@@ -1,0 +1,1049 @@
+diff --git a/composer.json b/composer.json
+index 7c866ad..20052f0 100755
+--- a/composer.json
++++ b/composer.json
+@@ -30,8 +30,8 @@
+         }
+     ],
+     "require": {
+-        "drupal/core": "^8.8 || ^9.0",
+-        "drupal/social_api": "^3"
++        "drupal/social_api": "^3",
++        "drupal/core": "^9.3 || ^10"
+     },
+     "require-dev": {
+         "drupal/coder": "^8.3"
+diff --git a/social_auth.info.yml b/social_auth.info.yml
+index 0850ecf..df23fa1 100755
+--- a/social_auth.info.yml
++++ b/social_auth.info.yml
+@@ -1,7 +1,7 @@
+ name: Social Auth
+ type: module
+ description: Allows user authentication with different services.
+-core_version_requirement: ^8.8 || ^9
++core_version_requirement: ^9.3 || ^10
+ package: Social
+ configure: social_auth.integrations
+ dependencies:
+diff --git a/social_auth.module b/social_auth.module
+index 3016de0..78a1465 100755
+--- a/social_auth.module
++++ b/social_auth.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\social_auth\Entity\SocialAuth;
+ /**
+  * @file
+  * Allows login using different social networking services.
+@@ -37,7 +38,7 @@ function social_auth_user_delete(EntityInterface $account) {
+     $storage = \Drupal::entityTypeManager()
+       ->getStorage('social_auth');
+ 
+-    /** @var \Drupal\social_auth\Entity\SocialAuth[] $socialAuthUser */
++    /** @var SocialAuth[] $socialAuthUser */
+     $users = $storage->loadByProperties([
+       'user_id' => $account->id(),
+     ]);
+diff --git a/social_auth.post_update.php b/social_auth.post_update.php
+index 1da7e4b..63a7c6e 100644
+--- a/social_auth.post_update.php
++++ b/social_auth.post_update.php
+@@ -1,10 +1,10 @@
+ <?php
+ 
++use Drupal\social_auth\Entity\SocialAuth;
+ /**
+  * @file
+  * Method hook_post_update_NAME.
+  */
+-
+ /**
+  * Encrypts all tokens currently stored by Social Auth.
+  */
+@@ -17,7 +17,7 @@ function social_auth_post_update_encrypt_tokens(&$sandbox = NULL) {
+   }
+ 
+   $ids = $storage->getQuery()->range($sandbox['progress'], 50)->execute();
+-  /** @var \Drupal\social_auth\Entity\SocialAuth[] $social_auth_users */
++  /** @var SocialAuth[] $social_auth_users */
+   $social_auth_users = $storage->loadMultiple($ids);
+   foreach ($social_auth_users as $user) {
+     $token = $user->get('token')->value;
+diff --git a/src/AuthManager/OAuth2Manager.php b/src/AuthManager/OAuth2Manager.php
+index ecfae78..67e66fd 100755
+--- a/src/AuthManager/OAuth2Manager.php
++++ b/src/AuthManager/OAuth2Manager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_auth\AuthManager;
+ 
++use League\OAuth2\Client\Provider\GenericResourceOwner;
+ use Drupal\social_api\AuthManager\OAuth2Manager as BaseOAuth2Manager;
+ 
+ /**
+@@ -28,7 +29,7 @@ abstract class OAuth2Manager extends BaseOAuth2Manager implements OAuth2ManagerI
+   /**
+    * The user returned by the provider.
+    *
+-   * @var \League\OAuth2\Client\Provider\GenericResourceOwner|array|mixed
++   * @var GenericResourceOwner|array|mixed
+    */
+   protected $user;
+ 
+diff --git a/src/Controller/OAuth2ControllerBase.php b/src/Controller/OAuth2ControllerBase.php
+index 19d8ae4..f9fc226 100644
+--- a/src/Controller/OAuth2ControllerBase.php
++++ b/src/Controller/OAuth2ControllerBase.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\social_auth\Controller;
+ 
++use Drupal\Core\Render\Renderer;
++use Symfony\Component\HttpFoundation\RedirectResponse;
++use League\OAuth2\Client\Provider\AbstractProvider;
++use League\OAuth2\Client\Provider\GenericResourceOwner;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Messenger\MessengerInterface;
+@@ -22,49 +26,49 @@ class OAuth2ControllerBase extends ControllerBase {
+   /**
+    * The Messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The network plugin manager.
+    *
+-   * @var \Drupal\social_api\Plugin\NetworkManager
++   * @var NetworkManager
+    */
+   protected $networkManager;
+ 
+   /**
+    * The Social Auth user authenticator..
+    *
+-   * @var \Drupal\social_auth\User\UserAuthenticator
++   * @var UserAuthenticator
+    */
+   protected $userAuthenticator;
+ 
+   /**
+    * The provider authentication manager.
+    *
+-   * @var \Drupal\social_auth\AuthManager\OAuth2ManagerInterface
++   * @var OAuth2ManagerInterface
+    */
+   protected $providerManager;
+ 
+   /**
+    * Used to access GET parameters.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $request;
+ 
+   /**
+    * The Social Auth data handler.
+    *
+-   * @var \Drupal\social_auth\SocialAuthDataHandler
++   * @var SocialAuthDataHandler
+    */
+   protected $dataHandler;
+ 
+   /**
+    * The renderer service.
+    *
+-   * @var \Drupal\Core\Render\Renderer
++   * @var Renderer
+    */
+   protected $renderer;
+ 
+@@ -89,19 +93,19 @@ class OAuth2ControllerBase extends ControllerBase {
+    *   The module name.
+    * @param string $plugin_id
+    *   The plugin id.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+-   * @param \Drupal\social_api\Plugin\NetworkManager $network_manager
++   * @param NetworkManager $network_manager
+    *   Used to get an instance of the network plugin.
+-   * @param \Drupal\social_auth\User\UserAuthenticator $user_authenticator
++   * @param UserAuthenticator $user_authenticator
+    *   Used to manage user authentication/registration.
+-   * @param \Drupal\social_auth\AuthManager\OAuth2ManagerInterface $provider_manager
++   * @param OAuth2ManagerInterface $provider_manager
+    *   Used to manage authentication methods.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request
++   * @param RequestStack $request
+    *   Used to access GET parameters.
+-   * @param \Drupal\social_auth\SocialAuthDataHandler $data_handler
++   * @param SocialAuthDataHandler $data_handler
+    *   The Social Auth data handler.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   Used to handle metadata for redirection to authentication URL.
+    */
+   public function __construct($module,
+@@ -160,10 +164,10 @@ public function __construct($module,
+   public function redirectToProvider() {
+     $context = new RenderContext();
+ 
+-    /** @var \Drupal\Core\Routing\TrustedRedirectResponse|\Symfony\Component\HttpFoundation\RedirectResponse $response */
++    /** @var TrustedRedirectResponse|RedirectResponse $response */
+     $response = $this->renderer->executeInRenderContext($context, function () {
+       try {
+-        /** @var \League\OAuth2\Client\Provider\AbstractProvider|false $client */
++        /** @var AbstractProvider|false $client */
+         $client = $this->networkManager->createInstance($this->pluginId)->getSdk();
+ 
+         // If provider client could not be obtained.
+@@ -219,13 +223,13 @@ public function redirectToProvider() {
+   /**
+    * Process implementer callback path.
+    *
+-   * @return \League\OAuth2\Client\Provider\GenericResourceOwner|null
++   * @return GenericResourceOwner|null
+    *   The user info if successful.
+    *   Null otherwise.
+    */
+   public function processCallback() {
+     try {
+-      /** @var \League\OAuth2\Client\Provider\AbstractProvider|false $client */
++      /** @var AbstractProvider|false $client */
+       $client = $this->networkManager->createInstance($this->pluginId)->getSdk();
+ 
+       // If provider client could not be obtained.
+@@ -279,7 +283,7 @@ public function processCallback() {
+    * @param string $key
+    *   The query parameter key to check for authentication error.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse|null
++   * @return RedirectResponse|null
+    *   Redirect response object that may be returned by the controller or null.
+    */
+   protected function checkAuthError($key = 'error') {
+diff --git a/src/Controller/SocialAuthController.php b/src/Controller/SocialAuthController.php
+index da580f4..0c42b95 100755
+--- a/src/Controller/SocialAuthController.php
++++ b/src/Controller/SocialAuthController.php
+@@ -22,7 +22,7 @@ class SocialAuthController extends SocialApiController {
+   public static function setLoginButtonSettings($module, $route, $img_path) {
+     $config = \Drupal::configFactory()->getEditable('social_auth.settings');
+ 
+-    $img_path = drupal_get_path('module', $module) . '/' . $img_path;
++    $img_path = \Drupal::service('extension.list.module')->getPath($module) . '/' . $img_path;
+ 
+     $config->set('auth.' . $module . '.route', $route)
+       ->set('auth.' . $module . '.img_path', $img_path)
+diff --git a/src/Event/BeforeRedirectEvent.php b/src/Event/BeforeRedirectEvent.php
+index 5786c7d..629c77c 100644
+--- a/src/Event/BeforeRedirectEvent.php
++++ b/src/Event/BeforeRedirectEvent.php
+@@ -14,7 +14,7 @@ class BeforeRedirectEvent extends SocialAuthEventBase {
+   /**
+    * The Social Auth data handler.
+    *
+-   * @var \Drupal\social_auth\SocialAuthDataHandler
++   * @var SocialAuthDataHandler
+    */
+   protected $dataHandler;
+ 
+@@ -35,7 +35,7 @@ class BeforeRedirectEvent extends SocialAuthEventBase {
+   /**
+    * BeforeRedirectEvent constructor.
+    *
+-   * @param \Drupal\social_auth\SocialAuthDataHandler $data_handler
++   * @param SocialAuthDataHandler $data_handler
+    *   The Social Auth data handler.
+    * @param string $plugin_id
+    *   The plugin Id dispatching this event.
+@@ -51,7 +51,7 @@ public function __construct(SocialAuthDataHandler $data_handler, $plugin_id, $de
+   /**
+    * Gets the Social Auth data handler object.
+    *
+-   * @return \Drupal\social_auth\SocialAuthDataHandler
++   * @return SocialAuthDataHandler
+    *   The Social Auth data handler.
+    */
+   public function getDataHandler() {
+diff --git a/src/Event/FailedAuthenticationEvent.php b/src/Event/FailedAuthenticationEvent.php
+index 948ff24..66833b8 100644
+--- a/src/Event/FailedAuthenticationEvent.php
++++ b/src/Event/FailedAuthenticationEvent.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_auth\Event;
+ 
++use Symfony\Component\HttpFoundation\Response;
+ use Drupal\social_auth\SocialAuthDataHandler;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+ 
+@@ -15,7 +16,7 @@ class FailedAuthenticationEvent extends SocialAuthEventBase {
+   /**
+    * The Social Auth data handler.
+    *
+-   * @var \Drupal\social_auth\SocialAuthDataHandler
++   * @var SocialAuthDataHandler
+    */
+   protected $dataHandler;
+ 
+@@ -36,14 +37,14 @@ class FailedAuthenticationEvent extends SocialAuthEventBase {
+   /**
+    * RedirectResponse object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RedirectResponse
++   * @var RedirectResponse
+    */
+   protected $response;
+ 
+   /**
+    * FailedAuthenticationEvent constructor.
+    *
+-   * @param \Drupal\social_auth\SocialAuthDataHandler $data_handler
++   * @param SocialAuthDataHandler $data_handler
+    *   The Social Auth data handler.
+    * @param string $plugin_id
+    *   The plugin Id dispatching this event.
+@@ -59,7 +60,7 @@ public function __construct(SocialAuthDataHandler $data_handler, $plugin_id, $er
+   /**
+    * Gets the Social Auth data handler object.
+    *
+-   * @return \Drupal\social_auth\SocialAuthDataHandler
++   * @return SocialAuthDataHandler
+    *   The Social Auth data handler.
+    */
+   public function getDataHandler() {
+@@ -89,7 +90,7 @@ public function getError() {
+   /**
+    * Returns the current redirect response object.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   The response from the provider.
+    */
+   public function getResponse() {
+@@ -99,7 +100,7 @@ public function getResponse() {
+   /**
+    * Sets a new redirect response object.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RedirectResponse $response
++   * @param RedirectResponse $response
+    *   The response from the provider.
+    */
+   public function setResponse(RedirectResponse $response) {
+diff --git a/src/Event/SocialAuthEventBase.php b/src/Event/SocialAuthEventBase.php
+index 3c4c097..77933a9 100644
+--- a/src/Event/SocialAuthEventBase.php
++++ b/src/Event/SocialAuthEventBase.php
+@@ -20,13 +20,13 @@
+    */
+   class EventProxy extends Drupal9Event {}
+ }
+-elseif (class_exists(Drupal8Event::class)) {
++elseif (class_exists(\Symfony\Contracts\EventDispatcher\Event::class)) {
+   /**
+    * Extends from Drupal8/Symfony 3 Event class.
+    *
+    * @package Drupal\social_auth\Event
+    */
+-  class EventProxy extends Drupal8Event {}
++  class EventProxy extends \Symfony\Contracts\EventDispatcher\Event {}
+ }
+ 
+ /**
+diff --git a/src/Event/UserEvent.php b/src/Event/UserEvent.php
+index 7e667e0..bb58aee 100644
+--- a/src/Event/UserEvent.php
++++ b/src/Event/UserEvent.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_auth\Event;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\user\UserInterface;
+ use Drupal\social_auth\User\SocialAuthUserInterface;
+ 
+@@ -15,7 +16,7 @@ class UserEvent extends SocialAuthEventBase {
+   /**
+    * The user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $user;
+ 
+@@ -29,18 +30,18 @@ class UserEvent extends SocialAuthEventBase {
+   /**
+    * The user's data passed by Social Auth.
+    *
+-   * @var \Drupal\social_auth\User\SocialAuthUserInterface
++   * @var SocialAuthUserInterface
+    */
+   protected $socialAuthUser;
+ 
+   /**
+    * UserEvent constructor.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user.
+    * @param string $plugin_id
+    *   The plugin Id dispatching this event.
+-   * @param \Drupal\social_auth\User\SocialAuthUserInterface|null $social_auth_user
++   * @param SocialAuthUserInterface|null $social_auth_user
+    *   The user's data passed by Social Auth.
+    */
+   public function __construct(UserInterface $user, $plugin_id, SocialAuthUserInterface $social_auth_user = NULL) {
+@@ -52,7 +53,7 @@ public function __construct(UserInterface $user, $plugin_id, SocialAuthUserInter
+   /**
+    * Gets the user.
+    *
+-   * @return \Drupal\user\UserInterface
++   * @return UserInterface
+    *   The user.
+    */
+   public function getUser() {
+@@ -72,7 +73,7 @@ public function getPluginId() {
+   /**
+    * Gets user's data passed by Social Auth.
+    *
+-   * @return \Drupal\social_auth\User\SocialAuthUserInterface
++   * @return SocialAuthUserInterface
+    *   The user's data.
+    */
+   public function getSocialAuthUser() {
+diff --git a/src/Event/UserFieldsEvent.php b/src/Event/UserFieldsEvent.php
+index e09293d..835258a 100644
+--- a/src/Event/UserFieldsEvent.php
++++ b/src/Event/UserFieldsEvent.php
+@@ -30,7 +30,7 @@ class UserFieldsEvent extends SocialAuthEventBase {
+   /**
+    * The data of the user to be created.
+    *
+-   * @var \Drupal\social_auth\User\SocialAuthUserInterface
++   * @var SocialAuthUserInterface
+    */
+   protected $user;
+ 
+@@ -41,7 +41,7 @@ class UserFieldsEvent extends SocialAuthEventBase {
+    *   Initial user fields to populate the newly created user.
+    * @param string $plugin_id
+    *   The plugin Id dispatching this event.
+-   * @param \Drupal\social_auth\User\SocialAuthUserInterface $user
++   * @param SocialAuthUserInterface $user
+    *   The data of the user to be created.
+    */
+   public function __construct(array $user_fields, $plugin_id, SocialAuthUserInterface $user) {
+@@ -83,7 +83,7 @@ public function getPluginId() {
+   /**
+    * Gets the data of the user to be created.
+    *
+-   * @return \Drupal\social_auth\User\SocialAuthUserInterface
++   * @return SocialAuthUserInterface
+    *   The user's data.
+    */
+   public function getSocialAuthUser() {
+diff --git a/src/Form/SocialAuthSettingsForm.php b/src/Form/SocialAuthSettingsForm.php
+index c84ce16..4141d1a 100755
+--- a/src/Form/SocialAuthSettingsForm.php
++++ b/src/Form/SocialAuthSettingsForm.php
+@@ -16,16 +16,16 @@ class SocialAuthSettingsForm extends ConfigFormBase {
+   /**
+    * The route provider.
+    *
+-   * @var \Drupal\Core\Routing\RouteProviderInterface
++   * @var RouteProviderInterface
+    */
+   protected $routeProvider;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+-   * @param \Drupal\Core\Routing\RouteProviderInterface $route_provider
++   * @param RouteProviderInterface $route_provider
+    *   Used to check if route exists.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, RouteProviderInterface $route_provider) {
+diff --git a/src/Plugin/Block/SocialAuthLoginBlock.php b/src/Plugin/Block/SocialAuthLoginBlock.php
+index d3fc8c3..9a06689 100755
+--- a/src/Plugin/Block/SocialAuthLoginBlock.php
++++ b/src/Plugin/Block/SocialAuthLoginBlock.php
+@@ -21,14 +21,14 @@ class SocialAuthLoginBlock extends BlockBase implements ContainerFactoryPluginIn
+   /**
+    * The network manager.
+    *
+-   * @var \Drupal\social_api\Plugin\NetworkManager
++   * @var NetworkManager
+    */
+   private $networkManager;
+ 
+   /**
+    * Immutable configuration for social_auth.settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   private $socialAuthConfig;
+ 
+@@ -41,9 +41,9 @@ class SocialAuthLoginBlock extends BlockBase implements ContainerFactoryPluginIn
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Config\ImmutableConfig $social_auth_config
++   * @param ImmutableConfig $social_auth_config
+    *   The Immutable configuration for social_oauth.settings.
+-   * @param \Drupal\social_api\Plugin\NetworkManager $network_manager
++   * @param NetworkManager $network_manager
+    *   The Social API network manager.
+    */
+   public function __construct(
+diff --git a/src/SettingsTrait.php b/src/SettingsTrait.php
+index dc5f9be..80e9098 100644
+--- a/src/SettingsTrait.php
++++ b/src/SettingsTrait.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\social_auth;
+ 
++use Drupal\Core\Config\ConfigFactoryInterface;
++use Drupal\Core\Routing\RouteProviderInterface;
+ use Drupal\Core\Url;
+ use Drupal\user\UserInterface;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+@@ -14,21 +16,21 @@ trait SettingsTrait {
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Used to check if route path exists.
+    *
+-   * @var \Drupal\Core\Routing\RouteProviderInterface
++   * @var RouteProviderInterface
+    */
+   protected $routeProvider;
+ 
+   /**
+    * The Social Auth data handler.
+    *
+-   * @var \Drupal\social_auth\SocialAuthDataHandler
++   * @var SocialAuthDataHandler
+    */
+   protected $dataHandler;
+ 
+@@ -60,7 +62,7 @@ protected function isApprovalRequired() {
+   /**
+    * Checks if Admin (user 1) can login.
+    *
+-   * @param \Drupal\user\UserInterface $drupal_user
++   * @param UserInterface $drupal_user
+    *   User object to check if user is admin.
+    *
+    * @return bool
+@@ -75,7 +77,7 @@ protected function isAdminDisabled(UserInterface $drupal_user) {
+   /**
+    * Checks if User with specific roles is allowed to login.
+    *
+-   * @param \Drupal\user\UserInterface $drupal_user
++   * @param UserInterface $drupal_user
+    *   User object to check if user has a specific role.
+    *
+    * @return string|false
+@@ -95,10 +97,10 @@ protected function isUserRoleDisabled(UserInterface $drupal_user) {
+   /**
+    * Checks if User should be redirected to User Form after creation.
+    *
+-   * @param \Drupal\user\UserInterface $drupal_user
++   * @param UserInterface $drupal_user
+    *   User object to get the id of user.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse|false
++   * @return RedirectResponse|false
+    *   A redirect response to user form, if option is enabled.
+    *   False otherwise
+    */
+@@ -130,7 +132,7 @@ protected function getNewUserStatus() {
+   /**
+    * Returns the Post Login redirection.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   Post Login Path to which the user would be redirected after login.
+    */
+   protected function getPostLoginRedirection() {
+diff --git a/src/User/UserAuthenticator.php b/src/User/UserAuthenticator.php
+index 6ca8439..3c73179 100644
+--- a/src/User/UserAuthenticator.php
++++ b/src/User/UserAuthenticator.php
+@@ -31,42 +31,42 @@ class UserAuthenticator extends SocialApiUserAuthenticator {
+   /**
+    * Event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * The Social Auth user manager.
+    *
+-   * @var \Drupal\social_auth\User\UserManager
++   * @var UserManager
+    */
+   protected $userManager;
+ 
+   /**
+    * The redirection response to be returned.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RedirectResponse
++   * @var RedirectResponse
+    */
+   protected $response;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   Used to get current active user.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Used to display messages to user.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   Used for logging errors.
+-   * @param \Drupal\social_auth\User\UserManager $user_manager
++   * @param UserManager $user_manager
+    *   The Social API user manager.
+-   * @param \Drupal\social_auth\SocialAuthDataHandler $data_handler
++   * @param SocialAuthDataHandler $data_handler
+    *   Used to interact with session.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Used for accessing Drupal configuration.
+-   * @param \Drupal\Core\Routing\RouteProviderInterface $route_provider
++   * @param RouteProviderInterface $route_provider
+    *   Used to check if route path exists.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   Used for dispatching social auth events.
+    */
+   public function __construct(AccountProxyInterface $current_user,
+@@ -111,7 +111,7 @@ public function setDestination($destination) {
+    * @param array|null $data
+    *   The additional user data to be stored in database.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirect response.
+    */
+   public function authenticateUser($name, $email, $provider_user_id, $token, $picture_url = NULL, $data = NULL) {
+@@ -257,7 +257,7 @@ public function authenticateWithEmail($email, $provider_user_id, $token, $data)
+   /**
+    * Authenticates and redirects existing users in authentication process.
+    *
+-   * @param \Drupal\user\UserInterface $drupal_user
++   * @param UserInterface $drupal_user
+    *   User object to authenticate.
+    */
+   public function authenticateExistingUser(UserInterface $drupal_user) {
+@@ -296,7 +296,7 @@ public function authenticateExistingUser(UserInterface $drupal_user) {
+   /**
+    * Authenticates and redirects new users in authentication process.
+    *
+-   * @param \Drupal\user\UserInterface|null $drupal_user
++   * @param UserInterface|null $drupal_user
+    *   User object to login.
+    */
+   public function authenticateNewUser(UserInterface $drupal_user = NULL) {
+@@ -343,7 +343,7 @@ public function authenticateNewUser(UserInterface $drupal_user = NULL) {
+   /**
+    * Logs the user in.
+    *
+-   * @param \Drupal\user\UserInterface $drupal_user
++   * @param UserInterface $drupal_user
+    *   User object.
+    *
+    * @return bool
+@@ -357,7 +357,7 @@ public function loginUser(UserInterface $drupal_user) {
+ 
+       // Dispatches SocialAuthEvents::USER_LOGIN event.
+       $event = new UserEvent($drupal_user, $this->getPluginId());
+-      $this->eventDispatcher->dispatch(SocialAuthEvents::USER_LOGIN, $event);
++      $this->eventDispatcher->dispatch($event, SocialAuthEvents::USER_LOGIN);
+ 
+       return TRUE;
+     }
+@@ -386,7 +386,7 @@ public function checkProviderIsAssociated($provider_user_id) {
+   /**
+    * Returns redirection to user login form.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   The redirection response.
+    */
+   protected function getLoginFormRedirection() {
+@@ -415,12 +415,12 @@ protected function userLoginFinalize(UserInterface $account) {
+    * @param string|null $error
+    *   The error string/code from provider.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   Return redirect response.
+    */
+   public function dispatchAuthenticationError($error = NULL) {
+     $event = new FailedAuthenticationEvent($this->dataHandler, $this->getPluginId(), $error ?? NULL);
+-    $this->eventDispatcher->dispatch(SocialAuthEvents::FAILED_AUTH, $event);
++    $this->eventDispatcher->dispatch($event, SocialAuthEvents::FAILED_AUTH);
+ 
+     if ($event->hasResponse()) {
+       return $event->getResponse();
+@@ -437,7 +437,7 @@ public function dispatchAuthenticationError($error = NULL) {
+    */
+   public function dispatchBeforeRedirect($destination = NULL) {
+     $event = new BeforeRedirectEvent($this->dataHandler, $this->getPluginId(), $destination);
+-    $this->eventDispatcher->dispatch(SocialAuthEvents::BEFORE_REDIRECT, $event);
++    $this->eventDispatcher->dispatch($event, SocialAuthEvents::BEFORE_REDIRECT);
+   }
+ 
+ }
+diff --git a/src/User/UserManager.php b/src/User/UserManager.php
+index 761ec02..2538697 100644
+--- a/src/User/UserManager.php
++++ b/src/User/UserManager.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\social_auth\User;
+ 
++use Drupal\user\Entity\User;
++use Drupal\file\FileInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityStorageException;
+@@ -33,67 +35,67 @@ class UserManager extends SocialApiUserManager {
+   /**
+    * Used for access Drupal user field definitions.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * Used for user picture directory and file transliteration.
+    *
+-   * @var \Drupal\Core\Transliteration\PhpTransliteration
++   * @var PhpTransliteration
+    */
+   protected $transliteration;
+ 
+   /**
+    * Used to get the current UI language.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Used for token support in Drupal user picture directory.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $token;
+ 
+   /**
+    * Used for saving the profile picture of the users.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Used for loading and creating Drupal user.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Used to display messages to user.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   Used for logging errors.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Used for accessing Drupal configuration.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   Used for access Drupal user field definitions.
+-   * @param \Drupal\Core\Transliteration\PhpTransliteration $transliteration
++   * @param PhpTransliteration $transliteration
+    *   Used for user picture directory and file transliteration.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   Used to get current UI language.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   Used for dispatching social auth events.
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   Used for token support in Drupal user picture directory.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   Used for saving the profile picture of the users.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager,
+@@ -121,10 +123,10 @@ public function __construct(EntityTypeManagerInterface $entity_type_manager,
+   /**
+    * Creates a new user.
+    *
+-   * @param \Drupal\social_auth\User\SocialAuthUserInterface $user
++   * @param SocialAuthUserInterface $user
+    *   The data of the user to be created.
+    *
+-   * @return \Drupal\user\UserInterface|null
++   * @return UserInterface|null
+    *   The Drupal user if successful
+    *   Null otherwise.
+    */
+@@ -154,10 +156,10 @@ public function createNewUser(SocialAuthUserInterface $user) {
+   /**
+    * Create a new user account.
+    *
+-   * @param \Drupal\social_auth\User\SocialAuthUserInterface $user
++   * @param SocialAuthUserInterface $user
+    *   The data of the user to be created.
+    *
+-   * @return \Drupal\user\Entity\User|false
++   * @return User|false
+    *   Drupal user account if user was created
+    *   False otherwise
+    */
+@@ -194,7 +196,7 @@ public function createUser(SocialAuthUserInterface $user) {
+       // Initializes the user fields.
+       $fields = $this->getUserFields($user, $langcode);
+ 
+-      /** @var \Drupal\user\Entity\User $new_user */
++      /** @var User $new_user */
+       $new_user = $this->entityTypeManager
+         ->getStorage('user')
+         ->create($fields);
+@@ -210,7 +212,7 @@ public function createUser(SocialAuthUserInterface $user) {
+ 
+       // Dispatches SocialAuthEvents::USER_CREATED event.
+       $event = new UserEvent($new_user, $this->getPluginId(), $user);
+-      $this->eventDispatcher->dispatch(SocialAuthEvents::USER_CREATED, $event);
++      $this->eventDispatcher->dispatch($event, SocialAuthEvents::USER_CREATED);
+ 
+       return $new_user;
+     }
+@@ -302,7 +304,7 @@ public function addUserRecord($user_id, $provider_user_id, $token, $user_data) {
+    * @param string $value
+    *   Value to search for.
+    *
+-   * @return \Drupal\user\Entity\User|false
++   * @return User|false
+    *   Drupal user account if found
+    *   False otherwise
+    */
+@@ -354,7 +356,7 @@ protected function saveUser(UserInterface $drupal_user) {
+   /**
+    * Downloads and sets user profile picture.
+    *
+-   * @param \Drupal\social_auth\User\SocialAuthUserInterface $user
++   * @param SocialAuthUserInterface $user
+    *   The Social Auth User object.
+    *
+    * @return bool
+@@ -384,7 +386,7 @@ protected function setProfilePic(SocialAuthUserInterface $user) {
+    * @param string $id
+    *   Social network ID of the user.
+    *
+-   * @return \Drupal\file\FileInterface|false
++   * @return FileInterface|false
+    *   FileInterface object if file was successfully downloaded
+    *   False otherwise
+    */
+@@ -481,7 +483,7 @@ protected function generateUniqueUsername($name) {
+   /**
+    * Returns an array of fields to initialize the creation of the user.
+    *
+-   * @param \Drupal\social_auth\User\SocialAuthUserInterface $user
++   * @param SocialAuthUserInterface $user
+    *   The data of the user to be created.
+    * @param string $langcode
+    *   The current UI language.
+@@ -505,7 +507,7 @@ protected function getUserFields(SocialAuthUserInterface $user, $langcode) {
+     // Dispatches SocialAuthEvents::USER_FIELDS, so that other modules can
+     // update this array before an user is saved.
+     $event = new UserFieldsEvent($fields, $this->getPluginId(), $user);
+-    $this->eventDispatcher->dispatch(SocialAuthEvents::USER_FIELDS, $event);
++    $this->eventDispatcher->dispatch($event, SocialAuthEvents::USER_FIELDS);
+     $fields = $event->getUserFields();
+ 
+     return $fields;
+@@ -556,7 +558,7 @@ protected function getPictureDirectory() {
+    * @see user_password
+    */
+   protected function userPassword($length) {
+-    return user_password($length);
++    return \Drupal::service('password_generator')->generate($length);
+   }
+ 
+   /**
+diff --git a/tests/src/Functional/SocialAuthLoginBlockTest.php b/tests/src/Functional/SocialAuthLoginBlockTest.php
+index f3d82e4..317ea1f 100644
+--- a/tests/src/Functional/SocialAuthLoginBlockTest.php
++++ b/tests/src/Functional/SocialAuthLoginBlockTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\social_auth\Functional;
+ 
++use Behat\Mink\Exception\ResponseTextException;
+ /**
+  * Test Social Auth Login block.
+  *
+@@ -15,7 +16,8 @@ class SocialAuthLoginBlockTest extends SocialAuthTestBase {
+    * No need to specify a provider since it is by default NULL and Social Auth
+    * does not have any authentication route by itself.
+    *
+-   * @throws \Behat\Mink\Exception\ResponseTextException
++   * @throws ResponseTextException
++   * @doesNotPerformAssertions
+    */
+   public function testBlockExists() {
+     parent::checkLinkToProviderExists();
+diff --git a/tests/src/Functional/SocialAuthTestBase.php b/tests/src/Functional/SocialAuthTestBase.php
+index c9962d8..7d6545d 100644
+--- a/tests/src/Functional/SocialAuthTestBase.php
++++ b/tests/src/Functional/SocialAuthTestBase.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\social_auth\Functional;
+ 
++use Drupal\block\Entity\Block;
++use Drupal\Core\Entity\EntityStorageException;
++use Behat\Mink\Exception\ResponseTextException;
+ use Drupal\Core\Url;
+ use Drupal\Tests\social_api\Functional\SocialApiTestBase;
+ 
+@@ -27,7 +30,7 @@ abstract class SocialAuthTestBase extends SocialApiTestBase {
+   /**
+    * The block entity.
+    *
+-   * @var \Drupal\block\Entity\Block
++   * @var Block
+    */
+   protected $socialAuthLoginBlock;
+ 
+@@ -41,7 +44,7 @@ abstract class SocialAuthTestBase extends SocialApiTestBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   protected function setUp(): void {
+ 
+@@ -61,7 +64,7 @@ protected function setUp(): void {
+   /**
+    * Test if link to provider exists in login block.
+    *
+-   * @throws \Behat\Mink\Exception\ResponseTextException
++   * @throws ResponseTextException
+    */
+   protected function checkLinkToProviderExists() {
+     // Test for a non-authenticated user.
+diff --git a/tests/src/Functional/UserTest.php b/tests/src/Functional/UserTest.php
+index 7968e79..5911330 100644
+--- a/tests/src/Functional/UserTest.php
++++ b/tests/src/Functional/UserTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\social_auth\Functional;
+ 
++use Drupal\user\UserInterface;
++use Drupal\social_auth\User\UserAuthenticator;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -28,21 +31,21 @@ class UserTest extends BrowserTestBase {
+   /**
+    * The Drupal user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+   /**
+    * The Social Auth user authenticator.
+    *
+-   * @var \Drupal\social_auth\User\UserAuthenticator
++   * @var UserAuthenticator
+    */
+   protected $userAuthenticator;
+ 
+   /**
+    * The Drupal entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+diff --git a/tests/src/Kernel/SocialAuthEntityTest.php b/tests/src/Kernel/SocialAuthEntityTest.php
+index d1d32aa..e15ad69 100644
+--- a/tests/src/Kernel/SocialAuthEntityTest.php
++++ b/tests/src/Kernel/SocialAuthEntityTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\social_auth\Kernel;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\KernelTests\Core\Entity\EntityKernelTestBase;
+ use Drupal\social_auth\Entity\SocialAuth;
+ 
+@@ -15,14 +16,14 @@ class SocialAuthEntityTest extends EntityKernelTestBase {
+   /**
+    * The social_auth entity.
+    *
+-   * @var \Drupal\social_auth\Entity\SocialAuth
++   * @var SocialAuth
+    */
+   protected $entity;
+ 
+   /**
+    * The entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $entityStorage;
+ 

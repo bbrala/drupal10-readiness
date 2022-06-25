@@ -1,0 +1,365 @@
+diff --git a/lingo24.info.yml b/lingo24.info.yml
+index fb48a51..3b70da0 100644
+--- a/lingo24.info.yml
++++ b/lingo24.info.yml
+@@ -1,7 +1,7 @@
+ name: 'Lingo24'
+ description: 'A translation plugin for Lingo24'
+ package: 'Translation Management'
+-core_version_requirement: ^8.8 || ^9
++core_version_requirement: ^9.3 || ^10
+ type: module
+ dependencies:
+   - tmgmt:tmgmt
+diff --git a/lingo24.module b/lingo24.module
+index 1ef1192..2ebe0d8 100644
+--- a/lingo24.module
++++ b/lingo24.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\file\FileUsage\FileUsageInterface;
+ use Drupal\Core\Entity\EntityFormInterface;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -20,7 +21,7 @@ use Drupal\tmgmt\TMGMTException;
+ function lingo24_theme() {
+   return array(
+     'lingo24_html_template' => array(
+-      'path' => drupal_get_path('module', 'lingo24') . '/templates',
++      'path' => \Drupal::service('extension.list.module')->getPath('lingo24') . '/templates',
+       'template' => 'lingo24_html_template',
+       'variables' => array('tjid' => NULL, 'source_language' => NULL, 'target_language' => NULL, 'items' => NULL),
+     ),
+@@ -50,7 +51,7 @@ function lingo24_import_form_submit(array $form, FormStateInterface $form_state)
+     // Not an entity form, nothing to alter.
+     return;
+   }
+-  /** @var \Drupal\tmgmt\JobInterface $job */
++  /** @var JobInterface $job */
+   $job = $formObject->getEntity();
+   $supported_formats = array_keys(Drupal::service('plugin.manager.lingo24.format')->getDefinitions());
+   if ($file = file_save_upload('file', array('file_validate_extensions' => array(implode(' ', $supported_formats))), FALSE, 0)) {
+@@ -102,7 +103,7 @@ function lingo24_tmgmt_job_delete(JobInterface $job) {
+   $fids = $result->fetchCol();
+   if (!empty($fids)) {
+     // Remove file usage record.
+-    /** @var \Drupal\file\FileUsage\FileUsageInterface $file_usage */
++    /** @var FileUsageInterface $file_usage */
+     $file_usage = \Drupal::service('file.usage');
+     foreach (File::loadMultiple($fids) as $file) {
+       $file_usage->delete($file, 'lingo24', 'tmgmt_job', $job->id());
+@@ -126,7 +127,7 @@ function lingo24_file_download($uri) {
+     ->condition('uri', $uri)
+     ->execute();
+   if ($fids) {
+-    $files = \Drupal\file\Entity\File::loadMultiple($fids);
++    $files = File::loadMultiple($fids);
+     foreach ($files as $item) {
+       // Since some database servers sometimes use a case-insensitive comparison
+       // by default, double check that the filename is an exact match.
+@@ -247,7 +248,7 @@ function _process_job (JobInterface $job){
+           $path = $job->getSetting('scheme') . '://lingo24/' . $name . '.xlf';
+           $dirname = dirname($path);
+           if (\Drupal::service('file_system')->prepareDirectory($dirname, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS)) {
+-            $file = file_save_data($lingo24Docs->getFileContent($file->getId()), $path, FileSystemInterface::EXISTS_REPLACE);
++            $file = \Drupal::service('file.repository')->writeData($lingo24Docs->getFileContent($file->getId()), $path, FileSystemInterface::EXISTS_REPLACE);
+             $plugin = \Drupal::service('plugin.manager.lingo24.format')->createInstance('xlf');
+             try {
+               $job->addTranslatedData($plugin->import($path));
+diff --git a/src/Annotation/FormatPlugin.php b/src/Annotation/FormatPlugin.php
+index 2f85a42..869aef1 100644
+--- a/src/Annotation/FormatPlugin.php
++++ b/src/Annotation/FormatPlugin.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\lingo24\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -23,7 +24,7 @@ class FormatPlugin extends Plugin {
+   /**
+    * The human-readable name of the format.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    * @ingroup plugin_translatable
+    */
+   public $label;
+diff --git a/src/Commands/Lingo24Commands.php b/src/Commands/Lingo24Commands.php
+index e22417c..12d17fa 100644
+--- a/src/Commands/Lingo24Commands.php
++++ b/src/Commands/Lingo24Commands.php
+@@ -15,23 +15,23 @@ class Lingo24Commands extends DrushCommands {
+   /**
+    * The File System.
+    *
+-   * @var Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * The Format Plugin.
+    *
+-   * @var Drupal\lingo24\Format\FormatManager
++   * @var FormatManager
+    */
+   protected $format;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   The File System.
+-   * @param Drupal\lingo24\Format\FormatManager $format
++   * @param FormatManager $format
+    *   The Format Plugin.
+    */
+   public function __construct(FileSystemInterface $file_system, FormatManager $format) {
+diff --git a/src/Controller/LingoController.php b/src/Controller/LingoController.php
+index d57a031..c5d8db8 100644
+--- a/src/Controller/LingoController.php
++++ b/src/Controller/LingoController.php
+@@ -18,50 +18,50 @@ class LingoController extends ControllerBase {
+   /**
+    * The messenger interface.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The state API.
+    *
+-   * @var Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+   /**
+    * The config interface.
+    *
+-   * @var Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $config;
+ 
+   /**
+    * The request.
+    *
+-   * @var Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * The logger factory.
+    *
+-   * @var Drupal\Core\Logger\LoggerChannelFactory
++   * @var LoggerChannelFactory
+    */
+   protected $logger;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger interface.
+-   * @param Drupal\Core\State\State $state
++   * @param State $state
+    *   The state interface.
+-   * @param Drupal\Core\Config\ConfigFactoryInterface $config
++   * @param ConfigFactoryInterface $config
+    *   The config interface.
+-   * @param Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The request.
+-   * @param Drupal\Core\Logger\LoggerChannelFactory $logger
++   * @param LoggerChannelFactory $logger
+    *   The logger factory.
+    */
+   public function __construct(MessengerInterface $messenger, State $state, ConfigFactoryInterface $config, Request $request, LoggerChannelFactory $logger) {
+diff --git a/src/Format/FormatInterface.php b/src/Format/FormatInterface.php
+index 64cc342..96bb13e 100644
+--- a/src/Format/FormatInterface.php
++++ b/src/Format/FormatInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\lingo24\Format;
+ 
++use Drupal\tmgmt\Entity\Job;
+ use Drupal\tmgmt\JobInterface;
+ 
+ /**
+@@ -12,7 +13,7 @@ interface FormatInterface {
+   /**
+    * Return the file content for the job data.
+    *
+-   * @param Drupal\tmgmt\JobInterface $job
++   * @param JobInterface $job
+    *   The translation job object to be exported.
+    * @param array $conditions
+    *   (optional) An array containing list of conditions.
+@@ -30,7 +31,7 @@ interface FormatInterface {
+    * @param bool $is_file
+    *   (optional) Whether $imported_file is the path to a file or not.
+    *
+-   * @return Drupal\tmgmt\Entity\Job
++   * @return Job
+    *   Returns the corresponding translation job entity if the import file is
+    *   valid, FALSE otherwise.
+    */
+diff --git a/src/Format/FormatManager.php b/src/Format/FormatManager.php
+index e2d9e01..eb399c3 100644
+--- a/src/Format/FormatManager.php
++++ b/src/Format/FormatManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\lingo24\Format;
+ 
++use Drupal\tmgmt\SourcePluginUiInterface;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\Plugin\DefaultPluginManager;
+@@ -30,9 +31,9 @@ class FormatManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+@@ -47,7 +48,7 @@ class FormatManager extends DefaultPluginManager {
+    * @param string $plugin
+    *   Name of the source plugin.
+    *
+-   * @return \Drupal\tmgmt\SourcePluginUiInterface
++   * @return SourcePluginUiInterface
+    *   Instance a source plugin UI instance.
+    */
+   public function createUIInstance($plugin) {
+diff --git a/src/LingoTranslatorUi.php b/src/LingoTranslatorUi.php
+index 4a5fe3b..c687548 100644
+--- a/src/LingoTranslatorUi.php
++++ b/src/LingoTranslatorUi.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\lingo24;
+ 
++use Drupal\tmgmt\TranslatorInterface;
++use Lingo24\API\Docs;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Entity\EntityFormInterface;
+ use Drupal\Core\File\FileSystemInterface;
+@@ -30,7 +32,7 @@ class LingoTranslatorUi extends TranslatorPluginUiBase {
+       // Not an entity form, nothing to alter.
+       return;
+     }
+-    /** @var \Drupal\tmgmt\TranslatorInterface $translator */
++    /** @var TranslatorInterface $translator */
+     $translator = $formObject->getEntity();
+ 
+     // Any visible, writeable wrapper can potentially be used for the files
+@@ -301,7 +303,7 @@ class LingoTranslatorUi extends TranslatorPluginUiBase {
+             $path = $job->getSetting('scheme') . '://lingo24/' . $name . '.xlf';
+             $dirname = dirname($path);
+             if (\Drupal::service('file_system')->prepareDirectory($dirname, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS)) {
+-              $file = file_save_data($lingo24Docs->getFileContent($file->getId()), $path, FileSystemInterface::EXISTS_REPLACE);
++              $file = \Drupal::service('file.repository')->writeData($lingo24Docs->getFileContent($file->getId()), $path, FileSystemInterface::EXISTS_REPLACE);
+               $plugin = \Drupal::service('plugin.manager.lingo24.format')->createInstance('xlf');
+               try {
+                 $job->addTranslatedData($plugin->import($path));
+@@ -359,7 +361,7 @@ class LingoTranslatorUi extends TranslatorPluginUiBase {
+       // Not an entity form, nothing to alter.
+       return;
+     }
+-    /** @var \Drupal\tmgmt\TranslatorInterface $translator */
++    /** @var TranslatorInterface $translator */
+     $translator = $formObject->getEntity();
+ 
+     if (empty($translator->getSetting('lingo_client_id'))) {
+@@ -371,10 +373,10 @@ class LingoTranslatorUi extends TranslatorPluginUiBase {
+     // Check if the authorization code exist and request one if doesn't.
+     if (empty(\Drupal::state()->get('lingo_auth_Code'))) {
+       if ($translator->getSetting('lingo_environment') == 'demo') {
+-        $uri = \Lingo24\API\Docs::$AUTH_URL_DEMO . '?response_type=code';
++        $uri = Docs::$AUTH_URL_DEMO . '?response_type=code';
+       }
+       else {
+-        $uri = \Lingo24\API\Docs::$AUTH_URL_LIVE . '?response_type=code';
++        $uri = Docs::$AUTH_URL_LIVE . '?response_type=code';
+       }
+       $uri .= '&client_id=' . $translator->getSetting('lingo_client_id');
+       $uri .= '&redirect_uri=' . \Drupal::state()->get('lingo_redirect_uri');
+diff --git a/src/Plugin/lingo24/Format/Xliff.php b/src/Plugin/lingo24/Format/Xliff.php
+index 3300607..8566798 100644
+--- a/src/Plugin/lingo24/Format/Xliff.php
++++ b/src/Plugin/lingo24/Format/Xliff.php
+@@ -66,7 +66,7 @@ class Xliff extends \XMLWriter implements FormatInterface {
+   /**
+    * Contains a reference to the currently being exported job.
+    *
+-   * @var \Drupal\tmgmt\JobInterface
++   * @var JobInterface
+    */
+   protected $job;
+ 
+@@ -108,7 +108,7 @@ class Xliff extends \XMLWriter implements FormatInterface {
+   /**
+    * Adds a job item to the xml export.
+    *
+-   * @param Drupal\tmgmt\JobItemInterface $item
++   * @param JobItemInterface $item
+    *   The job item entity.
+    */
+   protected function addItem(JobItemInterface $item) {
+@@ -132,7 +132,7 @@ class Xliff extends \XMLWriter implements FormatInterface {
+    *   The unique identifier for this data element.
+    * @param mixed $element
+    *   Array with the properties #text and optionally #label.
+-   * @param \Drupal\tmgmt\JobInterface $job
++   * @param JobInterface $job
+    *   Translation job.
+    */
+   protected function addTransUnit($key, $element, JobInterface $job) {
+@@ -404,7 +404,7 @@ class Xliff extends \XMLWriter implements FormatInterface {
+    *
+    * @param string $translation
+    *   Job data array.
+-   * @param \Drupal\tmgmt\JobInterface $job
++   * @param JobInterface $job
+    *   Translation job.
+    *
+    * @return string
+diff --git a/src/Plugin/tmgmt/Translator/LingoTranslator.php b/src/Plugin/tmgmt/Translator/LingoTranslator.php
+index 45e07bc..3590c90 100644
+--- a/src/Plugin/tmgmt/Translator/LingoTranslator.php
++++ b/src/Plugin/tmgmt/Translator/LingoTranslator.php
+@@ -49,7 +49,7 @@ class LingoTranslator extends TranslatorPluginBase {
+       $translator = $job->getTranslator();
+       $lingo24Docs = self::oauthClient($translator);
+       // Save the file.
+-      $file = file_save_data($export->export($job), $path, FileSystemInterface::EXISTS_REPLACE);
++      $file = \Drupal::service('file.repository')->writeData($export->export($job), $path, FileSystemInterface::EXISTS_REPLACE);
+       // Prepare and submit translation file to Lingo24.
+       if (!empty($job->getSetting('lingo_source_country')) && !empty($job->getSetting('lingo_source_region')) && !empty($job->getSetting('lingo_target_country')) && !empty($job->getSetting('lingo_target_region'))) {
+         $source_locale = $lingo24Docs->getLocale($job->getSetting('lingo_source_country') . '_' . $job->getSetting('lingo_source_region'));
+@@ -103,7 +103,7 @@ class LingoTranslator extends TranslatorPluginBase {
+    * @param mixed $translator
+    *   Container of Translator settings.
+    *
+-   * @return \Lingo24\API\Docs
++   * @return Docs
+    *   Lingo24 Client.
+    */
+   public static function oauthClient($translator) {

@@ -1,0 +1,250 @@
+diff --git a/yp/src/Controller/YpController.php b/yp/src/Controller/YpController.php
+index fd6e11d..3291999 100644
+--- a/yp/src/Controller/YpController.php
++++ b/yp/src/Controller/YpController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\yp\Controller;
+ 
++use Psr\Log\LoggerInterface;
++use Drupal\Core\Database\StatementInterface;
+ use Drupal\Component\Utility\Unicode;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Database\Connection;
+@@ -18,7 +20,7 @@ class YpController extends ControllerBase {
+   /**
+    * The database service.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+@@ -32,35 +34,35 @@ class YpController extends ControllerBase {
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Request object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * Response object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Response
++   * @var Response
+    */
+   protected $response;
+ 
+   /**
+    * Stream ID.
+    *
+-   * @var int|\Drupal\Core\Database\StatementInterface|null
++   * @var int|StatementInterface|null
+    */
+   protected $sid;
+ 
+   /**
+    * Whether or not the listing was updated.
+    *
+-   * @var bool|\Drupal\Core\Database\StatementInterface|null
++   * @var bool|StatementInterface|null
+    */
+   protected $touched;
+ 
+@@ -74,7 +76,7 @@ class YpController extends ControllerBase {
+   /**
+    * Constructs a YpController object.
+    *
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   A database connection.
+    */
+   public function __construct(Connection $database) {
+@@ -98,7 +100,7 @@ class YpController extends ControllerBase {
+       throw new AccessDeniedHttpException();
+     }
+     $this->response = new Response();
+-    $this->fields['last_touch'] = REQUEST_TIME;
++    $this->fields['last_touch'] = \Drupal::time()->getRequestTime();
+     $this->sid = is_string($request->get('sid')) ? (int) $request->get('sid') : NULL;
+     $this->request = $request;
+     $this->$action();
+diff --git a/yp/src/Plugin/views/field/ListenUrl.php b/yp/src/Plugin/views/field/ListenUrl.php
+index 293e2e0..6eb328d 100644
+--- a/yp/src/Plugin/views/field/ListenUrl.php
++++ b/yp/src/Plugin/views/field/ListenUrl.php
+@@ -28,7 +28,7 @@ class ListenUrl extends FieldPluginBase {
+     }
+     $image = [
+       '#theme' => 'image',
+-      '#uri' => drupal_get_path('module', 'yp') . '/listen.png',
++      '#uri' => \Drupal::service('extension.list.module')->getPath('yp') . '/listen.png',
+       '#alt' => $this->t('Listen'),
+       '#title' => $this->t('Listen'),
+       '#attributes' => ['width' => 16, 'height' => 16],
+diff --git a/yp/tests/src/Functional/YpTest.php b/yp/tests/src/Functional/YpTest.php
+index c9423cd..88be38e 100644
+--- a/yp/tests/src/Functional/YpTest.php
++++ b/yp/tests/src/Functional/YpTest.php
+@@ -23,6 +23,7 @@ class YpTest extends BrowserTestBase {
+ 
+   /**
+    * Functional tests for yp.
++   * @doesNotPerformAssertions
+    */
+   public function testYp() {
+   }
+diff --git a/yp/yp.module b/yp/yp.module
+index 8980acd..a141129 100644
+--- a/yp/yp.module
++++ b/yp/yp.module
+@@ -9,5 +9,5 @@
+  * Cleanup stale YP entries (not touched within past five minutes).
+  */
+ function yp_cron() {
+-  \Drupal::database()->delete('yp_stream')->condition('last_touch', REQUEST_TIME - 300, '<')->execute();
++  \Drupal::database()->delete('yp_stream')->condition('last_touch', \Drupal::time()->getRequestTime() - 300, '<')->execute();
+ }
+diff --git a/yplog/src/Controller/DefaultController.php b/yplog/src/Controller/DefaultController.php
+index b97b03a..99e27e3 100644
+--- a/yplog/src/Controller/DefaultController.php
++++ b/yplog/src/Controller/DefaultController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\yplog\Controller;
+ 
++use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Core\Controller\ControllerBase;
+ 
+ /**
+@@ -27,12 +28,14 @@ class DefaultController extends ControllerBase {
+         'field' => 'touches',
+       ],
+     ];
+-    $query = db_select('yp_log');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++    $query = \Drupal::database()->select('yp_log');
+     $query->addField('yp_log', 'listen_url');
+     $query->addExpression('MAX(listeners)', 'maximum');
+     $query->addExpression('ROUND(AVG(listeners))', 'average');
+     $query->addExpression('COUNT(*)', 'touches');
+-    $query->condition('timestamp', REQUEST_TIME - 604800, '>');
++    $query->condition('timestamp', \Drupal::time()->getRequestTime() - 604800, '>');
+     $query->groupBy('listen_url');
+     $query = $query
+       ->extend('TableSort')
+@@ -86,10 +89,10 @@ class DefaultController extends ControllerBase {
+     // l() expects a Url object, created from a route name or external URI.
+     // drupal_set_breadcrumb(array(l(t('Home'), NULL), l(t('Stream directory'), 'yp'), l(t('Reports'), 'yp/log')));
+     $directory = 'public://yplog';
+-    file_prepare_directory($directory, FILE_CREATE_DIRECTORY);
++    \Drupal::service('file_system')->prepareDirectory($directory, FileSystemInterface::CREATE_DIRECTORY);
+     $filename = $directory . '/' . md5($listen_url) . '.png';
+     // If image is stale or not found, generate new image.
+-    if (!file_exists($filename) || REQUEST_TIME - filemtime($filename) > 900) {
++    if (!file_exists($filename) || \Drupal::time()->getRequestTime() - filemtime($filename) > 900) {
+       yplog_graph($listen_url, $filename);
+     }
+     // @FIXME
+diff --git a/yplog/yplog.graph.inc b/yplog/yplog.graph.inc
+index bbecc75..26fa4c8 100644
+--- a/yplog/yplog.graph.inc
++++ b/yplog/yplog.graph.inc
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\File\FileSystemInterface;
+ /**
+  * @file
+  */
+@@ -16,12 +17,14 @@ function yplog_graph_index() {
+     ['data' => t('Average listeners'), 'field' => 'average'],
+     ['data' => t('Relative uptime'), 'field' => 'touches'],
+   ];
+-  $query = db_select('yp_log');
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++  $query = \Drupal::database()->select('yp_log');
+   $query->addField('yp_log', 'listen_url');
+   $query->addExpression('MAX(listeners)', 'maximum');
+   $query->addExpression('ROUND(AVG(listeners))', 'average');
+   $query->addExpression('COUNT(*)', 'touches');
+-  $query->condition('timestamp', REQUEST_TIME - 604800, '>');
++  $query->condition('timestamp', \Drupal::time()->getRequestTime() - 604800, '>');
+   $query->groupBy('listen_url');
+   $query = $query
+     ->extend('TableSort')
+@@ -75,10 +78,10 @@ function yplog_graph_page($host, $path = '') {
+   // l() expects a Url object, created from a route name or external URI.
+   // drupal_set_breadcrumb(array(l(t('Home'), NULL), l(t('Stream directory'), 'yp'), l(t('Reports'), 'yp/log')));
+   $directory = 'public://yplog';
+-  file_prepare_directory($directory, FILE_CREATE_DIRECTORY);
++  \Drupal::service('file_system')->prepareDirectory($directory, FileSystemInterface::CREATE_DIRECTORY);
+   $filename = $directory . '/' . md5($listen_url) . '.png';
+   // If image is stale or not found, generate new image.
+-  if (!file_exists($filename) || REQUEST_TIME - filemtime($filename) > 900) {
++  if (!file_exists($filename) || \Drupal::time()->getRequestTime() - filemtime($filename) > 900) {
+     yplog_graph($listen_url, $filename);
+   }
+   // @FIXME
+@@ -96,7 +99,9 @@ function yplog_graph_page($host, $path = '') {
+  * Generates graph image.
+  */
+ function yplog_graph($listen_url, $filename) {
+-  $result = db_query('SELECT timestamp, listeners, listen_url FROM {yp_log} WHERE listen_url = :listen_url AND timestamp > :timestamp', [':listen_url' => $listen_url, ':timestamp' => REQUEST_TIME - 604800]);
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++  $result = \Drupal::database()->query('SELECT timestamp, listeners, listen_url FROM {yp_log} WHERE listen_url = :listen_url AND timestamp > :timestamp', [':listen_url' => $listen_url, ':timestamp' => \Drupal::time()->getRequestTime() - 604800]);
+   require_once 'Image/Graph.php';
+   $Dataset =& Image_Graph::factory('dataset');
+   $max_listeners = 0;
+@@ -127,8 +132,8 @@ function yplog_graph($listen_url, $filename) {
+   $Plotarea->setFillColor('yellow@0.1');
+   $AxisX =& $Plotarea->getAxis(IMAGE_GRAPH_AXIS_X);
+   $AxisX->setDataPreprocessor(Image_Graph::factory('Image_Graph_DataPreprocessor_Function', 'yplog_graph_date'));
+-  $AxisX->forceMinimum(REQUEST_TIME - 604800);
+-  $AxisX->forceMaximum(REQUEST_TIME);
++  $AxisX->forceMinimum(\Drupal::time()->getRequestTime() - 604800);
++  $AxisX->forceMaximum(\Drupal::time()->getRequestTime());
+   $AxisX->setLabelInterval(7200);
+   $AxisX->setTitle(t('Date (@timezone)', ['@timezone' => yplog_graph_timezone()]), ['size' => 7, 'color' => 'gray@0.6']);
+   $AxisY =& $Plotarea->getAxis(IMAGE_GRAPH_AXIS_Y);
+@@ -158,7 +163,7 @@ function yplog_graph_date($timestamp) {
+  * Formats the timezone for X axis.
+  */
+ function yplog_graph_timezone() {
+-  $date = date_create('@' . REQUEST_TIME);
++  $date = date_create('@' . \Drupal::time()->getRequestTime());
+   // @FIXME
+   // // @FIXME
+   // // This looks like another module's variable. You'll need to rewrite this call
+diff --git a/yplog/yplog.module b/yplog/yplog.module
+index 9875d0f..6ada7aa 100644
+--- a/yplog/yplog.module
++++ b/yplog/yplog.module
+@@ -49,8 +49,12 @@ function yplog_perm() {
+ function yplog_cron() {
+   // In the event that multiple streams have the same listen URL, they will be
+   // summed together.
+-  db_delete('yp_log')->condition('timestamp', REQUEST_TIME - (60 * 60 * 24 * 30), '<')->execute();
+-  db_query('INSERT INTO {yp_log} (listen_url, listeners, timestamp) SELECT listen_url, SUM(listeners), :timestamp FROM {yp_stream} GROUP BY listen_url', [':timestamp' => REQUEST_TIME]);
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++  \Drupal::database()->delete('yp_log')->condition('timestamp', \Drupal::time()->getRequestTime() - (60 * 60 * 24 * 30), '<')->execute();
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++  \Drupal::database()->query('INSERT INTO {yp_log} (listen_url, listeners, timestamp) SELECT listen_url, SUM(listeners), :timestamp FROM {yp_stream} GROUP BY listen_url', [':timestamp' => \Drupal::time()->getRequestTime()]);
+ }
+ 
+ /**

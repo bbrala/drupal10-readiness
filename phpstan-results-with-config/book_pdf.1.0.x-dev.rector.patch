@@ -1,0 +1,334 @@
+diff --git a/book_pdf.info.yml b/book_pdf.info.yml
+index 2323bff..dc47561 100644
+--- a/book_pdf.info.yml
++++ b/book_pdf.info.yml
+@@ -2,7 +2,6 @@ name: Book PDF
+ type: module
+ description: Print an entire Book to a PDF file.
+ package: Book
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^8 || ^9 || ^10
+ dependencies:
+   - drupal:book
+diff --git a/book_pdf.module b/book_pdf.module
+index 85d0ede..793ef78 100644
+--- a/book_pdf.module
++++ b/book_pdf.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\State\State;
++use Drupal\book_pdf\BookPdfGenerator;
+ use Drupal\Core\Entity\EntityInterface;
+ 
+ /**
+@@ -19,9 +21,9 @@ function book_pdf_node_update(EntityInterface $entity) {
+   // so the PDF cache will be re-generated the next time it's
+   // requested.
+   if (isset($entity->book)) {
+-    /** @var \Drupal\Core\State\State $state */
++    /** @var State $state */
+     $state = \Drupal::getContainer()->get('state');
+-    /** @var \Drupal\book_pdf\BookPdfGenerator $generator */
++    /** @var BookPdfGenerator $generator */
+     $generator = \Drupal::getContainer()->get('book_pdf.generator');
+     $state->delete($generator->getStateKey($entity));
+   }
+diff --git a/src/BookPdfGenerator.php b/src/BookPdfGenerator.php
+index 4564764..7b327b7 100644
+--- a/src/BookPdfGenerator.php
++++ b/src/BookPdfGenerator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\book_pdf;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\book\BookExport;
+ use Drupal\book_pdf\Event\BookPdfPreGenerateEvent;
+ use Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher;
+@@ -22,35 +23,35 @@ class BookPdfGenerator {
+   /**
+    * The state service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The Book export service.
+    *
+-   * @var \Drupal\book\BookExport
++   * @var BookExport
+    */
+   protected $bookExport;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The book_pdf logger channel.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The The book_pdf settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $settings;
+ 
+@@ -58,24 +59,24 @@ class BookPdfGenerator {
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher
++   * @var ContainerAwareEventDispatcher
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Constructs a BookPdfGenerator object.
+    *
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state service.
+-   * @param \Drupal\book\BookExport $book_export
++   * @param BookExport $book_export
+    *   The Book export service.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+-   * @param \Psr\Log\LoggerInterface $logger_channel
++   * @param LoggerInterface $logger_channel
+    *   The logger.channel.book_pdf service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher $event_dispatcher
++   * @param ContainerAwareEventDispatcher $event_dispatcher
+    *   The event dispatcher.
+    */
+   public function __construct(StateInterface $state, BookExport $book_export, RendererInterface $renderer, LoggerInterface $logger_channel, ConfigFactoryInterface $config_factory, ContainerAwareEventDispatcher $event_dispatcher) {
+@@ -90,7 +91,7 @@ class BookPdfGenerator {
+   /**
+    * Get the Book PDF cache filename.
+    *
+-   * @param \Drupal\node\Entity\Node $book
++   * @param Node $book
+    *   The book to get the cache filename for.
+    *
+    * @return string
+@@ -103,7 +104,7 @@ class BookPdfGenerator {
+   /**
+    * Get the Book PDF contents.
+    *
+-   * @param \Drupal\node\Entity\Node $book
++   * @param Node $book
+    *   The Book node.
+    *
+    * @return bool|string
+@@ -118,7 +119,7 @@ class BookPdfGenerator {
+       $defaultOptions['password'] = $basicPass;
+     }
+     $pdf = new Pdf();
+-    $event = $this->eventDispatcher->dispatch('book_pdf.pre', new BookPdfPreGenerateEvent($book, $pdf, $defaultOptions));
++    $event = $this->eventDispatcher->dispatch(new BookPdfPreGenerateEvent($book, $pdf, $defaultOptions), 'book_pdf.pre');
+     $pdf->setOptions($event->getGlobalOptions());
+     if (($content = $pdf->toString())) {
+       return $content;
+@@ -132,7 +133,7 @@ class BookPdfGenerator {
+   /**
+    * Get the state key.
+    *
+-   * @param \Drupal\node\Entity\Node $book
++   * @param Node $book
+    *   The book to get the cache state key for.
+    *
+    * @return string
+@@ -145,7 +146,7 @@ class BookPdfGenerator {
+   /**
+    * Get the URI for a Book's cached PDF.
+    *
+-   * @param \Drupal\node\Entity\Node $book
++   * @param Node $book
+    *   The Book to return the PDF file path for.
+    *
+    * @return bool|string
+diff --git a/src/Controller/BookPdfController.php b/src/Controller/BookPdfController.php
+index 2294d33..1c141e0 100644
+--- a/src/Controller/BookPdfController.php
++++ b/src/Controller/BookPdfController.php
+@@ -20,23 +20,23 @@ class BookPdfController extends ControllerBase {
+   /**
+    * The book PDF generator service.
+    *
+-   * @var \Drupal\book_pdf\BookPdfGenerator
++   * @var BookPdfGenerator
+    */
+   protected $generator;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\Messenger
++   * @var Messenger
+    */
+   protected $messenger;
+ 
+   /**
+    * BookPdfController constructor.
+    *
+-   * @param \Drupal\book_pdf\BookPdfGenerator $generator
++   * @param BookPdfGenerator $generator
+    *   The book PDF generator service.
+-   * @param \Drupal\Core\Messenger\Messenger $messenger
++   * @param Messenger $messenger
+    *   The messenger service.
+    */
+   public function __construct(BookPdfGenerator $generator, Messenger $messenger) {
+@@ -78,7 +78,7 @@ class BookPdfController extends ControllerBase {
+   /**
+    * Get a filename for the PDF based on the book title and date/time.
+    *
+-   * @param \Drupal\node\Entity\Node $book
++   * @param Node $book
+    *   The book node by which we can generate the filename from.
+    *
+    * @return string
+diff --git a/src/Event/BookPdfPreGenerateEvent.php b/src/Event/BookPdfPreGenerateEvent.php
+index dc1451c..98986a8 100644
+--- a/src/Event/BookPdfPreGenerateEvent.php
++++ b/src/Event/BookPdfPreGenerateEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\book_pdf\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use mikehaertl\wkhtmlto\Pdf;
+-use Symfony\Component\EventDispatcher\Event;
+ use Drupal\node\Entity\Node;
+ 
+ /**
+@@ -16,7 +16,7 @@ class BookPdfPreGenerateEvent extends Event {
+   /**
+    * The WKHTMLTOPDF object.
+    *
+-   * @var \mikehaertl\wkhtmlto\Pdf
++   * @var Pdf
+    */
+   protected $pdf;
+ 
+@@ -30,16 +30,16 @@ class BookPdfPreGenerateEvent extends Event {
+   /**
+    * The Book node.
+    *
+-   * @var \Drupal\node\Entity\Node
++   * @var Node
+    */
+   protected $book;
+ 
+   /**
+    * BookPdfPreStringEvent constructor.
+    *
+-   * @param \Drupal\node\Entity\Node $book
++   * @param Node $book
+    *   The Book node.
+-   * @param \mikehaertl\wkhtmlto\Pdf $pdf
++   * @param Pdf $pdf
+    *   The WKHTMLTOPDF object.
+    * @param array $default_options
+    *   The default WKHTMLTOPDF global options.
+@@ -53,7 +53,7 @@ class BookPdfPreGenerateEvent extends Event {
+   /**
+    * Get the PDF object.
+    *
+-   * @return \mikehaertl\wkhtmlto\Pdf
++   * @return Pdf
+    *   The WKHTMLTOPDF object.
+    */
+   public function getPdf() {
+@@ -83,7 +83,7 @@ class BookPdfPreGenerateEvent extends Event {
+   /**
+    * Get the Book node.
+    *
+-   * @return \Drupal\node\Entity\Node
++   * @return Node
+    *   The Book node.
+    */
+   public function getBook() {
+diff --git a/src/EventSubscriber/BookPdfPreGenerateSubscriber.php b/src/EventSubscriber/BookPdfPreGenerateSubscriber.php
+index 7aa86ad..0805dda 100644
+--- a/src/EventSubscriber/BookPdfPreGenerateSubscriber.php
++++ b/src/EventSubscriber/BookPdfPreGenerateSubscriber.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\book_pdf\EventSubscriber;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Drupal\Core\Logger\LoggerChannelFactory;
+ use Drupal\book\BookExport;
+ use Drupal\book_pdf\Event\BookPdfEvents;
+ use Drupal\book_pdf\Event\BookPdfPreGenerateEvent;
+@@ -17,32 +19,32 @@ class BookPdfPreGenerateSubscriber implements EventSubscriberInterface {
+   /**
+    * The Book export service.
+    *
+-   * @var \Drupal\book\BookExport
++   * @var BookExport
+    */
+   protected $bookExport;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The book_pdf logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Constructs event subscriber.
+    *
+-   * @param \Drupal\book\BookExport $bookExport
++   * @param BookExport $bookExport
+    *   The Book export service.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactory $loggerFactory
++   * @param LoggerChannelFactory $loggerFactory
+    *   The logger factory service.
+    */
+   public function __construct(BookExport $bookExport, RendererInterface $renderer, LoggerChannelFactoryInterface $loggerFactory) {
+@@ -54,10 +56,10 @@ class BookPdfPreGenerateSubscriber implements EventSubscriberInterface {
+   /**
+    * Adds the main book body to the PDF being generated.
+    *
+-   * @param \Drupal\book_pdf\Event\BookPdfPreGenerateEvent $event
++   * @param BookPdfPreGenerateEvent $event
+    *   The Book Pdf Pre Generate Event Object.
+    *
+-   * @return \Drupal\book_pdf\Event\BookPdfPreGenerateEvent|false
++   * @return BookPdfPreGenerateEvent|false
+    *   Event Object.
+    */
+   public function addBookHtml(BookPdfPreGenerateEvent $event) {

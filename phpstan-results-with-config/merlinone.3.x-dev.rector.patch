@@ -1,0 +1,645 @@
+diff --git a/merlinone.install b/merlinone.install
+index f4904d3..5023c25 100644
+--- a/merlinone.install
++++ b/merlinone.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Config\ConfigFactoryInterface;
+ /**
+  * @file
+  * Update hooks for the MerlinOne module.
+@@ -63,7 +64,7 @@ function merlinone_update_8101() {
+  * plugin ID for Media Entity Browser widgets.
+  */
+ function merlinone_update_8201() {
+-  /** @var \Drupal\Core\Config\ConfigFactoryInterface $config_factory */
++  /** @var ConfigFactoryInterface $config_factory */
+   $config_factory = \Drupal::service('config.factory');
+ 
+   // Save browsers we changed to clear cached forms.
+@@ -116,7 +117,7 @@ function merlinone_update_8201() {
+  * Updates the plugin ID.
+  */
+ function merlinone_update_8202() {
+-  /** @var \Drupal\Core\Config\ConfigFactoryInterface $config_factory */
++  /** @var ConfigFactoryInterface $config_factory */
+   $config_factory = \Drupal::service('config.factory');
+ 
+   foreach ($config_factory->listAll('media.type.') as $name) {
+@@ -155,4 +156,4 @@ function merlinone_update_8203() {
+   \Drupal::getContainer()
+     ->get('plugin.manager.media.source')
+     ->clearCachedDefinitions();
+-}
+\ No newline at end of file
++}
+diff --git a/src/Controller/MerlinOneBulkAddController.php b/src/Controller/MerlinOneBulkAddController.php
+index 6cac76e..4a71fa3 100644
+--- a/src/Controller/MerlinOneBulkAddController.php
++++ b/src/Controller/MerlinOneBulkAddController.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\merlinone\Controller;
+ 
++use Symfony\Component\HttpFoundation\RedirectResponse;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Core\Access\AccessResultAllowed;
++use Drupal\Core\Access\AccessResultForbidden;
++use Drupal\Core\Access\AccessResultInterface;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -20,14 +26,14 @@ class MerlinOneBulkAddController extends ControllerBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a new MediaBulkUploadController.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -48,11 +54,11 @@ class MerlinOneBulkAddController extends ControllerBase {
+    *
+    * Redirects to the add form if there's only one bundle available.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse|array
++   * @return RedirectResponse|array
+    *   If there's only one available bundle, a redirect response.
+    *   Otherwise, a render array with the add links for each bundle.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   public function addLinksList() {
+     $build = [
+@@ -92,11 +98,11 @@ class MerlinOneBulkAddController extends ControllerBase {
+   /**
+    * Access callback to validate if the user has access to the upload form list.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   User to validate access on.
+    *
+-   * @return \Drupal\Core\Access\AccessResultAllowed|\Drupal\Core\Access\AccessResultForbidden
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @return AccessResultAllowed|AccessResultForbidden
++   * @throws InvalidPluginDefinitionException
+    */
+   public function accessList(AccountInterface $account) {
+     if ($account->hasPermission('administer media')) {
+@@ -118,12 +124,12 @@ class MerlinOneBulkAddController extends ControllerBase {
+   /**
+    * Access callback to validate if the user has access to a bulk upload form.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   User to validate access on.
+-   * @param \Drupal\media\MediaTypeInterface $media_type
++   * @param MediaTypeInterface $media_type
+    *   The media type the upload form belongs to.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    */
+   public function accessForm(AccountInterface $account, MediaTypeInterface $media_type) {
+     $permissions = [
+@@ -137,7 +143,7 @@ class MerlinOneBulkAddController extends ControllerBase {
+   /**
+    * The _title_callback for the merlinone.bulk.upload_form route.
+    *
+-   * @param \Drupal\media\MediaTypeInterface $media_type
++   * @param MediaTypeInterface $media_type
+    *   The current media type.
+    *
+    * @return string
+@@ -151,8 +157,8 @@ class MerlinOneBulkAddController extends ControllerBase {
+    * Finds all of the media types that have a MerlinOne source type.
+    *
+    * @return array
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getMerlinMediaTypes() {
+     $mediaStorage = $this->entityTypeManager->getStorage('media_type');
+diff --git a/src/Controller/MerlinOneFinalizeMediaController.php b/src/Controller/MerlinOneFinalizeMediaController.php
+index 613a287..bab6f4e 100644
+--- a/src/Controller/MerlinOneFinalizeMediaController.php
++++ b/src/Controller/MerlinOneFinalizeMediaController.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\merlinone\Controller;
+ 
++use Symfony\Component\Mime\MimeTypesInterface;
++use Drupal\media\MediaTypeInterface;
++use Drupal\media\MediaInterface;
++use Drupal\file\FileInterface;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\File\FileSystemInterface;
+@@ -9,7 +13,6 @@ use Drupal\image\Entity\ImageStyle;
+ use Drupal\media\Entity\Media;
+ use Drupal\merlinone\MerlinOneApiInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+-use Symfony\Component\HttpFoundation\File\MimeType\MimeTypeGuesserInterface;
+ use Symfony\Component\HttpFoundation\JsonResponse;
+ use Symfony\Component\HttpFoundation\Request;
+ 
+@@ -19,44 +22,44 @@ use Symfony\Component\HttpFoundation\Request;
+ class MerlinOneFinalizeMediaController extends ControllerBase {
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The MerlinOne API Service.
+    *
+-   * @var \Drupal\merlinone\MerlinOneApiInterface
++   * @var MerlinOneApiInterface
+    */
+   protected $merlinOneApi;
+ 
+   /**
+    * The file system interface.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * The mime type guesser service.
+    *
+-   * @var \Symfony\Component\HttpFoundation\File\MimeType\MimeTypeGuesserInterface
++   * @var MimeTypesInterface
+    */
+   protected $mimeTypeGuesser;
+ 
+   /**
+    * Constructs widget plugin.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\merlinone\MerlinOneApiInterface $merlinOneApi
++   * @param MerlinOneApiInterface $merlinOneApi
+    *   The MerlinOne API service.
+-   * @param \Drupal\Core\File\FileSystemInterface $fileSystem
++   * @param FileSystemInterface $fileSystem
+    *   The file system interface.
+-   * @param \Symfony\Component\HttpFoundation\File\MimeType\MimeTypeGuesserInterface $mimeTypeGuesser
++   * @param MimeTypesInterface $mimeTypeGuesser
+    *   The MIME type guesser.
+    */
+-  public function __construct(EntityTypeManagerInterface $entity_type_manager, MerlinOneApiInterface $merlinOneApi, FileSystemInterface $fileSystem, MimeTypeGuesserInterface $mimeTypeGuesser) {
++  public function __construct(EntityTypeManagerInterface $entity_type_manager, MerlinOneApiInterface $merlinOneApi, FileSystemInterface $fileSystem, MimeTypesInterface $mimeTypeGuesser) {
+     $this->entityTypeManager = $entity_type_manager;
+     $this->merlinOneApi = $merlinOneApi;
+     $this->fileSystem = $fileSystem;
+@@ -81,7 +84,7 @@ class MerlinOneFinalizeMediaController extends ControllerBase {
+    * @param string $media_type
+    *   The media type ID.
+    *
+-   * @return \Drupal\media\MediaTypeInterface
++   * @return MediaTypeInterface
+    *   Media type.
+    */
+   protected function getType($media_type) {
+@@ -94,14 +97,14 @@ class MerlinOneFinalizeMediaController extends ControllerBase {
+    * Finalize Media entities by replacing their source file with the full asset
+    * URL.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request.
+    * @param $media_type
+    *   The media type.
+    * @param $media_id
+    *   The media entity ID.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    */
+   public function finalizeMedia(Request $request, $media_type, $media_id) {
+     $type = $this->getType($media_type);
+@@ -109,11 +112,11 @@ class MerlinOneFinalizeMediaController extends ControllerBase {
+     $sourceFieldDefinition = $plugin->getSourceFieldDefinition($type);
+ 
+     // Load the media item and get its managed file from the source field.
+-    /** @var \Drupal\media\MediaInterface $mediaItem */
++    /** @var MediaInterface $mediaItem */
+     $mediaItem = Media::load($media_id);
+     $sourceField = $mediaItem->get($sourceFieldDefinition->getName());
+ 
+-    /** @var \Drupal\file\FileInterface $mediaFile */
++    /** @var FileInterface $mediaFile */
+     $mediaFile = $sourceField->entity;
+     $mediaFileUri = $mediaFile->getFileUri();
+ 
+diff --git a/src/Controller/MerlinOnePrepareMediaController.php b/src/Controller/MerlinOnePrepareMediaController.php
+index 809fb6b..54a5a5e 100644
+--- a/src/Controller/MerlinOnePrepareMediaController.php
++++ b/src/Controller/MerlinOnePrepareMediaController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\merlinone\Controller;
+ 
++use Drupal\media\MediaTypeInterface;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+@@ -18,30 +19,30 @@ use Symfony\Component\HttpFoundation\Request;
+ class MerlinOnePrepareMediaController extends ControllerBase {
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The MerlinOne API Service.
+    *
+-   * @var \Drupal\merlinone\MerlinOneApiInterface
++   * @var MerlinOneApiInterface
+    */
+   protected $merlinOneApi;
+ 
+   /**
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   private $token;
+ 
+   /**
+    * Constructs widget plugin.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\merlinone\MerlinOneApiInterface $merlinOneApi
++   * @param MerlinOneApiInterface $merlinOneApi
+    *   The MerlinOne API service.
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   The token utility.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, MerlinOneApiInterface $merlinOneApi, Token $token) {
+@@ -67,7 +68,7 @@ class MerlinOnePrepareMediaController extends ControllerBase {
+    * @param string $media_type
+    *   The media type ID.
+    *
+-   * @return \Drupal\media\MediaTypeInterface
++   * @return MediaTypeInterface
+    *   Media type.
+    */
+   protected function getType($media_type) {
+@@ -79,12 +80,12 @@ class MerlinOnePrepareMediaController extends ControllerBase {
+   /**
+    * Prepare Media entities by using their large thumbnail.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request.
+    * @param string $media_type
+    *   The media type to create.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    */
+   public function prepareMedia(Request $request, $media_type) {
+     $type = $this->getType($media_type);
+diff --git a/src/Form/MerlinOneBulkAddForm.php b/src/Form/MerlinOneBulkAddForm.php
+index c01560b..8d30d68 100644
+--- a/src/Form/MerlinOneBulkAddForm.php
++++ b/src/Form/MerlinOneBulkAddForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\merlinone\Form;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\media\MediaTypeInterface;
+@@ -30,9 +32,9 @@ class MerlinOneBulkAddForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+-   * @param \Drupal\media\MediaTypeInterface|null $media_type
++   * @param MediaTypeInterface|null $media_type
+    *   The media type configuration entity.
+    *
+    * @return array
+@@ -70,11 +72,11 @@ class MerlinOneBulkAddForm extends FormBase {
+    *
+    * @param array $form
+    *   The form render array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $form_state->setRedirect('entity.media.collection');
+diff --git a/src/Form/MerlinOneConfigurationForm.php b/src/Form/MerlinOneConfigurationForm.php
+index e333cda..8380218 100644
+--- a/src/Form/MerlinOneConfigurationForm.php
++++ b/src/Form/MerlinOneConfigurationForm.php
+@@ -17,16 +17,16 @@ class MerlinOneConfigurationForm extends ConfigFormBase {
+   /**
+    * The MerlinOne API Service.
+    *
+-   * @var \Drupal\merlinone\MerlinOneApiInterface
++   * @var MerlinOneApiInterface
+    */
+   private $merlinOneApi;
+ 
+   /**
+    * Constructs a MerlinOneConfigurationForm object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\merlinone\MerlinOneApiInterface $merlinOneApi
++   * @param MerlinOneApiInterface $merlinOneApi
+    *   The MerlinOne API service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, MerlinOneApiInterface $merlinOneApi) {
+diff --git a/src/MerlinOneApi.php b/src/MerlinOneApi.php
+index 4607791..ab8ace4 100644
+--- a/src/MerlinOneApi.php
++++ b/src/MerlinOneApi.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\merlinone;
+ 
++use Drupal\file\FileInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Core\Image\ImageFactory;
+@@ -19,26 +20,26 @@ class MerlinOneApi implements MerlinOneApiInterface {
+   /**
+    * The Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   private $configFactory;
+ 
+   /**
+    * The file system interface.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * The stream wrapper manager.
+    *
+-   * @var \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface
++   * @var StreamWrapperManagerInterface
+    */
+   protected $streamWrapperManager;
+ 
+   /**
+-   * @var \Drupal\Core\Image\ImageFactory
++   * @var ImageFactory
+    */
+   private $imageFactory;
+ 
+@@ -59,13 +60,13 @@ class MerlinOneApi implements MerlinOneApiInterface {
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation manager.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   The file system interface.
+-   * @param \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface $stream_wrapper_manager
++   * @param StreamWrapperManagerInterface $stream_wrapper_manager
+    *   The steam wrapper manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, TranslationInterface $string_translation, FileSystemInterface $file_system, StreamWrapperManagerInterface $stream_wrapper_manager, ImageFactory $imageFactory) {
+@@ -133,7 +134,7 @@ class MerlinOneApi implements MerlinOneApiInterface {
+     // Destination is the upload directory and the filename.
+     $destination = $this->streamWrapperManager->normalizeUri($directory . '/' . $filename);
+ 
+-    /** @var \Drupal\file\FileInterface $file */
++    /** @var FileInterface $file */
+     $file = system_retrieve_file($itemUrl, $destination, true, FileSystemInterface::EXISTS_RENAME);
+ 
+     // If source width and height are specified, or there's a crop, resize the
+diff --git a/src/MerlinOneApiInterface.php b/src/MerlinOneApiInterface.php
+index 6bffc41..a53323f 100644
+--- a/src/MerlinOneApiInterface.php
++++ b/src/MerlinOneApiInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\merlinone;
+ 
++use Drupal\file\FileInterface;
+ /**
+  * Provides the MerlinOne API.
+  */
+@@ -51,7 +52,7 @@ interface MerlinOneApiInterface {
+    * @param string $directory
+    *   Destination directory.
+    *
+-   * @return \Drupal\file\FileInterface
++   * @return FileInterface
+    *   A managed file
+    */
+   public function createPlaceholderFromItem($item, $transaction, $settings, $directory);
+diff --git a/src/Plugin/EntityBrowser/Widget/MerlinOneSearch.php b/src/Plugin/EntityBrowser/Widget/MerlinOneSearch.php
+index 3cea0da..cb0e2eb 100644
+--- a/src/Plugin/EntityBrowser/Widget/MerlinOneSearch.php
++++ b/src/Plugin/EntityBrowser/Widget/MerlinOneSearch.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\merlinone\Plugin\EntityBrowser\Widget;
+ 
++use Drupal\media\MediaInterface;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Component\Utility\NestedArray;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -38,7 +39,7 @@ class MerlinOneSearch extends WidgetBase {
+   /**
+    * Returns the media type that this widget creates.
+    *
+-   * @return \Drupal\media\MediaTypeInterface
++   * @return MediaTypeInterface
+    *   Media type.
+    */
+   protected function getType() {
+@@ -139,14 +140,14 @@ class MerlinOneSearch extends WidgetBase {
+    * Validate Media Type
+    *
+    * @param $element
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    * @param $form
+    */
+   public function validateType($element, FormStateInterface $form_state, $form) {
+     $type_id = $form_state->getValue($element['#parents']);
+ 
+     if ($type_id) {
+-      /** @var \Drupal\media\MediaTypeInterface $type */
++      /** @var MediaTypeInterface $type */
+       $type = $this->entityTypeManager
+         ->getStorage('media_type')
+         ->load($type_id);
+@@ -161,7 +162,7 @@ class MerlinOneSearch extends WidgetBase {
+   /**
+    * Indicates if the Media Type source has the Merlin ID field mapped.
+    *
+-   * @param \Drupal\media\MediaTypeInterface $type
++   * @param MediaTypeInterface $type
+    * @return bool
+    */
+   protected function typeHasMerlinIdMapped(MediaTypeInterface $type) {
+@@ -213,7 +214,7 @@ class MerlinOneSearch extends WidgetBase {
+    * {@inheritdoc}
+    */
+   public function submit(array &$element, array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\media\MediaInterface[] $media */
++    /** @var MediaInterface[] $media */
+     $media = $form_state->get('merlinone_prepared_entities');
+     $this->selectEntities($media, $form_state);
+     $this->clearFormValues($element, $form_state);
+@@ -224,7 +225,7 @@ class MerlinOneSearch extends WidgetBase {
+    *
+    * @param array $element
+    *   Upload form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state object.
+    */
+   protected function clearFormValues(array &$element, FormStateInterface $form_state) {
+diff --git a/src/Plugin/media/Source/MerlinOneMediaSourceInterface.php b/src/Plugin/media/Source/MerlinOneMediaSourceInterface.php
+index 1735a1f..ac46ef4 100644
+--- a/src/Plugin/media/Source/MerlinOneMediaSourceInterface.php
++++ b/src/Plugin/media/Source/MerlinOneMediaSourceInterface.php
+@@ -13,7 +13,7 @@ interface MerlinOneMediaSourceInterface {
+   /**
+    * Get supported file extensions for the given media type.
+    *
+-   * @param \Drupal\media\MediaTypeInterface $media_type
++   * @param MediaTypeInterface $media_type
+    *   The media type to check.
+    * @return array
+    *   An array of file extensions.
+@@ -25,7 +25,7 @@ interface MerlinOneMediaSourceInterface {
+    * type (currently need to force JPEG for non-supported, so only image media
+    * types should limit).
+    *
+-   * @param \Drupal\media\MediaTypeInterface $media_type
++   * @param MediaTypeInterface $media_type
+    *   The media type to check.
+    * @return bool
+    */
+diff --git a/src/Traits/MerlinOneBrowserTrait.php b/src/Traits/MerlinOneBrowserTrait.php
+index 8b8b170..3b54039 100644
+--- a/src/Traits/MerlinOneBrowserTrait.php
++++ b/src/Traits/MerlinOneBrowserTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\merlinone\Traits;
+ 
++use Drupal\merlinone\MerlinOneApiInterface;
+ use Drupal\media\MediaTypeInterface;
+ use Drupal\merlinone\Plugin\media\Source\MerlinOneMediaSourceInterface;
+ 
+@@ -13,14 +14,14 @@ trait MerlinOneBrowserTrait {
+   /**
+    * The MerlinOne API Service.
+    *
+-   * @var \Drupal\merlinone\MerlinOneApiInterface
++   * @var MerlinOneApiInterface
+    */
+   protected $merlinOneApi;
+ 
+   /**
+    * Gets the MerlinOne API service.
+    *
+-   * @return \Drupal\merlinone\MerlinOneApiInterface
++   * @return MerlinOneApiInterface
+    *   The MerlinOne API service.
+    */
+   protected function getMerlinOneApi() {
+@@ -57,7 +58,7 @@ trait MerlinOneBrowserTrait {
+   /**
+    * Get Merlin browser settings.
+    *
+-   * @param \Drupal\media\MediaTypeInterface $media_type
++   * @param MediaTypeInterface $media_type
+    *   The media type.
+    * @return array
+    *   Settings for the Merlin browser.
+diff --git a/src/Traits/MerlinOneMediaSourceTrait.php b/src/Traits/MerlinOneMediaSourceTrait.php
+index ab751d5..8d855d1 100644
+--- a/src/Traits/MerlinOneMediaSourceTrait.php
++++ b/src/Traits/MerlinOneMediaSourceTrait.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\merlinone\Traits;
+ 
++use Drupal\taxonomy\TermStorageInterface;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Form\SubformStateInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+@@ -35,7 +37,7 @@ trait MerlinOneMediaSourceTrait {
+   /**
+    * Handle Merlin metadata attribute for a given media item.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   A media item.
+    * @param string $attribute_name
+    *   Name of the attribute to fetch.
+@@ -78,7 +80,7 @@ trait MerlinOneMediaSourceTrait {
+           $keyword_strings = array_filter(array_unique($keyword_strings));
+ 
+           if (count($keyword_strings)) {
+-            /** @var \Drupal\taxonomy\TermStorageInterface $term_storage */
++            /** @var TermStorageInterface $term_storage */
+             $term_storage = $this->getEntityTypeManager()->getStorage('taxonomy_term');
+             $keywords = [];
+ 
+@@ -158,7 +160,7 @@ trait MerlinOneMediaSourceTrait {
+   /**
+    * Get the entity type manager.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @return EntityTypeManagerInterface
+    *   The entity type manager service.
+    */
+   abstract protected function getEntityTypeManager();

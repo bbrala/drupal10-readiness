@@ -1,0 +1,946 @@
+diff --git a/composer.json b/composer.json
+index eb9f545..d9eb1e1 100644
+--- a/composer.json
++++ b/composer.json
+@@ -18,12 +18,12 @@
+   },
+   "require": {
+     "drupal/map_widget": "^1.2",
+-    "drupal/core": "^8.9 || ^9.0",
+     "fathershawn/oauth2-formassembly": "^1.0",
+     "symfony/dom-crawler": "^3.4 || ^4.4",
+     "symfony/css-selector": "^3.4|^4.4|^5.0",
+     "ext-libxml": "*",
+-    "ext-json": "*"
++    "ext-json": "*",
++    "drupal/core": "^8.9 || ^9.0 || ^10"
+   },
+   "suggest": {
+     "scrivo/highlight.php": "Allows form html to be displayed for inspection on the entity edit form.",
+diff --git a/formassembly.info.yml b/formassembly.info.yml
+index b069cdb..2e9c3c9 100644
+--- a/formassembly.info.yml
++++ b/formassembly.info.yml
+@@ -3,5 +3,5 @@ type: module
+ description: Integrates a Drupal site with the FormAssembly service.
+ dependencies:
+   - drupal:map_widget
+-core_version_requirement: ^8.8 || ^9
++core_version_requirement: ^8.8 || ^9 || ^10
+ package: Web services
+diff --git a/formassembly.module b/formassembly.module
+index bbc30f5..77c2524 100644
+--- a/formassembly.module
++++ b/formassembly.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\formassembly\FormAssemblyBatchProcessor;
+ /**
+  * @file
+  * Procedural code for formassembly module.
+@@ -90,7 +91,7 @@ function formassembly_entity_field_access(
+  * Implementation of callback_batch_operation()
+  */
+ function formassembly_batch_get_forms(&$context) {
+-  /** @var \Drupal\formassembly\FormAssemblyBatchProcessor $batchProcessor */
++  /** @var FormAssemblyBatchProcessor $batchProcessor */
+   $batchProcessor = \Drupal::service('formassembly.batch');
+   if (empty($context['sandbox'])) {
+     // Batch has not run before.  Initialize.
+@@ -103,7 +104,7 @@ function formassembly_batch_get_forms(&$context) {
+  * Implementation of  callback_batch_finished()
+  */
+ function formassembly_batch_finished($success, $results, $operations) {
+-  /** @var \Drupal\formassembly\FormAssemblyBatchProcessor $batchProcessor */
++  /** @var FormAssemblyBatchProcessor $batchProcessor */
+   $batchProcessor = \Drupal::service('formassembly.batch');
+   if ($success) {
+     $batchProcessor->batchPostProcess($results['sync_id']);
+diff --git a/src/ApiAuthorize.php b/src/ApiAuthorize.php
+index fd35fe3..b5e9d1c 100644
+--- a/src/ApiAuthorize.php
++++ b/src/ApiAuthorize.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\formassembly;
+ 
++use League\OAuth2\Client\Token\AccessToken;
+ use Drupal\Core\Url;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\State\StateInterface as State;
+@@ -34,20 +35,20 @@ class ApiAuthorize extends ApiBase {
+   /**
+    * Service to obtain oauth credentials.
+    *
+-   * @var \Drupal\formassembly\FormAssemblyKeyService
++   * @var FormAssemblyKeyService
+    */
+   protected $keyService;
+ 
+   /**
+    * ApiAuthorize constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   Injected ConfigFactory service.
+-   * @param \Psr\Log\LoggerInterface $loggerChannel
++   * @param LoggerInterface $loggerChannel
+    *   Injected Logger service.
+    * @param \Drupal\Core\State\StateInterface $state
+    *   Injected State service.
+-   * @param \Drupal\formassembly\FormAssemblyKeyService $keyService
++   * @param FormAssemblyKeyService $keyService
+    *   Injected Key service.
+    */
+   public function __construct(
+@@ -102,7 +103,7 @@ class ApiAuthorize extends ApiBase {
+    *   Any exception passed through from the Oauth request.
+    */
+   public function getToken() {
+-    /** @var \League\OAuth2\Client\Token\AccessToken $accessToken */
++    /** @var AccessToken $accessToken */
+     $accessToken = $this->state->get('fa_form.access_token');
+     if ($accessToken->hasExpired()) {
+       // Get the provider.
+@@ -136,7 +137,7 @@ class ApiAuthorize extends ApiBase {
+    *   If there is such a valid token.
+    */
+   public function isAuthorized() {
+-    /** @var \League\OAuth2\Client\Token\AccessToken $accessToken */
++    /** @var AccessToken $accessToken */
+     $accessToken = $this->state->get('fa_form.access_token');
+     return isset($accessToken) && !$accessToken->hasExpired();
+   }
+diff --git a/src/ApiBase.php b/src/ApiBase.php
+index 2d6fa18..ab5df22 100644
+--- a/src/ApiBase.php
++++ b/src/ApiBase.php
+@@ -52,21 +52,21 @@ abstract class ApiBase {
+   /**
+    * Injected config service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected $configFactory;
+ 
+   /**
+    * Default logger channel.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * ApiBase constructor. No matching create() method - used to build services.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   Injected config service.
+    * @param \Drupal\formassembly\LoggerInterface $loggerChannel
+    *   Injected logging service.
+@@ -90,7 +90,7 @@ abstract class ApiBase {
+    * @param string $segment
+    *   A string key to indicate which path to use.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   A url object configured for the proper endpoint.
+    */
+   public function getUrl($segment) {
+diff --git a/src/ApiMarkup.php b/src/ApiMarkup.php
+index a3c077a..ae020f7 100644
+--- a/src/ApiMarkup.php
++++ b/src/ApiMarkup.php
+@@ -31,63 +31,63 @@ class ApiMarkup extends ApiBase {
+   /**
+    * GuzzleHttp\Client definition.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $httpClient;
+ 
+   /**
+    * Injected authorization service.
+    *
+-   * @var \Drupal\formassembly\ApiAuthorize
++   * @var ApiAuthorize
+    */
+   protected $authorize;
+ 
+   /**
+    * Injected service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Injected service.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $tokens;
+ 
+   /**
+    * Injected Service.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * Injected Service.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $userProxy;
+ 
+   /**
+    * ApiSync constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   Injected config service.
+-   * @param \Psr\Log\LoggerInterface $loggerChannel
++   * @param LoggerInterface $loggerChannel
+    *   Injected service.
+-   * @param \GuzzleHttp\Client $http_client
++   * @param Client $http_client
+    *   Injected Guzzle client.
+-   * @param \Drupal\formassembly\ApiAuthorize $authorize
++   * @param ApiAuthorize $authorize
+    *   Injected api service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler
++   * @param ModuleHandlerInterface $moduleHandler
+    *   Injected service.
+-   * @param \Drupal\Core\Utility\Token $tokenService
++   * @param Token $tokenService
+    *   Injected service.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $routeMatch
++   * @param RouteMatchInterface $routeMatch
+    *   Injected service.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $userProxy
++   * @param AccountProxyInterface $userProxy
+    *   Injected service.
+    */
+   public function __construct(
+@@ -118,7 +118,7 @@ class ApiMarkup extends ApiBase {
+    * hook_formassembly_form_params_alter(&$params) to allow modules to modify
+    * the passed parameter list.
+    *
+-   * @param \Drupal\formassembly\Entity\FormAssemblyEntity $entity
++   * @param FormAssemblyEntity $entity
+    *   Entity form object.
+    *
+    * @return string
+diff --git a/src/ApiSync.php b/src/ApiSync.php
+index 3c5ff70..17a8ed9 100644
+--- a/src/ApiSync.php
++++ b/src/ApiSync.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\formassembly;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\formassembly\Entity\FormAssemblyEntity;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Component\Utility\Xss;
+@@ -30,28 +33,28 @@ class ApiSync extends ApiBase {
+   /**
+    * GuzzleHttp\Client definition.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $httpClient;
+ 
+   /**
+    * FormAssembly storage..
+    *
+-   * @var \Drupal\formassembly\FormAssemblyStorage
++   * @var FormAssemblyStorage
+    */
+   protected $faStorage;
+ 
+   /**
+    * Injected authorization service.
+    *
+-   * @var \Drupal\formassembly\ApiAuthorize
++   * @var ApiAuthorize
+    */
+   protected $authorize;
+ 
+   /**
+    * Injected service for fasync cache.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cache;
+ 
+@@ -79,22 +82,22 @@ class ApiSync extends ApiBase {
+   /**
+    * ApiSync constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   Injected config service.
+-   * @param \Psr\Log\LoggerInterface $loggerChannel
++   * @param LoggerInterface $loggerChannel
+    *   Injected service.
+    *   Injected service.
+-   * @param \GuzzleHttp\Client $http_client
++   * @param Client $http_client
+    *   Injected Guzzle client.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Injected entity type service.
+-   * @param \Drupal\formassembly\ApiAuthorize $authorize
++   * @param ApiAuthorize $authorize
+    *   Injected api service.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cacheBackend
++   * @param CacheBackendInterface $cacheBackend
+    *   Injected service.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(
+     ConfigFactory $config_factory,
+@@ -205,7 +208,7 @@ class ApiSync extends ApiBase {
+   /**
+    * Helper method for getting forms from the admin index.
+    *
+-   * @throws \Drupal\formassembly\Exception\FormAssemblyException
++   * @throws FormAssemblyException
+    *   If the request is not returned in proper form.
+    * @throws \UnexpectedValueException
+    *   If an http return code other than 200 is received.
+@@ -263,7 +266,7 @@ class ApiSync extends ApiBase {
+   /**
+    * Helper method for getting forms from the standard index.
+    *
+-   * @throws \Drupal\formassembly\Exception\FormAssemblyException
++   * @throws FormAssemblyException
+    *   If the request is not returned in proper form.
+    * @throws \UnexpectedValueException
+    *   If an http return code other than 200 is received.
+@@ -362,7 +365,7 @@ class ApiSync extends ApiBase {
+         if (!empty($searchByFaId)) {
+           // There should only be one item - faid is a unique key so pop
+           // the first item off the array.
+-          /** @var \Drupal\formassembly\Entity\FormAssemblyEntity $formAssemblyEntity */
++          /** @var FormAssemblyEntity $formAssemblyEntity */
+           $formAssemblyEntity = array_shift($searchByFaId);
+           // Update forms that have changed since the last sync.
+           if ($formAssemblyEntity->getModifiedTime() < $formData['modified']) {
+diff --git a/src/Commands/FormassemblyCommands.php b/src/Commands/FormassemblyCommands.php
+index 5c93dfb..1bc2688 100644
+--- a/src/Commands/FormassemblyCommands.php
++++ b/src/Commands/FormassemblyCommands.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\formassembly\Commands;
+ 
++use Symfony\Component\Console\Helper\ProgressBar;
+ use Drupal\formassembly\FormAssemblyBatchProcessor;
+ use Drush\Commands\DrushCommands;
+ 
+@@ -23,21 +24,21 @@ class FormassemblyCommands extends DrushCommands {
+   /**
+    * Injected Sync service.
+    *
+-   * @var \Drupal\formassembly\FormAssemblyBatchProcessor
++   * @var FormAssemblyBatchProcessor
+    */
+   protected $batchProcessor;
+ 
+   /**
+    * Symfony progress bar component.
+    *
+-   * @var \Symfony\Component\Console\Helper\ProgressBar
++   * @var ProgressBar
+    */
+   protected $progressBar;
+ 
+   /**
+    * FormassemblyCommands constructor.
+    *
+-   * @param \Drupal\formassembly\FormAssemblyBatchProcessor $batchProcessor
++   * @param FormAssemblyBatchProcessor $batchProcessor
+    *   Our batch processing service.
+    */
+   public function __construct(FormAssemblyBatchProcessor $batchProcessor) {
+diff --git a/src/Component/Render/FormassemblyHtmlResponseAttachmentsProcessor.php b/src/Component/Render/FormassemblyHtmlResponseAttachmentsProcessor.php
+index 266594b..362960c 100644
+--- a/src/Component/Render/FormassemblyHtmlResponseAttachmentsProcessor.php
++++ b/src/Component/Render/FormassemblyHtmlResponseAttachmentsProcessor.php
+@@ -35,35 +35,35 @@ class FormassemblyHtmlResponseAttachmentsProcessor extends HtmlResponseAttachmen
+   /**
+    * The HTML response attachments processor service.
+    *
+-   * @var \Drupal\Core\Render\AttachmentsResponseProcessorInterface
++   * @var AttachmentsResponseProcessorInterface
+    */
+   protected $htmlResponseAttachmentsProcessor;
+ 
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Constructs a DfpResponseAttachmentsProcessor object.
+    *
+-   * @param \Drupal\Core\Render\AttachmentsResponseProcessorInterface $html_response_attachments_processor
++   * @param AttachmentsResponseProcessorInterface $html_response_attachments_processor
+    *   The HTML response attachments processor service.
+-   * @param \Drupal\Core\Asset\AssetResolverInterface $asset_resolver
++   * @param AssetResolverInterface $asset_resolver
+    *   An asset resolver.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   A config factory for retrieving required config objects.
+-   * @param \Drupal\Core\Asset\AssetCollectionRendererInterface $css_collection_renderer
++   * @param AssetCollectionRendererInterface $css_collection_renderer
+    *   The CSS asset collection renderer.
+-   * @param \Drupal\Core\Asset\AssetCollectionRendererInterface $js_collection_renderer
++   * @param AssetCollectionRendererInterface $js_collection_renderer
+    *   The JS asset collection renderer.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+    */
+   public function __construct(AttachmentsResponseProcessorInterface $html_response_attachments_processor, AssetResolverInterface $asset_resolver, ConfigFactoryInterface $config_factory, AssetCollectionRendererInterface $css_collection_renderer, AssetCollectionRendererInterface $js_collection_renderer, RequestStack $request_stack, RendererInterface $renderer, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Controller/OauthInteractions.php b/src/Controller/OauthInteractions.php
+index b246d50..9e48457 100644
+--- a/src/Controller/OauthInteractions.php
++++ b/src/Controller/OauthInteractions.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\formassembly\Controller;
+ 
++use Symfony\Component\HttpFoundation\Request;
++use Drupal\formassembly\ApiAuthorize;
++use Drupal\Core\Messenger\Messenger;
++use Drupal\formassembly\FormAssemblyKeyService;
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Url;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+@@ -28,14 +33,14 @@ class OauthInteractions extends ControllerBase {
+   /**
+    * Injected service.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $currentRequest;
+ 
+   /**
+    * Injected service.
+    *
+-   * @var \Drupal\formassembly\ApiAuthorize
++   * @var ApiAuthorize
+    */
+   protected $apiAuthorize;
+ 
+@@ -43,14 +48,14 @@ class OauthInteractions extends ControllerBase {
+   /**
+    * Injected service.
+    *
+-   * @var \Drupal\Core\Messenger\Messenger
++   * @var Messenger
+    */
+   protected $messenger;
+ 
+   /**
+    * Service to obtain oauth credentials.
+    *
+-   * @var \Drupal\formassembly\FormAssemblyKeyService
++   * @var FormAssemblyKeyService
+    */
+   protected $keyService;
+ 
+@@ -71,7 +76,7 @@ class OauthInteractions extends ControllerBase {
+    * Assemble the authorization url and redirect to it.
+    */
+   public function authorize() {
+-    /** @var \Drupal\Core\Config\ImmutableConfig $formassembly_config */
++    /** @var ImmutableConfig $formassembly_config */
+     $credentials = $this->keyService->getOauthKeys();
+     $provider = new OauthProvider([
+       'clientId' => $credentials['cid'],
+@@ -92,7 +97,7 @@ class OauthInteractions extends ControllerBase {
+    * @throws \Exception
+    *   Re-throws any caught exception after sending a message to the user.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   Redirect to the settings form.
+    */
+   public function code() {
+diff --git a/src/Entity/FormAssemblyEntityInterface.php b/src/Entity/FormAssemblyEntityInterface.php
+index 810f081..9273371 100644
+--- a/src/Entity/FormAssemblyEntityInterface.php
++++ b/src/Entity/FormAssemblyEntityInterface.php
+@@ -89,7 +89,7 @@ interface FormAssemblyEntityInterface extends ContentEntityInterface, EntityChan
+   /**
+    * Sets fa_form status to 1-published.
+    *
+-   * @return \Drupal\formassembly\Entity\FormAssemblyEntity
++   * @return FormAssemblyEntity
+    *   The called FormAssembly Form entity.
+    */
+   public function enable();
+@@ -97,7 +97,7 @@ interface FormAssemblyEntityInterface extends ContentEntityInterface, EntityChan
+   /**
+    * Sets fa_form status to 0-unpublished.
+    *
+-   * @return \Drupal\formassembly\Entity\FormAssemblyEntity
++   * @return FormAssemblyEntity
+    *   The called FormAssembly Form entity.
+    */
+   public function disable();
+diff --git a/src/Entity/FormAssemblyEntityViewBuilder.php b/src/Entity/FormAssemblyEntityViewBuilder.php
+index 2a704d6..ec4a7ff 100644
+--- a/src/Entity/FormAssemblyEntityViewBuilder.php
++++ b/src/Entity/FormAssemblyEntityViewBuilder.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\formassembly\Entity;
+ 
++use Drupal\formassembly\ApiMarkup;
++use Psr\Log\LoggerInterface;
++use Drupal\Core\PageCache\ResponsePolicy\KillSwitch;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Entity\EntityViewBuilder;
+@@ -28,14 +31,14 @@ class FormAssemblyEntityViewBuilder extends EntityViewBuilder {
+   /**
+    * Formassembly markup service.
+    *
+-   * @var \Drupal\formassembly\ApiMarkup
++   * @var ApiMarkup
+    */
+   protected $markup;
+ 
+   /**
+    * Default logger channel.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+@@ -43,7 +46,7 @@ class FormAssemblyEntityViewBuilder extends EntityViewBuilder {
+   /**
+    * Injected service.
+    *
+-   * @var \Drupal\Core\PageCache\ResponsePolicy\KillSwitch
++   * @var KillSwitch
+    */
+   protected $killSwitch;
+ 
+diff --git a/src/Form/FormAssemblyEntityForm.php b/src/Form/FormAssemblyEntityForm.php
+index 07d641b..5cac866 100644
+--- a/src/Form/FormAssemblyEntityForm.php
++++ b/src/Form/FormAssemblyEntityForm.php
+@@ -31,7 +31,7 @@ class FormAssemblyEntityForm extends ContentEntityForm {
+   /**
+    * Formassembly markup service.
+    *
+-   * @var \Drupal\formassembly\ApiMarkup
++   * @var ApiMarkup
+    */
+   protected $markup;
+ 
+diff --git a/src/Form/FormAssemblyEntitySettingsForm.php b/src/Form/FormAssemblyEntitySettingsForm.php
+index 8ece71b..88c80b1 100644
+--- a/src/Form/FormAssemblyEntitySettingsForm.php
++++ b/src/Form/FormAssemblyEntitySettingsForm.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\formassembly\Form;
+ 
++use Drupal\formassembly\ApiAuthorize;
++use Drupal\formassembly\FormAssemblyKeyService;
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Utility\LinkGeneratorInterface;
+ use Drupal\Core\Form\ConfigFormBaseTrait;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -29,28 +34,28 @@ class FormAssemblyEntitySettingsForm extends FormBase {
+   /**
+    * Injected authorization service.
+    *
+-   * @var \Drupal\formassembly\ApiAuthorize
++   * @var ApiAuthorize
+    */
+   protected $authorize;
+ 
+   /**
+    * Injected key service.
+    *
+-   * @var \Drupal\formassembly\FormAssemblyKeyService
++   * @var FormAssemblyKeyService
+    */
+   protected $keyService;
+ 
+   /**
+    * FormAssemblyEntity config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $formassemblyConfig;
+ 
+   /**
+    * Injected service.
+    *
+-   * @var \Drupal\Core\Utility\LinkGeneratorInterface
++   * @var LinkGeneratorInterface
+    */
+   protected $linkGenerator;
+ 
+@@ -90,11 +95,11 @@ class FormAssemblyEntitySettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Config\Config $formassembly_config */
++    /** @var Config $formassembly_config */
+     $values = $form_state->getValues();
+     $config = [
+       'endpoint' => $values['endpoint'],
+@@ -140,7 +145,7 @@ class FormAssemblyEntitySettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/FormAssemblyBatchProcessor.php b/src/FormAssemblyBatchProcessor.php
+index e48aec8..715bef2 100644
+--- a/src/FormAssemblyBatchProcessor.php
++++ b/src/FormAssemblyBatchProcessor.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\formassembly;
+ 
++use Drupal\Component\Uuid\Php;
+ use Drupal\Component\Uuid\UuidInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Drupal\Core\StringTranslation\TranslationInterface;
+@@ -30,25 +31,25 @@ class FormAssemblyBatchProcessor {
+   /**
+    * Injected Sync service.
+    *
+-   * @var \Drupal\formassembly\ApiSync
++   * @var ApiSync
+    */
+   protected $apiSync;
+ 
+   /**
+    * Injected UUID service.
+    *
+-   * @var \Drupal\Component\Uuid\Php
++   * @var Php
+    */
+   protected $uuid;
+ 
+   /**
+    * FormAssemblyBatchProcessor constructor.
+    *
+-   * @param \Drupal\formassembly\ApiSync $apiSync
++   * @param ApiSync $apiSync
+    *   Injected service.
+-   * @param \Drupal\Component\Uuid\UuidInterface $uuid
++   * @param UuidInterface $uuid
+    *   Injected service.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   Injected service.
+    */
+   public function __construct(
+diff --git a/src/FormAssemblyEntityAccessControlHandler.php b/src/FormAssemblyEntityAccessControlHandler.php
+index 6de76be..d9ad019 100644
+--- a/src/FormAssemblyEntityAccessControlHandler.php
++++ b/src/FormAssemblyEntityAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\formassembly;
+ 
++use Drupal\formassembly\Entity\FormAssemblyEntityInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -28,7 +29,7 @@ class FormAssemblyEntityAccessControlHandler extends EntityAccessControlHandler
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\formassembly\Entity\FormAssemblyEntityInterface $entity */
++    /** @var FormAssemblyEntityInterface $entity */
+     switch ($operation) {
+       case 'view':
+         return AccessResult::allowedIfHasPermission($account, 'view formassembly form entities');
+diff --git a/src/FormAssemblyEntityHtmlRouteProvider.php b/src/FormAssemblyEntityHtmlRouteProvider.php
+index d6a8921..f05058d 100644
+--- a/src/FormAssemblyEntityHtmlRouteProvider.php
++++ b/src/FormAssemblyEntityHtmlRouteProvider.php
+@@ -45,10 +45,10 @@ class FormAssemblyEntityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the collection route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getCollectionRoute(EntityTypeInterface $entity_type) {
+@@ -70,10 +70,10 @@ class FormAssemblyEntityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/FormAssemblyKeyService.php b/src/FormAssemblyKeyService.php
+index 669715b..9ddbbb3 100644
+--- a/src/FormAssemblyKeyService.php
++++ b/src/FormAssemblyKeyService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\formassembly;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\key\Entity\Key;
+ use Drupal\key\KeyRepositoryInterface;
+@@ -16,7 +17,7 @@ class FormAssemblyKeyService {
+   /**
+    * Config for the oauth credentials.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $oauthConfig;
+ 
+@@ -31,7 +32,7 @@ class FormAssemblyKeyService {
+   /**
+    * KeyService constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Injected service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory) {
+diff --git a/src/FormAssemblyStorage.php b/src/FormAssemblyStorage.php
+index 26b80d3..0c339a9 100644
+--- a/src/FormAssemblyStorage.php
++++ b/src/FormAssemblyStorage.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\formassembly;
+ 
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\formassembly\Entity\FormAssemblyEntity;
+ use Drupal\Core\Entity\Sql\SqlContentEntityStorage;
+ 
+ /**
+@@ -26,7 +28,7 @@ class FormAssemblyStorage extends SqlContentEntityStorage {
+    * @param array $faidEnabled
+    *   The name of the entity property.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function disableInactive(array $faidEnabled) {
+     $query = $this->database->select($this->baseTable, 'fa');
+@@ -35,7 +37,7 @@ class FormAssemblyStorage extends SqlContentEntityStorage {
+     $missingForms = $query->execute()->fetchCol();
+     $toDisable = $this->loadMultiple($missingForms);
+     foreach ($toDisable as $entity) {
+-      /** @var \Drupal\formassembly\Entity\FormAssemblyEntity $entity */
++      /** @var FormAssemblyEntity $entity */
+       $entity->disable()->save();
+     }
+   }
+diff --git a/tests/src/Functional/FormAssemblyLoadTest.php b/tests/src/Functional/FormAssemblyLoadTest.php
+index 3411593..fe3eb91 100644
+--- a/tests/src/Functional/FormAssemblyLoadTest.php
++++ b/tests/src/Functional/FormAssemblyLoadTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\formassembly\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Url;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -23,7 +24,7 @@ class FormAssemblyLoadTest extends BrowserTestBase {
+   /**
+    * A user with permission to administer site configuration.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+@@ -37,7 +38,7 @@ class FormAssemblyLoadTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->user = $this->drupalCreateUser([
+       'administer site configuration',
+@@ -51,7 +52,7 @@ class FormAssemblyLoadTest extends BrowserTestBase {
+    */
+   public function testLoad() {
+     $this->drupalGet(Url::fromRoute('fa_form.settings'));
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+   }
+ 
+ }
+diff --git a/tests/src/Unit/FormassemblyHtmlResponseAttachmentsProcessorTest.php b/tests/src/Unit/FormassemblyHtmlResponseAttachmentsProcessorTest.php
+index 8134ad1..51fe77a 100644
+--- a/tests/src/Unit/FormassemblyHtmlResponseAttachmentsProcessorTest.php
++++ b/tests/src/Unit/FormassemblyHtmlResponseAttachmentsProcessorTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\formassembly\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use PHPUnit\Framework\MockObject\MockObject;
++use Prophecy\Prophecy\ObjectProphecy;
+ use Drupal\Core\Asset\AssetCollectionRendererInterface;
+ use Drupal\Core\Asset\AssetResolverInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -30,64 +33,63 @@ use Symfony\Component\HttpFoundation\RequestStack;
+  */
+ class FormassemblyHtmlResponseAttachmentsProcessorTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * A mock core html attachment processor.
+    *
+-   * @var \Drupal\Core\Render\AttachmentsResponseProcessorInterface|\PHPUnit_Framework_MockObject_MockObject
++   * @var AttachmentsResponseProcessorInterface|MockObject
+    */
+   protected $attachmentProcessor;
+ 
+   /**
+    * A mock asset resolver service.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $assetResolver;
+ 
+   /**
+    * A mock CSS collection renderer.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $cssCollectionRenderer;
+ 
+   /**
+    * A mock JS collection renderer.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $jsCollectionRenderer;
+ 
+   /**
+    * A mock RequestStack.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $requestStack;
+ 
+   /**
+    * A mock renderer.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $renderer;
+ 
+   /**
+    * A mock module handler.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     // Mock core attachment processor.
+-    $this->attachmentProcessor = $this->getMockBuilder(AttachmentsResponseProcessorInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->attachmentProcessor = $this->createMock(AttachmentsResponseProcessorInterface::class);
+     $this->attachmentProcessor->method('processAttachments')
+       ->willReturnArgument(0);
+     $this->assetResolver = $this->prophesize(AssetResolverInterface::class);
+@@ -155,10 +157,10 @@ class FormassemblyHtmlResponseAttachmentsProcessorTest extends UnitTestCase {
+   /**
+    * Creates a FormassemblyHtmlResponseAttachmentsProcessor object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   A mock config factory that can contain 'dfp.settings' configuration.
+    *
+-   * @return \Drupal\formassembly\Component\Render\FormassemblyHtmlResponseAttachmentsProcessor
++   * @return FormassemblyHtmlResponseAttachmentsProcessor
+    *   The DfpHtmlResponseAttachmentsProcessor object.
+    */
+   protected function getFormassemblyAttachmentProcessor(ConfigFactoryInterface $config_factory) {

@@ -1,0 +1,197 @@
+diff --git a/composer.json b/composer.json
+index 7f8483a..aafdc03 100644
+--- a/composer.json
++++ b/composer.json
+@@ -4,6 +4,6 @@
+     "description": "This small module allows to download configs archive on slow VPS or hostings with time http timeouts.",
+     "license": "GPL-2.0+",
+     "require": {
+-        "drupal/core": "^8 || ^9"
++        "drupal/core": "^9.1 || ^10"
+     }
+ }
+diff --git a/config_batch_export.info.yml b/config_batch_export.info.yml
+index 66da02c..73fda1d 100644
+--- a/config_batch_export.info.yml
++++ b/config_batch_export.info.yml
+@@ -3,8 +3,7 @@ type: module
+ description: 'Allows administrators export configuration using batch'
+ package: Core
+ # version: VERSION
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.1 || ^10
+ configure: config.sync
+ dependencies:
+   - drupal:config
+diff --git a/config_batch_export.module b/config_batch_export.module
+index 4dbfe0c..6da10a9 100644
+--- a/config_batch_export.module
++++ b/config_batch_export.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\file\FileStorageInterface;
+ /**
+  * @file
+  * Allows to download configs archive in batch.
+@@ -44,7 +45,7 @@ function _config_batch_export_export_button_callback($form, FormStateInterface $
+ function config_batch_export_file_download($uri) {
+   $routeMatch = \Drupal::routeMatch();
+ 
+-  /** @var \Drupal\file\FileStorageInterface $file_storage */
++  /** @var FileStorageInterface $file_storage */
+   $file_storage = \Drupal::entityTypeManager()->getStorage('file');
+   if (
+     ($fid = $routeMatch->getRawParameter('file')) &&
+diff --git a/src/Controller/ConfigBatchExportController.php b/src/Controller/ConfigBatchExportController.php
+index cd2af11..181818a 100644
+--- a/src/Controller/ConfigBatchExportController.php
++++ b/src/Controller/ConfigBatchExportController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\config_batch_export\Controller;
+ 
++use Drupal\Core\Config\StorageInterface;
++use Drupal\Core\Lock\LockBackendInterface;
++use Symfony\Component\HttpFoundation\BinaryFileResponse;
+ use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\config\Controller\ConfigController;
+@@ -37,7 +40,7 @@ class ConfigBatchExportController extends ConfigController {
+   /**
+    * File system.
+    *
+-   * @return \Drupal\Core\File\FileSystemInterface
++   * @return FileSystemInterface
+    *   File system.
+    */
+   protected static function getFilesystem() {
+@@ -50,7 +53,7 @@ class ConfigBatchExportController extends ConfigController {
+   public static function callbackBatchJob($batch_data, &$context) {
+     $sandbox = &$context['sandbox'];
+     if (!isset($sandbox['started'])) {
+-      /** @var \Drupal\file\FileInterface $file */
++      /** @var FileInterface $file */
+       $file = \Drupal::entityTypeManager()->getStorage('file')->load($batch_data['file_id']);
+ 
+       $sandbox['filename'] = $file->getFileUri();
+@@ -68,7 +71,7 @@ class ConfigBatchExportController extends ConfigController {
+       $archiver = new ArchiveTar($sandbox['filename']);
+ 
+       $config_factory = \Drupal::configFactory();
+-      /** @var \Drupal\Core\Config\StorageInterface $target_storage */
++      /** @var StorageInterface $target_storage */
+       $target_storage = \Drupal::service('config_batch_export.config_storage');
+       foreach ($configs as $config_definition) {
+         if (is_array($config_definition)) {
+@@ -105,7 +108,7 @@ class ConfigBatchExportController extends ConfigController {
+    * Batch finished callback.
+    */
+   public static function callbackBatchFinished($status, $results) {
+-    /** @var \Drupal\file\FileInterface $file */
++    /** @var FileInterface $file */
+     $file = \Drupal::entityTypeManager()->getStorage('file')->load($results['file_id']);
+     $oldpath = $file->getFileUri();
+ 
+@@ -167,7 +170,7 @@ class ConfigBatchExportController extends ConfigController {
+     $existing_files = \Drupal::entityTypeManager()->getStorage('file')->loadByProperties(['uri' => 'private://configs.tar.gz']);
+     $existing_files += \Drupal::entityTypeManager()->getStorage('file')->loadByProperties(['uri' => 'private://configs.tar']);
+     if (!empty($existing_files)) {
+-      /** @var \Drupal\file\FileInterface $file */
++      /** @var FileInterface $file */
+       foreach ($existing_files as $file) {
+         try {
+           $file->delete();
+@@ -262,7 +265,7 @@ class ConfigBatchExportController extends ConfigController {
+   /**
+    * Get lock backend.
+    *
+-   * @return \Drupal\Core\Lock\LockBackendInterface
++   * @return LockBackendInterface
+    */
+   protected static function lockBackend() {
+     return \Drupal::service('lock.persistent');
+@@ -282,13 +285,13 @@ class ConfigBatchExportController extends ConfigController {
+   /**
+    * Downloads a file.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   File object.
+    *
+-   * @return \Symfony\Component\HttpFoundation\BinaryFileResponse
++   * @return BinaryFileResponse
+    *   Response.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function downloadExportFile(FileInterface $file) {
+     if (static::isLocked()) {
+diff --git a/tests/src/Functional/FileGenerationTest.php b/tests/src/Functional/FileGenerationTest.php
+index 97a0e67..cb9b961 100644
+--- a/tests/src/Functional/FileGenerationTest.php
++++ b/tests/src/Functional/FileGenerationTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\config_batch_export\Functional;
+ 
++use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Component\Serialization\Exception\InvalidDataTypeException;
+ use Drupal\Core\Archiver\ArchiveTar;
+ use Drupal\Core\Serialization\Yaml;
+@@ -40,14 +41,14 @@ class FileGenerationTest extends BrowserTestBase {
+   protected $fpdir;
+ 
+   /**
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->drupalLogin($this->drupalCreateUser([
+@@ -62,7 +63,8 @@ class FileGenerationTest extends BrowserTestBase {
+    *  Test batch processing.
+    */
+   public function testBatchProcessing() {
+-    $this->drupalPostForm('admin/config/development/configuration/full/export', [], 'edit-export-batch');
++    $this->drupalGet('admin/config/development/configuration/full/export');
++    $this->submitForm([], 'edit-export-batch');
+     $this->clickLink('here');
+ 
+     $this->headers = $this->getSession()->getResponseHeaders();
+@@ -89,7 +91,7 @@ class FileGenerationTest extends BrowserTestBase {
+   }
+ 
+   public function _testFilesize() {
+-    /** @var \Drupal\Core\File\FileSystemInterface $file_system */
++    /** @var FileSystemInterface $file_system */
+     $file_system = $this->fileSystem;
+     $this->filepath = $file_system->tempnam('temporary://', hash('adler32', 'config_batch_export')) . '.' . $this->extension;
+     $file_content = $this->content;
+@@ -138,7 +140,7 @@ class FileGenerationTest extends BrowserTestBase {
+ 
+         $decoded = Yaml::decode($file_content);
+       }
+-      catch (\Drupal\Component\Serialization\Exception\InvalidDataTypeException $e) {
++      catch (InvalidDataTypeException $e) {
+         $this->fail('Yaml data incorrect');
+       }
+ 
+@@ -146,7 +148,7 @@ class FileGenerationTest extends BrowserTestBase {
+     }
+   }
+ 
+-  public function tearDown() {
++  public function tearDown(): void {
+     $this->fileSystem->delete($this->filepath);
+ 
+     if ($this->fpdir) {

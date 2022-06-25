@@ -1,0 +1,962 @@
+diff --git a/ajax_comments.info.yml b/ajax_comments.info.yml
+index 15ea6b4..bff3480 100644
+--- a/ajax_comments.info.yml
++++ b/ajax_comments.info.yml
+@@ -1,7 +1,7 @@
+ name: AJAX Comments
+ type: module
+ description: Module makes comments load without a page refresh via AJAX
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.1 || ^10
+ dependencies:
+   - drupal:comment
+ configure: ajax_comments.settings
+diff --git a/ajax_comments.module b/ajax_comments.module
+index ef0b67b..21a60b2 100644
+--- a/ajax_comments.module
++++ b/ajax_comments.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Routing\CurrentRouteMatch;
++use Drupal\Core\Entity\EntityInterface;
+ /**
+  * @file
+  * AJAX comments module file.
+@@ -37,7 +39,7 @@ use Symfony\Component\HttpFoundation\Request;
+  */
+ function ajax_comments_comment_links_alter(array &$links, CommentInterface &$entity, array &$context) {
+   $request = \Drupal::request();
+-  /** @var \Drupal\ajax_comments\FieldSettingsHelper $field_settings_helper */
++  /** @var FieldSettingsHelper $field_settings_helper */
+   $field_settings_helper = \Drupal::service('ajax_comments.field_settings_helper');
+   $comment_formatter = $field_settings_helper->getFieldFormatterFromComment($entity, $context['view_mode']);
+ 
+@@ -155,7 +157,7 @@ function ajax_comments_entity_display_build_alter(&$build, $context) {
+   foreach ($build as $field_name => $field) {
+     if (!empty($field['#field_type']) && $field['#field_type'] === 'comment') {
+       // Check that this comment field uses Ajax Comments.
+-      /** @var \Drupal\ajax_comments\FieldSettingsHelper $field_settings_helper */
++      /** @var FieldSettingsHelper $field_settings_helper */
+       $field_settings_helper = \Drupal::service('ajax_comments.field_settings_helper');
+       $field_config = $build[$field_name]['#items']->getFieldDefinition();
+       $field_formatter = $field_settings_helper->getFieldFormatter($context['display'], $field['#field_name'], $field_config, $context['display']->getMode());
+@@ -191,7 +193,7 @@ function ajax_comments_entity_view_alter(array &$build, ContentEntityInterface $
+   if (!$commands_added) {
+     foreach ($entity->getFieldDefinitions() as $machine_name => $field_config) {
+       if ($field_config->getType() === 'comment') {
+-        /** @var \Drupal\ajax_comments\FieldSettingsHelper $field_settings_helper */
++        /** @var FieldSettingsHelper $field_settings_helper */
+         $field_settings_helper = \Drupal::service('ajax_comments.field_settings_helper');
+         $field_formatter = $field_settings_helper->getFieldFormatter($display, $machine_name, $field_config, $display->getMode());
+         if (!empty($field_formatter) && $field_settings_helper->isEnabled($field_formatter)) {
+@@ -208,10 +210,10 @@ function ajax_comments_entity_view_alter(array &$build, ContentEntityInterface $
+ /**
+  * Implements hook_form_FORM_ID_alter().
+  */
+-function ajax_comments_form_comment_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $form_state, $form_id) {
+-  /** @var \Drupal\ajax_comments\FieldSettingsHelper $field_settings_helper */
++function ajax_comments_form_comment_form_alter(&$form, FormStateInterface $form_state, $form_id) {
++  /** @var FieldSettingsHelper $field_settings_helper */
+   $field_settings_helper = \Drupal::service('ajax_comments.field_settings_helper');
+-  /** @var \Drupal\Core\Routing\CurrentRouteMatch $current_route */
++  /** @var CurrentRouteMatch $current_route */
+   $current_route = \Drupal::service('current_route_match');
+   // Ajax replies to other comments should happen on the canonical entity page
+   // (note this functionality has not been ported to D8, yet).
+@@ -222,9 +224,9 @@ function ajax_comments_form_comment_form_alter(&$form, \Drupal\Core\Form\FormSta
+     return;
+   }
+ 
+-  /** @var \Drupal\comment\CommentInterface $comment */
++  /** @var CommentInterface $comment */
+   $comment = $form_state->getFormObject()->getEntity();
+-  /** @var \Drupal\Core\Entity\EntityInterface $commented_entity */
++  /** @var EntityInterface $commented_entity */
+   $commented_entity = $comment->getCommentedEntity();
+   $field_name = $comment->getFieldName();
+ 
+@@ -258,7 +260,7 @@ function ajax_comments_form_comment_form_alter(&$form, \Drupal\Core\Form\FormSta
+ 
+   // Set unique id (need for Views with enabled AJAX).
+   if (empty($form['actions']['submit']['#id'])) {
+-    $form['actions']['submit']['#id'] = \Drupal\Component\Utility\Html::getUniqueId('edit-' . $id);
++    $form['actions']['submit']['#id'] = Html::getUniqueId('edit-' . $id);
+   }
+ 
+   $form['actions']['preview']['#ajax'] = [
+@@ -269,7 +271,7 @@ function ajax_comments_form_comment_form_alter(&$form, \Drupal\Core\Form\FormSta
+   ];
+   // Set unique id (need for Views with enabled AJAX).
+   if (empty($form['actions']['preview']['#id'])) {
+-    $form['actions']['preview']['#id'] = \Drupal\Component\Utility\Html::getUniqueId('preview-' . $id);
++    $form['actions']['preview']['#id'] = Html::getUniqueId('preview-' . $id);
+   }
+ }
+ 
+@@ -287,7 +289,7 @@ function _ajax_comments_preview_js($form, FormStateInterface $form_state) {
+  * Implements template_preprocess_comment().
+  */
+ function ajax_comments_preprocess_comment(&$variables) {
+-  /** @var \Drupal\comment\CommentInterface $comment */
++  /** @var CommentInterface $comment */
+   $comment = $variables['elements']['#comment'];
+   $variables['attributes']['class'][] = AjaxCommentsController::$commentClassPrefix . $comment->id();
+ }
+diff --git a/src/Controller/AjaxCommentsController.php b/src/Controller/AjaxCommentsController.php
+index 9d2d855..555024f 100644
+--- a/src/Controller/AjaxCommentsController.php
++++ b/src/Controller/AjaxCommentsController.php
+@@ -43,7 +43,7 @@ class AjaxCommentsController extends ControllerBase {
+   /**
+    * Service to turn render arrays into HTML strings.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+@@ -52,7 +52,7 @@ class AjaxCommentsController extends ControllerBase {
+    *
+    * A router class for Drupal.
+    *
+-   * @var \Symfony\Component\Routing\RouterInterface
++   * @var RouterInterface
+    */
+   protected $router;
+ 
+@@ -61,31 +61,31 @@ class AjaxCommentsController extends ControllerBase {
+    *
+    * This service stores temporary data to be used across HTTP requests.
+    *
+-   * @var \Drupal\ajax_comments\TempStore
++   * @var TempStore
+    */
+   protected $tempStore;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Constructs a AjaxCommentsController object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The render service.
+-   * @param \Symfony\Component\Routing\RouterInterface $router
++   * @param RouterInterface $router
+    *   The Router service.
+-   * @param \Drupal\ajax_comments\TempStore $temp_store
++   * @param TempStore $temp_store
+    *   The TempStore service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The Messenger service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, AccountInterface $current_user, RendererInterface $renderer, RouterInterface $router, TempStore $temp_store, MessengerInterface $messenger) {
+@@ -124,7 +124,7 @@ class AjaxCommentsController extends ControllerBase {
+   /**
+    * Build a comment field render array for the ajax response.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity that has the comment field.
+    * @param string $field_name
+    *   The machine name of the comment field.
+@@ -179,18 +179,18 @@ class AjaxCommentsController extends ControllerBase {
+   /**
+    * Create an ajax response to replace the comment field.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+-   * @param \Drupal\Core\Ajax\AjaxResponse $response
++   * @param AjaxResponse $response
+    *   The response object being built.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity that has the comment field.
+    * @param string $field_name
+    *   The machine name of the comment field.
+    * @param int|null $pid
+    *   The entity id of the parent comment, if applicable, NULL otherwise.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   The modified ajax response.
+    */
+   protected function buildCommentFieldResponse(Request $request, AjaxResponse $response, EntityInterface $entity, $field_name, $pid = NULL) {
+@@ -214,9 +214,9 @@ class AjaxCommentsController extends ControllerBase {
+   /**
+    * Add messages to the ajax response.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+-   * @param \Drupal\Core\Ajax\AjaxResponse $response
++   * @param AjaxResponse $response
+    *   The response object being built.
+    * @param string $selector
+    *   The DOM selector used to insert status messages.
+@@ -224,7 +224,7 @@ class AjaxCommentsController extends ControllerBase {
+    *   Indicates whether to use PrependCommand, BeforeCommand, AppendCommand,
+    *   or AfterCommand.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   The modified ajax response.
+    */
+   protected function addMessages(Request $request, AjaxResponse $response, $selector = '', $position = 'prepend') {
+@@ -300,12 +300,12 @@ class AjaxCommentsController extends ControllerBase {
+   /**
+    * Returns the comment edit form.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+-   * @param \Drupal\comment\CommentInterface $comment
++   * @param CommentInterface $comment
+    *   The comment entity.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse|\Symfony\Component\HttpFoundation\RedirectResponse
++   * @return AjaxResponse|RedirectResponse
+    *   The Ajax response, or a redirect response if not using ajax.
+    */
+   public function edit(Request $request, CommentInterface $comment) {
+@@ -361,12 +361,12 @@ class AjaxCommentsController extends ControllerBase {
+   /**
+    * Submit handler for the comment reply and edit forms.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+-   * @param \Drupal\comment\CommentInterface $comment
++   * @param CommentInterface $comment
+    *   The comment entity.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   The Ajax response.
+    */
+   public function save(Request $request, CommentInterface $comment) {
+@@ -476,12 +476,12 @@ class AjaxCommentsController extends ControllerBase {
+   /**
+    * Cancel handler for the comment edit form.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+    * @param int $cid
+    *   The id of the comment being edited, or 0 if this is a new comment.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   The Ajax response.
+    */
+   public function cancel(Request $request, $cid) {
+@@ -515,12 +515,12 @@ class AjaxCommentsController extends ControllerBase {
+   /**
+    * Builds ajax response for deleting a comment.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+-   * @param \Drupal\comment\CommentInterface $comment
++   * @param CommentInterface $comment
+    *   The comment entity.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   The Ajax response.
+    */
+   public function delete(Request $request, CommentInterface $comment) {
+@@ -564,9 +564,9 @@ class AjaxCommentsController extends ControllerBase {
+   /**
+    * Builds ajax response for adding a new comment without a parent comment.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity this comment belongs to.
+    * @param string $field_name
+    *   The field_name to which the comment belongs.
+@@ -574,7 +574,7 @@ class AjaxCommentsController extends ControllerBase {
+    *   (optional) Some comments are replies to other comments. In those cases,
+    *   $pid is the parent comment's comment ID. Defaults to NULL.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   The Ajax response.
+    *
+    * @see \Drupal\comment\Controller\CommentController::getReplyForm()
+@@ -680,16 +680,16 @@ class AjaxCommentsController extends ControllerBase {
+   /**
+    * Builds ajax response to display a form to reply to another comment.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity this comment belongs to.
+    * @param string $field_name
+    *   The field_name to which the comment belongs.
+    * @param int $pid
+    *   The parent comment's comment ID.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse|\Symfony\Component\HttpFoundation\RedirectResponse
++   * @return AjaxResponse|RedirectResponse
+    *   The Ajax response, or a redirect response if not using ajax.
+    *
+    * @see \Drupal\comment\Controller\CommentController::getReplyForm()
+@@ -764,16 +764,16 @@ class AjaxCommentsController extends ControllerBase {
+   /**
+    * Builds ajax response to save a submitted reply to another comment.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity this comment belongs to.
+    * @param string $field_name
+    *   The field_name to which the comment belongs.
+    * @param int $pid
+    *   The parent comment's comment ID.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   The Ajax response.
+    */
+   public function saveReply(Request $request, EntityInterface $entity, $field_name, $pid) {
+@@ -822,23 +822,23 @@ class AjaxCommentsController extends ControllerBase {
+   }
+ 
+   /**
+-   * Check the user's permission to post a comment.
+-   *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
+-   *   The current request object.
+-   * @param \Drupal\Core\Ajax\AjaxResponse $response
+-   *   The response object being built.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
+-   *   The entity this comment belongs to.
+-   * @param string $field_name
+-   *   The field_name to which the comment belongs.
+-   * @param int $pid
+-   *   (optional) Some comments are replies to other comments. In those cases,
+-   *   $pid is the parent comment's comment ID. Defaults to NULL.
+-   *
+-   * @return \Drupal\Core\Ajax\AjaxResponse $response
+-   *   The ajax response, if access is denied.
+-   */
++  * Check the user's permission to post a comment.
++  *
++   * @param Request $request
++  *   The current request object.
++   * @param AjaxResponse $response
++  *   The response object being built.
++   * @param EntityInterface $entity
++  *   The entity this comment belongs to.
++  * @param string $field_name
++  *   The field_name to which the comment belongs.
++  * @param int $pid
++  *   (optional) Some comments are replies to other comments. In those cases,
++  *   $pid is the parent comment's comment ID. Defaults to NULL.
++  *
++   * @return AjaxResponse $response
++    The ajax response, if access is denied.
++  */
+   public function replyAccess(Request $request, AjaxResponse $response, EntityInterface $entity, $field_name, $pid = NULL) {
+ 
+     // Get the selectors.
+diff --git a/src/FieldSettingsHelper.php b/src/FieldSettingsHelper.php
+index d0f10f1..1f51e1c 100644
+--- a/src/FieldSettingsHelper.php
++++ b/src/FieldSettingsHelper.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ajax_comments;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\comment\CommentInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Entity\Display\EntityDisplayInterface;
+@@ -19,23 +20,23 @@ class FieldSettingsHelper {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The field formatter plugin manager service.
+    *
+-   * @var \Drupal\Core\Field\FormatterPluginManager
++   * @var FormatterPluginManager
+    */
+   protected $fieldFormatterManager;
+ 
+   /**
+    * AjaxCommentsFieldSettings constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Field\FormatterPluginManager $formatter_plugin_manager
++   * @param FormatterPluginManager $formatter_plugin_manager
+    *   The field formatter plugin manager service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, FormatterPluginManager $formatter_plugin_manager) {
+@@ -46,21 +47,21 @@ class FieldSettingsHelper {
+   /**
+    * Get the entity view display configuration for the commented entity.
+    *
+-   * @param \Drupal\comment\CommentInterface $comment
++   * @param CommentInterface $comment
+    *   The comment entity.
+    * @param string $view_mode
+    *   The current view mode.
+    *
+-   * @return \Drupal\Core\Entity\Display\EntityDisplayInterface
++   * @return EntityDisplayInterface
+    *   The entity view display configuration for the commented entity.
+    */
+   public function getEntityViewDisplay(CommentInterface $comment, $view_mode = 'default') {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $commented_entity */
++    /** @var ContentEntityInterface $commented_entity */
+     $commented_entity = $comment->getCommentedEntity();
+ 
+     // Try to load the configuration entity for the entity's
+     // view display settings.
+-    /** @var \Drupal\Core\Entity\Display\EntityDisplayInterface $view_display */
++    /** @var EntityDisplayInterface $view_display */
+     $view_display = $this->entityTypeManager
+       ->getStorage('entity_view_display')
+       ->load($commented_entity->getEntityTypeId() . '.' . $commented_entity->bundle() . '.' . $view_mode);
+@@ -79,16 +80,16 @@ class FieldSettingsHelper {
+   /**
+    * Get the active field formatter for a comment field.
+    *
+-   * @param \Drupal\Core\Entity\Display\EntityDisplayInterface $view_display
++   * @param EntityDisplayInterface $view_display
+    *   The commented entity view display configuration.
+    * @param string $field_name
+    *   The machine name of the comment field.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field configuration.
+    * @param string $view_mode
+    *   The current view mode.
+    *
+-   * @return \Drupal\Core\Field\FormatterInterface
++   * @return FormatterInterface
+    *   The field formatter for the comment field.
+    */
+   public function getFieldFormatter(EntityDisplayInterface $view_display, $field_name, FieldDefinitionInterface $field_definition, $view_mode = 'default') {
+@@ -105,7 +106,7 @@ class FieldSettingsHelper {
+     }
+     else {
+       // Get the formatter for the current comment field.
+-      /** @var \Drupal\Core\Field\FormatterInterface $comment_formatter */
++      /** @var FormatterInterface $comment_formatter */
+       $comment_formatter = $this->fieldFormatterManager
+         ->getInstance([
+           'field_definition' => $field_definition,
+@@ -120,27 +121,27 @@ class FieldSettingsHelper {
+   /**
+    * Get the active field formatter for a comment entity.
+    *
+-   * @param \Drupal\comment\CommentInterface $comment
++   * @param CommentInterface $comment
+    *   The comment entity.
+    * @param string $view_mode
+    *   The current view mode.
+    *
+-   * @return \Drupal\Core\Field\FormatterInterface
++   * @return FormatterInterface
+    *   The field formatter for the current comment.
+    */
+   public function getFieldFormatterFromComment(CommentInterface $comment, $view_mode = 'default') {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $commented_entity */
++    /** @var ContentEntityInterface $commented_entity */
+     $commented_entity = $comment->getCommentedEntity();
+     $field_name = $comment->getFieldName();
+-    /** @var \Drupal\Core\Field\FieldDefinitionInterface $field_definition */
++    /** @var FieldDefinitionInterface $field_definition */
+     $field_definition = $commented_entity->getFieldDefinition($field_name);
+ 
+     // Load the configuration entity for the entity's view display settings.
+-    /** @var \Drupal\Core\Entity\Display\EntityDisplayInterface $view_display */
++    /** @var EntityDisplayInterface $view_display */
+     $view_display = $this->getEntityViewDisplay($comment, $view_mode);
+ 
+     // Get the formatter for the current comment field.
+-    /** @var \Drupal\Core\Field\FormatterInterface $comment_formatter */
++    /** @var FormatterInterface $comment_formatter */
+     $comment_formatter = $this->getFieldFormatter($view_display, $field_name, $field_definition, $view_mode);
+ 
+     return $comment_formatter;
+@@ -149,7 +150,7 @@ class FieldSettingsHelper {
+   /**
+    * Determine if ajax comments is enabled for a comment field in a view mode.
+    *
+-   * @param \Drupal\Core\Field\FormatterInterface $comment_formatter
++   * @param FormatterInterface $comment_formatter
+    *   The field formatter for the comment field in the provided
+    *   entity view mode.
+    *
+diff --git a/src/Form/AjaxCommentsDeleteForm.php b/src/Form/AjaxCommentsDeleteForm.php
+index 88cf09f..3b558ec 100644
+--- a/src/Form/AjaxCommentsDeleteForm.php
++++ b/src/Form/AjaxCommentsDeleteForm.php
+@@ -25,20 +25,20 @@ class AjaxCommentsDeleteForm extends DeleteForm {
+    *
+    * This service stores temporary data to be used across HTTP requests.
+    *
+-   * @var \Drupal\ajax_comments\TempStore
++   * @var TempStore
+    */
+   protected $tempStore;
+ 
+   /**
+    * Constructs an AjaxCommentsDeleteForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity manager.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\ajax_comments\TempStore $temp_store
++   * @param TempStore $temp_store
+    *   The TempStore service.
+    */
+   public function __construct(EntityRepositoryInterface $entity_repository, EntityTypeBundleInfoInterface $entity_type_bundle_info, TimeInterface $time, TempStore $temp_store) {
+diff --git a/src/Form/AjaxCommentsForm.php b/src/Form/AjaxCommentsForm.php
+index c893f02..3b2896c 100644
+--- a/src/Form/AjaxCommentsForm.php
++++ b/src/Form/AjaxCommentsForm.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\ajax_comments\Form;
+ 
++use Drupal\comment\CommentInterface;
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\ajax_comments\FieldSettingsHelper;
+ use Drupal\ajax_comments\TempStore;
+ use Drupal\ajax_comments\Utility;
+@@ -30,14 +33,14 @@ class AjaxCommentsForm extends CommentForm {
+   /**
+    * The CurrentRouteMatch service.
+    *
+-   * @var \Drupal\Core\Routing\CurrentRouteMatch
++   * @var CurrentRouteMatch
+    */
+   protected $currentRouteMatch;
+ 
+   /**
+    * The FieldSettingsHelper service.
+    *
+-   * @var \Drupal\ajax_comments\FieldSettingsHelper
++   * @var FieldSettingsHelper
+    */
+   protected $fieldSettingsHelper;
+ 
+@@ -46,37 +49,37 @@ class AjaxCommentsForm extends CommentForm {
+    *
+    * This service stores temporary data to be used across HTTP requests.
+    *
+-   * @var \Drupal\ajax_comments\TempStore
++   * @var TempStore
+    */
+   protected $tempStore;
+ 
+   /**
+    * A request stack symfony instance.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * Constructs a new CommentForm.
+    *
+-   *@param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\Routing\CurrentRouteMatch $current_route_match
++   * @param CurrentRouteMatch $current_route_match
+    *   The CurrentRouteMatch service.
+-   * @param \Drupal\ajax_comments\FieldSettingsHelper $field_settings_helper
++   * @param FieldSettingsHelper $field_settings_helper
+    *   The FieldSettingsHelper service.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\ajax_comments\TempStore $temp_store
++   * @param TempStore $temp_store
+    *   The TempStore service.
+    */
+   public function __construct(EntityRepositoryInterface $entity_repository, AccountInterface $current_user, RendererInterface $renderer, EntityTypeBundleInfoInterface $entity_type_bundle_info = NULL, TimeInterface $time = NULL, EntityFieldManagerInterface $entity_field_manager = NULL, RequestStack $request_stack, CurrentRouteMatch $current_route_match, FieldSettingsHelper $field_settings_helper, TempStore $temp_store) {
+@@ -129,7 +132,7 @@ class AjaxCommentsForm extends CommentForm {
+       return $form;
+     }
+ 
+-    /** @var \Drupal\comment\CommentInterface $comment */
++    /** @var CommentInterface $comment */
+     $comment = $form_state->getFormObject()->getEntity();
+     // Check to see if this comment field uses ajax comments.
+     $comment_formatter = $this->fieldSettingsHelper->getFieldFormatterFromComment($comment, 'full');
+@@ -138,7 +141,7 @@ class AjaxCommentsForm extends CommentForm {
+       return $form;
+     }
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $commented_entity */
++    /** @var ContentEntityInterface $commented_entity */
+     $commented_entity = $comment->getCommentedEntity();
+     $field_name = $comment->getFieldName();
+ 
+@@ -208,14 +211,14 @@ class AjaxCommentsForm extends CommentForm {
+     $element = parent::actions($form, $form_state);
+ 
+     // Populate the comment-specific variables.
+-    /** @var \Drupal\comment\CommentInterface $comment */
++    /** @var CommentInterface $comment */
+     $comment = $form_state->getFormObject()->getEntity();
+     $comment_formatter = $this->fieldSettingsHelper->getFieldFormatterFromComment($comment, 'full');
+     if (empty($comment_formatter) || !$this->fieldSettingsHelper->isEnabled($comment_formatter)) {
+       // If not using Ajax Comments, return the unmodified element.
+       return $element;
+     }
+-    /** @var \Drupal\Core\Entity\EntityInterface $commented_entity */
++    /** @var EntityInterface $commented_entity */
+     $commented_entity = $comment->getCommentedEntity();
+     $field_name = $comment->getFieldName();
+     $cid = $comment->id() ? $comment->id() : 0;
+@@ -364,7 +367,7 @@ class AjaxCommentsForm extends CommentForm {
+   public function validateForm(array &$form, FormStateInterface $form_state) {
+     parent::validateForm($form, $form_state);
+ 
+-    /** @var \Drupal\comment\CommentInterface $comment */
++    /** @var CommentInterface $comment */
+     $comment = $form_state->getFormObject()->getEntity();
+     $comment_formatter = $this->fieldSettingsHelper->getFieldFormatterFromComment($comment, 'full');
+     if ($comment_formatter && !$this->fieldSettingsHelper->isEnabled($comment_formatter)) {
+@@ -395,12 +398,12 @@ class AjaxCommentsForm extends CommentForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+     parent::save($form, $form_state);
+-    /** @var \Drupal\comment\CommentInterface $comment */
++    /** @var CommentInterface $comment */
+     $comment = $form_state->getFormObject()->getEntity();
+     $comment_formatter = $this->fieldSettingsHelper->getFieldFormatterFromComment($comment, 'full');
+     if (empty($comment_formatter) || !$this->fieldSettingsHelper->isEnabled($comment_formatter)) {
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 7c98c90..c96a2ea 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ajax_comments\Form;
+ 
++use Drupal\Core\Entity\ContentEntityTypeInterface;
+ use Drupal\field_ui\FieldUI;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityListBuilderInterface;
+@@ -22,34 +23,34 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity type bundle info service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityTypeBundleInfo;
+ 
+   /**
+    * The entity type bundle info service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Constructs a \Drupal\ajax_comments\Form\SettingsForm object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle info service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The entity type bundle info service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, EntityTypeBundleInfoInterface $entity_type_bundle_info, ModuleHandlerInterface $module_handler) {
+@@ -110,7 +111,7 @@ class SettingsForm extends ConfigFormBase {
+     foreach ($field_list as $field_storage_config) {
+       if ($field_storage_config->getType() === 'comment') {
+         $entity_type_id = $field_storage_config->getTargetEntityTypeId();
+-        /** @var \Drupal\Core\Entity\ContentEntityTypeInterface $entity_type */
++        /** @var ContentEntityTypeInterface $entity_type */
+         $entity_type = $this->entityTypeManager->getDefinition($entity_type_id);
+         // Load label info for the bundles of entity type $entity_type_id.
+         $bundle_info = $this->entityTypeBundleInfo->getBundleInfo($entity_type_id);
+diff --git a/src/TempStore.php b/src/TempStore.php
+index a83125f..7f5e139 100644
+--- a/src/TempStore.php
++++ b/src/TempStore.php
+@@ -28,7 +28,7 @@ class TempStore {
+   /**
+    * TempStore constructor.
+    *
+-   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $private_temp_store_factory
++   * @param PrivateTempStoreFactory $private_temp_store_factory
+    *   The factory to create the PrivateTempStore object.
+    */
+   public function __construct(PrivateTempStoreFactory $private_temp_store_factory) {
+@@ -58,7 +58,7 @@ class TempStore {
+   /**
+    * Get a single selector value, without the '#' prefix.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The request object.
+    * @param string $selector
+    *   The selector to retrieve.
+@@ -78,7 +78,7 @@ class TempStore {
+    * Store the selectors in the privateTempStore so that they are available
+    * for a subsequent HTTP response (when the #lazy_builder callback runs).
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The request object.
+    * @param bool $overwrite
+    *   Boolean to indicate if an existing selector should be overwritten if
+@@ -125,11 +125,11 @@ class TempStore {
+   /**
+    * Update the temp store values while rebuilding a form, when necessary.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The request object.
+    * @param array $form
+    *   A form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+    * @param bool $is_validating
+    *   Indicates if this method has been called from a form validation function.
+diff --git a/src/Tests/AjaxCommentsSettingsFormTest.php b/src/Tests/AjaxCommentsSettingsFormTest.php
+index 58ad912..f70531a 100644
+--- a/src/Tests/AjaxCommentsSettingsFormTest.php
++++ b/src/Tests/AjaxCommentsSettingsFormTest.php
+@@ -33,7 +33,7 @@ class AjaxCommentsSettingsFormTest extends CommentTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $admin_roles = $this->adminUser->getRoles();
+     $admin_role = Role::load(reset($admin_roles));
+@@ -47,22 +47,22 @@ class AjaxCommentsSettingsFormTest extends CommentTestBase {
+     $this->drupalLogin($this->adminUser);
+     $this->drupalGet('admin/config/content/ajax_comments');
+     // Check that the page loads.
+-    $this->assertResponse(200);
+-    $this->assertText(
+-      t("Enable Ajax Comments on the comment fields' display settings"),
+-      'The list of bundles appears on the form.'
+-    );
++    $this->assertSession()->statusCodeEquals(200);
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains(t("Enable Ajax Comments on the comment fields' display settings"));
+     $this->clickLink(t('Content: Article'));
+-    $this->assertUrl('/admin/structure/types/manage/article/display', [], 'There is a link to the entity view display form for articles.');
+-    $this->assertResponse(200);
++    $this->assertSession()->addressEquals('/admin/structure/types/manage/article/display', [], 'There is a link to the entity view display form for articles.');
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     // Open comment settings.
+-    $this->drupalPostForm(NULL, [], 'comment_settings_edit');
++    $this->submitForm([], 'comment_settings_edit');
+     // Disable ajax comments.
+-    $this->drupalPostForm(NULL, ['fields[comment][settings_edit_form][third_party_settings][ajax_comments][enable_ajax_comments]' => '0'], 'comment_plugin_settings_update');
++    $this->submitForm(['fields[comment][settings_edit_form][third_party_settings][ajax_comments][enable_ajax_comments]' => '0'], 'comment_plugin_settings_update');
+     // Save display mode.
+-    $this->drupalPostForm(NULL, [], t('Save'));
+-    $this->assertResponse(200);
++    $this->submitForm([], t('Save'));
++    $this->assertSession()->statusCodeEquals(200);
+   }
+ 
+ }
+diff --git a/src/Utility.php b/src/Utility.php
+index 10c7ac9..0c45ef5 100644
+--- a/src/Utility.php
++++ b/src/Utility.php
+@@ -31,7 +31,7 @@ class Utility {
+    *
+    * @param array $build
+    *   The render array to store.
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity with the render array to store.
+    * @param string $view_mode
+    *   The view mode of the render array.
+@@ -48,7 +48,7 @@ class Utility {
+   /**
+    * Retrieve a stored entity render array.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity whose render array should be loaded.
+    * @param string $view_mode
+    *   The view mode of the render array to load.
+@@ -85,7 +85,7 @@ class Utility {
+    * field, return the id attribute value of the wrapper element around the
+    * comment field, for use in ajax responses.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $commented_entity
++   * @param ContentEntityInterface $commented_entity
+    *   The entity that has the comment field being updated.
+    * @param string $field_name
+    *   The machine name of the comment field.
+@@ -173,7 +173,7 @@ class Utility {
+   /**
+    * Check if a request was made through ajax.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+    * @param array $input
+    *   (optional) The form input returned from $form_state->getUserInput().
+@@ -197,7 +197,7 @@ class Utility {
+   /**
+    * Check if the request is for a modal dialog.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+    *
+    * @return bool
+diff --git a/tests/src/FunctionalJavascript/AjaxCommentsFunctionalTest.php b/tests/src/FunctionalJavascript/AjaxCommentsFunctionalTest.php
+index 2f50869..43e246f 100644
+--- a/tests/src/FunctionalJavascript/AjaxCommentsFunctionalTest.php
++++ b/tests/src/FunctionalJavascript/AjaxCommentsFunctionalTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\ajax_comments\FunctionalJavascript;
+ 
++use Drupal\user\RoleInterface;
+ use Drupal\comment\Entity\Comment;
+ use Drupal\comment\Plugin\Field\FieldType\CommentItemInterface;
+ use Drupal\comment\Tests\CommentTestTrait;
+@@ -41,7 +42,7 @@ class AjaxCommentsFunctionalTest extends WebDriverTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->entityTypeManager = $this->container->get('entity_type.manager');
+ 
+@@ -289,7 +290,7 @@ JS;
+     $this->assertJsCondition($javascript_assertion);
+ 
+     // Test removing the role's permission to post comments.
+-    /** @var \Drupal\user\RoleInterface[] $roles */
++    /** @var RoleInterface[] $roles */
+     $roles = Role::loadMultiple($admin_user->getRoles());
+     foreach ($roles as $role) {
+       $role->revokePermission('post comments');
+@@ -323,7 +324,7 @@ JS;
+ 
+     // Restore the user's permission to post comments, and reload the page
+     // so that the reply links are visible.
+-    /** @var \Drupal\user\RoleInterface[] $roles */
++    /** @var RoleInterface[] $roles */
+     $roles = Role::loadMultiple($admin_user->getRoles());
+     foreach ($roles as $role) {
+       $role->grantPermission('post comments');
+@@ -334,7 +335,7 @@ JS;
+     $this->drupalGet($node->toUrl());
+ 
+     // Revoke the user's permission to post comments, again.
+-    /** @var \Drupal\user\RoleInterface[] $roles */
++    /** @var RoleInterface[] $roles */
+     $roles = Role::loadMultiple($admin_user->getRoles());
+     foreach ($roles as $role) {
+       $role->revokePermission('post comments');
+@@ -358,7 +359,7 @@ JS;
+ 
+     // Again, restore the user's permission to post comments, and
+     // reload the page so that the reply links are visible.
+-    /** @var \Drupal\user\RoleInterface[] $roles */
++    /** @var RoleInterface[] $roles */
+     $roles = Role::loadMultiple($admin_user->getRoles());
+     foreach ($roles as $role) {
+       $role->grantPermission('post comments');
+@@ -387,7 +388,7 @@ JS;
+     }
+ 
+     // Revoke the user's permission to post comments without reloading the page.
+-    /** @var \Drupal\user\RoleInterface[] $roles */
++    /** @var RoleInterface[] $roles */
+     $roles = Role::loadMultiple($admin_user->getRoles());
+     foreach ($roles as $role) {
+       $role->revokePermission('post comments');

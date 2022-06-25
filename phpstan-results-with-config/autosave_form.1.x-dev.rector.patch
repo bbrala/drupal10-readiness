@@ -1,0 +1,795 @@
+diff --git a/autosave_form.info.yml b/autosave_form.info.yml
+index 2dc2358..46da8a8 100644
+--- a/autosave_form.info.yml
++++ b/autosave_form.info.yml
+@@ -2,8 +2,7 @@ name: Autosave Form
+ type: module
+ description: 'Adds autosave feature on forms.'
+ package: Content
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.1 || ^10
+ configure: autosave_form.admin_settings
+ dependencies:
+   - drupal:system (>=8.3)
+diff --git a/autosave_form.module b/autosave_form.module
+index 13da4ab..8dab3bc 100644
+--- a/autosave_form.module
++++ b/autosave_form.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\autosave_form\Storage\AutosaveEntityFormStorageInterface;
++use Drupal\user\UserInterface;
+ /**
+  * @file
+  * This module holds autosave form functionality.
+@@ -102,7 +104,7 @@ function autosave_form_entity_update(EntityInterface $entity) {
+   static $autosave_entity_form_storage;
+ 
+   if (!isset($autosave_entity_form_storage)) {
+-    /** @var \Drupal\autosave_form\Storage\AutosaveEntityFormStorageInterface $autosave_entity_form_storage */
++    /** @var AutosaveEntityFormStorageInterface $autosave_entity_form_storage */
+     $autosave_entity_form_storage = \Drupal::service('autosave_form.entity_form_storage');
+   }
+ 
+@@ -132,14 +134,14 @@ function autosave_form_entity_update(EntityInterface $entity) {
+  * data for them.
+  */
+ function autosave_form_user_update(EntityInterface $user) {
+-  /** @var \Drupal\user\UserInterface $user */
++  /** @var UserInterface $user */
+   $current_roles = $user->getRoles();
+   $original_roles = $user->original->getRoles();
+   sort($current_roles);
+   sort($original_roles);
+ 
+   if ($current_roles !== $original_roles) {
+-    /** @var \Drupal\autosave_form\Storage\AutosaveEntityFormStorageInterface $autosave_entity_form_storage */
++    /** @var AutosaveEntityFormStorageInterface $autosave_entity_form_storage */
+     $autosave_entity_form_storage = \Drupal::service('autosave_form.entity_form_storage');
+     $autosave_entity_form_storage->purgeAutosavedEntitiesStates(NULL, NULL, $user->id());
+   }
+diff --git a/src/EventSubscriber/ConfigSubscriber.php b/src/EventSubscriber/ConfigSubscriber.php
+index 701372b..e485e7b 100644
+--- a/src/EventSubscriber/ConfigSubscriber.php
++++ b/src/EventSubscriber/ConfigSubscriber.php
+@@ -15,14 +15,14 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * The autosave form storage.
+    *
+-   * @var \Drupal\autosave_form\Storage\AutosaveEntityFormStorageInterface
++   * @var AutosaveEntityFormStorageInterface
+    */
+   protected $autosaveEntityFormStorage;
+ 
+   /**
+    * Constructs a new class object.
+    *
+-   * @param \Drupal\autosave_form\Storage\AutosaveEntityFormStorageInterface $autosave_entity_form_storage
++   * @param AutosaveEntityFormStorageInterface $autosave_entity_form_storage
+    *   The autosave entity form storage.
+    */
+   public function __construct(AutosaveEntityFormStorageInterface $autosave_entity_form_storage) {
+@@ -41,7 +41,7 @@ class ConfigSubscriber implements EventSubscriberInterface {
+    * the label of a field is changed then we don't have to purge the autosave
+    * states.
+    *
+-   * @param \Drupal\Core\Config\ConfigCrudEvent $event
++   * @param ConfigCrudEvent $event
+    *   The configuration event.
+    */
+   public function onConfigSave(ConfigCrudEvent $event) {
+@@ -101,7 +101,7 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * Purges all autosave states in case a form-related config is deleted.
+    *
+-   * @param \Drupal\Core\Config\ConfigCrudEvent $event
++   * @param ConfigCrudEvent $event
+    *   The configuration event.
+    */
+   public function onConfigDelete(ConfigCrudEvent $event) {
+diff --git a/src/Form/AutosaveButtonClickedTrait.php b/src/Form/AutosaveButtonClickedTrait.php
+index 5f9ef71..960ba3b 100644
+--- a/src/Form/AutosaveButtonClickedTrait.php
++++ b/src/Form/AutosaveButtonClickedTrait.php
+@@ -10,7 +10,7 @@ trait AutosaveButtonClickedTrait {
+   /**
+    * Checks if the submission is triggered by autosave save.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return bool
+@@ -33,7 +33,7 @@ trait AutosaveButtonClickedTrait {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return bool
+@@ -52,7 +52,7 @@ trait AutosaveButtonClickedTrait {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return bool
+diff --git a/src/Form/AutosaveEntityFormHandler.php b/src/Form/AutosaveEntityFormHandler.php
+index 1b3913f..8edde5e 100644
+--- a/src/Form/AutosaveEntityFormHandler.php
++++ b/src/Form/AutosaveEntityFormHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\autosave_form\Form;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\autosave_form\Ajax\OpenAutosaveDisabledDialog;
+ use Drupal\autosave_form\Storage\AutosaveEntityFormStorageInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+@@ -44,7 +45,7 @@ class AutosaveEntityFormHandler implements AutosaveEntityFormHandlerInterface, E
+   /**
+    * Information about the entity type.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeInterface
++   * @var EntityTypeInterface
+    */
+   protected $entityType;
+ 
+@@ -53,49 +54,49 @@ class AutosaveEntityFormHandler implements AutosaveEntityFormHandlerInterface, E
+    *
+    * Will be used to load the unchanged entity.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $entityStorage;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The autosave form storage.
+    *
+-   * @var \Drupal\autosave_form\Storage\AutosaveEntityFormStorageInterface
++   * @var AutosaveEntityFormStorageInterface
+    */
+   protected $autosaveEntityFormStorage;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The factory for expirable key value stores used by form cache.
+    *
+-   * @var \Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface
++   * @var KeyValueExpirableFactoryInterface
+    */
+   protected $keyValueExpirableFactory;
+ 
+@@ -109,24 +110,24 @@ class AutosaveEntityFormHandler implements AutosaveEntityFormHandlerInterface, E
+   /**
+    * Initializes an instance of the autosave form controller.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\autosave_form\Storage\AutosaveEntityFormStorageInterface $autosave_entity_form_storage
++   * @param AutosaveEntityFormStorageInterface $autosave_entity_form_storage
+    *   The autosave form storage service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface $key_value_expirable_factory
++   * @param KeyValueExpirableFactoryInterface $key_value_expirable_factory
+    *   The key value expirable factory, used to create key value expirable
+    *   stores for the form cache and form state cache.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityTypeManagerInterface $entity_type_manager, AccountInterface $current_user, AutosaveEntityFormStorageInterface $autosave_entity_form_storage, TimeInterface $time, DateFormatterInterface $date_formatter, ConfigFactoryInterface $config_factory, KeyValueExpirableFactoryInterface $key_value_expirable_factory, ModuleHandlerInterface $module_handler) {
+@@ -164,7 +165,7 @@ class AutosaveEntityFormHandler implements AutosaveEntityFormHandlerInterface, E
+    *
+    * @param array $form
+    *   The entity form to be altered to provide the autosave functionality.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function formAlter(array &$form, FormStateInterface $form_state) {
+@@ -214,7 +215,7 @@ class AutosaveEntityFormHandler implements AutosaveEntityFormHandlerInterface, E
+    *
+    * @param string $entity_type
+    *   The type of the entity.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity whose form is being built.
+    */
+   public static function entityFormEntityBuild($entity_type, EntityInterface $entity, array $form, FormStateInterface $form_state) {
+@@ -312,7 +313,7 @@ class AutosaveEntityFormHandler implements AutosaveEntityFormHandlerInterface, E
+   /**
+    * Retrieves the form ID and the form entity object from the form state.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/AutosaveFormAlterTrait.php b/src/Form/AutosaveFormAlterTrait.php
+index dd54e2d..454f8b1 100644
+--- a/src/Form/AutosaveFormAlterTrait.php
++++ b/src/Form/AutosaveFormAlterTrait.php
+@@ -20,7 +20,7 @@ trait AutosaveFormAlterTrait {
+    *
+    * @param array $form
+    *   The form to be altered to provide the autosave form support.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function formAlter(array &$form, FormStateInterface $form_state) {
+@@ -247,7 +247,7 @@ trait AutosaveFormAlterTrait {
+   /**
+    * Retrieves the autosave form session ID.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return string|NULL
+@@ -260,7 +260,7 @@ trait AutosaveFormAlterTrait {
+   /**
+    * Sets the autosave form session ID into the form state.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    * @param string $autosave_form_session_id
+    *   The autosave form session ID.
+diff --git a/src/Form/AutosaveFormBuilder.php b/src/Form/AutosaveFormBuilder.php
+index b23f82e..10b8dd2 100644
+--- a/src/Form/AutosaveFormBuilder.php
++++ b/src/Form/AutosaveFormBuilder.php
+@@ -34,14 +34,14 @@ class AutosaveFormBuilder extends FormBuilder {
+   /**
+    * The form builder service.
+    *
+-   * @var \Drupal\Core\Form\FormBuilderInterface
++   * @var FormBuilderInterface
+    */
+   protected $formBuilder;
+ 
+   /**
+    * The autosave form storage.
+    *
+-   * @var \Drupal\autosave_form\Storage\AutosaveEntityFormStorageInterface
++   * @var AutosaveEntityFormStorageInterface
+    */
+   protected $autosaveEntityFormStorage;
+ 
+@@ -62,29 +62,29 @@ class AutosaveFormBuilder extends FormBuilder {
+   /**
+    * Constructs a new FormBuilder.
+    *
+-   * @param \Drupal\Core\Form\FormBuilderInterface $form_builder
++   * @param FormBuilderInterface $form_builder
+    *   The form builder service.
+-   * @param \Drupal\Core\Form\FormValidatorInterface $form_validator
++   * @param FormValidatorInterface $form_validator
+    *   The form validator.
+-   * @param \Drupal\Core\Form\FormSubmitterInterface $form_submitter
++   * @param FormSubmitterInterface $form_submitter
+    *   The form submission processor.
+-   * @param \Drupal\Core\Form\FormCacheInterface $form_cache
++   * @param FormCacheInterface $form_cache
+    *   The form cache.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   The event dispatcher.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\DependencyInjection\ClassResolverInterface $class_resolver
++   * @param ClassResolverInterface $class_resolver
+    *   The class resolver.
+-   * @param \Drupal\Core\Render\ElementInfoManagerInterface $element_info
++   * @param ElementInfoManagerInterface $element_info
+    *   The element info manager.
+-   * @param \Drupal\Core\Theme\ThemeManagerInterface $theme_manager
++   * @param ThemeManagerInterface $theme_manager
+    *   The theme manager.
+-   * @param \Drupal\Core\Access\CsrfTokenGenerator $csrf_token
++   * @param CsrfTokenGenerator $csrf_token
+    *   The CSRF token generator.
+-   * @param \Drupal\autosave_form\Storage\AutosaveEntityFormStorageInterface $autosave_entity_form_storage
++   * @param AutosaveEntityFormStorageInterface $autosave_entity_form_storage
+    *   The autosave form storage service.
+    */
+   public function __construct(FormBuilderInterface $form_builder, FormValidatorInterface $form_validator, FormSubmitterInterface $form_submitter, FormCacheInterface $form_cache, ModuleHandlerInterface $module_handler, EventDispatcherInterface $event_dispatcher, RequestStack $request_stack, ClassResolverInterface $class_resolver, ElementInfoManagerInterface $element_info, ThemeManagerInterface $theme_manager, CsrfTokenGenerator $csrf_token = NULL, AutosaveEntityFormStorageInterface $autosave_entity_form_storage) {
+@@ -167,7 +167,7 @@ class AutosaveFormBuilder extends FormBuilder {
+    *
+    * @param $form_id
+    *   The form id.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   protected function restoreAutosavedState($form_id, FormStateInterface $form_state) {
+diff --git a/src/Form/AutosaveFormErrorHandler.php b/src/Form/AutosaveFormErrorHandler.php
+index 3cab710..47c929a 100644
+--- a/src/Form/AutosaveFormErrorHandler.php
++++ b/src/Form/AutosaveFormErrorHandler.php
+@@ -16,14 +16,14 @@ class AutosaveFormErrorHandler extends FormErrorHandler {
+   /**
+    * The form error handler.
+    *
+-   * @var \Drupal\Core\Form\FormErrorHandlerInterface
++   * @var FormErrorHandlerInterface
+    */
+   protected $formErrorHandler;
+ 
+   /**
+    * Constructs a AutosaveFormErrorHandler object.
+    *
+-   * @param \Drupal\Core\Form\FormErrorHandlerInterface $form_error_handler
++   * @param FormErrorHandlerInterface $form_error_handler
+    *   The form error handler service.
+    */
+   public function __construct(FormErrorHandlerInterface $form_error_handler) {
+diff --git a/src/Form/AutosaveFormInterface.php b/src/Form/AutosaveFormInterface.php
+index 9ce60b9..6b62ccc 100644
+--- a/src/Form/AutosaveFormInterface.php
++++ b/src/Form/AutosaveFormInterface.php
+@@ -19,7 +19,7 @@ interface AutosaveFormInterface {
+    *
+    * @param array $form
+    *   The form to be altered to provide autosave.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function formAlter(array &$form, FormStateInterface $form_state);
+@@ -27,7 +27,7 @@ interface AutosaveFormInterface {
+   /**
+    * Checks if the autosave submit is allowed.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return boolean
+@@ -38,7 +38,7 @@ interface AutosaveFormInterface {
+   /**
+    * Stores the state of the form in the autosave storage.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    * @param string $autosave_form_session_id
+    *   The autosave form session ID.
+@@ -52,7 +52,7 @@ interface AutosaveFormInterface {
+   /**
+    * Retrieves the last autosaved timestamp.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    * @param string|int $uid
+    *   The user id.
+@@ -65,7 +65,7 @@ interface AutosaveFormInterface {
+   /**
+    * Retrieves the last autosaved form state if any present.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form, based on which to retrieve the last
+    *   autosaved form state.
+    * @param string $autosave_form_session_id
+@@ -73,7 +73,7 @@ interface AutosaveFormInterface {
+    * @param string|int $uid
+    *   The user id.
+    *
+-   * @return \Drupal\Core\Form\FormStateInterface|NULL
++   * @return FormStateInterface|NULL
+    *   The last autosaved form state or NULL if none present.
+    */
+   public function getLastAutosavedFormState(FormStateInterface $form_state, $autosave_form_session_id, $uid);
+@@ -81,7 +81,7 @@ interface AutosaveFormInterface {
+   /**
+    * Purges the current autosave state session for the form state and user.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *  The current state of the form.
+    * @param string|int $uid
+    *   The user id for which to purge the autosaved states.
+@@ -91,7 +91,7 @@ interface AutosaveFormInterface {
+   /**
+    * Purges all autosaved state sessions for the current form and user.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *  The current state of the form.
+    * @param string|int $uid
+    *   The user id for which to purge the autosaved states.
+@@ -101,7 +101,7 @@ interface AutosaveFormInterface {
+   /**
+    * Determines if autosave is enabled for the current form.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *  The current state of the form.
+    *
+    * @return bool
+diff --git a/src/Form/AutosaveFormSettingsForm.php b/src/Form/AutosaveFormSettingsForm.php
+index af5c2b6..71dd2e1 100644
+--- a/src/Form/AutosaveFormSettingsForm.php
++++ b/src/Form/AutosaveFormSettingsForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\autosave_form\Form;
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Entity\ContentEntityTypeInterface;
+ use Drupal\Core\Entity\EntityTypeBundleInfoInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -17,23 +19,23 @@ class AutosaveFormSettingsForm extends ConfigFormBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity type bundle info.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityTypeBundleInfo;
+ 
+   /**
+    * Constructs a new AutosaveFormSettingsForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle info.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityTypeBundleInfoInterface $entity_type_bundle_info) {
+@@ -147,7 +149,7 @@ class AutosaveFormSettingsForm extends ConfigFormBase {
+       ],
+     ];
+ 
+-    /** @var  \Drupal\Core\Entity\EntityTypeInterface $entity_type */
++    /** @var EntityTypeInterface $entity_type */
+     foreach ($this->entityTypeManager->getDefinitions() as $entity_type_id => $entity_type) {
+       if ($entity_type instanceof ContentEntityTypeInterface) {
+         $entity_type_label = $entity_type->getLabel();
+@@ -190,7 +192,7 @@ class AutosaveFormSettingsForm extends ConfigFormBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Config\Config $config */
++    /** @var Config $config */
+     $config = $this->config('autosave_form.settings');
+     $allowed_content_entity_types = [];
+     foreach ($form_state->getValue('allowed_content_entities') as $entity_type_id => $data) {
+diff --git a/src/Form/AutosaveFormValidator.php b/src/Form/AutosaveFormValidator.php
+index 2588c8e..b7268b7 100644
+--- a/src/Form/AutosaveFormValidator.php
++++ b/src/Form/AutosaveFormValidator.php
+@@ -21,24 +21,24 @@ class AutosaveFormValidator extends FormValidator  {
+   /**
+    * The form validator service.
+    *
+-   * @var \Drupal\Core\Form\FormValidatorInterface
++   * @var FormValidatorInterface
+    */
+   protected $formValidator;
+ 
+   /**
+    * Constructs a AutosaveFormValidator object.
+    *
+-   * @param \Drupal\Core\Form\FormValidatorInterface $form_validator
++   * @param FormValidatorInterface $form_validator
+    *   The form validator service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation service.
+-   * @param \Drupal\Core\Access\CsrfTokenGenerator $csrf_token
++   * @param CsrfTokenGenerator $csrf_token
+    *   The CSRF token generator.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+-   * @param \Drupal\Core\Form\FormErrorHandlerInterface $form_error_handler
++   * @param FormErrorHandlerInterface $form_error_handler
+    *   The form error handler.
+    */
+   public function __construct(FormValidatorInterface $form_validator, RequestStack $request_stack, TranslationInterface $string_translation, CsrfTokenGenerator $csrf_token, LoggerInterface $logger, FormErrorHandlerInterface $form_error_handler) {
+diff --git a/src/Storage/AutosaveEntityFormDatabaseStorage.php b/src/Storage/AutosaveEntityFormDatabaseStorage.php
+index a2052ed..dcc37a4 100644
+--- a/src/Storage/AutosaveEntityFormDatabaseStorage.php
++++ b/src/Storage/AutosaveEntityFormDatabaseStorage.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\autosave_form\Storage;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Component\Serialization\SerializationInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\ContentEntityFormInterface;
+@@ -18,7 +19,7 @@ class AutosaveEntityFormDatabaseStorage implements AutosaveEntityFormStorageInte
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+@@ -32,9 +33,9 @@ class AutosaveEntityFormDatabaseStorage implements AutosaveEntityFormStorageInte
+   /**
+    * Constructs an AutosaveEntityStorage.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Component\Serialization\SerializationInterface $serializer
++   * @param SerializationInterface $serializer
+    *   The serializer to use.
+    */
+   public function __construct(Connection $connection, SerializationInterface $serializer) {
+@@ -288,9 +289,9 @@ class AutosaveEntityFormDatabaseStorage implements AutosaveEntityFormStorageInte
+   /**
+    * Returns the serialized entity object.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity object to serialize.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state to retrieve meta information about the serialization.
+    *
+    * @return string
+@@ -298,7 +299,7 @@ class AutosaveEntityFormDatabaseStorage implements AutosaveEntityFormStorageInte
+    */
+   protected function serializeEntity(EntityInterface $entity, FormStateInterface $form_state) {
+     if (($form_object = $form_state->getFormObject()) && ($form_object instanceof ContentEntityFormInterface) && method_exists($form_object, 'isEntityDeepSerializationRequired') && $form_object->isEntityDeepSerializationRequired()) {
+-      /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++      /** @var ContentEntityInterface $entity */
+       if (method_exists($entity, 'setDeepSerialization')) {
+         $entity->setDeepSerialization(TRUE);
+       }
+diff --git a/src/Storage/AutosaveEntityFormStorageInterface.php b/src/Storage/AutosaveEntityFormStorageInterface.php
+index c0d761f..8a8bd73 100644
+--- a/src/Storage/AutosaveEntityFormStorageInterface.php
++++ b/src/Storage/AutosaveEntityFormStorageInterface.php
+@@ -31,9 +31,9 @@ interface AutosaveEntityFormStorageInterface {
+    *   The user id.
+    * @param int $timestamp
+    *   The timestamp of the autosave.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity object.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    */
+   public function storeEntityAndFormState($form_id, $form_session_id, $entity_type_id, $entity_id, $langcode, $uid, $timestamp, EntityInterface $entity, FormStateInterface $form_state);
+@@ -83,7 +83,7 @@ interface AutosaveEntityFormStorageInterface {
+    * @param $timestamp
+    *   (optional) The timestamp for which to load the entity.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   The entity.
+    */
+   public function getEntity($form_id, $entity_type_id, $entity_id, $langcode, $uid, $form_session_id = NULL, $timestamp = NULL);
+@@ -109,7 +109,7 @@ interface AutosaveEntityFormStorageInterface {
+    * @param $timestamp
+    *   (optional) The timestamp for which to load the form state.
+    *
+-   * @return \Drupal\Core\Form\FormStateInterface
++   * @return FormStateInterface
+    *   The form state.
+    */
+   public function getFormState($form_id, $entity_type_id, $entity_id, $langcode, $uid, $form_session_id = NULL, $timestamp = NULL);
+@@ -117,7 +117,7 @@ interface AutosaveEntityFormStorageInterface {
+   /**
+    * Checks if any autosaved state exist for the user based on the form state.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    * @param $uid
+    *   The user id.
+diff --git a/src/Storage/AutosaveFormBackendInterface.php b/src/Storage/AutosaveFormBackendInterface.php
+index 157ef51..0f1e408 100644
+--- a/src/Storage/AutosaveFormBackendInterface.php
++++ b/src/Storage/AutosaveFormBackendInterface.php
+@@ -20,7 +20,7 @@ interface AutosaveFormBackendInterface {
+    *   The language code of the form.
+    * @param $uid
+    *   The user id.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    */
+   public function storeFormState($form_id, $langcode, $uid, FormStateInterface $form_state);
+diff --git a/tests/modules/autosave_form_test/autosave_form_test.module b/tests/modules/autosave_form_test/autosave_form_test.module
+index 40177fb..d64df16 100644
+--- a/tests/modules/autosave_form_test/autosave_form_test.module
++++ b/tests/modules/autosave_form_test/autosave_form_test.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\State\StateInterface;
+ use Drupal\autosave_form\Form\AutosaveFormInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -18,7 +19,7 @@ function autosave_form_test_form_alter(&$form, FormStateInterface $form_state, $
+ }
+ 
+ function autosave_form_test_autosave_submit($form, FormStateInterface $form_state) {
+-  /** @var \Drupal\Core\State\StateInterface $state */
++  /** @var StateInterface $state */
+   $state = \Drupal::state();
+   $count = $state->get('autosave_submit_count', 0);
+   $state->set('autosave_submit_count', ++$count);
+diff --git a/tests/src/FunctionalJavascript/AutosaveFormTestBase.php b/tests/src/FunctionalJavascript/AutosaveFormTestBase.php
+index e59e147..a869a08 100644
+--- a/tests/src/FunctionalJavascript/AutosaveFormTestBase.php
++++ b/tests/src/FunctionalJavascript/AutosaveFormTestBase.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\autosave_form\FunctionalJavascript;
+ 
++use Drupal\user\UserInterface;
++use Drupal\Core\Url;
++use Drupal\Core\State\StateInterface;
+ use Behat\Mink\Exception\ResponseTextException;
+ use Drupal\FunctionalJavascriptTests\WebDriverTestBase;
+ 
+@@ -30,7 +33,7 @@ abstract class AutosaveFormTestBase extends WebDriverTestBase {
+   /**
+    * The user to test with.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $webUser;
+ 
+@@ -44,7 +47,7 @@ abstract class AutosaveFormTestBase extends WebDriverTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->prepareSetUp();
+   }
+@@ -72,7 +75,7 @@ abstract class AutosaveFormTestBase extends WebDriverTestBase {
+   /**
+    * Loads the page and submits the autosave restore.
+    *
+-   * @param string|\Drupal\Core\Url $path
++   * @param string|Url $path
+    *   Drupal path or URL to load into Mink controlled browser.
+    * @param $last_autosave_timestamp
+    *   The last autosave timestamp for the provided path to check
+@@ -141,7 +144,7 @@ abstract class AutosaveFormTestBase extends WebDriverTestBase {
+    *   TRUE, if the autosave submits have occurred, FALSE otherwise.
+    */
+   protected function waitForAutosaveSubmits($count) {
+-    /** @var \Drupal\Core\State\StateInterface $state */
++    /** @var StateInterface $state */
+     $state = \Drupal::state();
+     $state->resetCache();
+     $start_count = $state->get('autosave_submit_count', 0);
+diff --git a/tests/src/FunctionalJavascript/ContentEntity/ContentEntityAutosaveFormTestBase.php b/tests/src/FunctionalJavascript/ContentEntity/ContentEntityAutosaveFormTestBase.php
+index e44fc60..f775c6e 100644
+--- a/tests/src/FunctionalJavascript/ContentEntity/ContentEntityAutosaveFormTestBase.php
++++ b/tests/src/FunctionalJavascript/ContentEntity/ContentEntityAutosaveFormTestBase.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\autosave_form\FunctionalJavascript\ContentEntity;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
+ use Drupal\autosave_form\Storage\AutosaveEntityFormStorageInterface;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Entity\EntityChangedInterface;
+@@ -168,7 +171,7 @@ abstract class ContentEntityAutosaveFormTestBase extends AutosaveFormTestBase {
+    * Submits the current form.
+    */
+   protected function saveForm() {
+-    $this->drupalPostForm(NULL, [], t('Save'));
++    $this->submitForm([], t('Save'));
+   }
+ 
+   /**
+@@ -626,7 +629,7 @@ abstract class ContentEntityAutosaveFormTestBase extends AutosaveFormTestBase {
+   /**
+    * Creates a new test entity.
+    *
+-   * @return \Drupal\Core\Entity\ContentEntityInterface
++   * @return ContentEntityInterface
+    *   The newly created entity.
+    */
+   protected function createTestEntity() {
+@@ -660,7 +663,7 @@ abstract class ContentEntityAutosaveFormTestBase extends AutosaveFormTestBase {
+    * @param mixed $id
+    *   The ID of the entity to load.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null
++   * @return EntityInterface|null
+    *   An entity object. NULL if no matching entity is found.
+    */
+   protected function reloadEntity($id) {
+@@ -761,7 +764,7 @@ abstract class ContentEntityAutosaveFormTestBase extends AutosaveFormTestBase {
+    * @param string $form_mode
+    *   The form mode.
+    *
+-   * @return \Drupal\Core\Entity\Display\EntityFormDisplayInterface
++   * @return EntityFormDisplayInterface
+    *   The entity form display associated with the given form mode.
+    *
+    * @todo Remove this once Drupal 8.7 is no longer supported.

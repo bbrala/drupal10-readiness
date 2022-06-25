@@ -1,0 +1,1251 @@
+diff --git a/field_encrypt.api.php b/field_encrypt.api.php
+index 05e5079..9f5ed07 100644
+--- a/field_encrypt.api.php
++++ b/field_encrypt.api.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
+ /**
+  * @file
+  * Hooks for Field Encrypt module.
+@@ -20,13 +21,13 @@ use Drupal\node\Entity\Node;
+  * encrypted. It does not allow an entity that is not configured to be
+  * encrypted, because there are no settings defined to do so.
+  *
+- * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++ * @param ContentEntityInterface $entity
+  *   The entity to encrypt fields on.
+  *
+  * @return bool
+  *   Return FALSE if entity should not be encrypted.
+  */
+-function hook_field_encrypt_allow_encryption(\Drupal\Core\Entity\ContentEntityInterface $entity) {
++function hook_field_encrypt_allow_encryption(ContentEntityInterface $entity) {
+   // Only encrypt fields on unpublished nodes.
+   if ($entity instanceof Node) {
+     if ($entity->isPublished()) {
+diff --git a/field_encrypt.module b/field_encrypt.module
+index 215b7d2..77f92ae 100644
+--- a/field_encrypt.module
++++ b/field_encrypt.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\field_encrypt\Entity\FieldEncryptEntityType;
+ /**
+  * @file
+  * Contains module hooks for field_encrypt.
+@@ -30,7 +31,7 @@ function field_encrypt_form_alter(&$form, FormStateInterface $form_state, $form_
+     // Check permissions.
+     $user = \Drupal::currentUser();
+     if ($user->hasPermission('administer field encryption') && \Drupal::config('field_encrypt.settings')->get('encryption_profile') !== '') {
+-      /** @var \Drupal\field\Entity\FieldStorageConfig $field */
++      /** @var FieldStorageConfig $field */
+       $field = $form_state->getFormObject()->getEntity();
+       $field_type = $field->getType();
+       $default_properties = \Drupal::config('field_encrypt.settings')->get('default_properties');
+@@ -91,11 +92,11 @@ function field_encrypt_form_alter(&$form, FormStateInterface $form_state, $form_
+  *
+  * @param string $entity_type
+  *   The entity type.
+- * @param \Drupal\field\Entity\FieldStorageConfig $field_storage_config
++ * @param FieldStorageConfig $field_storage_config
+  *   The field storage config entity.
+  * @param array $form
+  *   The complete form array.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The current state of the form.
+  */
+ function field_encrypt_form_field_add_form_builder($entity_type, FieldStorageConfig $field_storage_config, array &$form, FormStateInterface $form_state) {
+@@ -163,7 +164,7 @@ function field_encrypt_entity_storage_load($entities, $entity_type) {
+     return;
+   }
+ 
+-  /** @var \Drupal\field_encrypt\ProcessEntities $field_encrypt_process_entities */
++  /** @var ProcessEntities $field_encrypt_process_entities */
+   $field_encrypt_process_entities = \Drupal::service('field_encrypt.process_entities');
+ 
+   foreach ($entities as $entity) {
+@@ -174,7 +175,7 @@ function field_encrypt_entity_storage_load($entities, $entity_type) {
+ /**
+  * Verify if the given entity has encrypted fields.
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  *   The entity to check.
+  *
+  * @return bool
+@@ -225,7 +226,7 @@ function field_encrypt_entity_base_field_info(EntityTypeInterface $entity_type)
+  */
+ function field_encrypt_entity_base_field_info_alter(&$fields, EntityTypeInterface $entity_type) {
+   /** @var \Drupal\Core\Field\BaseFieldDefinition[] $fields */
+-  /** @var \Drupal\field_encrypt\Entity\FieldEncryptEntityType $field_encrypt_settings */
++  /** @var FieldEncryptEntityType $field_encrypt_settings */
+   $field_encrypt_settings = \Drupal::entityTypeManager()->getStorage('field_encrypt_entity_type')->load($entity_type->id());
+   if ($field_encrypt_settings) {
+     foreach ($field_encrypt_settings->getBaseFields() as $field_name => $encrypted_properties) {
+diff --git a/src/Controller/FieldOverviewController.php b/src/Controller/FieldOverviewController.php
+index 14bd63f..a306d44 100644
+--- a/src/Controller/FieldOverviewController.php
++++ b/src/Controller/FieldOverviewController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\field_encrypt\Controller;
+ 
++use Drupal\Core\Field\FieldStorageDefinitionInterface;
++use Drupal\Core\Field\BaseFieldDefinition;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Entity\ContentEntityTypeInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+@@ -17,23 +19,23 @@ class FieldOverviewController extends ControllerBase {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * Creates a new FieldOverviewController object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager) {
+@@ -112,7 +114,7 @@ class FieldOverviewController extends ControllerBase {
+   /**
+    * Get a list of encrypted fields' storage entities.
+    *
+-   * @return \Drupal\Core\Field\FieldStorageDefinitionInterface[]
++   * @return FieldStorageDefinitionInterface[]
+    *   An array of FieldStorageConfig entities and base fields for encrypted
+    *   fields.
+    */
+@@ -128,7 +130,7 @@ class FieldOverviewController extends ControllerBase {
+     foreach ($this->entityTypeManager->getDefinitions() as $entity_type) {
+       // Only content entity types support encryption.
+       if ($entity_type instanceof ContentEntityTypeInterface) {
+-        /** @var \Drupal\Core\Field\BaseFieldDefinition $base_field */
++        /** @var BaseFieldDefinition $base_field */
+         foreach ($this->entityFieldManager->getBaseFieldDefinitions($entity_type->id()) as $base_field) {
+           if ($base_field->getSetting('field_encrypt.encrypt')) {
+             $encrypted_fields[] = $base_field;
+diff --git a/src/EncryptedFieldComputedProperty.php b/src/EncryptedFieldComputedProperty.php
+index edb2c1e..eeba0cb 100644
+--- a/src/EncryptedFieldComputedProperty.php
++++ b/src/EncryptedFieldComputedProperty.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_encrypt;
+ 
++use Drupal\field_encrypt\Plugin\Field\FieldType\EncryptedFieldStorageItem;
+ use Drupal\Core\TypedData\TypedData;
+ 
+ /**
+@@ -21,7 +22,7 @@ class EncryptedFieldComputedProperty extends TypedData {
+    */
+   public function getValue() {
+     if ($this->decryptedData === NULL) {
+-      /** @var \Drupal\field_encrypt\Plugin\Field\FieldType\EncryptedFieldStorageItem $item */
++      /** @var EncryptedFieldStorageItem $item */
+       $item = $this->getParent();
+       $this->decryptedData = $item->decrypt();
+     }
+diff --git a/src/Entity/FieldEncryptEntityType.php b/src/Entity/FieldEncryptEntityType.php
+index f27ce3a..583d9bf 100644
+--- a/src/Entity/FieldEncryptEntityType.php
++++ b/src/Entity/FieldEncryptEntityType.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_encrypt\Entity;
+ 
++use Drupal\Core\Queue\QueueInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\StringTranslation\TranslatableMarkup;
+@@ -146,7 +147,7 @@ class FieldEncryptEntityType extends ConfigEntityBase {
+    *   entity type the config entity is configures.
+    */
+   private static function queueEntityUpdates($entity_type_id) {
+-    /** @var \Drupal\Core\Queue\QueueInterface $queue */
++    /** @var QueueInterface $queue */
+     $queue = \Drupal::service('queue')->get('field_encrypt_update_entity_encryption');
+     $entity_type_manager = \Drupal::entityTypeManager();
+ 
+diff --git a/src/EventSubscriber/ConfigSubscriber.php b/src/EventSubscriber/ConfigSubscriber.php
+index d93d884..d9b2985 100644
+--- a/src/EventSubscriber/ConfigSubscriber.php
++++ b/src/EventSubscriber/ConfigSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_encrypt\EventSubscriber;
+ 
++use Drupal\field_encrypt\Entity\FieldEncryptEntityType;
+ use Drupal\Core\Config\Config;
+ use Drupal\Core\Config\ConfigCrudEvent;
+ use Drupal\Core\Config\ConfigEvents;
+@@ -26,43 +27,43 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The state manager.
+    *
+-   * @var \Drupal\field_encrypt\StateManager
++   * @var StateManager
+    */
+   protected $stateManager;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Constructs a new ConfigSubscriber object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   The queue factory.
+-   * @param \Drupal\field_encrypt\StateManager $state_manager
++   * @param StateManager $state_manager
+    *   The state manager.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $translation
++   * @param TranslationInterface $translation
+    *   The string translation service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, QueueFactory $queue_factory, StateManager $state_manager, TranslationInterface $translation, MessengerInterface $messenger) {
+@@ -86,7 +87,7 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * React on the configuration save event.
+    *
+-   * @param \Drupal\Core\Config\ConfigCrudEvent $event
++   * @param ConfigCrudEvent $event
+    *   The configuration event.
+    *
+    * @todo why is this not just using hook_field_storage_update?
+@@ -105,7 +106,7 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * Reacts to changes in field.storage.*.
+    *
+-   * @param \Drupal\Core\Config\Config $config
++   * @param Config $config
+    *   The field storage config.
+    */
+   protected function onFieldStorageChange(Config $config) {
+@@ -162,7 +163,7 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * Reacts to changes in field_encrypt.settings.
+    *
+-   * @param \Drupal\Core\Config\Config $config
++   * @param Config $config
+    *   The field_encrypt.settings config object.
+    */
+   protected function onFieldEncryptSettingsChange(Config $config) {
+@@ -174,7 +175,7 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * React on the configuration delete event.
+    *
+-   * @param \Drupal\Core\Config\ConfigCrudEvent $event
++   * @param ConfigCrudEvent $event
+    *   The configuration event.
+    */
+   public function onConfigDelete(ConfigCrudEvent $event) {
+@@ -187,7 +188,7 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * React to a base field being deleted.
+    *
+-   * @param \Drupal\Core\Field\FieldStorageDefinitionEvent $event
++   * @param FieldStorageDefinitionEvent $event
+    *   The field storage event.
+    */
+   public function onBaseFieldDelete(FieldStorageDefinitionEvent $event) {
+@@ -195,7 +196,7 @@ class ConfigSubscriber implements EventSubscriberInterface {
+     //   configuration import?
+     $field = $event->getFieldStorageDefinition();
+     if ($event->getFieldStorageDefinition()->isBaseField()) {
+-      /** @var \Drupal\field_encrypt\Entity\FieldEncryptEntityType $field_encrypt_settings */
++      /** @var FieldEncryptEntityType $field_encrypt_settings */
+       $field_encrypt_settings = $this->entityTypeManager->getStorage('field_encrypt_entity_type')->load($field->getTargetEntityTypeId());
+       if ($field_encrypt_settings && $field_encrypt_settings->hasBaseField($field->getName())) {
+         $field_encrypt_settings->removeBaseField($field->getName());
+diff --git a/src/Form/DecryptFieldForm.php b/src/Form/DecryptFieldForm.php
+index da2e39e..ae46d75 100644
+--- a/src/Form/DecryptFieldForm.php
++++ b/src/Form/DecryptFieldForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_encrypt\Form;
+ 
++use Drupal\field_encrypt\Entity\FieldEncryptEntityType;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -37,14 +38,14 @@ class DecryptFieldForm extends ConfirmFormBase {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a new FieldEncryptDecryptForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -113,7 +114,7 @@ class DecryptFieldForm extends ConfirmFormBase {
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     if ($this->baseField) {
+-      /** @var \Drupal\field_encrypt\Entity\FieldEncryptEntityType $field_encrypt_settings */
++      /** @var FieldEncryptEntityType $field_encrypt_settings */
+       $field_encrypt_settings = $this->entityTypeManager->getStorage('field_encrypt_entity_type')->load($this->entityType);
+       $field_encrypt_settings
+         ->removeBaseField($this->fieldName)
+diff --git a/src/Form/EntityTypeForm.php b/src/Form/EntityTypeForm.php
+index 887bd9f..863d546 100644
+--- a/src/Form/EntityTypeForm.php
++++ b/src/Form/EntityTypeForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\field_encrypt\Form;
+ 
++use Drupal\field_encrypt\Entity\FieldEncryptEntityType;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Core\Entity\ContentEntityTypeInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -21,23 +23,23 @@ class EntityTypeForm extends FormBase {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * FieldEncryptDecryptForm constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager) {
+@@ -107,7 +109,7 @@ class EntityTypeForm extends FormBase {
+     $default_value = [];
+     $possible_fields = [];
+     if ($entity_type_id) {
+-      /** @var \Drupal\field_encrypt\Entity\FieldEncryptEntityType $field_encrypt_settings */
++      /** @var FieldEncryptEntityType $field_encrypt_settings */
+       $field_encrypt_settings = $this->entityTypeManager->getStorage('field_encrypt_entity_type')->load($entity_type_id);
+       if ($field_encrypt_settings) {
+         $default_value = array_keys($field_encrypt_settings->getBaseFields());
+@@ -168,7 +170,7 @@ class EntityTypeForm extends FormBase {
+     // Get information required to build a property field for each base field.
+     $form = [];
+     $base_field_definitions = $this->entityFieldManager->getBaseFieldDefinitions($entity_type_id);
+-    /** @var \Drupal\field_encrypt\Entity\FieldEncryptEntityType $field_encrypt_settings */
++    /** @var FieldEncryptEntityType $field_encrypt_settings */
+     $field_encrypt_settings = $this->entityTypeManager->getStorage('field_encrypt_entity_type')->load($entity_type_id);
+     $default_values = $field_encrypt_settings ? $field_encrypt_settings->getBaseFields() : [];
+     $default_properties = $this->config('field_encrypt.settings')->get('default_properties');
+@@ -205,7 +207,7 @@ class EntityTypeForm extends FormBase {
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $entity_type_id = $form_state->getValue('entity_type');
+     if ($form['entity_type']['#default_value'] === $form_state->getValue('entity_type')) {
+-      /** @var \Drupal\field_encrypt\Entity\FieldEncryptEntityType $field_encrypt_settings */
++      /** @var FieldEncryptEntityType $field_encrypt_settings */
+       $field_encrypt_settings = $this->entityTypeManager->getStorage('field_encrypt_entity_type')->load($entity_type_id);
+       if (!$field_encrypt_settings) {
+         $field_encrypt_settings = $this->entityTypeManager->getStorage('field_encrypt_entity_type')->create([
+@@ -252,7 +254,7 @@ class EntityTypeForm extends FormBase {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -268,7 +270,7 @@ class EntityTypeForm extends FormBase {
+    * @param string $entity_type_id
+    *   The entity type ID.
+    *
+-   * @return string[]|\Drupal\Core\StringTranslation\TranslatableMarkup[]
++   * @return string[]|TranslatableMarkup[]
+    *   A array of base fields labels that can be encrypted. Keyed by base field
+    *   name.
+    */
+diff --git a/src/Form/ProcessQueueForm.php b/src/Form/ProcessQueueForm.php
+index c678973..1cc2dc0 100644
+--- a/src/Form/ProcessQueueForm.php
++++ b/src/Form/ProcessQueueForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\field_encrypt\Form;
+ 
++use Drupal\Core\Queue\QueueInterface;
++use Drupal\field_encrypt\Plugin\QueueWorker\FieldEncryptQueueWorkerInterface;
+ use Drupal\Core\Batch\BatchBuilder;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -18,23 +20,23 @@ class ProcessQueueForm extends FormBase {
+   /**
+    * The queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The QueueWorker manager.
+    *
+-   * @var \Drupal\Core\Queue\QueueWorkerManagerInterface
++   * @var QueueWorkerManagerInterface
+    */
+   protected $queueManager;
+ 
+   /**
+    * Constructs a new FieldEncryptUpdateForm.
+    *
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   The queue factory.
+-   * @param \Drupal\Core\Queue\QueueWorkerManagerInterface $queue_manager
++   * @param QueueWorkerManagerInterface $queue_manager
+    *   The QueueWorker manager.
+    */
+   public function __construct(QueueFactory $queue_factory, QueueWorkerManagerInterface $queue_manager) {
+@@ -107,11 +109,11 @@ class ProcessQueueForm extends FormBase {
+   public static function processUpdates($queue_id, array &$context) {
+     $batch_size = \Drupal::config('field_encrypt.settings')->get('batch_size');
+ 
+-    /** @var \Drupal\Core\Queue\QueueInterface $queue */
++    /** @var QueueInterface $queue */
+     $queue = \Drupal::service('queue')->get($queue_id);
+     $num_items = $queue->numberOfItems();
+ 
+-    /** @var \Drupal\field_encrypt\Plugin\QueueWorker\FieldEncryptQueueWorkerInterface $queue_worker */
++    /** @var FieldEncryptQueueWorkerInterface $queue_worker */
+     $queue_worker = \Drupal::service('plugin.manager.queue_worker')->createInstance($queue_id);
+ 
+     if (empty($context['sandbox'])) {
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index e096a5b..b37b4d7 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -19,25 +19,25 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * The field type plugin manager.
+    *
+-   * @var \Drupal\Core\Field\FieldTypePluginManagerInterface
++   * @var FieldTypePluginManagerInterface
+    */
+   protected $fieldTypePluginManager;
+ 
+   /**
+    * The encryption profile manager.
+    *
+-   * @var \Drupal\encrypt\EncryptionProfileManagerInterface
++   * @var EncryptionProfileManagerInterface
+    */
+   protected $encryptionProfileManager;
+ 
+   /**
+    * Constructs a new FieldEncryptSettingsForm.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Field\FieldTypePluginManagerInterface $field_type_plugin_manager
++   * @param FieldTypePluginManagerInterface $field_type_plugin_manager
+    *   The field type plugin manager.
+-   * @param \Drupal\encrypt\EncryptionProfileManagerInterface $encryption_profile_manager
++   * @param EncryptionProfileManagerInterface $encryption_profile_manager
+    *   The encryption profile manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, FieldTypePluginManagerInterface $field_type_plugin_manager, EncryptionProfileManagerInterface $encryption_profile_manager) {
+diff --git a/src/Form/UpdateEncryptionProfileForm.php b/src/Form/UpdateEncryptionProfileForm.php
+index 8425155..763d800 100644
+--- a/src/Form/UpdateEncryptionProfileForm.php
++++ b/src/Form/UpdateEncryptionProfileForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_encrypt\Form;
+ 
++use Drupal\Core\Entity\EntityType;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -19,37 +20,37 @@ class UpdateEncryptionProfileForm extends ConfirmFormBase {
+   /**
+    * The entity type.
+    *
+-   * @var \Drupal\Core\Entity\EntityType
++   * @var EntityType
+    */
+   protected $entityType;
+ 
+   /**
+    * The encryption profile.
+    *
+-   * @var \Drupal\encrypt\Entity\EncryptionProfile
++   * @var EncryptionProfile
+    */
+   protected $encryptionProfile;
+ 
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The queue.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+   /**
+    * Constructs a new FieldEncryptDecryptForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Queue\QueueInterface $queue
++   * @param QueueInterface $queue
+    *   The field encryption entity update queue.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, QueueInterface $queue) {
+diff --git a/src/Plugin/Field/FieldType/EncryptedFieldStorageItem.php b/src/Plugin/Field/FieldType/EncryptedFieldStorageItem.php
+index b87378a..64d4ee9 100644
+--- a/src/Plugin/Field/FieldType/EncryptedFieldStorageItem.php
++++ b/src/Plugin/Field/FieldType/EncryptedFieldStorageItem.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_encrypt\Plugin\Field\FieldType;
+ 
++use Drupal\encrypt\EncryptionProfileInterface;
+ use Drupal\Core\Field\FieldItemBase;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\Core\StringTranslation\TranslatableMarkup;
+@@ -109,7 +110,7 @@ class EncryptedFieldStorageItem extends FieldItemBase {
+   /**
+    * Loads the encryption profile config entity.
+    *
+-   * @return \Drupal\encrypt\EncryptionProfileInterface
++   * @return EncryptionProfileInterface
+    *   The EncryptionProfile entity.
+    */
+   protected function loadEncryptionProfile($encryption_profile) {
+diff --git a/src/Plugin/QueueWorker/FieldEncryptQueueWorkerInterface.php b/src/Plugin/QueueWorker/FieldEncryptQueueWorkerInterface.php
+index 7efa18c..41658d3 100644
+--- a/src/Plugin/QueueWorker/FieldEncryptQueueWorkerInterface.php
++++ b/src/Plugin/QueueWorker/FieldEncryptQueueWorkerInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_encrypt\Plugin\QueueWorker;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Core\Queue\QueueWorkerInterface;
+ 
+ /**
+@@ -17,7 +18,7 @@ interface FieldEncryptQueueWorkerInterface extends QueueWorkerInterface {
+    * @param array $data
+    *   The data that to generate the message.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   Translatable markup
+    */
+   public function batchMessage(array $data);
+diff --git a/src/Plugin/QueueWorker/UpdateEntityEncryption.php b/src/Plugin/QueueWorker/UpdateEntityEncryption.php
+index 35bf740..5885c45 100644
+--- a/src/Plugin/QueueWorker/UpdateEntityEncryption.php
++++ b/src/Plugin/QueueWorker/UpdateEntityEncryption.php
+@@ -30,7 +30,7 @@ class UpdateEntityEncryption extends QueueWorkerBase implements ContainerFactory
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -43,7 +43,7 @@ class UpdateEntityEncryption extends QueueWorkerBase implements ContainerFactory
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/ProcessEntities.php b/src/ProcessEntities.php
+index ec93a8e..60ba471 100644
+--- a/src/ProcessEntities.php
++++ b/src/ProcessEntities.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_encrypt;
+ 
++use Drupal\field\FieldStorageConfigInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+@@ -24,14 +25,14 @@ class ProcessEntities {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Constructs a ProcessEntities object.
+    *
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(ModuleHandlerInterface $module_handler) {
+@@ -41,7 +42,7 @@ class ProcessEntities {
+   /**
+    * Encrypts an entity's encrypted fields.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity to encrypt.
+    *
+    * @see field_encrypt_entity_presave()
+@@ -105,7 +106,7 @@ class ProcessEntities {
+   /**
+    * Decrypts an entity's encrypted fields.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity to decrypt.
+    *
+    * @see field_encrypt_entity_storage_load()
+@@ -127,9 +128,9 @@ class ProcessEntities {
+   /**
+    * Encrypts a field.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity being encrypted.
+-   * @param \Drupal\Core\Field\FieldItemListInterface $field
++   * @param FieldItemListInterface $field
+    *   The field to encrypt.
+    */
+   protected function encryptField(ContentEntityInterface $entity, FieldItemListInterface $field) {
+@@ -142,7 +143,7 @@ class ProcessEntities {
+       $properties = $storage->getSetting('field_encrypt.properties') ?? [];
+     }
+     else {
+-      /** @var \Drupal\field\FieldStorageConfigInterface $storage */
++      /** @var FieldStorageConfigInterface $storage */
+       $properties = $storage->getThirdPartySetting('field_encrypt', 'properties', []);
+     }
+     // Process the field with the given encryption provider.
+@@ -161,7 +162,7 @@ class ProcessEntities {
+   /**
+    * Sets an entity's encrypted fields to a value.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity to set the values on.
+    * @param string|null $method
+    *   (optional) The method call to set the value. By default, this code sets
+@@ -201,7 +202,7 @@ class ProcessEntities {
+   /**
+    * Gets the encrypted fields from the entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity with encrypted fields.
+    *
+    * @return iterable
+@@ -225,9 +226,9 @@ class ProcessEntities {
+   /**
+    * Moves the unencrypted value to the encrypted field storage.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity to process.
+-   * @param \Drupal\Core\Field\FieldItemListInterface $field
++   * @param FieldItemListInterface $field
+    *   The field to process.
+    * @param int $delta
+    *   The field delta.
+@@ -268,9 +269,9 @@ class ProcessEntities {
+   /**
+    * Render a placeholder value to be stored in the unencrypted field storage.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity to encrypt fields on.
+-   * @param \Drupal\Core\Field\FieldItemListInterface $field
++   * @param FieldItemListInterface $field
+    *   The field to encrypt.
+    * @param string $property_name
+    *   The property to encrypt.
+@@ -322,7 +323,7 @@ class ProcessEntities {
+   /**
+    * Sets an entity's encrypted field's cache tags appropriately.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity being viewed.
+    * @param array $build
+    *   A renderable array representing the entity content.
+diff --git a/src/StateManager.php b/src/StateManager.php
+index 4c5f37b..1fd923e 100644
+--- a/src/StateManager.php
++++ b/src/StateManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_encrypt;
+ 
++use Drupal\field\FieldStorageConfigInterface;
+ use Drupal\Core\Entity\ContentEntityTypeInterface;
+ use Drupal\Core\Entity\DynamicallyFieldableEntityStorageInterface;
+ use Drupal\Core\Entity\EntityDefinitionUpdateManagerInterface;
+@@ -26,58 +27,58 @@ class StateManager {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The state key value store.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The entity last installed schema repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface
++   * @var EntityLastInstalledSchemaRepositoryInterface
+    */
+   protected $entitySchemaRepository;
+ 
+   /**
+    * The entity definition update manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityDefinitionUpdateManagerInterface
++   * @var EntityDefinitionUpdateManagerInterface
+    */
+   protected $entityDefinitionUpdateManager;
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Constructs a new ConfigSubscriber object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   The queue factory.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state key value store.
+-   * @param \Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface $entity_schema_repository
++   * @param EntityLastInstalledSchemaRepositoryInterface $entity_schema_repository
+    *   The entity last installed schema repository.
+-   * @param \Drupal\Core\Entity\EntityDefinitionUpdateManagerInterface $entity_definition_update_manager
++   * @param EntityDefinitionUpdateManagerInterface $entity_definition_update_manager
+    *   The entity definition update manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, QueueFactory $queue_factory, StateInterface $state, EntityLastInstalledSchemaRepositoryInterface $entity_schema_repository, EntityDefinitionUpdateManagerInterface $entity_definition_update_manager, ModuleHandlerInterface $module_handler) {
+@@ -183,7 +184,7 @@ class StateManager {
+   /**
+    * Gets the field definition for the blob where we store data.
+    *
+-   * @return \Drupal\Core\Field\BaseFieldDefinition
++   * @return BaseFieldDefinition
+    *   The field definition for the blob where we store data.
+    */
+   public static function getEncryptedFieldStorageDefinition() {
+@@ -219,7 +220,7 @@ class StateManager {
+             ->condition('id', $entity_type_id . '.', 'STARTS_WITH')
+             ->execute();
+           // Fetch all fields on entity type.
+-          /** @var \Drupal\field\FieldStorageConfigInterface[] $field_storages */
++          /** @var FieldStorageConfigInterface[] $field_storages */
+           $field_storages = $this->entityTypeManager->getStorage('field_storage_config')->loadMultiple($ids);
+           foreach ($field_storages as $storage) {
+             // Check if field is encrypted.
+diff --git a/tests/scripts/performance_test.php b/tests/scripts/performance_test.php
+index bb21b9e..2ac52d2 100644
+--- a/tests/scripts/performance_test.php
++++ b/tests/scripts/performance_test.php
+@@ -1,4 +1,5 @@
+ <?php
++use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ // @codingStandardsIgnoreFile
+ /**
+  * @file
+@@ -81,7 +82,7 @@ if (!FieldStorageConfig::loadByName('node', 'field_test_single')) {
+     'label' => 'Single field',
+   ]);
+   $single_field->save();
+-  /** @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface $display_repository */
++  /** @var EntityDisplayRepositoryInterface $display_repository */
+   $display_repository = \Drupal::service('entity_display.repository');
+   $display_repository->getFormDisplay('node', 'page', 'default')
+     ->setComponent('field_test_single')
+diff --git a/tests/src/Functional/BaseFieldTest.php b/tests/src/Functional/BaseFieldTest.php
+index e2f421b..28be274 100644
+--- a/tests/src/Functional/BaseFieldTest.php
++++ b/tests/src/Functional/BaseFieldTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\field_encrypt\Functional;
+ 
++use Drupal\Core\Field\FieldConfigInterface;
++use Drupal\field_encrypt\Entity\FieldEncryptEntityType;
++use Drupal\Core\Queue\QueueInterface;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\field_encrypt\ProcessEntities;
+ use Drupal\language\Entity\ConfigurableLanguage;
+@@ -42,7 +45,7 @@ class BaseFieldTest extends EncryptTestBase {
+    *
+    * @TODO: Simplify setUp() by extending EncryptTestBase when https://www.drupal.org/node/2692387 lands.
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Create an admin user.
+@@ -103,7 +106,7 @@ class BaseFieldTest extends EncryptTestBase {
+     // Check title base field settings.
+     $definition = $fields['title']->getFieldDefinition();
+     $this->assertTrue($definition instanceof FieldDefinitionInterface);
+-    /** @var \Drupal\Core\Field\FieldConfigInterface $storage */
++    /** @var FieldConfigInterface $storage */
+     $storage = $definition->getFieldStorageDefinition();
+     $this->assertEquals(TRUE, $storage->getSetting('field_encrypt.encrypt'));
+     $this->assertEquals(['value'], array_filter($storage->getSetting('field_encrypt.properties')));
+@@ -278,7 +281,7 @@ class BaseFieldTest extends EncryptTestBase {
+    */
+   public function testEntityTypeDependencies() {
+     $this->setFieldStorageSettings(TRUE);
+-    /** @var \Drupal\field_encrypt\Entity\FieldEncryptEntityType $config_entity */
++    /** @var FieldEncryptEntityType $config_entity */
+     $config_entity = \Drupal::entityTypeManager()->getStorage('field_encrypt_entity_type')->load('node');
+     $this->assertNotNull($config_entity);
+     $old_config = $config_entity->getBaseFields();
+@@ -312,7 +315,7 @@ class BaseFieldTest extends EncryptTestBase {
+     // Remove title encryption and set up encryption on the test base field.
+     $config_entity = \Drupal::entityTypeManager()->getStorage('field_encrypt_entity_type')->load('node');
+     $config_entity->setBaseFields(['field_encrypt_test_base_field' => ['value']])->save();
+-    /** @var \Drupal\Core\Queue\QueueInterface $queue */
++    /** @var QueueInterface $queue */
+     $queue = \Drupal::service('queue')->get('field_encrypt_update_entity_encryption');
+     $this->assertSame(1, $queue->numberOfItems());
+     $this->cronRun();
+diff --git a/tests/src/Functional/CacheTest.php b/tests/src/Functional/CacheTest.php
+index 55692c7..2bd0593 100644
+--- a/tests/src/Functional/CacheTest.php
++++ b/tests/src/Functional/CacheTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\field_encrypt\Functional;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\dynamic_page_cache\EventSubscriber\DynamicPageCacheSubscriber;
+ use Drupal\field\Entity\FieldStorageConfig;
+ 
+@@ -22,14 +23,14 @@ class CacheTest extends FieldEncryptTestBase {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->entityTypeManager = $this->container->get('entity_type.manager');
+diff --git a/tests/src/Functional/ConfigurableFieldTest.php b/tests/src/Functional/ConfigurableFieldTest.php
+index 4fef6a8..0184086 100644
+--- a/tests/src/Functional/ConfigurableFieldTest.php
++++ b/tests/src/Functional/ConfigurableFieldTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\field_encrypt\Functional;
+ 
++use Drupal\Core\Field\FieldConfigInterface;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\field_encrypt\ProcessEntities;
+ use Drupal\Tests\Traits\Core\CronRunTrait;
+@@ -33,7 +34,7 @@ class ConfigurableFieldTest extends FieldEncryptTestBase {
+     $single_field = $fields['field_test_single'];
+     $definition = $single_field->getFieldDefinition();
+     $this->assertTrue($definition instanceof FieldDefinitionInterface);
+-    /** @var \Drupal\Core\Field\FieldConfigInterface $storage */
++    /** @var FieldConfigInterface $storage */
+     $storage = $definition->getFieldStorageDefinition();
+     $this->assertEquals(TRUE, $storage->getThirdPartySetting('field_encrypt', 'encrypt', FALSE));
+     $this->assertEquals(
+@@ -45,7 +46,7 @@ class ConfigurableFieldTest extends FieldEncryptTestBase {
+     $single_field = $fields['field_test_multi'];
+     $definition = $single_field->getFieldDefinition();
+     $this->assertTrue($definition instanceof FieldDefinitionInterface);
+-    /** @var \Drupal\Core\Field\FieldConfigInterface $storage */
++    /** @var FieldConfigInterface $storage */
+     $storage = $definition->getFieldStorageDefinition();
+     $this->assertEquals(TRUE, $storage->getThirdPartySetting('field_encrypt', 'encrypt', FALSE));
+     $this->assertEquals(['value' => 'value'], array_filter($storage->getThirdPartySetting('field_encrypt', 'properties', [])));
+diff --git a/tests/src/Functional/EncryptUserTest.php b/tests/src/Functional/EncryptUserTest.php
+index 02e7d19..d180c47 100644
+--- a/tests/src/Functional/EncryptUserTest.php
++++ b/tests/src/Functional/EncryptUserTest.php
+@@ -35,7 +35,7 @@ class EncryptUserTest extends EncryptTestBase {
+    *
+    * @TODO: Simplify setUp() by extending EncryptTestBase when https://www.drupal.org/node/2692387 lands.
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Create an admin user.
+diff --git a/tests/src/Functional/EncryptingExistingDataTest.php b/tests/src/Functional/EncryptingExistingDataTest.php
+index 706c891..9a36651 100644
+--- a/tests/src/Functional/EncryptingExistingDataTest.php
++++ b/tests/src/Functional/EncryptingExistingDataTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\field_encrypt\Functional;
+ 
++use Drupal\node\NodeInterface;
+ use Drupal\field_encrypt\ProcessEntities;
+ 
+ /**
+@@ -14,7 +15,7 @@ class EncryptingExistingDataTest extends FieldEncryptTestBase {
+   /**
+    * Test nodes.
+    *
+-   * @var \Drupal\node\NodeInterface[]
++   * @var NodeInterface[]
+    */
+   protected $testNodes = [];
+ 
+diff --git a/tests/src/Functional/EntityHooksTest.php b/tests/src/Functional/EntityHooksTest.php
+index e72a6b0..4526665 100644
+--- a/tests/src/Functional/EntityHooksTest.php
++++ b/tests/src/Functional/EntityHooksTest.php
+@@ -35,7 +35,7 @@ class EntityHooksTest extends EncryptTestBase {
+    *
+    * @TODO: Simplify setUp() by extending EncryptTestBase when https://www.drupal.org/node/2692387 lands.
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Disable eval().
+diff --git a/tests/src/Functional/FieldEncryptTestBase.php b/tests/src/Functional/FieldEncryptTestBase.php
+index 9e5cdf9..0bdb9c7 100644
+--- a/tests/src/Functional/FieldEncryptTestBase.php
++++ b/tests/src/Functional/FieldEncryptTestBase.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\field_encrypt\Functional;
+ 
++use Drupal\node\NodeTypeInterface;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\node\Entity\Node;
++use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+ use Drupal\language\Entity\ConfigurableLanguage;
+@@ -34,21 +38,21 @@ abstract class FieldEncryptTestBase extends EncryptTestBase {
+   /**
+    * The page node type.
+    *
+-   * @var \Drupal\node\NodeTypeInterface
++   * @var NodeTypeInterface
+    */
+   protected $nodeType;
+ 
+   /**
+    * The entity manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * A test node.
+    *
+-   * @var \Drupal\node\Entity\Node
++   * @var Node
+    */
+   protected $testNode;
+ 
+@@ -57,7 +61,7 @@ abstract class FieldEncryptTestBase extends EncryptTestBase {
+    *
+    * @TODO: Simplify setUp() by extending EncryptTestBase when https://www.drupal.org/node/2692387 lands.
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Create an admin user.
+@@ -91,7 +95,7 @@ abstract class FieldEncryptTestBase extends EncryptTestBase {
+       'label' => 'Single field',
+     ]);
+     $single_field->save();
+-    /** @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface $display_repository */
++    /** @var EntityDisplayRepositoryInterface $display_repository */
+     $display_repository = \Drupal::service('entity_display.repository');
+     $display_repository->getFormDisplay('node', 'page', 'default')
+       ->setComponent('field_test_single')
+diff --git a/tests/src/Functional/KeyChangeTest.php b/tests/src/Functional/KeyChangeTest.php
+index 7c5e94d..f049931 100644
+--- a/tests/src/Functional/KeyChangeTest.php
++++ b/tests/src/Functional/KeyChangeTest.php
+@@ -37,7 +37,7 @@ class KeyChangeTest extends EncryptTestBase {
+    *
+    * @TODO: Simplify setUp() by extending EncryptTestBase when https://www.drupal.org/node/2692387 lands.
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Create an admin user.
+diff --git a/tests/src/Functional/PerformanceScriptTest.php b/tests/src/Functional/PerformanceScriptTest.php
+index 72e606a..68b47a0 100644
+--- a/tests/src/Functional/PerformanceScriptTest.php
++++ b/tests/src/Functional/PerformanceScriptTest.php
+@@ -39,7 +39,7 @@ class PerformanceScriptTest extends EncryptTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     // This test relies on
+     // \Drupal\Tests\encrypt\Functional\EncryptTestBase::setUp()
+     // creating an encryption profile called 'encryption_profile_1' to avoid
+diff --git a/tests/src/FunctionalJavascript/BaseFieldSettingsFormTest.php b/tests/src/FunctionalJavascript/BaseFieldSettingsFormTest.php
+index 30729ac..0887004 100644
+--- a/tests/src/FunctionalJavascript/BaseFieldSettingsFormTest.php
++++ b/tests/src/FunctionalJavascript/BaseFieldSettingsFormTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\field_encrypt\FunctionalJavascript;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\encrypt\Entity\EncryptionProfile;
+ use Drupal\FunctionalJavascriptTests\WebDriverTestBase;
+ use Drupal\key\Entity\Key;
+@@ -32,21 +33,21 @@ class BaseFieldSettingsFormTest extends WebDriverTestBase {
+   /**
+    * An administrator user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $adminUser;
+ 
+   /**
+    * A list of test keys.
+    *
+-   * @var \Drupal\key\Entity\Key[]
++   * @var Key[]
+    */
+   protected $testKeys;
+ 
+   /**
+    * A list of test encryption profiles.
+    *
+-   * @var \Drupal\encrypt\Entity\EncryptionProfile[]
++   * @var EncryptionProfile[]
+    */
+   protected $encryptionProfiles;
+ 
+@@ -58,7 +59,7 @@ class BaseFieldSettingsFormTest extends WebDriverTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->adminUser = $this->drupalCreateUser([
+diff --git a/tests/src/Unit/ProcessEntitiesTest.php b/tests/src/Unit/ProcessEntitiesTest.php
+index 16e481e..546bdc6 100644
+--- a/tests/src/Unit/ProcessEntitiesTest.php
++++ b/tests/src/Unit/ProcessEntitiesTest.php
+@@ -3,6 +3,8 @@
+ namespace Drupal\Tests\field_encrypt\Unit;
+ 
+ // phpcs:disable Drupal.Arrays.Array.LongLineDeclaration
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\TypedData\DataDefinition;
+ use Drupal\field\Entity\FieldConfig;
+@@ -23,28 +25,28 @@ class ProcessEntitiesTest extends UnitTestCase {
+   /**
+    * A mock entity.
+    *
+-   * @var \Drupal\Core\Entity\ContentEntityInterface
++   * @var ContentEntityInterface
+    */
+   protected $entity;
+ 
+   /**
+    * A mock field.
+    *
+-   * @var \Drupal\Core\Field\FieldItemListInterface
++   * @var FieldItemListInterface
+    */
+   protected $field;
+ 
+   /**
+    * A mock encrypted storage field.
+    *
+-   * @var \Drupal\Core\Field\FieldItemListInterface
++   * @var FieldItemListInterface
+    */
+   protected $storageField;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     if (version_compare(Version::id(), '8.0', '<')) {
+@@ -52,14 +54,10 @@ class ProcessEntitiesTest extends UnitTestCase {
+     }
+ 
+     // Set up a mock entity.
+-    $this->entity = $this->getMockBuilder('\Drupal\Core\Entity\ContentEntityInterface')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->entity = $this->createMock('\Drupal\Core\Entity\ContentEntityInterface');
+ 
+     // Set up language object.
+-    $language = $this->getMockBuilder('\Drupal\Core\Language\LanguageInterface')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $language = $this->createMock('\Drupal\Core\Language\LanguageInterface');
+ 
+     // Set up expectations for language.
+     $language->expects($this->any())
+@@ -75,17 +73,11 @@ class ProcessEntitiesTest extends UnitTestCase {
+       ->will($this->returnSelf());
+ 
+     // Set up a mock field.
+-    $this->field = $this->getMockBuilder('\Drupal\Core\Field\FieldItemListInterface')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->field = $this->createMock('\Drupal\Core\Field\FieldItemListInterface');
+ 
+     // Set up a mock storage field.
+-    $storage_item = $this->getMockBuilder(EncryptedFieldStorageItem::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
+-    $this->storageField = $this->getMockBuilder('\Drupal\Core\Field\FieldItemListInterface')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $storage_item = $this->createMock(EncryptedFieldStorageItem::class);
++    $this->storageField = $this->createMock('\Drupal\Core\Field\FieldItemListInterface');
+     $this->storageField->expects($this->any())
+       ->method('offsetGet')
+       ->with(0)

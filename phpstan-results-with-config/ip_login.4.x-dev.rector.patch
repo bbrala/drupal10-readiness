@@ -1,0 +1,192 @@
+diff --git a/ip_login.info.yml b/ip_login.info.yml
+index 10a8b13..06e52a3 100644
+--- a/ip_login.info.yml
++++ b/ip_login.info.yml
+@@ -1,7 +1,7 @@
+ name: 'IP Login'
+ type: module
+ description: 'Allows users to be automatically logged in in by matching IP address, range or wildcards.'
+-core_version_requirement: ^8.9 || ^9
++core_version_requirement: ^8.9 || ^9 || ^10
+ dependencies:
+   - drupal:user
+   - field_ipaddress:field_ipaddress
+diff --git a/src/EventSubscriber/IpLoginSubscriber.php b/src/EventSubscriber/IpLoginSubscriber.php
+index 68a882a..7f1bce6 100644
+--- a/src/EventSubscriber/IpLoginSubscriber.php
++++ b/src/EventSubscriber/IpLoginSubscriber.php
+@@ -2,9 +2,9 @@
+ 
+ namespace Drupal\ip_login\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\ResponseEvent;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\HttpFoundation\Cookie;
+-use Symfony\Component\HttpKernel\Event\FilterResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -15,23 +15,23 @@ class IpLoginSubscriber implements EventSubscriberInterface {
+   /**
+    * Clears various IP Login cookies if needed.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\FilterResponseEvent $event
++   * @param ResponseEvent $event
+    *   The response event.
+    */
+-  public function onKernelResponse(FilterResponseEvent $event) {
++  public function onKernelResponse(ResponseEvent $event) {
+     if (!$event->isMasterRequest()) {
+       return;
+     }
+ 
+     $response = $event->getResponse();
+     if ($event->getRequest()->attributes->get('ip_login_user_login')) {
+-      $response->headers->setCookie(new Cookie('ipLoginAttempted', '', 1));
+-      $response->headers->setCookie(new Cookie('ipLoginAsDifferentUser', '', 1));
++      $response->headers->setCookie(Cookie::create('ipLoginAttempted', '', 1));
++      $response->headers->setCookie(Cookie::create('ipLoginAsDifferentUser', '', 1));
+     }
+ 
+     $can_login_as_another_user = $event->getRequest()->attributes->get('ip_login_can_login_as_another_user');
+     if ($can_login_as_another_user !== NULL) {
+-      $response->headers->setCookie(new Cookie('ipLoginAsDifferentUser', $can_login_as_another_user));
++      $response->headers->setCookie(Cookie::create('ipLoginAsDifferentUser', $can_login_as_another_user));
+     }
+   }
+ 
+diff --git a/src/Form/IpLoginSettingsForm.php b/src/Form/IpLoginSettingsForm.php
+index e94de9a..2f40352 100644
+--- a/src/Form/IpLoginSettingsForm.php
++++ b/src/Form/IpLoginSettingsForm.php
+@@ -17,25 +17,25 @@ class IpLoginSettingsForm extends ConfigFormBase {
+   /**
+    * The cache factory.
+    *
+-   * @var \Drupal\Core\Cache\CacheFactoryInterface
++   * @var CacheFactoryInterface
+    */
+   protected $cacheFactory;
+ 
+   /**
+    * The cache tags invalidator.
+    *
+-   * @var \Drupal\Core\Cache\CacheTagsInvalidatorInterface
++   * @var CacheTagsInvalidatorInterface
+    */
+   protected $cacheTagsInvalidator;
+ 
+   /**
+    * Constructs a PathautoSettingsForm.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Defines the configuration object factory.
+-   * @param \Drupal\Core\Cache\CacheFactoryInterface $cache_factory
++   * @param CacheFactoryInterface $cache_factory
+    *   The cache factory.
+-   * @param \Drupal\Core\Cache\CacheTagsInvalidatorInterface $cache_tags_invalidator
++   * @param CacheTagsInvalidatorInterface $cache_tags_invalidator
+    *   The cache tags invalidator.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, CacheFactoryInterface $cache_factory, CacheTagsInvalidatorInterface $cache_tags_invalidator) {
+diff --git a/src/IpLoginController.php b/src/IpLoginController.php
+index 8d109ae..12817eb 100644
+--- a/src/IpLoginController.php
++++ b/src/IpLoginController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ip_login;
+ 
++use Symfony\Component\HttpFoundation\RedirectResponse;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Entity\Sql\SqlContentEntityStorage;
+ use Drupal\Core\Session\AccountInterface;
+@@ -14,7 +15,7 @@ class IpLoginController extends ControllerBase {
+   /**
+    * Menu callback for IP-based login: do the actual login.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirect response object that may be returned by the controller.
+    */
+   public function loginProcess(Request $request) {
+@@ -49,7 +50,7 @@ class IpLoginController extends ControllerBase {
+    *
+    * @param int|string $uid
+    *   A valid user ID.
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request object.
+    */
+   public static function doUserLogin($uid, Request $request) {
+@@ -69,7 +70,7 @@ class IpLoginController extends ControllerBase {
+   /**
+    * Looks up if current request IP matches an IP login.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   A request object.
+    *
+    * @return string|false
+@@ -109,7 +110,7 @@ class IpLoginController extends ControllerBase {
+   /**
+    * Checks whether a user can log into another account.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $user
++   * @param AccountInterface $user
+    *   The user account.
+    *
+    * @return bool
+diff --git a/src/StackMiddleware/EarlyIpLoginMiddleware.php b/src/StackMiddleware/EarlyIpLoginMiddleware.php
+index 6ad1b95..5bb8c2d 100644
+--- a/src/StackMiddleware/EarlyIpLoginMiddleware.php
++++ b/src/StackMiddleware/EarlyIpLoginMiddleware.php
+@@ -23,7 +23,7 @@ class EarlyIpLoginMiddleware implements HttpKernelInterface {
+   /**
+    * The decorated kernel.
+    *
+-   * @var \Symfony\Component\HttpKernel\HttpKernelInterface
++   * @var HttpKernelInterface
+    */
+   protected $httpKernel;
+ 
+@@ -37,7 +37,7 @@ class EarlyIpLoginMiddleware implements HttpKernelInterface {
+   /**
+    * Constructs an EarlyIpLoginMiddleware.
+    *
+-   * @param \Symfony\Component\HttpKernel\HttpKernelInterface $http_kernel
++   * @param HttpKernelInterface $http_kernel
+    *   The decorated kernel.
+    * @param string $service_name
+    *   The name of the session service, defaults to "session".
+@@ -105,7 +105,7 @@ class EarlyIpLoginMiddleware implements HttpKernelInterface {
+     // If we determined that we can't auto-login the user, set a session cookie
+     // so we don't repeat the user IP check for this browser session.
+     if (empty($matched_uid)) {
+-      $response->headers->setCookie(new Cookie('ipLoginAttempted', 1));
++      $response->headers->setCookie(Cookie::create('ipLoginAttempted', 1));
+     }
+     return $response;
+   }
+diff --git a/src/StackMiddleware/IpLoginMiddleware.php b/src/StackMiddleware/IpLoginMiddleware.php
+index eafee1a..b635f9d 100644
+--- a/src/StackMiddleware/IpLoginMiddleware.php
++++ b/src/StackMiddleware/IpLoginMiddleware.php
+@@ -14,14 +14,14 @@ class IpLoginMiddleware implements HttpKernelInterface {
+   /**
+    * The decorated kernel.
+    *
+-   * @var \Symfony\Component\HttpKernel\HttpKernelInterface
++   * @var HttpKernelInterface
+    */
+   protected $httpKernel;
+ 
+   /**
+    * Constructs an IpLoginMiddleware.
+    *
+-   * @param \Symfony\Component\HttpKernel\HttpKernelInterface $http_kernel
++   * @param HttpKernelInterface $http_kernel
+    *   The decorated kernel.
+    */
+   public function __construct(HttpKernelInterface $http_kernel) {

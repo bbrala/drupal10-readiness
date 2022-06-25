@@ -1,0 +1,926 @@
+diff --git a/modules/setka_editor_amp/setka_editor_amp.module b/modules/setka_editor_amp/setka_editor_amp.module
+index 7e0a14e..d7b9c57 100644
+--- a/modules/setka_editor_amp/setka_editor_amp.module
++++ b/modules/setka_editor_amp/setka_editor_amp.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Config\Config;
+ /**
+  * @file
+  * Setka Editor AMP module file.
+@@ -162,9 +164,9 @@ function setka_editor_amp_cron() {
+ /**
+  * Sets task of URLs to download.
+  *
+- * @param \Drupal\Core\Config\ImmutableConfig|\Drupal\Core\Config\Config $config
++ * @param ImmutableConfig|Config $config
+  *   Drupal config object.
+- * @param \Drupal\Core\State\StateInterface $drupalState
++ * @param StateInterface $drupalState
+  *   Drupal state service.
+  * @param array $newSettings
+  *   New Style Manager settings.
+@@ -232,8 +234,8 @@ function setka_editor_amp_styles_download_file($fileUrl) {
+   if ($fileData) {
+     preg_match('/.*?\/([^\/]+)$/', $fileUrl, $matches);
+     if ($matches[1]) {
+-      $file = file_save_data($fileData, 'public://setka/' . $matches[1], FileSystemInterface::EXISTS_REPLACE);
+-      return $file ? file_create_url($file->getFileUri()) : FALSE;
++      $file = \Drupal::service('file.repository')->writeData($fileData, 'public://setka/' . $matches[1], FileSystemInterface::EXISTS_REPLACE);
++      return $file ? \Drupal::service('file_url_generator')->generateAbsoluteString($file->getFileUri()) : FALSE;
+     }
+   }
+   return FALSE;
+@@ -270,7 +272,7 @@ function setka_editor_amp_build_libraries(&$libraries) {
+       ];
+ 
+       if (!empty($cachedAmpStyles[$libraryId])) {
+-        $cachedAmpStyle = file_url_transform_relative($cachedAmpStyles[$libraryId]);
++        $cachedAmpStyle = \Drupal::service('file_url_generator')->transformRelative($cachedAmpStyles[$libraryId]);
+         $libraries[$libraryId]['css'] = [
+           'theme' => [
+             $cachedAmpStyle => [
+diff --git a/modules/setka_editor_amp/src/Plugin/Field/FieldFormatter/SetkaEditorAMPFormatter.php b/modules/setka_editor_amp/src/Plugin/Field/FieldFormatter/SetkaEditorAMPFormatter.php
+index 30ab3fd..adbd3f9 100644
+--- a/modules/setka_editor_amp/src/Plugin/Field/FieldFormatter/SetkaEditorAMPFormatter.php
++++ b/modules/setka_editor_amp/src/Plugin/Field/FieldFormatter/SetkaEditorAMPFormatter.php
+@@ -36,7 +36,7 @@ class SetkaEditorAMPFormatter extends SetkaEditorFormatter implements ContainerF
+   protected $ampService;
+ 
+   /**
+-   * @var \Drupal\setka_editor_amp\SetkaAmpSanitizer
++   * @var SetkaAmpSanitizer
+    */
+   protected $sanitizer;
+ 
+diff --git a/setka_editor.module b/setka_editor.module
+index 9c1795b..a65f5cc 100644
+--- a/setka_editor.module
++++ b/setka_editor.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\Core\TempStore\PrivateTempStore;
++use Drupal\file\FileUsage\DatabaseFileUsageBackend;
++use Drupal\Core\Image\Image;
+ /**
+  * @file
+  * Main Setka Editor module file.
+@@ -291,11 +294,11 @@ function setka_editor_entity_insert(EntityInterface $entity) {
+   // to know which images to attach to entity.
+   // See \Drupal\setka_Editor\Validate\SetkaEditorValidate::validate method.
+   $setkaEditorUuid = &drupal_static('setkaEditorUuid');
+-  /** @var \Drupal\Core\TempStore\PrivateTempStore $store */
++  /** @var PrivateTempStore $store */
+   $store = \Drupal::service('tempstore.private')->get('setka_editor');
+   $setkaEditorImages = $store->get('setka_editor_images') ?? [];
+   if ($setkaEditorUuid && !empty($setkaEditorImages[$setkaEditorUuid])) {
+-    /** @var \Drupal\file\FileUsage\DatabaseFileUsageBackend $file_usage */
++    /** @var DatabaseFileUsageBackend $file_usage */
+     $file_usage = \Drupal::service('file.usage');
+     $entityImages = File::loadMultiple($setkaEditorImages[$setkaEditorUuid]);
+     foreach ($entityImages as $imageFile) {
+@@ -324,10 +327,10 @@ function setka_editor_form_field_config_edit_form_alter(&$form, FormStateInterfa
+  */
+ function setka_editor_image_item_prepare($imageItem) {
+   $image = \Drupal::service('image.factory')->get($imageItem->uri);
+-  if ($image instanceof Drupal\Core\Image\Image) {
++  if ($image instanceof Image) {
+     // Original image size.
+     $original = [
+-      'url' => file_create_url($imageItem->uri),
++      'url' => \Drupal::service('file_url_generator')->generateAbsoluteString($imageItem->uri),
+       'width' => $image->getWidth(),
+       'height' => $image->getHeight(),
+     ];
+@@ -343,7 +346,7 @@ function setka_editor_image_item_prepare($imageItem) {
+         $sizes[] = $size;
+       }
+     }
+-    $imageUrl = file_create_url($imageItem->uri);
++    $imageUrl = \Drupal::service('file_url_generator')->generateAbsoluteString($imageItem->uri);
+     $entityImage = [
+       'id' => $imageItem->fid,
+       'name' => $imageItem->filename,
+diff --git a/src/Controller/SetkaEditorApiController.php b/src/Controller/SetkaEditorApiController.php
+index ce56ff3..c1a7b72 100644
+--- a/src/Controller/SetkaEditorApiController.php
++++ b/src/Controller/SetkaEditorApiController.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\setka_editor\Controller;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\TempStore\PrivateTempStore;
++use Drupal\Core\Cache\DatabaseBackend;
++use Drupal\Core\Access\AccessResultInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Asset\CssCollectionOptimizer;
+ use Drupal\Core\Asset\JsCollectionOptimizer;
+@@ -42,84 +48,84 @@ class SetkaEditorApiController extends ControllerBase {
+   /**
+    * Setka Editor api service.
+    *
+-   * @var \Drupal\setka_editor\SetkaEditorApi
++   * @var SetkaEditorApi
+    */
+   protected $editorApi;
+ 
+   /**
+    * Setka Editor config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $setkaConfig;
+ 
+   /**
+    * Service to interact with $_SESSION.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStore
++   * @var PrivateTempStore
+    */
+   protected $sessionStore;
+ 
+   /**
+    * Drupal file usage interface.
+    *
+-   * @var \Drupal\file\FileUsage\FileUsageInterface
++   * @var FileUsageInterface
+    */
+   protected $fileUsage;
+ 
+   /**
+    * Drupal database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * Cache Discovery bin backend.
+    *
+-   * @var \Drupal\Core\Cache\DatabaseBackend
++   * @var DatabaseBackend
+    */
+   protected $cacheDiscovery;
+ 
+   /**
+    * Drupal CSS optimizer service.
+    *
+-   * @var \Drupal\Core\Asset\CssCollectionOptimizer
++   * @var CssCollectionOptimizer
+    */
+   protected $cssOptimizer;
+ 
+   /**
+    * Drupal JS optimizer service.
+    *
+-   * @var \Drupal\Core\Asset\JsCollectionOptimizer
++   * @var JsCollectionOptimizer
+    */
+   protected $jsOptimizer;
+ 
+   /**
+    * Drupal file_system service.
+    *
+-   * @var \Drupal\Core\File\FileSystem
++   * @var FileSystem
+    */
+   protected $fileSystem;
+ 
+   /**
+    * Drupal queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * Library discovery service.
+    *
+-   * @var \Drupal\Core\Asset\LibraryDiscovery
++   * @var LibraryDiscovery
+    */
+   protected $libraryDiscovery;
+ 
+   /**
+    * Lock service.
+    *
+-   * @var \Drupal\Core\Lock\LockBackendInterface
++   * @var LockBackendInterface
+    */
+   protected $lock;
+ 
+@@ -190,7 +196,7 @@ class SetkaEditorApiController extends ControllerBase {
+    * @param array $data
+    *   Current version data.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   Return 200 code.
+    */
+   public function processEditorConfig($token, array $data) {
+@@ -397,7 +403,7 @@ class SetkaEditorApiController extends ControllerBase {
+         }
+         else {
+           $fileData = file_get_contents($_FILES['file']['tmp_name']);
+-          $file = file_save_data($fileData, 'public://setka/' . $_FILES['file']['name']);
++          $file = \Drupal::service('file.repository')->writeData($fileData, 'public://setka/' . $_FILES['file']['name']);
+ 
+           if ($entityId && $entityType && $entityId !== 'null') {
+             $this->fileUsage->add($file, 'setka_editor', $entityType, $entityId);
+@@ -431,7 +437,7 @@ class SetkaEditorApiController extends ControllerBase {
+       $imageId = (int) $id;
+       if (($requestPayload['entityId'] || $requestPayload['entityUuid']) && !empty($requestPayload['entityType']) && $requestPayload['alt'] && $imageId > 0) {
+         if ($this->checkEntityEditAccess($requestPayload['entityId'], $requestPayload['entityType'])) {
+-          /** @var \Drupal\file\Entity\File $imageEntity */
++          /** @var File $imageEntity */
+           $imageEntity = $this->entityTypeManager()->getStorage('file')->load($imageId);
+           if ($this->checkImageAttachedToEntity($imageEntity, $requestPayload['entityId'], $requestPayload['entityUuid'])) {
+             $imageUri = $imageEntity->getFileUri();
+@@ -498,11 +504,11 @@ class SetkaEditorApiController extends ControllerBase {
+    * @param string $entityType
+    *   Entity type.
+    *
+-   * @return bool|\Drupal\Core\Access\AccessResultInterface
++   * @return bool|AccessResultInterface
+    *   Check access result.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function checkEntityEditAccess($entityId, $entityType) {
+     $account = $this->currentUser();
+@@ -518,7 +524,7 @@ class SetkaEditorApiController extends ControllerBase {
+   /**
+    * Checks if image attached to entity or not.
+    *
+-   * @param \Drupal\file\Entity\File $imageFile
++   * @param File $imageFile
+    *   Image file.
+    * @param int $entityId
+    *   Entity id.
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 7d403e3..ecf886e 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\setka_editor\Form;
+ 
++use Drupal\Core\Cache\DatabaseBackend;
+ use Drupal\Core\Asset\CssCollectionOptimizer;
+ use Drupal\Core\Asset\JsCollectionOptimizer;
+ use Drupal\Core\Asset\LibraryDiscovery;
+@@ -32,70 +33,70 @@ class SettingsForm extends ConfigFormBase  implements ConfirmFormInterface {
+   /**
+    * Setka Editor api service.
+    *
+-   * @var \Drupal\setka_editor\SetkaEditorApi
++   * @var SetkaEditorApi
+    */
+   protected $editorApi;
+ 
+   /**
+    * Cache Discovery bin backend.
+    *
+-   * @var \Drupal\Core\Cache\DatabaseBackend
++   * @var DatabaseBackend
+    */
+   protected $cacheDiscovery;
+ 
+   /**
+    * Drupal CSS optimizer service.
+    *
+-   * @var \Drupal\Core\Asset\CssCollectionOptimizer
++   * @var CssCollectionOptimizer
+    */
+   protected $cssOptimizer;
+ 
+   /**
+    * Drupal JS optimizer service.
+    *
+-   * @var \Drupal\Core\Asset\JsCollectionOptimizer
++   * @var JsCollectionOptimizer
+    */
+   protected $jsOptimizer;
+ 
+   /**
+    * Drupal file_system service.
+    *
+-   * @var \Drupal\Core\File\FileSystem
++   * @var FileSystem
+    */
+   protected $fileSystem;
+ 
+   /**
+    * Drupal state service.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+   /**
+    * Drupal queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * Library discovery service.
+    *
+-   * @var \Drupal\Core\Asset\LibraryDiscovery
++   * @var LibraryDiscovery
+    */
+   protected $libraryDiscovery;
+ 
+   /**
+    * Lock service.
+    *
+-   * @var \Drupal\Core\Lock\LockBackendInterface
++   * @var LockBackendInterface
+    */
+   protected $lock;
+ 
+   /**
+    * Module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+@@ -455,9 +456,9 @@ class SettingsForm extends ConfigFormBase  implements ConfirmFormInterface {
+   /**
+    * Returns CDN Setka Editor config value if local is empty.
+    *
+-   * @param \Drupal\Core\Config\ImmutableConfig $config
++   * @param ImmutableConfig $config
+    *   Immutable config.
+-   * @param \Drupal\Core\State\State $state
++   * @param State $state
+    *   Drupal state service.
+    * @param string $confName
+    *   Config value name.
+@@ -517,9 +518,9 @@ class SettingsForm extends ConfigFormBase  implements ConfirmFormInterface {
+   /**
+    * Returns CDN Setka Editor state value if local is empty.
+    *
+-   * @param \Drupal\Core\Config\ImmutableConfig $config
++   * @param ImmutableConfig $config
+    *   Immutable config.
+-   * @param \Drupal\Core\State\State $state
++   * @param State $state
+    *   Drupal state service.
+    * @param string $confName
+    *   Config value name.
+diff --git a/src/Plugin/Field/FieldFormatter/SetkaEditorFormatter.php b/src/Plugin/Field/FieldFormatter/SetkaEditorFormatter.php
+index 687256c..b2ff005 100755
+--- a/src/Plugin/Field/FieldFormatter/SetkaEditorFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/SetkaEditorFormatter.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\setka_editor\Plugin\Field\FieldFormatter;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+@@ -28,14 +30,14 @@ class SetkaEditorFormatter extends FormatterBase {
+   /**
+    * Drupal state service.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+   /**
+    * Setka Editor config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $setkaEditorConfig;
+ 
+diff --git a/src/Plugin/Field/FieldWidget/SetkaEditorStringTextareaWidget.php b/src/Plugin/Field/FieldWidget/SetkaEditorStringTextareaWidget.php
+index abebad4..d4e4a91 100755
+--- a/src/Plugin/Field/FieldWidget/SetkaEditorStringTextareaWidget.php
++++ b/src/Plugin/Field/FieldWidget/SetkaEditorStringTextareaWidget.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\setka_editor\Plugin\Field\FieldWidget;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\TempStore\PrivateTempStore;
++use Drupal\Core\Entity\EntityForm;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Database\Connection;
+@@ -34,42 +38,42 @@ class SetkaEditorStringTextareaWidget extends StringTextareaWidget implements Co
+   /**
+    * Setka Editor config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $setkaEditorConfig;
+ 
+   /**
+    * Service to interact with $_SESSION.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStore
++   * @var PrivateTempStore
+    */
+   protected $sessionStore;
+ 
+   /**
+    * Drupal database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * Setka Editor helper service.
+    *
+-   * @var \Drupal\setka_editor\SetkaEditorHelper
++   * @var SetkaEditorHelper
+    */
+   protected $setkaEditorHelper;
+ 
+   /**
+    * Drupal current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $currentUser;
+ 
+   /**
+    * Drupal state service.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+@@ -155,7 +159,7 @@ class SetkaEditorStringTextareaWidget extends StringTextareaWidget implements Co
+           $setkaEditorHeaderTopOffset = 0;
+         }
+         $formBuildInfo = $form_state->getBuildInfo();
+-        /** @var \Drupal\Core\Entity\EntityForm $callbackObject */
++        /** @var EntityForm $callbackObject */
+         $callbackObject = $formBuildInfo['callback_object'];
+         /** @var \Drupal\Core\Entity\Entity $entity */
+         $entity = $callbackObject->getEntity();
+diff --git a/src/Plugin/Field/FieldWidget/SetkaEditorWidget.php b/src/Plugin/Field/FieldWidget/SetkaEditorWidget.php
+index 027305f..676adc9 100755
+--- a/src/Plugin/Field/FieldWidget/SetkaEditorWidget.php
++++ b/src/Plugin/Field/FieldWidget/SetkaEditorWidget.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\setka_editor\Plugin\Field\FieldWidget;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\TempStore\PrivateTempStore;
++use Drupal\Core\Entity\EntityForm;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Database\Connection;
+@@ -34,42 +38,42 @@ class SetkaEditorWidget extends TextareaWidget implements ContainerFactoryPlugin
+   /**
+    * Setka Editor config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $setkaEditorConfig;
+ 
+   /**
+    * Service to interact with $_SESSION.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStore
++   * @var PrivateTempStore
+    */
+   protected $sessionStore;
+ 
+   /**
+    * Drupal database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * Setka Editor helper service.
+    *
+-   * @var \Drupal\setka_editor\SetkaEditorHelper
++   * @var SetkaEditorHelper
+    */
+   protected $setkaEditorHelper;
+ 
+   /**
+    * Drupal current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $currentUser;
+ 
+   /**
+    * Drupal state service.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+@@ -155,7 +159,7 @@ class SetkaEditorWidget extends TextareaWidget implements ContainerFactoryPlugin
+           $setkaEditorHeaderTopOffset = 0;
+         }
+         $formBuildInfo = $form_state->getBuildInfo();
+-        /** @var \Drupal\Core\Entity\EntityForm $callbackObject */
++        /** @var EntityForm $callbackObject */
+         $callbackObject = $formBuildInfo['callback_object'];
+         /** @var \Drupal\Core\Entity\Entity $entity */
+         $entity = $callbackObject->getEntity();
+diff --git a/src/Plugin/Field/FieldWidget/SetkaEditorWithSummaryWidget.php b/src/Plugin/Field/FieldWidget/SetkaEditorWithSummaryWidget.php
+index 3bd7819..fc87ce6 100755
+--- a/src/Plugin/Field/FieldWidget/SetkaEditorWithSummaryWidget.php
++++ b/src/Plugin/Field/FieldWidget/SetkaEditorWithSummaryWidget.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\setka_editor\Plugin\Field\FieldWidget;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\TempStore\PrivateTempStore;
++use Drupal\Core\Entity\EntityForm;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Database\Connection;
+@@ -34,42 +38,42 @@ class SetkaEditorWithSummaryWidget extends TextareaWithSummaryWidget implements
+   /**
+    * Setka Editor config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $setkaEditorConfig;
+ 
+   /**
+    * Service to interact with $_SESSION.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStore
++   * @var PrivateTempStore
+    */
+   protected $sessionStore;
+ 
+   /**
+    * Drupal database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * Setka Editor helper service.
+    *
+-   * @var \Drupal\setka_editor\SetkaEditorHelper
++   * @var SetkaEditorHelper
+    */
+   protected $setkaEditorHelper;
+ 
+   /**
+    * Drupal current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $currentUser;
+ 
+   /**
+    * Drupal state service.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+@@ -155,7 +159,7 @@ class SetkaEditorWithSummaryWidget extends TextareaWithSummaryWidget implements
+           $setkaEditorHeaderTopOffset = 0;
+         }
+         $formBuildInfo = $form_state->getBuildInfo();
+-        /** @var \Drupal\Core\Entity\EntityForm $callbackObject */
++        /** @var EntityForm $callbackObject */
+         $callbackObject = $formBuildInfo['callback_object'];
+         /** @var \Drupal\Core\Entity\Entity $entity */
+         $entity = $callbackObject->getEntity();
+diff --git a/src/ProxyClass/SetkaEditorUninstallValidator.php b/src/ProxyClass/SetkaEditorUninstallValidator.php
+index 14a25af..0d40076 100644
+--- a/src/ProxyClass/SetkaEditorUninstallValidator.php
++++ b/src/ProxyClass/SetkaEditorUninstallValidator.php
+@@ -7,15 +7,19 @@
+ 
+ namespace Drupal\setka_editor\ProxyClass {
+ 
++    use Drupal\Core\Extension\ModuleUninstallValidatorInterface;
++    use Drupal\Core\DependencyInjection\DependencySerializationTrait;
++    use Symfony\Component\DependencyInjection\ContainerInterface;
++    use Drupal\Core\StringTranslation\TranslationInterface;
+     /**
+      * Provides a proxy class for \Drupal\setka_editor\SetkaEditorUninstallValidator.
+      *
+      * @see \Drupal\Component\ProxyBuilder
+      */
+-    class SetkaEditorUninstallValidator implements \Drupal\Core\Extension\ModuleUninstallValidatorInterface
++    class SetkaEditorUninstallValidator implements ModuleUninstallValidatorInterface
+     {
+ 
+-        use \Drupal\Core\DependencyInjection\DependencySerializationTrait;
++        use DependencySerializationTrait;
+ 
+         /**
+          * The id of the original proxied service.
+@@ -34,19 +38,19 @@ namespace Drupal\setka_editor\ProxyClass {
+         /**
+          * The service container.
+          *
+-         * @var \Symfony\Component\DependencyInjection\ContainerInterface
++         * @var ContainerInterface
+          */
+         protected $container;
+ 
+         /**
+          * Constructs a ProxyClass Drupal proxy object.
+          *
+-         * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++         * @param ContainerInterface $container
+          *   The container.
+          * @param string $drupal_proxy_original_service_id
+          *   The service ID of the original service.
+          */
+-        public function __construct(\Symfony\Component\DependencyInjection\ContainerInterface $container, $drupal_proxy_original_service_id)
++        public function __construct(ContainerInterface $container, $drupal_proxy_original_service_id)
+         {
+             $this->container = $container;
+             $this->drupalProxyOriginalServiceId = $drupal_proxy_original_service_id;
+@@ -78,7 +82,7 @@ namespace Drupal\setka_editor\ProxyClass {
+         /**
+          * {@inheritdoc}
+          */
+-        public function setStringTranslation(\Drupal\Core\StringTranslation\TranslationInterface $translation)
++        public function setStringTranslation(TranslationInterface $translation)
+         {
+             return $this->lazyLoadItself()->setStringTranslation($translation);
+         }
+diff --git a/src/SetkaEditorApi.php b/src/SetkaEditorApi.php
+index 8229f60..a5d54aa 100644
+--- a/src/SetkaEditorApi.php
++++ b/src/SetkaEditorApi.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\setka_editor;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Extension\ModuleExtensionList;
+@@ -23,7 +24,7 @@ class SetkaEditorApi {
+   /**
+    * Http client.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $httpClient;
+ 
+@@ -37,28 +38,28 @@ class SetkaEditorApi {
+   /**
+    * Drupal messenger interface.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Drupal logger channel interface.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Setka Editor helper service.
+    *
+-   * @var \Drupal\setka_editor\SetkaEditorHelper
++   * @var SetkaEditorHelper
+    */
+   protected $setkaEditorHelper;
+ 
+   /**
+    * The module extension list.
+    *
+-   * @var \Drupal\Core\Extension\ModuleExtensionList
++   * @var ModuleExtensionList
+    */
+   protected $moduleExtensionList;
+ 
+diff --git a/src/SetkaEditorHelper.php b/src/SetkaEditorHelper.php
+index a94dd7e..23ffde2 100644
+--- a/src/SetkaEditorHelper.php
++++ b/src/SetkaEditorHelper.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\setka_editor;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Config\Config;
+ use Drupal\Core\Config\ConfigFactory;
+@@ -31,14 +32,14 @@ class SetkaEditorHelper {
+   /**
+    * Drupal messenger interface.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected $configFactory;
+ 
+@@ -183,8 +184,8 @@ class SetkaEditorHelper {
+         $filename = $matches[1];
+       }
+       if ($filename) {
+-        $file = file_save_data($fileData, 'public://setka/' . $filename, FileSystemInterface::EXISTS_REPLACE);
+-        return $file ? file_create_url($file->getFileUri()) : FALSE;
++        $file = \Drupal::service('file.repository')->writeData($fileData, 'public://setka/' . $filename, FileSystemInterface::EXISTS_REPLACE);
++        return $file ? \Drupal::service('file_url_generator')->generateAbsoluteString($file->getFileUri()) : FALSE;
+       }
+     }
+     return FALSE;
+@@ -208,9 +209,9 @@ class SetkaEditorHelper {
+       $directoryPath = str_replace('/' . $filename, '', $directoryPath);
+       $directoryPath = "public://setka/{$directoryPath}";
+       \Drupal::service('file_system')->prepareDirectory($directoryPath, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS);
+-      $file = file_save_data($fileData, "{$directoryPath}/{$filename}", FileSystemInterface::EXISTS_REPLACE);
++      $file = \Drupal::service('file.repository')->writeData($fileData, "{$directoryPath}/{$filename}", FileSystemInterface::EXISTS_REPLACE);
+ 
+-      return $file ? file_create_url($file->getFileUri()) : FALSE;
++      return $file ? \Drupal::service('file_url_generator')->generateAbsoluteString($file->getFileUri()) : FALSE;
+     }
+ 
+     return FALSE;
+@@ -219,7 +220,7 @@ class SetkaEditorHelper {
+   /**
+    * Checks if public://setka is writable directory.
+    *
+-   * @param \Drupal\Core\File\FileSystem $fileSystem
++   * @param FileSystem $fileSystem
+    *   Drupal file system service.
+    *
+    * @return bool
+@@ -235,9 +236,9 @@ class SetkaEditorHelper {
+   /**
+    * Sets task of URLs to download.
+    *
+-   * @param \Drupal\Core\Config\ImmutableConfig|\Drupal\Core\Config\Config $config
++   * @param ImmutableConfig|Config $config
+    *   Drupal config object.
+-   * @param \Drupal\Core\State\State $drupalState
++   * @param State $drupalState
+    *   Drupal state service.
+    * @param array $newSettings
+    *   New Style Manager settings.
+@@ -276,7 +277,7 @@ class SetkaEditorHelper {
+   /**
+    * This method updates Style Editor files on server storage.
+    *
+-   * @param \Drupal\Core\State\State $drupalState
++   * @param State $drupalState
+    *   Drupal state service.
+    */
+   public static function runSetkaFilesUpdateTask(State $drupalState) {
+@@ -417,11 +418,11 @@ class SetkaEditorHelper {
+   /**
+    * Updates all Setka Editor settings in DB.
+    *
+-   * @param \Drupal\Core\Config\Config $setkaEditorConfig
++   * @param Config $setkaEditorConfig
+    *   Editable Setka Editor config.
+    * @param array $newSettings
+    *   New settings values.
+-   * @param \Drupal\Core\State\State $state
++   * @param State $state
+    *   Drupal state service.
+    */
+   public static function updateSetkaEditorConfig(Config $setkaEditorConfig, array $newSettings, State $state) {
+diff --git a/src/SetkaEditorUninstallValidator.php b/src/SetkaEditorUninstallValidator.php
+index 4c19fbd..74eb7e9 100644
+--- a/src/SetkaEditorUninstallValidator.php
++++ b/src/SetkaEditorUninstallValidator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\setka_editor;
+ 
++use Drupal\Core\Entity\Entity\EntityFormDisplay;
+ use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -18,21 +19,21 @@ class SetkaEditorUninstallValidator implements ModuleUninstallValidatorInterface
+   /**
+    * Drupal entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Drupal entity field manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * Drupal entity display repository interface.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+@@ -65,7 +66,7 @@ class SetkaEditorUninstallValidator implements ModuleUninstallValidatorInterface
+             foreach ($fieldData['bundles'] as $bundle) {
+               $formModes = $this->entityDisplayRepository->getFormModeOptionsByBundle($entityType, $bundle);
+               foreach ($formModes as $formMode => $formModeData) {
+-                /** @var \Drupal\Core\Entity\Entity\EntityFormDisplay $formDisplay */
++                /** @var EntityFormDisplay $formDisplay */
+                 $formDisplay = $this->entityTypeManager
+                   ->getStorage('entity_form_display')
+                   ->load($entityType . '.' . $bundle . '.' . $formMode);
+@@ -76,7 +77,7 @@ class SetkaEditorUninstallValidator implements ModuleUninstallValidatorInterface
+               }
+               $viewModes = $this->entityDisplayRepository->getViewModeOptionsByBundle($entityType, $bundle);
+               foreach ($viewModes as $viewMode => $viewModeData) {
+-                /** @var \Drupal\Core\Entity\Entity\EntityFormDisplay $viewDisplay */
++                /** @var EntityFormDisplay $viewDisplay */
+                 $viewDisplay = $this->entityTypeManager
+                   ->getStorage('entity_view_display')
+                   ->load($entityType . '.' . $bundle . '.' . $viewMode);
+diff --git a/src/Validate/SetkaEditorValidate.php b/src/Validate/SetkaEditorValidate.php
+index cc872b0..fef4a16 100644
+--- a/src/Validate/SetkaEditorValidate.php
++++ b/src/Validate/SetkaEditorValidate.php
+@@ -15,7 +15,7 @@ class SetkaEditorValidate {
+    *
+    * @param array $element
+    *   The form element to process.
+-   * @param \Drupal\Core\Form\FormStateInterface $formState
++   * @param FormStateInterface $formState
+    *   The form state.
+    * @param array $form
+    *   The complete form structure.
+diff --git a/tests/src/Kernel/SetkaEditorApiTest.php b/tests/src/Kernel/SetkaEditorApiTest.php
+index 191fc6d..7403ec3 100644
+--- a/tests/src/Kernel/SetkaEditorApiTest.php
++++ b/tests/src/Kernel/SetkaEditorApiTest.php
+@@ -40,7 +40,7 @@ class SetkaEditorApiTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->testStyleManagerResponse = [

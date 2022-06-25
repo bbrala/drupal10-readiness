@@ -1,0 +1,375 @@
+diff --git a/analytics.module b/analytics.module
+index 9fcb399..8d0752e 100644
+--- a/analytics.module
++++ b/analytics.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\analytics\Entity\AnalyticsServiceInterface;
+ use Drupal\Core\Cache\CacheableMetadata;
+ 
+ /**
+@@ -10,7 +11,7 @@ function analytics_page_bottom(array &$page_bottom) {
+     return;
+   }
+ 
+-  /** @var \Drupal\analytics\Entity\AnalyticsServiceInterface[] $services */
++  /** @var AnalyticsServiceInterface[] $services */
+   $services = \Drupal::entityTypeManager()->getStorage('analytics_service')->loadMultiple();
+   foreach ($services as $service) {
+     if (!$service->status()) {
+diff --git a/src/AnalyticsServiceListBuilder.php b/src/AnalyticsServiceListBuilder.php
+index 1f91e42..e247486 100644
+--- a/src/AnalyticsServiceListBuilder.php
++++ b/src/AnalyticsServiceListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\analytics;
+ 
++use Drupal\analytics\Entity\AnalyticsServiceInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityListBuilder;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -43,11 +44,11 @@ class AnalyticsServiceListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\analytics\Entity\AnalyticsServiceInterface $entity */
++    /** @var AnalyticsServiceInterface $entity */
+     $row['label'] = $entity->label();
+     $row['service'] = $entity->getService()->getLabel();
+     // @todo Do we need to actually show if overwritten? Do any other list builders do this?
+-    /** @var \Drupal\analytics\Entity\AnalyticsServiceInterface $overridden_entity */
++    /** @var AnalyticsServiceInterface $overridden_entity */
+     $overridden_entity = $this->storage->load($entity->id());
+     $row['status'] = $overridden_entity->status() ? $this->t('Enabled') : $this->t('Disabled');
+     if ($overridden_entity->status() != $entity->status()) {
+@@ -61,7 +62,7 @@ class AnalyticsServiceListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function getDefaultOperations(EntityInterface $entity) {
+-    /** @var \Drupal\analytics\Entity\AnalyticsServiceInterface $entity */
++    /** @var AnalyticsServiceInterface $entity */
+     $operations = parent::getDefaultOperations($entity);
+     if (!$entity->get('status') && $entity->hasLinkTemplate('enable')) {
+       $operations['enable'] = [
+diff --git a/src/AnalyticsServiceManager.php b/src/AnalyticsServiceManager.php
+index c99b477..be9c4ff 100644
+--- a/src/AnalyticsServiceManager.php
++++ b/src/AnalyticsServiceManager.php
+@@ -24,9 +24,9 @@ class AnalyticsServiceManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Annotation/AnalyticsService.php b/src/Annotation/AnalyticsService.php
+index d354b53..210a162 100644
+--- a/src/Annotation/AnalyticsService.php
++++ b/src/Annotation/AnalyticsService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\analytics\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -23,7 +24,7 @@ class AnalyticsService extends Plugin {
+   /**
+    * The label of the service.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Controller/AnalyticsController.php b/src/Controller/AnalyticsController.php
+index 17145f2..7fb2892 100644
+--- a/src/Controller/AnalyticsController.php
++++ b/src/Controller/AnalyticsController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\analytics\Controller;
+ 
++use Symfony\Component\HttpFoundation\RedirectResponse;
+ use Drupal\analytics\Entity\AnalyticsServiceInterface;
+ use Drupal\Core\Ajax\AjaxResponse;
+ use Drupal\Core\Ajax\ReplaceCommand;
+@@ -16,14 +17,14 @@ class AnalyticsController extends ControllerBase {
+   /**
+    * Calls a method on a view and reloads the listing page.
+    *
+-   * @param \Drupal\analytics\Entity\AnalyticsServiceInterface $analytics_service
++   * @param AnalyticsServiceInterface $analytics_service
+    *   The analytics service being acted on.
+    * @param string $op
+    *   The operation to perform, e.g., 'enable' or 'disable'.
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse|\Symfony\Component\HttpFoundation\RedirectResponse
++   * @return AjaxResponse|RedirectResponse
+    *   Either returns a rebuilt listing page as an AJAX response, or redirects
+    *   back to the listing page.
+    */
+diff --git a/src/Entity/AnalyticsService.php b/src/Entity/AnalyticsService.php
+index 5780544..4bc6777 100644
+--- a/src/Entity/AnalyticsService.php
++++ b/src/Entity/AnalyticsService.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\analytics\Entity;
+ 
++use Drupal\Component\Plugin\LazyPluginCollection;
++use Drupal\analytics\AnalyticsServiceManager;
+ use Drupal\analytics\Plugin\ServicePluginCollection;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+ use Drupal\Core\Entity\EntityWithPluginCollectionInterface;
+@@ -110,14 +112,14 @@ class AnalyticsService extends ConfigEntityBase implements AnalyticsServiceInter
+   /**
+    * The plugin collection that stores action plugins.
+    *
+-   * @var \Drupal\analytics\Plugin\ServicePluginCollection
++   * @var ServicePluginCollection
+    */
+   protected $pluginCollection;
+ 
+   /**
+    * Encapsulates the creation of the services's LazyPluginCollection.
+    *
+-   * @return \Drupal\Component\Plugin\LazyPluginCollection
++   * @return LazyPluginCollection
+    *   The service's plugin collection.
+    */
+   protected function servicePluginCollection() {
+@@ -165,7 +167,7 @@ class AnalyticsService extends ConfigEntityBase implements AnalyticsServiceInter
+   /**
+    * Gets the analytics service plugin manager.
+    *
+-   * @return \Drupal\analytics\AnalyticsServiceManager
++   * @return AnalyticsServiceManager
+    */
+   protected function analyticsServicePluginManager() {
+     return \Drupal::service('plugin.manager.analytics.service');
+diff --git a/src/Entity/AnalyticsServiceInterface.php b/src/Entity/AnalyticsServiceInterface.php
+index ab51451..70fa9d7 100644
+--- a/src/Entity/AnalyticsServiceInterface.php
++++ b/src/Entity/AnalyticsServiceInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\analytics\Entity;
+ 
++use Drupal\analytics\Plugin\ServicePluginInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ 
+ /**
+@@ -12,7 +13,7 @@ interface AnalyticsServiceInterface extends ConfigEntityInterface {
+   /**
+    * Returns the service plugin.
+    *
+-   * @return \Drupal\analytics\Plugin\ServicePluginInterface
++   * @return ServicePluginInterface
+    *   The analytics service plugin used by this analytics service entity.
+    */
+   public function getService();
+diff --git a/src/EventSubscriber/ConfigSubscriber.php b/src/EventSubscriber/ConfigSubscriber.php
+index cc9e6ee..63d4dc9 100644
+--- a/src/EventSubscriber/ConfigSubscriber.php
++++ b/src/EventSubscriber/ConfigSubscriber.php
+@@ -15,14 +15,14 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * The cache tags invalidator.
+    *
+-   * @var \Drupal\Core\Cache\CacheTagsInvalidatorInterface
++   * @var CacheTagsInvalidatorInterface
+    */
+   protected $cacheTagsInvalidator;
+ 
+   /**
+    * Constructs a new ConfigSubscriber.
+    *
+-   * @param \Drupal\Core\Cache\CacheTagsInvalidatorInterface $cache_tags_invalidator
++   * @param CacheTagsInvalidatorInterface $cache_tags_invalidator
+    *   The cache tags invalidator.
+    */
+   public function __construct(CacheTagsInvalidatorInterface $cache_tags_invalidator) {
+@@ -41,7 +41,7 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * Respond to the config save event.
+    *
+-   * @param \Drupal\Core\Config\ConfigCrudEvent $event
++   * @param ConfigCrudEvent $event
+    *   The Event to process.
+    */
+   public function onConfigSave(ConfigCrudEvent $event) {
+diff --git a/src/EventSubscriber/ResponseSubscriber.php b/src/EventSubscriber/ResponseSubscriber.php
+index cb9691c..3e9d39c 100644
+--- a/src/EventSubscriber/ResponseSubscriber.php
++++ b/src/EventSubscriber/ResponseSubscriber.php
+@@ -2,9 +2,10 @@
+ 
+ namespace Drupal\analytics\EventSubscriber;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Symfony\Component\HttpKernel\Event\ResponseEvent;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+-use Symfony\Component\HttpKernel\Event\FilterResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -15,14 +16,14 @@ class ResponseSubscriber implements EventSubscriberInterface {
+   /**
+    * The analytics module configuration.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Constructs a new ResponseSubscriber.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config
++   * @param ConfigFactoryInterface $config
+    *   The configuration factory.
+    */
+   public function __construct(ConfigFactoryInterface $config) {
+@@ -41,10 +42,10 @@ class ResponseSubscriber implements EventSubscriberInterface {
+   /**
+    * Respond to the kernel response event.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\FilterResponseEvent $event
++   * @param ResponseEvent $event
+    *   The event.
+    */
+-  public function onKernelResponse(FilterResponseEvent $event) {
++  public function onKernelResponse(ResponseEvent $event) {
+     if (!$event->isMasterRequest()) {
+       return;
+     }
+diff --git a/src/Form/AnalyticsServiceForm.php b/src/Form/AnalyticsServiceForm.php
+index 4d4e2a8..ad30816 100644
+--- a/src/Form/AnalyticsServiceForm.php
++++ b/src/Form/AnalyticsServiceForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\analytics\Form;
+ 
++use Drupal\analytics\Entity\AnalyticsServiceInterface;
++use Drupal\Core\Form\SubformStateInterface;
+ use Drupal\analytics\AnalyticsServiceManager;
+ use Drupal\analytics\Entity\AnalyticsService;
+ use Drupal\Core\Ajax\AjaxResponse;
+@@ -17,21 +19,21 @@ class AnalyticsServiceForm extends EntityForm {
+   /**
+    * The entity being used by this form.
+    *
+-   * @var \Drupal\analytics\Entity\AnalyticsServiceInterface
++   * @var AnalyticsServiceInterface
+    */
+   protected $entity;
+ 
+   /**
+    * The analyics service plugin manager.
+    *
+-   * @var \Drupal\analytics\AnalyticsServiceManager
++   * @var AnalyticsServiceManager
+    */
+   protected $analyticsServiceManager;
+ 
+   /**
+    * Constructs on AnalyticsServiceForm object.
+    *
+-   * @param \Drupal\analytics\AnalyticsServiceManager $analytics_service_manager
++   * @param AnalyticsServiceManager $analytics_service_manager
+    *   The analytics service.
+    */
+   public function __construct(AnalyticsServiceManager $analytics_service_manager) {
+@@ -106,10 +108,10 @@ class AnalyticsServiceForm extends EntityForm {
+    *
+    * @param array $form
+    *   Full form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Parent form state.
+    *
+-   * @return \Drupal\Core\Form\SubformStateInterface
++   * @return SubformStateInterface
+    *   Sub-form state for the media source configuration form.
+    */
+   protected function getPluginSubFormState(array $form, FormStateInterface $form_state) {
+diff --git a/src/Plugin/ServiceDataTrait.php b/src/Plugin/ServiceDataTrait.php
+index 4c83394..ca6add6 100644
+--- a/src/Plugin/ServiceDataTrait.php
++++ b/src/Plugin/ServiceDataTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\analytics\Plugin;
+ 
++use Drupal\Core\Extension\ModuleHandlerInterface;
+ trait ServiceDataTrait {
+ 
+   /**
+@@ -25,7 +26,7 @@ trait ServiceDataTrait {
+   /**
+    * Wraps the module handler.
+    *
+-   * @return \Drupal\Core\Extension\ModuleHandlerInterface
++   * @return ModuleHandlerInterface
+    *   The module handler.
+    */
+   abstract protected function moduleHandler();
+diff --git a/src/Plugin/ServicePluginCollection.php b/src/Plugin/ServicePluginCollection.php
+index 1d8013c..f81ae6b 100644
+--- a/src/Plugin/ServicePluginCollection.php
++++ b/src/Plugin/ServicePluginCollection.php
+@@ -17,7 +17,7 @@ class ServicePluginCollection extends DefaultSingleLazyPluginCollection {
+   /**
+    * Constructs a new SearchPluginCollection.
+    *
+-   * @param \Drupal\Component\Plugin\PluginManagerInterface $manager
++   * @param PluginManagerInterface $manager
+    *   The manager to be used for instantiating plugins.
+    * @param string $instance_id
+    *   The ID of the plugin instance.
+@@ -34,7 +34,7 @@ class ServicePluginCollection extends DefaultSingleLazyPluginCollection {
+   /**
+    * {@inheritdoc}
+    *
+-   * @return \Drupal\analytics\Plugin\ServicePluginInterface
++   * @return ServicePluginInterface
+    */
+   public function &get($instance_id) {
+     return parent::get($instance_id);
+@@ -45,7 +45,7 @@ class ServicePluginCollection extends DefaultSingleLazyPluginCollection {
+    */
+   protected function initializePlugin($instance_id) {
+     parent::initializePlugin($instance_id);
+-    /** @var \Drupal\analytics\Plugin\ServicePluginBase $plugin_instance */
++    /** @var ServicePluginBase $plugin_instance */
+     $plugin_instance = $this->pluginInstances[$instance_id];
+     $plugin_instance->setServiceId($this->analyticsServiceId);
+   }
+diff --git a/tests/src/Functional/DisableFlocTest.php b/tests/src/Functional/DisableFlocTest.php
+index 1c7d4a1..ce227eb 100644
+--- a/tests/src/Functional/DisableFlocTest.php
++++ b/tests/src/Functional/DisableFlocTest.php
+@@ -33,7 +33,8 @@ class DisableFlocTest extends BrowserTestBase {
+ 
+     $account = $this->createUser(['administer analytics']);
+     $this->drupalLogin($account);
+-    $this->drupalPostForm('admin/config/services/analytics/settings', ['privacy[disable_floc]' => TRUE], 'Save configuration');
++    $this->drupalGet('admin/config/services/analytics/settings');
++    $this->submitForm(['privacy[disable_floc]' => TRUE], 'Save configuration');
+     // Log out the user to test that the page cache was invalidated.
+     $this->drupalLogout();
+ 

@@ -1,0 +1,3057 @@
+diff --git a/layoutcomponents.install b/layoutcomponents.install
+index 68d2037..7eb7092 100755
+--- a/layoutcomponents.install
++++ b/layoutcomponents.install
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityTypeBundleInfo;
++use Drupal\layout_builder\Section;
+ /**
+  * @file
+  * Install, uninstall and update hooks for Layoutcomponents module.
+@@ -27,7 +29,7 @@ function layoutcomponents_update_8001() {
+  * Update the default sections with the new config().
+  */
+ function layoutcomponents_update_8002() {
+-  /** @var \Drupal\Core\Entity\EntityTypeBundleInfo $bundle_info */
++  /** @var EntityTypeBundleInfo $bundle_info */
+   $bundles = \Drupal::service('entity_type.bundle.info')->getBundleInfo('node');
+   foreach ($bundles as $id => $bundle) {
+     $displays = \Drupal::entityTypeManager()->getStorage('entity_view_display')->loadByProperties(['bundle' => $id]);
+@@ -35,7 +37,7 @@ function layoutcomponents_update_8002() {
+       if ($display instanceof LcEntityViewDisplay) {
+         $settings = $display->getThirdPartySettings('layout_builder');
+         if (array_key_exists('sections', $settings)) {
+-          /** @var \Drupal\layout_builder\Section $section */
++          /** @var Section $section */
+           foreach ($settings['sections'] as $delta => $section) {
+             $section_settings = $section->getLayoutSettings();
+             $section_settings['section']['general']['basic']['section_overwrite'] = FALSE;
+diff --git a/layoutcomponents.module b/layoutcomponents.module
+index a3c67ca..b5f5f62 100755
+--- a/layoutcomponents.module
++++ b/layoutcomponents.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Asset\AttachedAssetsInterface;
+ /**
+  * @file
+  * Contains layoutcomponents.module.
+@@ -133,7 +134,7 @@ function layoutcomponents_entity_type_alter(array &$entity_types) {
+ /**
+  * Implements hook_css_alter().
+  */
+-function layoutcomponents_css_alter(&$css, \Drupal\Core\Asset\AttachedAssetsInterface $assets) {
++function layoutcomponents_css_alter(&$css, AttachedAssetsInterface $assets) {
+   $route = \Drupal::routeMatch()->getRouteObject();
+   $parameters = $route->getOption('parameters');
+   if (isset($parameters)) {
+diff --git a/layoutcomponents.theme.inc b/layoutcomponents.theme.inc
+index ae54ba5..9b6bb73 100755
+--- a/layoutcomponents.theme.inc
++++ b/layoutcomponents.theme.inc
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Layout\LayoutDefinition;
++use Drupal\layoutcomponents\LcLayoutRender;
+ /**
+  * @file
+  * Contains layoutcomponents.theme.inc.
+@@ -15,7 +17,7 @@ use Drupal\layoutcomponents\Event\LcPreprocessLayoutEvent;
+  *   The array with variables.
+  */
+ function _layoutcomponents_preprocess_layout(array &$variables) {
+-  /** @var \Drupal\Core\Layout\LayoutDefinition $layout_definition */
++  /** @var LayoutDefinition $layout_definition */
+   $layout_definition = $variables['layout'];
+ 
+   // Remove quick edit as it doesn't make sense here. It also points to the view
+@@ -24,7 +26,7 @@ function _layoutcomponents_preprocess_layout(array &$variables) {
+     unset($variables['attributes']['data-quickedit-entity-id']);
+   }
+ 
+-  /** @var \Drupal\layoutcomponents\LcLayoutRender $layout */
++  /** @var LcLayoutRender $layout */
+   $layout = \Drupal::service('layoutcomponents.render');
+ 
+   // Dispatch the event.
+diff --git a/modules/lc_commands/src/Commands/LcCommands.php b/modules/lc_commands/src/Commands/LcCommands.php
+index 749a9bc..8671fac 100755
+--- a/modules/lc_commands/src/Commands/LcCommands.php
++++ b/modules/lc_commands/src/Commands/LcCommands.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\lc_commands\Commands;
+ 
++use Drupal\layout_builder\Entity\LayoutBuilderEntityViewDisplayStorage;
++use Drupal\entity_reference_revisions\EntityReferenceRevisionsFieldItemList;
++use Drupal\Core\Entity\Sql\SqlContentEntityStorage;
+ use Drush\Commands\DrushCommands;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\block_content\Entity\BlockContent;
+@@ -29,41 +32,41 @@ class LcCommands extends DrushCommands {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The serializer.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $serializer;
+ 
+   /**
+    * The Config factory object.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The Inline block usage.
+    *
+-   * @var \Drupal\layout_builder\InlineBlockUsage
++   * @var InlineBlockUsage
+    */
+   protected $inlineBlockUsage;
+ 
+   /**
+    * LcCommands constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity manager interface object.
+-   * @param \Symfony\Component\Serializer\SerializerInterface $serializer
++   * @param SerializerInterface $serializer
+    *   The serializer interface object.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory interface object.
+-   * @param \Drupal\layout_builder\InlineBlockUsage $inline_block_usage
++   * @param InlineBlockUsage $inline_block_usage
+    *   The inline block usage manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, SerializerInterface $serializer, ConfigFactoryInterface $config_factory, InlineBlockUsage $inline_block_usage) {
+@@ -84,7 +87,7 @@ class LcCommands extends DrushCommands {
+     $block_storage = $this->entityTypeManager->getStorage('block_content');
+     $blocks = $block_storage->loadMultiple();
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     foreach ($blocks as $i => $block) {
+       // Provide the las version of block.
+       $revision = $block_storage->getLatestRevisionId($block->id());
+@@ -121,7 +124,7 @@ class LcCommands extends DrushCommands {
+     // Clear the directory.
+     $this->clearDirectory();
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     foreach ($blocks as $i => $block) {
+       // Ensure that is the last revision.
+       $block_revision = $this->getLastRevisionBlock($block->id());
+@@ -157,7 +160,7 @@ class LcCommands extends DrushCommands {
+     foreach ($files as $file) {
+       $this->output->writeln('Importing: ' . $file);
+ 
+-      /** @var \Drupal\block_content\Entity\BlockContent $n_block */
++      /** @var BlockContent $n_block */
+       $n_block = $this->readFile($file);
+ 
+       $uuid = $n_block['uuid'][0];
+@@ -165,7 +168,7 @@ class LcCommands extends DrushCommands {
+       // Normalize Layout builder field if exists.
+       $this->normalizeSections($n_block);
+ 
+-      /** @var \Drupal\block_content\Entity\BlockContent $d_block */
++      /** @var BlockContent $d_block */
+       $d_block = $this->getBlock($uuid);
+ 
+       // Check for references.
+@@ -177,7 +180,7 @@ class LcCommands extends DrushCommands {
+ 
+           // Register the dependencies, the dependencies as media won't
+           // be exported.
+-          /** @var \Drupal\block_content\Entity\BlockContent $dependencie */
++          /** @var BlockContent $dependencie */
+           if (!empty($dependencies)) {
+             foreach ($dependencies as $i => $dependencie) {
+               $n_block[$this->getEmbedded($link)][$i]['target_id'] = $dependencie->id();
+@@ -200,7 +203,7 @@ class LcCommands extends DrushCommands {
+   /**
+    * Export a block.
+    *
+-   * @param \Drupal\block_content\Entity\BlockContent $block
++   * @param BlockContent $block
+    *   The block.
+    *
+    * @return bool
+@@ -218,7 +221,7 @@ class LcCommands extends DrushCommands {
+   /**
+    * Export the sub-blocks of a block.
+    *
+-   * @param \Drupal\block_content\Entity\BlockContent $block
++   * @param BlockContent $block
+    *   The block.
+    */
+   public function exportSubBlocks(BlockContent $block) {
+@@ -226,13 +229,13 @@ class LcCommands extends DrushCommands {
+       $layout = $block->get('layout_builder__layout')->getValue();
+       if (!empty($layout)) {
+         foreach ($layout as $item) {
+-          /** @var \Drupal\layout_builder\Section $section */
++          /** @var Section $section */
+           $section = $item['section'];
+           $components = $section->getComponents();
+           if (!empty($components)) {
+-            /** @var \Drupal\layout_builder\SectionComponent $component */
++            /** @var SectionComponent $component */
+             foreach ($components as $component) {
+-              /** @var \Drupal\block_content\Entity\BlockContent $sub_block */
++              /** @var BlockContent $sub_block */
+               $sub_block = $this->getLastRevisionBlock($component->toArray()['configuration']['block_revision_id']);
+               if ($sub_block instanceof BlockContent) {
+                 $this->exportBlock($sub_block);
+@@ -298,7 +301,7 @@ class LcCommands extends DrushCommands {
+   /**
+    * Check if the block is a LC block and is used from a display.
+    *
+-   * @param \Drupal\block_content\Entity\BlockContent $block
++   * @param BlockContent $block
+    *   The block.
+    * @param string $action
+    *   The type of action.
+@@ -307,7 +310,7 @@ class LcCommands extends DrushCommands {
+    *   If is a LC block.
+    */
+   public function isLcBlock(BlockContent $block, $action = 'export') {
+-    /** @var \Drupal\layout_builder\Entity\LayoutBuilderEntityViewDisplayStorage $storage */
++    /** @var LayoutBuilderEntityViewDisplayStorage $storage */
+     $storage = $this->entityTypeManager->getStorage('entity_view_display');
+     $displays = $storage->loadMultiple();
+ 
+@@ -327,10 +330,10 @@ class LcCommands extends DrushCommands {
+                   $definitions = $block->getFieldDefinitions();
+                   foreach ($definitions as $definition) {
+                     if ($definition->getType() == 'entity_reference_revisions') {
+-                      /** @var \Drupal\entity_reference_revisions\EntityReferenceRevisionsFieldItemList $list */
++                      /** @var EntityReferenceRevisionsFieldItemList $list */
+                       $list = $block->get($definition->getName());
+                       for ($i = 0; $i < $list->count(); $i++) {
+-                        /** @var \Drupal\block_content\Entity\BlockContent $tab_item */
++                        /** @var BlockContent $tab_item */
+                         $tab_item = $this->getLastRevisionBlock($list->get($i)->getValue()['target_id']);
+                         if (!isset($tab_item)) {
+                           continue;
+@@ -365,7 +368,7 @@ class LcCommands extends DrushCommands {
+   /**
+    * Get the dependencie or create if not exists.
+    *
+-   * @param \Drupal\block_content\Entity\BlockContent $n_block
++   * @param BlockContent $n_block
+    *   The block.
+    * @param string $reference
+    *   The new reference.
+@@ -427,7 +430,7 @@ class LcCommands extends DrushCommands {
+    * @param string $uuid
+    *   The uuid.
+    *
+-   * @return \Drupal\block_content\Entity\BlockContent
++   * @return BlockContent
+    *   The new block.
+    */
+   public function getBlock($uuid) {
+@@ -435,7 +438,7 @@ class LcCommands extends DrushCommands {
+       ->getStorage('block_content')
+       ->loadByProperties(['uuid' => $uuid]);
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = reset($block);
+ 
+     return $block;
+@@ -447,11 +450,11 @@ class LcCommands extends DrushCommands {
+    * @param string $id
+    *   The block id.
+    *
+-   * @return \Drupal\block_content\Entity\BlockContent
++   * @return BlockContent
+    *   The full block.
+    */
+   public function getLastRevisionBlock($id) {
+-    /** @var \Drupal\Core\Entity\Sql\SqlContentEntityStorage $storage */
++    /** @var SqlContentEntityStorage $storage */
+     $storage = $this->entityTypeManager->getStorage('block_content');
+     $revision = $storage->getLatestRevisionId($id);
+     return $storage->loadRevision($revision);
+@@ -460,12 +463,12 @@ class LcCommands extends DrushCommands {
+   /**
+    * Update the dependencie of the block.
+    *
+-   * @param \Drupal\block_content\Entity\BlockContent $block
++   * @param BlockContent $block
+    *   The block.
+    * @param string $uuid
+    *   The uuid.
+    *
+-   * @return \Drupal\block_content\Entity\BlockContent
++   * @return BlockContent
+    *   The new block.
+    */
+   public function updateDependencie(BlockContent $block, string $uuid) {
+@@ -490,7 +493,7 @@ class LcCommands extends DrushCommands {
+   /**
+    * Update each block with the new data.
+    *
+-   * @return \Drupal\block_content\Entity\BlockContent
++   * @return BlockContent
+    *   The new block.
+    */
+   public function updateBlock($block, $n_block) {
+diff --git a/modules/lc_simple_accordion/lc_simple_accordion.module b/modules/lc_simple_accordion/lc_simple_accordion.module
+index 682cd49..78e516a 100755
+--- a/modules/lc_simple_accordion/lc_simple_accordion.module
++++ b/modules/lc_simple_accordion/lc_simple_accordion.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
++use Drupal\entity_reference_revisions\EntityReferenceRevisionsFieldItemList;
++use Drupal\layoutcomponents\Api\Component;
+ /**
+  * @file
+  * LC Simple accordion module file.
+@@ -68,7 +71,7 @@ function lc_simple_accordion_preprocess_block(&$variables) {
+     return;
+   }
+ 
+-  /** @var \Drupal\block_content\Entity\BlockContent $block */
++  /** @var BlockContent $block */
+   $block = $variables['content']['#block_content'];
+ 
+   $block_id = str_replace(' ', '_', $block->uuid());
+@@ -89,7 +92,7 @@ function lc_simple_accordion_preprocess_block(&$variables) {
+   $items['field_sa_accordion_item'] = $variables['content']['field_sa_accordion_item'];
+   unset($variables['content']['field_sa_accordion_item']);
+ 
+-  /** @var \Drupal\entity_reference_revisions\EntityReferenceRevisionsFieldItemList $cards */
++  /** @var EntityReferenceRevisionsFieldItemList $cards */
+   $cards = $items['field_sa_accordion_item']['#items'];
+ 
+   if (!isset($cards)) {
+@@ -97,7 +100,7 @@ function lc_simple_accordion_preprocess_block(&$variables) {
+   }
+ 
+   for ($i = 0; $i < $cards->count(); $i++) {
+-    /** @var \Drupal\block_content\Entity\BlockContent $block_item */
++    /** @var BlockContent $block_item */
+     $block_item = $items['field_sa_accordion_item'][$i]['#block_content'];
+ 
+     // Header attributes.
+@@ -138,7 +141,7 @@ function lc_simple_accordion_inline_entity_form_entity_form_alter(&$entity_form,
+     if (!array_key_exists('#default_value', $entity_form) || !isset($entity_form['#default_value'])) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $entity_form['#default_value'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_accordion_form_alter($entity_form, $block_id);
+@@ -153,7 +156,7 @@ function lc_simple_accordion_block_type_form_alter(array &$form, FormStateInterf
+     if (!array_key_exists('#block', $form)) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $form['#block'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_accordion_form_alter($form, $block_id);
+@@ -169,7 +172,7 @@ function lc_simple_accordion_block_type_form_alter(array &$form, FormStateInterf
+  *   The id of the block.
+  */
+ function _lc_simple_accordion_form_alter(array &$form, $block_id) {
+-  /** @var \Drupal\layoutcomponents\Api\Component $lcApi */
++  /** @var Component $lcApi */
+   $lcApi = Drupal::service('layoutcomponents.apiComponent');
+ 
+   // LC inline video extra class.
+diff --git a/modules/lc_simple_button/lc_simple_button.module b/modules/lc_simple_button/lc_simple_button.module
+index f78e55d..4b9ad61 100755
+--- a/modules/lc_simple_button/lc_simple_button.module
++++ b/modules/lc_simple_button/lc_simple_button.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
++use Drupal\layoutcomponents\Api\Component;
+ /**
+  * @file
+  * LC Simple button module file.
+@@ -56,7 +58,7 @@ function lc_simple_button_preprocess_field(&$variables) {
+ 
+     $helper = \Drupal::service("plugin.manager.layoutcomponents_layouts");
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $variables['element']["#object"];
+     $block_id = str_replace(' ', '_', $block->uuid());
+ 
+@@ -209,7 +211,7 @@ function lc_simple_button_inline_entity_form_entity_form_alter(&$entity_form, &$
+     if (!array_key_exists('#default_value', $entity_form) || !isset($entity_form['#default_value'])) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $entity_form['#default_value'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_button_form_alter($entity_form, $block_id);
+@@ -225,7 +227,7 @@ function lc_simple_button_block_type_form_alter(array &$form, FormStateInterface
+       return;
+     }
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $form['#block'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_button_form_alter($form, $block_id);
+@@ -241,7 +243,7 @@ function lc_simple_button_block_type_form_alter(array &$form, FormStateInterface
+  *   The id of the block.
+  */
+ function _lc_simple_button_form_alter(array &$form, $block_id) {
+-  /** @var \Drupal\layoutcomponents\Api\Component $lcApi */
++  /** @var Component $lcApi */
+   $lcApi = Drupal::service('layoutcomponents.apiComponent');
+ 
+   // LC inline url.
+diff --git a/modules/lc_simple_card/lc_simple_card.module b/modules/lc_simple_card/lc_simple_card.module
+index 5487b6d..db4c983 100755
+--- a/modules/lc_simple_card/lc_simple_card.module
++++ b/modules/lc_simple_card/lc_simple_card.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
++use Drupal\layoutcomponents\Api\Component;
+ /**
+  * @file
+  * LC Simple cards module file.
+@@ -60,7 +62,7 @@ function lc_simple_card_preprocess_block(&$variables) {
+     return;
+   }
+ 
+-  /** @var \Drupal\block_content\Entity\BlockContent $block */
++  /** @var BlockContent $block */
+   $block = $variables['content']['#block_content'];
+   $block_id = str_replace(' ', '_', $block->uuid());
+ 
+@@ -78,7 +80,7 @@ function lc_simple_card_block_type_form_alter(array &$form, FormStateInterface &
+     if (!array_key_exists('#block', $form)) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $form['#block'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_card_form_alter($form, $block_id);
+@@ -94,7 +96,7 @@ function lc_simple_card_block_type_form_alter(array &$form, FormStateInterface &
+  *   The id of the block.
+  */
+ function _lc_simple_card_form_alter(array &$form, $block_id) {
+-  /** @var \Drupal\layoutcomponents\Api\Component $lcApi */
++  /** @var Component $lcApi */
+   $lcApi = Drupal::service('layoutcomponents.apiComponent');
+ 
+   // LC inline video extra class.
+diff --git a/modules/lc_simple_card_with_float_text/lc_simple_card_with_float_text.module b/modules/lc_simple_card_with_float_text/lc_simple_card_with_float_text.module
+index 6bbdaac..499e5b3 100755
+--- a/modules/lc_simple_card_with_float_text/lc_simple_card_with_float_text.module
++++ b/modules/lc_simple_card_with_float_text/lc_simple_card_with_float_text.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
+ /**
+  * @file
+  * LC Simple card with float text file.
+@@ -48,7 +49,7 @@ function lc_simple_card_with_float_text_preprocess_block(&$variables) {
+     return;
+   }
+ 
+-  /** @var \Drupal\block_content\Entity\BlockContent $block */
++  /** @var BlockContent $block */
+   $block = $variables['content']['#block_content'];
+ 
+   if ($block->bundle() != 'simple_card_with_float_text') {
+diff --git a/modules/lc_simple_countdown/lc_simple_countdown.module b/modules/lc_simple_countdown/lc_simple_countdown.module
+index 1234a4e..e1b1ee3 100755
+--- a/modules/lc_simple_countdown/lc_simple_countdown.module
++++ b/modules/lc_simple_countdown/lc_simple_countdown.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
++use Drupal\layoutcomponents\Api\Component;
+ /**
+  * @file
+  * LC Simple countdown module file.
+@@ -62,7 +64,7 @@ function lc_simple_countdown_preprocess_block(&$variables) {
+ 
+   $helper = \Drupal::service("plugin.manager.layoutcomponents_layouts");
+ 
+-  /** @var \Drupal\block_content\Entity\BlockContent $block */
++  /** @var BlockContent $block */
+   $block = $variables['content']['#block_content'];
+   $block_id = str_replace(' ', '_', $block->uuid());
+ 
+@@ -118,7 +120,7 @@ function lc_simple_countdown_inline_entity_form_entity_form_alter(&$entity_form,
+     if (!array_key_exists('#default_value', $entity_form) || !isset($entity_form['#default_value'])) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $entity_form['#default_value'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_countdown_form_alter($entity_form, $block_id);
+@@ -134,7 +136,7 @@ function lc_simple_countdown_block_type_form_alter(array &$form, FormStateInterf
+       return;
+     }
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $form['#block'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_countdown_form_alter($form, $block_id);
+@@ -150,7 +152,7 @@ function lc_simple_countdown_block_type_form_alter(array &$form, FormStateInterf
+  *   The id of the block.
+  */
+ function _lc_simple_countdown_form_alter(array &$form, $block_id) {
+-  /** @var \Drupal\layoutcomponents\Api\Component $lcApi */
++  /** @var Component $lcApi */
+   $lcApi = Drupal::service('layoutcomponents.apiComponent');
+ 
+   // LC date.
+diff --git a/modules/lc_simple_iframe/lc_simple_iframe.module b/modules/lc_simple_iframe/lc_simple_iframe.module
+index 47dbb82..b012613 100755
+--- a/modules/lc_simple_iframe/lc_simple_iframe.module
++++ b/modules/lc_simple_iframe/lc_simple_iframe.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
++use Drupal\layoutcomponents\Api\Component;
+ /**
+  * @file
+  * LC Simple Iframe module file.
+@@ -62,7 +64,7 @@ function lc_simple_iframe_preprocess_block(&$variables) {
+     return;
+   }
+ 
+-  /** @var \Drupal\block_content\Entity\BlockContent $block */
++  /** @var BlockContent $block */
+   $block = $variables['content']['#block_content'];
+   $block_id = str_replace(' ', '_', $block->uuid());
+ 
+@@ -139,7 +141,7 @@ function lc_simple_iframe_inline_entity_form_entity_form_alter(&$entity_form, &$
+     if (!array_key_exists('#default_value', $entity_form) || !isset($entity_form['#default_value'])) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $entity_form['#default_value'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_iframe_form_alter($entity_form, $block_id);
+@@ -155,7 +157,7 @@ function lc_simple_iframe_block_type_form_alter(array &$form, FormStateInterface
+       return;
+     }
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $form['#block'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_iframe_form_alter($form, $block_id);
+@@ -171,7 +173,7 @@ function lc_simple_iframe_block_type_form_alter(array &$form, FormStateInterface
+  *   The id of the block.
+  */
+ function _lc_simple_iframe_form_alter(array &$form, $block_id) {
+-  /** @var \Drupal\layoutcomponents\Api\Component $lcApi */
++  /** @var Component $lcApi */
+   $lcApi = Drupal::service('layoutcomponents.apiComponent');
+ 
+   // LC url.
+diff --git a/modules/lc_simple_image/lc_simple_image.module b/modules/lc_simple_image/lc_simple_image.module
+index e71274c..ecedb1f 100755
+--- a/modules/lc_simple_image/lc_simple_image.module
++++ b/modules/lc_simple_image/lc_simple_image.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\image\Plugin\Field\FieldType\ImageItem;
++use Drupal\layoutcomponents\Api\Component;
++use Drupal\image\Entity\ImageStyle;
+ /**
+  * @file
+  * LC Simple image module file.
+@@ -64,7 +67,7 @@ function lc_simple_image_preprocess_field(&$variables) {
+         continue;
+       }
+ 
+-      /** @var \Drupal\image\Plugin\Field\FieldType\ImageItem $imageItem */
++      /** @var ImageItem $imageItem */
+       $imageItem = $variables['items'][$i]['content']['#item'];
+ 
+       if (!isset($imageItem->getEntity()->_referringItem)) {
+@@ -215,7 +218,7 @@ function lc_simple_image_inline_entity_form_entity_form_alter(&$entity_form, &$f
+     if (!array_key_exists('#default_value', $entity_form) || !isset($entity_form['#default_value'])) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $entity_form['#default_value'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_image_form_alter($entity_form, $block_id);
+@@ -230,7 +233,7 @@ function lc_simple_image_block_type_form_alter(array &$form, FormStateInterface
+     if (!array_key_exists('#block', $form)) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $form['#block'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_image_form_alter($form, $block_id);
+@@ -246,7 +249,7 @@ function lc_simple_image_block_type_form_alter(array &$form, FormStateInterface
+  *   The id of the block.
+  */
+ function _lc_simple_image_form_alter(array &$form, $block_id) {
+-  /** @var \Drupal\layoutcomponents\Api\Component $lcApi */
++  /** @var Component $lcApi */
+   $lcApi = Drupal::service('layoutcomponents.apiComponent');
+ 
+   // LC inline image.
+@@ -266,7 +269,7 @@ function _lc_simple_image_form_alter(array &$form, $block_id) {
+   $styles = \Drupal::entityTypeManager()->getStorage('image_style')->loadMultiple();
+   $options = [];
+ 
+-  /** @var \Drupal\image\Entity\ImageStyle $style */
++  /** @var ImageStyle $style */
+   foreach ($styles as $style) {
+     $options[$style->id()] = $style->label();
+   }
+diff --git a/modules/lc_simple_image_two_text_columns/lc_simple_image_two_text_columns.module b/modules/lc_simple_image_two_text_columns/lc_simple_image_two_text_columns.module
+index ccc6794..7f48314 100755
+--- a/modules/lc_simple_image_two_text_columns/lc_simple_image_two_text_columns.module
++++ b/modules/lc_simple_image_two_text_columns/lc_simple_image_two_text_columns.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
+ /**
+  * @file
+  * LC Simple image with two text columns
+@@ -48,7 +49,7 @@ function lc_simple_image_two_text_columns_preprocess_block(&$variables) {
+     return;
+   }
+ 
+-  /** @var \Drupal\block_content\Entity\BlockContent $block */
++  /** @var BlockContent $block */
+   $block = $variables['content']['#block_content'];
+ 
+   if ($block->bundle() != 'simple_image_two_text_columns') {
+diff --git a/modules/lc_simple_image_with_hover_text/lc_simple_image_with_hover_text.module b/modules/lc_simple_image_with_hover_text/lc_simple_image_with_hover_text.module
+index 1a79e8a..31cf0e4 100755
+--- a/modules/lc_simple_image_with_hover_text/lc_simple_image_with_hover_text.module
++++ b/modules/lc_simple_image_with_hover_text/lc_simple_image_with_hover_text.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
+ /**
+  * @file
+  * LC Simple image with hover textt file.
+@@ -48,7 +49,7 @@ function lc_simple_image_with_hover_text_preprocess_block(&$variables) {
+     return;
+   }
+ 
+-  /** @var \Drupal\block_content\Entity\BlockContent $block */
++  /** @var BlockContent $block */
+   $block = $variables['content']['#block_content'];
+ 
+   if ($block->bundle() != 'simple_image_with_hover_text') {
+diff --git a/modules/lc_simple_image_with_top_float_text/lc_simple_image_with_top_float_text.module b/modules/lc_simple_image_with_top_float_text/lc_simple_image_with_top_float_text.module
+index 695fba9..5bf325a 100755
+--- a/modules/lc_simple_image_with_top_float_text/lc_simple_image_with_top_float_text.module
++++ b/modules/lc_simple_image_with_top_float_text/lc_simple_image_with_top_float_text.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
+ /**
+  * @file
+  * LC Simple image with top float text module file.
+@@ -55,7 +56,7 @@ function lc_simple_image_with_top_float_text_preprocess_block(&$variables) {
+     return;
+   }
+ 
+-  /** @var \Drupal\block_content\Entity\BlockContent $block */
++  /** @var BlockContent $block */
+   $block = $variables['content']['#block_content'];
+ 
+   if ($block->bundle() != 'simple_image_with_top_float_text') {
+diff --git a/modules/lc_simple_tabs/lc_simple_tabs.module b/modules/lc_simple_tabs/lc_simple_tabs.module
+index 8372d62..237e76d 100755
+--- a/modules/lc_simple_tabs/lc_simple_tabs.module
++++ b/modules/lc_simple_tabs/lc_simple_tabs.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\layoutcomponents\Api\Component;
++use Drupal\block_content\Entity\BlockContent;
+ /**
+  * @file
+  * LC Simple tabs module file.
+@@ -52,7 +54,7 @@ function lc_simple_tabs_help($route_name, RouteMatchInterface $route_match) {
+  * Implements hook_entity_form_alter().
+  */
+ function lc_simple_tabs_inline_entity_form_entity_form_alter(&$entity_form, &$form_state) {
+-  /** @var \Drupal\layoutcomponents\Api\Component $lcApi */
++  /** @var Component $lcApi */
+   $lcApi = Drupal::service('layoutcomponents.apiComponent');
+ 
+   if ($entity_form['#bundle'] == 'simple_tab_item') {
+@@ -72,7 +74,7 @@ function lc_simple_tabs_inline_entity_form_entity_form_alter(&$entity_form, &$fo
+         '#weight' => '-1',
+       ];
+ 
+-      /** @var \Drupal\block_content\Entity\BlockContent $block */
++      /** @var BlockContent $block */
+       $block = $entity_form['#default_value'];
+ 
+       // LC Title.
+@@ -97,7 +99,7 @@ function lc_simple_tabs_inline_entity_form_entity_form_alter(&$entity_form, &$fo
+         $anchor
+       );
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $entity_form['#default_value'];
+     if (isset($block)) {
+       $block->isDefaultRevision(TRUE);
+@@ -111,10 +113,10 @@ function lc_simple_tabs_inline_entity_form_entity_form_alter(&$entity_form, &$fo
+  */
+ function lc_simple_tabs_block_type_form_alter(array &$form, FormStateInterface &$form_state, $block_type) {
+   if ($block_type == "simple_tabs") {
+-    /** @var \Drupal\layoutcomponents\Api\Component $lcApi */
++    /** @var Component $lcApi */
+     $lcApi = Drupal::service('layoutcomponents.apiComponent');
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $form['#block'];
+     $block_id = str_replace(" ", "_", $block->get('info')->getString());
+ 
+diff --git a/modules/lc_simple_text/lc_simple_text.module b/modules/lc_simple_text/lc_simple_text.module
+index f5b363b..44e7ccc 100755
+--- a/modules/lc_simple_text/lc_simple_text.module
++++ b/modules/lc_simple_text/lc_simple_text.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
++use Drupal\layoutcomponents\Api\Component;
+ /**
+  * @file
+  * LC Simple text module file.
+@@ -56,7 +58,7 @@ function lc_simple_text_preprocess_field(&$variables) {
+ 
+     $helper = \Drupal::service("plugin.manager.layoutcomponents_layouts");
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $variables['element']["#object"];
+     $block_id = str_replace(' ', '_', $block->uuid());
+ 
+@@ -136,7 +138,7 @@ function lc_simple_text_inline_entity_form_entity_form_alter(&$entity_form, &$fo
+     if (!array_key_exists('#default_value', $entity_form) || !isset($entity_form['#default_value'])) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $entity_form['#default_value'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_text_form_alter($entity_form, $block_id);
+@@ -151,7 +153,7 @@ function lc_simple_text_block_type_form_alter(array &$form, FormStateInterface &
+     if (!array_key_exists('#block', $form)) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $form['#block'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_text_form_alter($form, $block_id);
+@@ -167,7 +169,7 @@ function lc_simple_text_block_type_form_alter(array &$form, FormStateInterface &
+  *   The id of the block.
+  */
+ function _lc_simple_text_form_alter(array &$form, $block_id) {
+-  /** @var \Drupal\layoutcomponents\Api\Component $lcApi */
++  /** @var Component $lcApi */
+   $lcApi = Drupal::service('layoutcomponents.apiComponent');
+ 
+   // LC inline ckeditor text.
+diff --git a/modules/lc_simple_text_with_hover_image/lc_simple_text_with_hover_image.module b/modules/lc_simple_text_with_hover_image/lc_simple_text_with_hover_image.module
+index a5b5aae..9388d67 100755
+--- a/modules/lc_simple_text_with_hover_image/lc_simple_text_with_hover_image.module
++++ b/modules/lc_simple_text_with_hover_image/lc_simple_text_with_hover_image.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
+ /**
+  * @file
+  * LC Simple text with hover image file.
+@@ -48,7 +49,7 @@ function lc_simple_text_with_hover_image_preprocess_block(&$variables) {
+     return;
+   }
+ 
+-  /** @var \Drupal\block_content\Entity\BlockContent $block */
++  /** @var BlockContent $block */
+   $block = $variables['content']['#block_content'];
+ 
+   if ($block->bundle() != 'simple_text_with_hover_image') {
+diff --git a/modules/lc_simple_timeline/lc_simple_timeline.module b/modules/lc_simple_timeline/lc_simple_timeline.module
+index 7cfe950..34d0947 100755
+--- a/modules/lc_simple_timeline/lc_simple_timeline.module
++++ b/modules/lc_simple_timeline/lc_simple_timeline.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
+ /**
+  * @file
+  * LC Simple timeline module file.
+@@ -55,7 +56,7 @@ function lc_simple_timeline_preprocess_block(&$variables) {
+     return;
+   }
+ 
+-  /** @var \Drupal\block_content\Entity\BlockContent $block */
++  /** @var BlockContent $block */
+   $block = $variables['content']['#block_content'];
+ 
+   if ($block->bundle() != 'simple_timeline') {
+diff --git a/modules/lc_simple_title/lc_simple_title.module b/modules/lc_simple_title/lc_simple_title.module
+index e9f1274..ba02f3f 100755
+--- a/modules/lc_simple_title/lc_simple_title.module
++++ b/modules/lc_simple_title/lc_simple_title.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
++use Drupal\layoutcomponents\Api\Component;
+ /**
+  * @file
+  * LC Simple text module file.
+@@ -56,7 +58,7 @@ function lc_simple_title_preprocess_field(&$variables) {
+ 
+     $helper = \Drupal::service("plugin.manager.layoutcomponents_layouts");
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $variables['element']["#object"];
+     $block_id = str_replace(' ', '_', $block->uuid());
+ 
+@@ -154,7 +156,7 @@ function lc_simple_title_inline_entity_form_entity_form_alter(&$entity_form, &$f
+     if (!array_key_exists('#default_value', $entity_form) || !isset($entity_form['#default_value'])) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $entity_form['#default_value'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_title_form_alter($entity_form, $block_id);
+@@ -169,7 +171,7 @@ function lc_simple_title_block_type_form_alter(array &$form, FormStateInterface
+     if (!array_key_exists('#block', $form)) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $form['#block'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_title_form_alter($form, $block_id);
+@@ -185,7 +187,7 @@ function lc_simple_title_block_type_form_alter(array &$form, FormStateInterface
+  *   The id of the block.
+  */
+ function _lc_simple_title_form_alter(array &$form, $block_id) {
+-  /** @var \Drupal\layoutcomponents\Api\Component $lcApi */
++  /** @var Component $lcApi */
+   $lcApi = Drupal::service('layoutcomponents.apiComponent');
+ 
+   // LC inline ckeditor text.
+diff --git a/modules/lc_simple_video/lc_simple_video.module b/modules/lc_simple_video/lc_simple_video.module
+index 1d2d5d7..534c7fe 100755
+--- a/modules/lc_simple_video/lc_simple_video.module
++++ b/modules/lc_simple_video/lc_simple_video.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
++use Drupal\media\Entity\Media;
++use Drupal\layoutcomponents\Api\Component;
+ /**
+  * @file
+  * LC Simple video module file.
+@@ -55,7 +58,7 @@ function lc_simple_video_page_attachments(&$page) {
+ function lc_simple_video_preprocess_field(&$variables) {
+   if ($variables['field_name'] == 'field_sv_upload_video' || $variables['field_name'] == 'field_sv_video') {
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $variables['element']["#object"];
+     $block_id = str_replace(' ', '_', $block->uuid());
+ 
+@@ -142,7 +145,7 @@ function lc_simple_video_preprocess_field(&$variables) {
+         // Render the video directly.
+         $content['#theme'] = 'file_video';
+ 
+-        /** @var \Drupal\media\Entity\Media $media */
++        /** @var Media $media */
+         $media = $content['#media'];
+         $file_id = $media->field_media_video_file->target_id;
+         $file = File::load($file_id);
+@@ -173,7 +176,7 @@ function lc_simple_video_inline_entity_form_entity_form_alter(&$entity_form, &$f
+     if (!array_key_exists('#default_value', $entity_form) || !isset($entity_form['#default_value'])) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $entity_form['#default_value'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_video_form_alter($entity_form, $block_id);
+@@ -188,7 +191,7 @@ function lc_simple_video_block_type_form_alter(array &$form, FormStateInterface
+     if (!array_key_exists('#block', $form)) {
+       return;
+     }
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $form['#block'];
+     $block_id = str_replace(" ", "_", $block->uuid());
+     _lc_simple_video_form_alter($form, $block_id);
+@@ -204,7 +207,7 @@ function lc_simple_video_block_type_form_alter(array &$form, FormStateInterface
+  *   The id of the block.
+  */
+ function _lc_simple_video_form_alter(array &$form, $block_id) {
+-  /** @var \Drupal\layoutcomponents\Api\Component $lcApi */
++  /** @var Component $lcApi */
+   $lcApi = Drupal::service('layoutcomponents.apiComponent');
+ 
+   // LC inline video type.
+diff --git a/modules/lc_simple_view_carousel/lc_simple_view_carousel.module b/modules/lc_simple_view_carousel/lc_simple_view_carousel.module
+index f082a61..ebe8909 100755
+--- a/modules/lc_simple_view_carousel/lc_simple_view_carousel.module
++++ b/modules/lc_simple_view_carousel/lc_simple_view_carousel.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\block_content\Entity\BlockContent;
++use Drupal\views\ViewExecutable;
++use Drupal\node\Entity\Node;
+ /**
+  * @file
+  * LC Simple View Carrousel module file.
+@@ -45,7 +48,7 @@ function lc_simple_view_carousel_preprocess_block(&$variables) {
+     return;
+   }
+ 
+-  /** @var \Drupal\block_content\Entity\BlockContent $block */
++  /** @var BlockContent $block */
+   $block = $variables['content']['#block_content'];
+   $block_slick = $variables['content']['#attributes']['class'][] = 'block-inline-blocksimple-view-carousel-' . $block->id();
+ 
+@@ -54,7 +57,7 @@ function lc_simple_view_carousel_preprocess_block(&$variables) {
+   $preprocess_tabs = $block->get('field_vc_preprocess_tabs')->getString();
+ 
+   if (!empty($id)) {
+-    /** @var \Drupal\views\ViewExecutable $view */
++    /** @var ViewExecutable $view */
+     $view = Views::getView($id);
+ 
+     // Render the view.
+@@ -73,7 +76,7 @@ function lc_simple_view_carousel_preprocess_block(&$variables) {
+     // Find the values for the dots.
+     if (boolval($preprocess_tabs)) {
+       foreach ($items as $i => $item) {
+-        /** @var \Drupal\node\Entity\Node $node */
++        /** @var Node $node */
+         $node = $item['slide']['#node'];
+         if ($node->hasField('field_tab_pagination_text')) {
+           $js_settings['items'][] = [
+diff --git a/modules/lc_slick/lc_slick.module b/modules/lc_slick/lc_slick.module
+index 1500cfd..fd6dc64 100755
+--- a/modules/lc_slick/lc_slick.module
++++ b/modules/lc_slick/lc_slick.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\layoutcomponents\Form\LcConfigureSection;
+ /**
+  * @file
+  * LC Simple Slick module file.
+@@ -51,7 +52,7 @@ function lc_slick_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+     // Form section.
+     $section = &$form['layout_settings']['container']['section']['container'];
+ 
+-    /** @var \Drupal\layoutcomponents\Form\LcConfigureSection $obj */
++    /** @var LcConfigureSection $obj */
+     $obj = $form_state->getFormObject();
+ 
+     $configuration = $obj->getLayoutSettings()->getConfiguration();
+diff --git a/modules/sliderwidget/src/Element/Slider.php b/modules/sliderwidget/src/Element/Slider.php
+index 61035f4..1e9c04f 100755
+--- a/modules/sliderwidget/src/Element/Slider.php
++++ b/modules/sliderwidget/src/Element/Slider.php
+@@ -451,7 +451,7 @@ class Slider extends FormElement {
+    *
+    * @param array $element
+    *   Form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state.
+    */
+   public function sliderValidatePositiveNumber(array $element, FormStateInterface $form_state) {
+diff --git a/modules/sliderwidget/src/Plugin/Field/FieldWidget/SliderUIFieldWidget.php b/modules/sliderwidget/src/Plugin/Field/FieldWidget/SliderUIFieldWidget.php
+index 78263d4..d03fc64 100755
+--- a/modules/sliderwidget/src/Plugin/Field/FieldWidget/SliderUIFieldWidget.php
++++ b/modules/sliderwidget/src/Plugin/Field/FieldWidget/SliderUIFieldWidget.php
+@@ -202,7 +202,7 @@ class SliderUIFieldWidget extends WidgetBase {
+    *
+    * @param array $element
+    *   Form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state.
+    */
+   public function sliderwidgetValidatePositiveNumber(array $element, FormStateInterface $form_state) {
+diff --git a/modules/sliderwidget/tests/src/Functional/LoadTest.php b/modules/sliderwidget/tests/src/Functional/LoadTest.php
+index e0056a8..26003a7 100755
+--- a/modules/sliderwidget/tests/src/Functional/LoadTest.php
++++ b/modules/sliderwidget/tests/src/Functional/LoadTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\sliderwidget\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Url;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -22,14 +23,14 @@ class LoadTest extends BrowserTestBase {
+   /**
+    * A user with permission to administer site configuration.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->user = $this->drupalCreateUser(['administer site configuration']);
+     $this->drupalLogin($this->user);
+@@ -40,7 +41,7 @@ class LoadTest extends BrowserTestBase {
+    */
+   public function testLoad() {
+     $this->drupalGet(Url::fromRoute('<front>'));
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+   }
+ 
+ }
+diff --git a/src/Access/LcAccessHelperTrait.php b/src/Access/LcAccessHelperTrait.php
+index 6eafbce..6889d17 100755
+--- a/src/Access/LcAccessHelperTrait.php
++++ b/src/Access/LcAccessHelperTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Access;
+ 
++use Drupal\node\Entity\Node;
+ use Drupal\Core\Session\AccountProxy;
+ 
+ /**
+@@ -12,7 +13,7 @@ trait LcAccessHelperTrait {
+   /**
+    * Get the current entity.
+    *
+-   * @return \Drupal\node\Entity\Node
++   * @return Node
+    *   The entity.
+    */
+   protected function getCurrentEntity() {
+@@ -24,7 +25,7 @@ trait LcAccessHelperTrait {
+   /**
+    * Check if the user is allowed.
+    *
+-   * @param \Drupal\Core\Session\AccountProxy $account
++   * @param AccountProxy $account
+    *   The section storage object.
+    * @param string $permission
+    *   The permission.
+diff --git a/src/Api/Color.php b/src/Api/Color.php
+index d5891bb..216dee1 100755
+--- a/src/Api/Color.php
++++ b/src/Api/Color.php
+@@ -19,7 +19,7 @@ class Color {
+   /**
+    * Layoutcomponents manager.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected $configFactory;
+ 
+diff --git a/src/Controller/LcChooseBlockController.php b/src/Controller/LcChooseBlockController.php
+index 215ad29..97d11d8 100755
+--- a/src/Controller/LcChooseBlockController.php
++++ b/src/Controller/LcChooseBlockController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\layoutcomponents\Controller;
+ 
++use Drupal\Core\Ajax\AjaxResponse;
++use Drupal\Core\TempStore\PrivateTempStore;
++use Drupal\Core\Config\Config;
+ use Drupal\Component\Uuid\UuidInterface;
+ use Drupal\Core\Block\BlockManagerInterface;
+ use Drupal\Core\Config\ConfigFactory;
+@@ -31,42 +34,42 @@ class LcChooseBlockController extends ChooseBlockController {
+   /**
+    * The section storage.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $layoutManager;
+ 
+   /**
+    * The UUID generator.
+    *
+-   * @var \Drupal\Component\Uuid\UuidInterface
++   * @var UuidInterface
+    */
+   protected $uuidGenerator;
+ 
+   /**
+    * The layout tempstore repository.
+    *
+-   * @var \Drupal\layout_builder\LayoutTempstoreRepositoryInterface
++   * @var LayoutTempstoreRepositoryInterface
+    */
+   protected $layoutTempstoreRepository;
+ 
+   /**
+    * Drupal\Core\TempStore\PrivateTempStoreFactory definition.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStoreFactory
++   * @var PrivateTempStoreFactory
+    */
+   private $tempStoreFactory;
+ 
+   /**
+    * The section storage.
+    *
+-   * @var \Drupal\layout_builder\SectionStorageInterface
++   * @var SectionStorageInterface
+    */
+   protected $sectionStorage;
+ 
+   /**
+    * Config factory object.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected $configFactory;
+ 
+@@ -81,21 +84,21 @@ class LcChooseBlockController extends ChooseBlockController {
+   /**
+    * LcChooseBlockController constructor.
+    *
+-   * @param \Drupal\Core\Block\BlockManagerInterface $block_manager
++   * @param BlockManagerInterface $block_manager
+    *   The block manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\layoutcomponents\LcLayoutsManager $layout_manager
++   * @param LcLayoutsManager $layout_manager
+    *   The LcLayoutsManager object.
+-   * @param \Drupal\Component\Uuid\UuidInterface $uuid
++   * @param UuidInterface $uuid
+    *   The requestStack.
+-   * @param \Drupal\layout_builder\LayoutTempstoreRepositoryInterface $layout_tempstore_repository
++   * @param LayoutTempstoreRepositoryInterface $layout_tempstore_repository
+    *   The LayoutTempstoreRepositoryInterface object.
+-   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $temp_store
++   * @param PrivateTempStoreFactory $temp_store
+    *   The PrivateTempStoreFactory object.
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   The config factory object.
+    */
+   public function __construct(BlockManagerInterface $block_manager, EntityTypeManagerInterface $entity_type_manager, AccountInterface $current_user, LcLayoutsManager $layout_manager, UuidInterface $uuid, LayoutTempstoreRepositoryInterface $layout_tempstore_repository, PrivateTempStoreFactory $temp_store, ConfigFactory $config_factory) {
+@@ -126,14 +129,14 @@ class LcChooseBlockController extends ChooseBlockController {
+   /**
+    * Provides the UI for choosing a new block.
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage.
+    * @param int $delta
+    *   The delta of the section to splice.
+    * @param string $region
+    *   The region the block is going in.
+    *
+-   * @return array|\Drupal\Core\Ajax\AjaxResponse
++   * @return array|AjaxResponse
+    *   A render array.
+    */
+   public function build(SectionStorageInterface $section_storage, $delta, $region) {
+@@ -142,11 +145,11 @@ class LcChooseBlockController extends ChooseBlockController {
+     $this->isDefault = (boolval($section_overwrite) && !$section_storage instanceof DefaultsSectionStorage) ? TRUE : FALSE;
+ 
+     // Get temp store lc data.
+-    /** @var \Drupal\Core\TempStore\PrivateTempStore $store */
++    /** @var PrivateTempStore $store */
+     $store = $this->tempStoreFactory->get('lc');
+     $data = $store->get('lc_element');
+ 
+-    /** @var \Drupal\Core\Config\Config $lc_settings */
++    /** @var Config $lc_settings */
+     $lcSettings = $this->configFactory->getEditable('layoutcomponents.general');
+ 
+     // If a new element must be copied.
+@@ -213,7 +216,7 @@ class LcChooseBlockController extends ChooseBlockController {
+   /**
+    * Provides the UI for choosing a new inline block.
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage.
+    * @param int $delta
+    *   The delta of the section to splice.
+diff --git a/src/Controller/LcChooseSectionController.php b/src/Controller/LcChooseSectionController.php
+index b9bb8e9..07475e5 100755
+--- a/src/Controller/LcChooseSectionController.php
++++ b/src/Controller/LcChooseSectionController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Controller;
+ 
++use Drupal\Core\TempStore\PrivateTempStore;
+ use Drupal\Core\Layout\LayoutPluginManagerInterface;
+ use Drupal\Core\TempStore\PrivateTempStoreFactory;
+ use Drupal\layout_builder\Controller\ChooseSectionController;
+@@ -30,35 +31,35 @@ class LcChooseSectionController extends ChooseSectionController {
+   /**
+    * RequestStack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $request;
+ 
+   /**
+    * The layout tempstore repository.
+    *
+-   * @var \Drupal\layout_builder\LayoutTempstoreRepositoryInterface
++   * @var LayoutTempstoreRepositoryInterface
+    */
+   protected $layoutTempstoreRepository;
+ 
+   /**
+    * The LC manager.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $lcLayoutManager;
+ 
+   /**
+    * Drupal\Core\TempStore\PrivateTempStoreFactory definition.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStoreFactory
++   * @var PrivateTempStoreFactory
+    */
+   private $tempStoreFactory;
+ 
+   /**
+    * Config factory object.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected $configFactory;
+ 
+@@ -72,17 +73,17 @@ class LcChooseSectionController extends ChooseSectionController {
+   /**
+    * LcChooseSectionController constructor.
+    *
+-   * @param \Drupal\Core\Layout\LayoutPluginManagerInterface $layout_manager
++   * @param LayoutPluginManagerInterface $layout_manager
+    *   The layout manager.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request
++   * @param RequestStack $request
+    *   The requestStack.
+-   * @param \Drupal\layout_builder\LayoutTempstoreRepositoryInterface $layout_tempstore_repository
++   * @param LayoutTempstoreRepositoryInterface $layout_tempstore_repository
+    *   The LayoutTempstoreRepositoryInterface object.
+-   * @param \Drupal\layoutcomponents\LcLayoutsManager $lc_layout_manager
++   * @param LcLayoutsManager $lc_layout_manager
+    *   The LcLayoutsManager object.
+-   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $temp_store
++   * @param PrivateTempStoreFactory $temp_store
+    *   The PrivateTempStoreFactory object.
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   The config factory object.
+    */
+   public function __construct(LayoutPluginManagerInterface $layout_manager, RequestStack $request, LayoutTempstoreRepositoryInterface $layout_tempstore_repository, LcLayoutsManager $lc_layout_manager, PrivateTempStoreFactory $temp_store, ConfigFactory $config_factory) {
+@@ -111,7 +112,7 @@ class LcChooseSectionController extends ChooseSectionController {
+   /**
+    * Adds the new section.
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage.
+    * @param int $delta
+    *   The delta of the section to splice.
+@@ -121,7 +122,7 @@ class LcChooseSectionController extends ChooseSectionController {
+    */
+   public function build(SectionStorageInterface $section_storage, $delta) {
+     // Get temp store lc data.
+-    /** @var \Drupal\Core\TempStore\PrivateTempStore $store */
++    /** @var PrivateTempStore $store */
+     $store = $this->tempStoreFactory->get('lc');
+     $data = $store->get('lc_element');
+ 
+@@ -177,7 +178,7 @@ class LcChooseSectionController extends ChooseSectionController {
+       else {
+         $classes = [];
+       }
+-      /** @var \Drupal\Core\Url $url */
++      /** @var Url $url */
+       $url = $item['#url'];
+       $item['#url'] = Url::fromRoute('layout_builder.configure_section',
+         [
+diff --git a/src/Controller/LcClipboardController.php b/src/Controller/LcClipboardController.php
+index 8358d21..cf436f8 100755
+--- a/src/Controller/LcClipboardController.php
++++ b/src/Controller/LcClipboardController.php
+@@ -18,14 +18,14 @@ class LcClipboardController extends ControllerBase implements ContainerInjection
+   /**
+    * Drupal\Core\TempStore\PrivateTempStoreFactory definition.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStoreFactory
++   * @var PrivateTempStoreFactory
+    */
+   private $tempStoreFactory;
+ 
+   /**
+    * LcClipboardController constructor.
+    *
+-   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $temp_store
++   * @param PrivateTempStoreFactory $temp_store
+    *   The PrivateTempStoreFactory object.
+    */
+   public function __construct(PrivateTempStoreFactory $temp_store) {
+@@ -44,7 +44,7 @@ class LcClipboardController extends ControllerBase implements ContainerInjection
+   /**
+    * Return the element coied on clipboard.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   The JsonResponse object.
+    */
+   public function getElement() {
+diff --git a/src/Controller/LcInlineMedia.php b/src/Controller/LcInlineMedia.php
+index f9404af..2af86e0 100755
+--- a/src/Controller/LcInlineMedia.php
++++ b/src/Controller/LcInlineMedia.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\layoutcomponents\Controller;
+ 
++use Drupal\file\Plugin\Field\FieldType\FileFieldItemList;
++use Drupal\file\Entity\file;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -18,14 +20,14 @@ class LcInlineMedia extends ControllerBase implements ContainerInjectionInterfac
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * ChooseBlockController constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -47,14 +49,14 @@ class LcInlineMedia extends ControllerBase implements ContainerInjectionInterfac
+    * @param string $id
+    *   The media id.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   The JsonResponse object.
+    */
+   public function getMedia($id) {
+-    /** @var \Drupal\file\Plugin\Field\FieldType\FileFieldItemList $media_field */
++    /** @var FileFieldItemList $media_field */
+     $media_field = $this->entityTypeManager->getStorage('media')->load($id)->get('field_media_image')->getValue();
+ 
+-    /** @var \Drupal\file\Entity\file $file */
++    /** @var file $file */
+     $file = $this->entityTypeManager->getStorage('file')->load($media_field[0]['target_id']);
+     if (!isset($file)) {
+       return new JsonResponse(['uri' => '']);
+diff --git a/src/Element/LcColorField.php b/src/Element/LcColorField.php
+index fcacb92..f52bc17 100755
+--- a/src/Element/LcColorField.php
++++ b/src/Element/LcColorField.php
+@@ -51,7 +51,7 @@ class LcColorField extends FormElement {
+    *
+    * @param array $element
+    *   The form element to process.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    * @param array $form
+    *   The complete form structure.
+diff --git a/src/Element/LcElement.php b/src/Element/LcElement.php
+index 94e4b3c..ff7190d 100755
+--- a/src/Element/LcElement.php
++++ b/src/Element/LcElement.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\layoutcomponents\Element;
+ 
++use Drupal\node\Entity\Node;
++use Drupal\Core\TempStore\PrivateTempStore;
++use Drupal\layout_builder\Section;
+ use Drupal\Core\Messenger\MessengerInterface;
+ use Drupal\Core\TempStore\PrivateTempStoreFactory;
+ use Drupal\layout_builder\Element\LayoutBuilder;
+@@ -32,56 +35,56 @@ class LcElement extends LayoutBuilder {
+   /**
+    * The theme handler.
+    *
+-   * @var \Drupal\Core\Extension\ThemeHandlerInterface
++   * @var ThemeHandlerInterface
+    */
+   protected $themeHandler;
+ 
+   /**
+    * Config factory object.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected $configFactory;
+ 
+   /**
+    * Drupal\Core\TempStore\PrivateTempStoreFactory definition.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStoreFactory
++   * @var PrivateTempStoreFactory
+    */
+   protected $tempStoreFactory;
+ 
+   /**
+    * The Layout Tempstore.
+    *
+-   * @var \Drupal\layout_builder\LayoutTempstoreRepositoryInterface
++   * @var LayoutTempstoreRepositoryInterface
+    */
+   protected $layoutTempstore;
+ 
+   /**
+    * The LC manager.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $lcLayoutManager;
+ 
+   /**
+    * Drupal\Core\Session\AccountProxy definition.
+    *
+-   * @var \Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $currentUser;
+ 
+   /**
+    * Drupal\layoutcomponents\LcSectionManager definition.
+    *
+-   * @var \Drupal\layoutcomponents\LcSectionManager
++   * @var LcSectionManager
+    */
+   protected $lcSectionManager;
+ 
+   /**
+    * Current Entity.
+    *
+-   * @var \Drupal\node\Entity\Node
++   * @var Node
+    */
+   protected $entity;
+ 
+@@ -135,7 +138,7 @@ class LcElement extends LayoutBuilder {
+     $storage_id = $section_storage->getStorageId();
+ 
+     // Allow remove clipboard.
+-    /** @var \Drupal\Core\TempStore\PrivateTempStore $store */
++    /** @var PrivateTempStore $store */
+     $store = $this->tempStoreFactory->get('lc');
+     $data = $store->get('lc_element');
+     $clipboard_attr = (!empty($data)) ?: 'hidden';
+@@ -222,7 +225,7 @@ class LcElement extends LayoutBuilder {
+     $build['link']['#title'] = '';
+ 
+     // Alter Add Section button.
+-    /** @var \Drupal\Core\Url $url */
++    /** @var Url $url */
+     $url = $build['link']['#url'];
+ 
+     // Set update_layout if is "Add section".
+@@ -430,7 +433,7 @@ class LcElement extends LayoutBuilder {
+       $addBlock['link']['#title'] = '';
+       $addBlock['#weight'] = 999;
+ 
+-      /** @var \Drupal\Core\Url $url */
++      /** @var Url $url */
+       $url = $addBlock['link']['#url'];
+ 
+       // Remove link--add class.
+@@ -522,7 +525,7 @@ class LcElement extends LayoutBuilder {
+       // Include sub sections.
+       $current_layout_settings = $section_storage->getSection($delta)->getLayoutSettings();
+ 
+-      /** @var \Drupal\layout_builder\Section $dd_section */
++      /** @var Section $dd_section */
+       foreach ($section_storage->getSections() as $dd => $dd_section) {
+         $dd_settings = $dd_section->getLayoutSettings();
+         if (empty($dd_settings['sub_section'])) {
+@@ -676,12 +679,12 @@ class LcElement extends LayoutBuilder {
+   /**
+    * Provide tooltip for Url elements.
+    *
+-   * @param \Drupal\Core\Url $url
++   * @param Url $url
+    *   The section storage.
+    * @param string $text
+    *   The text.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   The url preprocessed.
+    */
+   public function addTooltip(Url $url, $text) {
+diff --git a/src/Entity/LcEntityViewDisplay.php b/src/Entity/LcEntityViewDisplay.php
+index cec06cd..e3cf3db 100755
+--- a/src/Entity/LcEntityViewDisplay.php
++++ b/src/Entity/LcEntityViewDisplay.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Entity;
+ 
++use Drupal\layout_builder\SectionStorage\SectionStorageManagerInterface;
+ use Drupal\Core\Cache\CacheableMetadata;
+ use Drupal\Core\Entity\FieldableEntityInterface;
+ use Drupal\Core\Plugin\Context\EntityContext;
+@@ -19,7 +20,7 @@ class LcEntityViewDisplay extends LayoutBuilderEntityViewDisplay {
+   /**
+    * Gets the section storage manager.
+    *
+-   * @return \Drupal\layout_builder\SectionStorage\SectionStorageManagerInterface
++   * @return SectionStorageManagerInterface
+    *   The section storage manager.
+    */
+   private function sectionStorageManager() {
+diff --git a/src/Event/LcPreprocessLayoutEvent.php b/src/Event/LcPreprocessLayoutEvent.php
+index 91b4cb2..8b16e42 100755
+--- a/src/Event/LcPreprocessLayoutEvent.php
++++ b/src/Event/LcPreprocessLayoutEvent.php
+@@ -15,14 +15,14 @@ class LcPreprocessLayoutEvent extends Event {
+   /**
+    * The layout array.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutRender
++   * @var LcLayoutRender
+    */
+   protected $layout;
+ 
+   /**
+    * Constructs the object.
+    *
+-   * @param \Drupal\layoutcomponents\LcLayoutRender $layout
++   * @param LcLayoutRender $layout
+    *   The complete object with the data.
+    */
+   public function __construct(LcLayoutRender $layout) {
+@@ -32,7 +32,7 @@ class LcPreprocessLayoutEvent extends Event {
+   /**
+    * Get the layout object.
+    *
+-   * @return \Drupal\layoutcomponents\LcLayoutRender
++   * @return LcLayoutRender
+    */
+   public function getLayout() {
+     return $this->layout;
+@@ -41,7 +41,7 @@ class LcPreprocessLayoutEvent extends Event {
+   /**
+    * Set the layout object.
+    *
+-   * @param \Drupal\layoutcomponents\LcLayoutRender $layout
++   * @param LcLayoutRender $layout
+    *   The complete layout object.
+    */
+   public function setLayout(LcLayoutRender $layout) {
+diff --git a/src/Form/LcAddBlockForm.php b/src/Form/LcAddBlockForm.php
+index 927ecae..1f7866a 100755
+--- a/src/Form/LcAddBlockForm.php
++++ b/src/Form/LcAddBlockForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\block_content\Entity\BlockContent;
+ use Drupal\Core\Ajax\AjaxHelperTrait;
+ use Drupal\Core\Ajax\InvokeCommand;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -24,7 +25,7 @@ class LcAddBlockForm extends AddBlockForm {
+     $admin_label = isset($build['settings']['admin_label']) ? $build['settings']['admin_label'] : NULL;
+ 
+     if (array_key_exists('block_form', $build['settings'])) {
+-      /** @var \Drupal\block_content\Entity\BlockContent $block */
++      /** @var BlockContent $block */
+       $block = $build['settings']['block_form']['#block'];
+       $build['#title'] = $this->t("Add new @title", ['@title' => $block->bundle()]);
+     }
+diff --git a/src/Form/LcColorsSettings.php b/src/Form/LcColorsSettings.php
+index 217258a..a668569 100755
+--- a/src/Form/LcColorsSettings.php
++++ b/src/Form/LcColorsSettings.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -31,7 +32,7 @@ class LcColorsSettings extends ConfigFormBase {
+    */
+   public function buildForm(array $form, FormStateInterface $form_state) {
+ 
+-    /** @var \Drupal\Core\Config\Config $config */
++    /** @var Config $config */
+     $config = $this->config('layoutcomponents.colors');
+ 
+     $form['general'] = [
+diff --git a/src/Form/LcColumnSettings.php b/src/Form/LcColumnSettings.php
+index fad5cd1..5bb6c89 100755
+--- a/src/Form/LcColumnSettings.php
++++ b/src/Form/LcColumnSettings.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -16,16 +17,16 @@ class LcColumnSettings extends ConfigFormBase {
+   /**
+    * The Lc manager.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $layoutManager;
+ 
+   /**
+    * The Lc column settings contruct.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configFactory object.
+-   * @param \Drupal\layoutcomponents\LcLayoutsManager $layout_manager
++   * @param LcLayoutsManager $layout_manager
+    *   The LcLayoutsManager object.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, LcLayoutsManager $layout_manager) {
+@@ -64,7 +65,7 @@ class LcColumnSettings extends ConfigFormBase {
+    */
+   public function buildForm(array $form, FormStateInterface $form_state) {
+ 
+-    /** @var \Drupal\Core\Config\Config $config */
++    /** @var Config $config */
+     $config = $this->config('layoutcomponents.column');
+     $colors = $this->configFactory->getEditable('layoutcomponents.colors')->getRawData()['editor_colors_list'];
+     $colors = str_replace(' ', '', $colors);
+diff --git a/src/Form/LcConfigureSection.php b/src/Form/LcConfigureSection.php
+index 56f6057..df76fe7 100755
+--- a/src/Form/LcConfigureSection.php
++++ b/src/Form/LcConfigureSection.php
+@@ -31,21 +31,21 @@ class LcConfigureSection extends ConfigureSectionForm {
+   /**
+    * RequestStack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $request;
+ 
+   /**
+    * The LC manager.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $lcLayoutManager;
+ 
+   /**
+    * Drupal\layoutcomponents\LcSectionManager definition.
+    *
+-   * @var \Drupal\layoutcomponents\LcSectionManager
++   * @var LcSectionManager
+    */
+   protected $lcSectionManager;
+ 
+@@ -187,7 +187,7 @@ class LcConfigureSection extends ConfigureSectionForm {
+    *
+    * @param array $form
+    *   The complete form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The Form state object.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+diff --git a/src/Form/LcCopy.php b/src/Form/LcCopy.php
+index 1d4c2e0..0438ae7 100755
+--- a/src/Form/LcCopy.php
++++ b/src/Form/LcCopy.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\layout_builder\SectionStorageInterface;
+ use Drupal\Core\Ajax\AjaxFormHelperTrait;
+ use Drupal\Core\Ajax\InvokeCommand;
+ use Drupal\Core\Form\FormBase;
+@@ -25,21 +26,21 @@ class LcCopy extends FormBase {
+   /**
+    * The layout tempstore repository.
+    *
+-   * @var \Drupal\layout_builder\LayoutTempstoreRepositoryInterface
++   * @var LayoutTempstoreRepositoryInterface
+    */
+   protected $layoutTempstoreRepository;
+ 
+   /**
+    * The UUID generator.
+    *
+-   * @var \Drupal\Component\Uuid\UuidInterface
++   * @var UuidInterface
+    */
+   protected $uuidGenerator;
+ 
+   /**
+    * The Lc manager.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $layoutManager;
+ 
+@@ -75,14 +76,14 @@ class LcCopy extends FormBase {
+   /**
+    * The section storage.
+    *
+-   * @var \Drupal\layout_builder\SectionStorageInterface
++   * @var SectionStorageInterface
+    */
+   protected $sectionStorage;
+ 
+   /**
+    * Drupal\Core\TempStore\PrivateTempStoreFactory definition.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStoreFactory
++   * @var PrivateTempStoreFactory
+    */
+   protected $tempStoreFactory;
+ 
+@@ -96,13 +97,13 @@ class LcCopy extends FormBase {
+   /**
+    * Constructs a new copy block form.
+    *
+-   * @param \Drupal\layoutcomponents\LcLayoutsManager $layout_manager
++   * @param LcLayoutsManager $layout_manager
+    *   The layout manager object.
+-   * @param \Drupal\Component\Uuid\UuidInterface $uuid
++   * @param UuidInterface $uuid
+    *   The UUID generator.
+-   * @param \Drupal\layout_builder\LayoutTempstoreRepositoryInterface $layout_tempstore_repository
++   * @param LayoutTempstoreRepositoryInterface $layout_tempstore_repository
+    *   The layout tempstore repository.
+-   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $temp_store
++   * @param PrivateTempStoreFactory $temp_store
+    *   The PrivateTempStoreFactory object.
+    */
+   public function __construct(LcLayoutsManager $layout_manager, UuidInterface $uuid, LayoutTempstoreRepositoryInterface $layout_tempstore_repository, PrivateTempStoreFactory $temp_store) {
+diff --git a/src/Form/LcCopyBlock.php b/src/Form/LcCopyBlock.php
+index 523acf0..61439cf 100755
+--- a/src/Form/LcCopyBlock.php
++++ b/src/Form/LcCopyBlock.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\Core\Ajax\AjaxResponse;
++use Drupal\Core\TempStore\PrivateTempStore;
+ use Drupal\layoutcomponents\Form\LcCopy as LcCopy;
+ use Drupal\Core\Ajax\AjaxFormHelperTrait;
+ use Drupal\Core\Ajax\InvokeCommand;
+@@ -30,9 +32,9 @@ class LcCopyBlock extends LcCopy {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage.
+    * @param int $delta
+    *   The delta of the section to splice.
+@@ -41,7 +43,7 @@ class LcCopyBlock extends LcCopy {
+    * @param string $uuid
+    *   The uuid of the block.
+    *
+-   * @return array|\Drupal\Core\Ajax\AjaxResponse
++   * @return array|AjaxResponse
+    *   A render array.
+    */
+   public function buildForm(array $form, FormStateInterface $form_state, SectionStorageInterface $section_storage = NULL, $delta = NULL, $region = NULL, $uuid = NULL) {
+@@ -70,7 +72,7 @@ class LcCopyBlock extends LcCopy {
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     if (!$this->getDefault()) {
+-      /** @var \Drupal\Core\TempStore\PrivateTempStore $store */
++      /** @var PrivateTempStore $store */
+       $store = $this->tempStoreFactory->get('lc');
+       $store->set('lc_element', [
+         'type' => $this->type,
+diff --git a/src/Form/LcCopyColumn.php b/src/Form/LcCopyColumn.php
+index b4c1d5a..f70a07f 100755
+--- a/src/Form/LcCopyColumn.php
++++ b/src/Form/LcCopyColumn.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\Core\Ajax\AjaxResponse;
++use Drupal\Core\TempStore\PrivateTempStore;
+ use Drupal\Core\Ajax\AjaxFormHelperTrait;
+ use Drupal\layout_builder\Controller\LayoutRebuildTrait;
+ use Drupal\layout_builder\Plugin\Block\InlineBlock;
+@@ -30,16 +32,16 @@ class LcCopyColumn extends LcCopy {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage.
+    * @param int $delta
+    *   The delta of the section to splice.
+    * @param string $region
+    *   The region the block is going in.
+    *
+-   * @return array|\Drupal\Core\Ajax\AjaxResponse
++   * @return array|AjaxResponse
+    *   A render array.
+    */
+   public function buildForm(array $form, FormStateInterface $form_state, SectionStorageInterface $section_storage = NULL, $delta = NULL, $region = NULL) {
+@@ -67,7 +69,7 @@ class LcCopyColumn extends LcCopy {
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     if (!$this->getDefault()) {
+-      /** @var \Drupal\Core\TempStore\PrivateTempStore $store */
++      /** @var PrivateTempStore $store */
+       $store = $this->tempStoreFactory->get('lc');
+       $store->set('lc_element', [
+         'type' => $this->type,
+diff --git a/src/Form/LcCopyRemove.php b/src/Form/LcCopyRemove.php
+index e72f147..b815cd8 100755
+--- a/src/Form/LcCopyRemove.php
++++ b/src/Form/LcCopyRemove.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\Core\TempStore\PrivateTempStore;
+ use Drupal\Core\Ajax\AjaxFormHelperTrait;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -22,30 +23,30 @@ class LcCopyRemove extends FormBase {
+   /**
+    * The layout tempstore repository.
+    *
+-   * @var \Drupal\layout_builder\LayoutTempstoreRepositoryInterface
++   * @var LayoutTempstoreRepositoryInterface
+    */
+   protected $layoutTempstoreRepository;
+ 
+   /**
+    * The section storage.
+    *
+-   * @var \Drupal\layout_builder\SectionStorageInterface
++   * @var SectionStorageInterface
+    */
+   protected $sectionStorage;
+ 
+   /**
+    * Drupal\Core\TempStore\PrivateTempStoreFactory definition.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStoreFactory
++   * @var PrivateTempStoreFactory
+    */
+   protected $tempStoreFactory;
+ 
+   /**
+    * Constructs a new copy block form.
+    *
+-   * @param \Drupal\layout_builder\LayoutTempstoreRepositoryInterface $layout_tempstore_repository
++   * @param LayoutTempstoreRepositoryInterface $layout_tempstore_repository
+    *   The layout tempstore repository.
+-   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $temp_store
++   * @param PrivateTempStoreFactory $temp_store
+    *   The PrivateTempStoreFactory object.
+    */
+   public function __construct(LayoutTempstoreRepositoryInterface $layout_tempstore_repository, PrivateTempStoreFactory $temp_store) {
+@@ -97,7 +98,7 @@ class LcCopyRemove extends FormBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\TempStore\PrivateTempStore $store */
++    /** @var PrivateTempStore $store */
+     $store = $this->tempStoreFactory->get('lc');
+     $store->delete('lc_element');
+   }
+diff --git a/src/Form/LcCopySection.php b/src/Form/LcCopySection.php
+index 88e3f83..c961cbf 100755
+--- a/src/Form/LcCopySection.php
++++ b/src/Form/LcCopySection.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\Core\Ajax\AjaxResponse;
++use Drupal\Core\TempStore\PrivateTempStore;
+ use Drupal\layout_builder\Plugin\Block\InlineBlock;
+ use Drupal\layoutcomponents\Form\LcCopy as LcCopy;
+ use Drupal\Core\Ajax\AjaxFormHelperTrait;
+@@ -30,14 +32,14 @@ class LcCopySection extends LcCopy {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage.
+    * @param int $delta
+    *   The delta of the section to splice.
+    *
+-   * @return array|\Drupal\Core\Ajax\AjaxResponse
++   * @return array|AjaxResponse
+    *   A render array.
+    */
+   public function buildForm(array $form, FormStateInterface $form_state, SectionStorageInterface $section_storage = NULL, $delta = NULL) {
+@@ -64,7 +66,7 @@ class LcCopySection extends LcCopy {
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     if (!$this->getDefault()) {
+-      /** @var \Drupal\Core\TempStore\PrivateTempStore $store */
++      /** @var PrivateTempStore $store */
+       $store = $this->tempStoreFactory->get('lc');
+       $store->set('lc_element', [
+         'type' => $this->type,
+diff --git a/src/Form/LcInterfaceSettings.php b/src/Form/LcInterfaceSettings.php
+index 4d3b3e6..5195b9a 100755
+--- a/src/Form/LcInterfaceSettings.php
++++ b/src/Form/LcInterfaceSettings.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -30,7 +31,7 @@ class LcInterfaceSettings extends ConfigFormBase {
+    * {@inheritdoc}
+    */
+   public function buildForm(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Config\Config $config */
++    /** @var Config $config */
+     $config = $this->config('layoutcomponents.interface');
+ 
+     $form['general'] = [
+diff --git a/src/Form/LcRemoveBlock.php b/src/Form/LcRemoveBlock.php
+index 456cd3d..8c85ad4 100755
+--- a/src/Form/LcRemoveBlock.php
++++ b/src/Form/LcRemoveBlock.php
+@@ -18,7 +18,7 @@ class LcRemoveBlock extends RemoveBlockForm {
+   /**
+    * The LC manager.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $lcLayoutManager;
+ 
+diff --git a/src/Form/LcRemoveSection.php b/src/Form/LcRemoveSection.php
+index 63f54e7..a44cbe8 100755
+--- a/src/Form/LcRemoveSection.php
++++ b/src/Form/LcRemoveSection.php
+@@ -18,7 +18,7 @@ class LcRemoveSection extends RemoveSectionForm {
+   /**
+    * The LC manager.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $lcLayoutManager;
+ 
+diff --git a/src/Form/LcSectionSettings.php b/src/Form/LcSectionSettings.php
+index 7f9d552..765f42c 100755
+--- a/src/Form/LcSectionSettings.php
++++ b/src/Form/LcSectionSettings.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -16,16 +17,16 @@ class LcSectionSettings extends ConfigFormBase {
+   /**
+    * The Lc manager.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $layoutManager;
+ 
+   /**
+    * The Lc manager.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configFactory object.
+-   * @param \Drupal\layoutcomponents\LcLayoutsManager $layout_manager
++   * @param LcLayoutsManager $layout_manager
+    *   The LcLayoutsManager object.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, LcLayoutsManager $layout_manager) {
+@@ -63,7 +64,7 @@ class LcSectionSettings extends ConfigFormBase {
+    * {@inheritdoc}
+    */
+   public function buildForm(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Config\Config $config */
++    /** @var Config $config */
+     $config = $this->config('layoutcomponents.section');
+     $colors = $this->configFactory->getEditable('layoutcomponents.colors')->getRawData()['editor_colors_list'];
+     $colors = str_replace(' ', '', $colors);
+diff --git a/src/Form/LcSettings.php b/src/Form/LcSettings.php
+index a7ccc0d..447c014 100755
+--- a/src/Form/LcSettings.php
++++ b/src/Form/LcSettings.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -31,7 +32,7 @@ class LcSettings extends ConfigFormBase {
+    */
+   public function buildForm(array $form, FormStateInterface $form_state) {
+ 
+-    /** @var \Drupal\Core\Config\Config $config */
++    /** @var Config $config */
+     $config = $this->config('layoutcomponents.general');
+ 
+     $form['general'] = [
+diff --git a/src/Form/LcUpdateBlockForm.php b/src/Form/LcUpdateBlockForm.php
+index a3de917..9dc0e31 100755
+--- a/src/Form/LcUpdateBlockForm.php
++++ b/src/Form/LcUpdateBlockForm.php
+@@ -31,21 +31,21 @@ class LcUpdateBlockForm extends UpdateBlockForm {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The Language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The LC manager.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $lcLayoutManager;
+ 
+@@ -90,7 +90,7 @@ class LcUpdateBlockForm extends UpdateBlockForm {
+     $section_overwrite = $section_storage->getSection($delta)->getLayoutSettings()['section']['general']['basic']['section_overwrite'];
+     $this->isDefault = (boolval($section_overwrite) && !$section_storage instanceof DefaultsSectionStorage) ? TRUE : FALSE;
+ 
+-    /** @var \Drupal\layout_builder\SectionComponent $component */
++    /** @var SectionComponent $component */
+     $component = $section_storage->getSection($delta)->getComponent($uuid);
+     $conf = $component->get('configuration');
+ 
+@@ -101,7 +101,7 @@ class LcUpdateBlockForm extends UpdateBlockForm {
+ 
+     $build = parent::buildForm($form, $form_state, $section_storage, $delta, $region, $uuid);
+ 
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = !empty($build['settings']['block_form']['#block'])
+       ? $build['settings']['block_form']['#block'] : NULL;
+     if (!isset($block)) {
+@@ -153,7 +153,7 @@ class LcUpdateBlockForm extends UpdateBlockForm {
+    */
+   public function blockContentToInline(array $configuration) {
+     $configuration['id'] = str_replace('block_content:', '', $configuration['id']);
+-    /** @var \Drupal\block_content\Entity\BlockContent $block_content */
++    /** @var BlockContent $block_content */
+     $block_content = $this->entityTypeManager->getStorage('block_content')->loadByProperties(['uuid' => $configuration['id']]);
+     $block_content = reset($block_content);
+     return [
+@@ -172,13 +172,13 @@ class LcUpdateBlockForm extends UpdateBlockForm {
+   /**
+    * Set translation of current language.
+    *
+-   * @param \Drupal\layout_builder\SectionComponent $component
++   * @param SectionComponent $component
+    *   The layout builder component.
+    */
+   public function setCurrentLanguageTranslation(SectionComponent &$component) {
+     $configuration = $component->get('configuration');
+     try {
+-      /** @var \Drupal\block_content\Entity\BlockContent $block_content */
++      /** @var BlockContent $block_content */
+       $block_content = $component->getPlugin()->build();
+       $block_content = reset($block_content);
+       if (!$block_content instanceof BlockContent) {
+diff --git a/src/Form/LcUpdateColumn.php b/src/Form/LcUpdateColumn.php
+index 0b5da4d..a537e76 100755
+--- a/src/Form/LcUpdateColumn.php
++++ b/src/Form/LcUpdateColumn.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents\Form;
+ 
++use Drupal\Core\TempStore\PrivateTempStore;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Plugin\PluginFormFactoryInterface;
+ use Drupal\Core\TempStore\PrivateTempStoreFactory;
+@@ -20,14 +21,14 @@ class LcUpdateColumn extends ConfigureSectionForm {
+   /**
+    * The section storage.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $layoutManager;
+ 
+   /**
+    * Drupal\Core\TempStore\PrivateTempStoreFactory definition.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStoreFactory
++   * @var PrivateTempStoreFactory
+    */
+   private $tempStoreFactory;
+ 
+@@ -41,13 +42,13 @@ class LcUpdateColumn extends ConfigureSectionForm {
+   /**
+    * Constructs to update the column.
+    *
+-   * @param \Drupal\layout_builder\LayoutTempstoreRepositoryInterface $layout_tempstore_repository
++   * @param LayoutTempstoreRepositoryInterface $layout_tempstore_repository
+    *   The layout tempstore repository.
+-   * @param \Drupal\Core\Plugin\PluginFormFactoryInterface $plugin_form_manager
++   * @param PluginFormFactoryInterface $plugin_form_manager
+    *   The plugin form manager.
+-   * @param \Drupal\layoutcomponents\LcLayoutsManager $layout_manager
++   * @param LcLayoutsManager $layout_manager
+    *   The LcLayoutsManager object.
+-   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $temp_store
++   * @param PrivateTempStoreFactory $temp_store
+    *   The PrivateTempStoreFactory object.
+    */
+   public function __construct(LayoutTempstoreRepositoryInterface $layout_tempstore_repository, PluginFormFactoryInterface $plugin_form_manager, LcLayoutsManager $layout_manager, PrivateTempStoreFactory $temp_store) {
+@@ -77,7 +78,7 @@ class LcUpdateColumn extends ConfigureSectionForm {
+     $this->isDefault = (boolval($section_overwrite) && !$section_storage instanceof DefaultsSectionStorage) ? TRUE : FALSE;
+ 
+     // Get temp store lc data.
+-    /** @var \Drupal\Core\TempStore\PrivateTempStore $store */
++    /** @var PrivateTempStore $store */
+     $store = $this->tempStoreFactory->get('lc');
+     $data = $store->get('lc_element');
+ 
+diff --git a/src/LcDialogHelperTrait.php b/src/LcDialogHelperTrait.php
+index 89ef486..795e840 100755
+--- a/src/LcDialogHelperTrait.php
++++ b/src/LcDialogHelperTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents;
+ 
++use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Component\Serialization\Json;
+ 
+ /**
+@@ -30,7 +31,7 @@ trait LcDialogHelperTrait {
+   /**
+    * Get the confgiFactory object.
+    *
+-   * @return \Drupal\Core\Config\ConfigFactory
++   * @return ConfigFactory
+    *   The configFactory object.
+    */
+   private function configFactory() {
+diff --git a/src/LcDisplayHelperTrait.php b/src/LcDisplayHelperTrait.php
+index 8e0c9f7..c78accc 100755
+--- a/src/LcDisplayHelperTrait.php
++++ b/src/LcDisplayHelperTrait.php
+@@ -14,7 +14,7 @@ trait LcDisplayHelperTrait {
+   /**
+    * Gets revision IDs for layout sections.
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage object.
+    *
+    * @return array
+@@ -71,7 +71,7 @@ trait LcDisplayHelperTrait {
+     }
+ 
+     // Store the rest of defaults.
+-    /** @var \Drupal\layout_builder\Section $default */
++    /** @var Section $default */
+     foreach ($defaults as $delta => $default) {
+       if ($default->getLayoutId() == 'layout_builder_blank') {
+         continue;
+@@ -109,7 +109,7 @@ trait LcDisplayHelperTrait {
+    *   If the default exists.
+    */
+   public function checkDefaultExists(array $defaults, $label) {
+-    /** @var \Drupal\layout_builder\Section $default */
++    /** @var Section $default */
+     foreach ($defaults as $delta => $default) {
+       $settings = $default->getLayoutSettings();
+       if (!empty($settings)) {
+@@ -150,7 +150,7 @@ trait LcDisplayHelperTrait {
+   /**
+    * Get if the section is setted as overwriten.
+    *
+-   * @param \Drupal\layout_builder\Section $default
++   * @param Section $default
+    *   The new element.
+    *
+    * @return bool
+@@ -163,12 +163,12 @@ trait LcDisplayHelperTrait {
+   /**
+    * Get if the section is setted as overwriten.
+    *
+-   * @param \Drupal\layout_builder\Section $default
++   * @param Section $default
+    *   The new element.
+    * @param bool $status
+    *   The new status.
+    *
+-   * @return \Drupal\layout_builder\Section
++   * @return Section
+    *   The section.
+    */
+   public function updateOverWriten(Section &$default, bool $status) {
+@@ -185,7 +185,7 @@ trait LcDisplayHelperTrait {
+    *   The array of sections.
+    * @param int $index
+    *   The new position.
+-   * @param \Drupal\layout_builder\Section $value
++   * @param Section $value
+    *   The new section.
+    */
+   public function arrayInsert(array &$arr, int $index, Section $value) {
+diff --git a/src/LcEntity.php b/src/LcEntity.php
+index 8533300..59fd964 100755
+--- a/src/LcEntity.php
++++ b/src/LcEntity.php
+@@ -20,7 +20,7 @@ class LcEntity implements ContainerInjectionInterface {
+   /**
+    * The LcApi object.
+    *
+-   * @var \Drupal\layoutcomponents\Api\Component
++   * @var Component
+    */
+   protected $lcApi;
+ 
+@@ -82,11 +82,11 @@ class LcEntity implements ContainerInjectionInterface {
+    *
+    * @param array $form
+    *   The array with the form.
+-   * @param \Drupal\block_content\Entity\BlockContent $element
++   * @param BlockContent $element
+    *   The blockcontent.
+    */
+   public function layoutcomponentsFormAlter(array &$form, BlockContent $element) {
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $element;
+ 
+     $definitions = $block->getFieldDefinitions();
+diff --git a/src/LcLayoutRender.php b/src/LcLayoutRender.php
+index 38a69c6..722c030 100644
+--- a/src/LcLayoutRender.php
++++ b/src/LcLayoutRender.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents;
+ 
++use Drupal\Core\Utility\Token;
+ use Drupal\Component\Utility\DiffArray;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Component\Utility\NestedArray;
+@@ -44,21 +45,21 @@ class LcLayoutRender {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+    * The route match interface object.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+@@ -294,7 +295,7 @@ class LcLayoutRender {
+   public function parseAttributes($string = NULL, array $tokens = []) {
+     static $token;
+     if (!isset($token)) {
+-      /** @var \Drupal\Core\Utility\Token $token */
++      /** @var Token $token */
+       $token = \Drupal::service('token');
+     }
+     $attributes = [];
+@@ -447,7 +448,7 @@ class LcLayoutRender {
+         if ($media->bundle() == 'image') {
+           $background_image_fid = $media->getSource()->getSourceFieldValue($media);
+           $file = File::load($background_image_fid);
+-          $url = Url::fromUri(file_create_url($file->getFileUri()))->getUri();
++          $url = \Drupal::service('file_url_generator')->generate($file->getFileUri())->getUri();
+           if (!empty($url)) {
+             if (boolval($background_image_full)) {
+               // Background as normal image.
+@@ -716,7 +717,7 @@ class LcLayoutRender {
+         if ($media->bundle() == 'image') {
+           $background_image_fid = $media->getSource()->getSourceFieldValue($media);
+           $file = File::load($background_image_fid);
+-          $url = Url::fromUri(file_create_url($file->getFileUri()))->getUri();
++          $url = \Drupal::service('file_url_generator')->generate($file->getFileUri())->getUri();
+           if (!empty($url)) {
+             if (boolval($background_image_full)) {
+               // Background as normal image.
+diff --git a/src/LcLayoutsManager.php b/src/LcLayoutsManager.php
+index 9fe14c9..2e5677a 100755
+--- a/src/LcLayoutsManager.php
++++ b/src/LcLayoutsManager.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\layoutcomponents;
+ 
++use Drupal\Core\Layout\LayoutDefinition;
++use Drupal\block_content\Entity\BlockContent;
+ use Drupal\Core\Layout\LayoutPluginManager;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Drupal\layout_builder\Section;
+@@ -87,35 +89,35 @@ class LcLayoutsManager {
+   /**
+    * Layout Plugin Manager.
+    *
+-   * @var \Drupal\Core\Layout\LayoutPluginManager
++   * @var LayoutPluginManager
+    */
+   protected $layoutPluginManager;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+   /**
+    * The UUID generator.
+    *
+-   * @var \Drupal\Component\Uuid\UuidInterface
++   * @var UuidInterface
+    */
+   protected $uuidGenerator;
+ 
+@@ -229,7 +231,7 @@ class LcLayoutsManager {
+   protected function getLayoutComponentsLayouts() {
+     $layoutList = $this->layoutPluginManager->getDefinitions();
+     foreach ($layoutList as $name => $layout) {
+-      /** @var \Drupal\Core\Layout\LayoutDefinition $layout */
++      /** @var LayoutDefinition $layout */
+       if ($layout->getClass() === 'Drupal\layoutcomponents\Plugin\Layout\LcBase') {
+         $this->layouts[] = $layout;
+       }
+@@ -548,13 +550,13 @@ class LcLayoutsManager {
+   /**
+    * Clone the block.
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage being configured.
+    * @param int $delta
+    *   The delta.
+    * @param string $region
+    *   The region.
+-   * @param \Drupal\layout_builder\SectionComponent $component
++   * @param SectionComponent $component
+    *   The component.
+    */
+   public function duplicateBlock(SectionStorageInterface &$section_storage, $delta, $region, SectionComponent $component) {
+@@ -580,7 +582,7 @@ class LcLayoutsManager {
+     // The field definitions.
+     $fields = $block->getFieldDefinitions();
+ 
+-    /** @var \Drupal\field\Entity\FieldConfig $field */
++    /** @var FieldConfig $field */
+     foreach ($fields as $name => $field) {
+       // Filter by config.
+       if ($field instanceof FieldConfig) {
+@@ -588,7 +590,7 @@ class LcLayoutsManager {
+         if ($field->getType() == 'entity_reference_revisions') {
+           $current_values = $block->get($field->getName())->getValue();
+           foreach ($current_values as $i => $value) {
+-            /** @var \Drupal\block_content\Entity\BlockContent $old */
++            /** @var BlockContent $old */
+             // Duplicate the items reference.
+             $old = $this->entityTypeManager->getStorage('block_content')->loadRevision($value['target_revision_id']);
+ 
+@@ -635,7 +637,7 @@ class LcLayoutsManager {
+   /**
+    * Clone the column.
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage being configured.
+    * @param int $delta
+    *   The delta.
+@@ -659,11 +661,11 @@ class LcLayoutsManager {
+   /**
+    * Clone the section.
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage being configured.
+    * @param int $delta
+    *   The delta.
+-   * @param \Drupal\layout_builder\Section $section
++   * @param Section $section
+    *   The section.
+    */
+   public function duplicateSection(SectionStorageInterface &$section_storage, $delta, Section $section) {
+@@ -677,7 +679,7 @@ class LcLayoutsManager {
+   /**
+    * Check if the new UUID generated is not in used.
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage being configured.
+    * @param string $uuid
+    *   The delta of the section.
+diff --git a/src/LcPage.php b/src/LcPage.php
+index 722d7eb..2678de8 100755
+--- a/src/LcPage.php
++++ b/src/LcPage.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents;
+ 
++use Symfony\Component\HttpFoundation\Request;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Extension\ModuleHandler;
+@@ -18,35 +19,35 @@ class LcPage implements ContainerInjectionInterface {
+   /**
+    * The ModuleHandler object.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The Config Factory object.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The Request object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * The Alias Manager object.
+    *
+-   * @var \Drupal\path_alias\AliasManager
++   * @var AliasManager
+    */
+   protected $aliasManager;
+ 
+   /**
+    * The Alias Manager object.
+    *
+-   * @var \Drupal\Core\Path\CurrentPathStack
++   * @var CurrentPathStack
+    */
+   protected $currentPathStack;
+ 
+diff --git a/src/LcPermissions.php b/src/LcPermissions.php
+index 18c308e..3a639e8 100755
+--- a/src/LcPermissions.php
++++ b/src/LcPermissions.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutcomponents;
+ 
++use Drupal\layout_builder\Entity\LayoutEntityDisplayInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityTypeBundleInfoInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -18,23 +19,23 @@ class LcPermissions implements ContainerInjectionInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity type bundle info service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $bundleInfo;
+ 
+   /**
+    * LcPermissions constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $bundle_info
++   * @param EntityTypeBundleInfoInterface $bundle_info
+    *   The bundle info service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityTypeBundleInfoInterface $bundle_info) {
+@@ -55,12 +56,12 @@ class LcPermissions implements ContainerInjectionInterface {
+   /**
+    * The LC permissions for entities.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   public function getPermissions() {
+     $permissions = [];
+ 
+-    /** @var \Drupal\layout_builder\Entity\LayoutEntityDisplayInterface[] $entity_displays */
++    /** @var LayoutEntityDisplayInterface[] $entity_displays */
+     $entity_displays = $this->entityTypeManager->getStorage('entity_view_display')->loadByProperties(['third_party_settings.layout_builder.allow_custom' => TRUE]);
+     foreach ($entity_displays as $entity_display) {
+       $entity_type_id = $entity_display->getTargetEntityTypeId();
+diff --git a/src/LcSectionManager.php b/src/LcSectionManager.php
+index d3f1fac..52cd212 100755
+--- a/src/LcSectionManager.php
++++ b/src/LcSectionManager.php
+@@ -12,7 +12,7 @@ class LcSectionManager {
+   /**
+    * Get the layout settings of a section.
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage object.
+    * @param int $delta
+    *   The section delta.
+@@ -29,7 +29,7 @@ class LcSectionManager {
+   /**
+    * Get the id of a sub section.
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage object.
+    * @param int $delta
+    *   The section delta.
+@@ -49,7 +49,7 @@ class LcSectionManager {
+   /**
+    * Check if is a sub section.
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage object.
+    * @param int $delta
+    *   The section delta.
+diff --git a/src/LcTheme.php b/src/LcTheme.php
+index 26bfe65..446f71a 100755
+--- a/src/LcTheme.php
++++ b/src/LcTheme.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\layoutcomponents;
+ 
++use Drupal\Core\Layout\LayoutDefinition;
++use Drupal\Core\Template\Attribute;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\node\Entity\Node;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -16,14 +18,14 @@ class LcTheme implements ContainerInjectionInterface {
+   /**
+    * The Layout Plugin Manager object.
+    *
+-   * @var \Drupal\Core\Layout\LayoutPluginManager
++   * @var LayoutPluginManager
+    */
+   protected $layoutPluginManager;
+ 
+   /**
+    * The Request object.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+@@ -89,7 +91,7 @@ class LcTheme implements ContainerInjectionInterface {
+         $class = $class[0];
+       }
+ 
+-      /** @var \Drupal\Core\Layout\LayoutDefinition $layout */
++      /** @var LayoutDefinition $layout */
+       $layout = $variables['content']['#layout'];
+ 
+       $suggestions[] = 'layout__layoutcomponents_base__' . $layout->id();
+@@ -126,7 +128,7 @@ class LcTheme implements ContainerInjectionInterface {
+     }
+ 
+     if ($hook == 'layoutcomponents__subregion') {
+-      /** @var \Drupal\Core\Template\Attribute $attributes */
++      /** @var Attribute $attributes */
+       $attributes = $variables['subregion']['attributes'];
+       $attributes_classes  =$attributes->getClass()->value();
+ 
+@@ -175,7 +177,7 @@ class LcTheme implements ContainerInjectionInterface {
+    *   The type of node.
+    */
+   public function getNodeFromSectionContent(array $variables) {
+-    /** @var \Drupal\Core\Layout\LayoutDefinition $layout */
++    /** @var LayoutDefinition $layout */
+     $layout = $variables['content']['#layout'];
+ 
+     $node = NULL;
+@@ -268,7 +270,7 @@ class LcTheme implements ContainerInjectionInterface {
+         str_contains($theme_registry[$theme_hook]['template'], 'layout--layoutcomponents-base--')
+       ) {
+         // Include file.
+-        $theme_registry[$theme_hook]['includes'][] = drupal_get_path('module', 'layoutcomponents') . '/layoutcomponents.theme.inc';
++        $theme_registry[$theme_hook]['includes'][] = \Drupal::service('extension.list.module')->getPath('layoutcomponents') . '/layoutcomponents.theme.inc';
+         // Set new preprocess function.
+         $theme_registry[$theme_hook]['preprocess functions'][] = '_layoutcomponents_preprocess_layout';
+         $theme_registry[$theme_hook]['base hook'] = 'layout__layoutcomponents_base';
+diff --git a/src/LcUpdateManager.php b/src/LcUpdateManager.php
+index 53bd468..da3ad08 100755
+--- a/src/LcUpdateManager.php
++++ b/src/LcUpdateManager.php
+@@ -15,32 +15,32 @@ class LcUpdateManager {
+   /**
+    * Section options.
+    *
+-   * @var \Drupal\Core\Config\CachedStorage
++   * @var CachedStorage
+    */
+   protected $configStorage;
+ 
+   /**
+    * Section options.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected $configFactory;
+ 
+   /**
+    * Section options.
+    *
+-   * @var \Drupal\Component\Uuid\UuidInterface
++   * @var UuidInterface
+    */
+   protected $uuid;
+ 
+   /**
+    * LcUpdateManager constructor.
+    *
+-   * @param \Drupal\Core\Config\CachedStorage $config_storage
++   * @param CachedStorage $config_storage
+    *   The Cached Storage service.
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   The Config factory service.
+-   * @param \Drupal\Component\Uuid\UuidInterface $uuid
++   * @param UuidInterface $uuid
+    *   The uuid service.
+    */
+   public function __construct(CachedStorage $config_storage, ConfigFactory $config_factory, UuidInterface $uuid) {
+@@ -58,7 +58,7 @@ class LcUpdateManager {
+    *   The name of module.
+    */
+   public function updateConfig(array $config_names, $module) {
+-    $config_path = drupal_get_path('module', $module) . '/config/install';
++    $config_path = \Drupal::service('extension.list.module')->getPath($module) . '/config/install';
+     $source = new FileStorage($config_path);
+ 
+     foreach ($config_names as $name) {
+diff --git a/src/Plugin/Field/FieldFormatter/LcFieldReferenceFormatter.php b/src/Plugin/Field/FieldFormatter/LcFieldReferenceFormatter.php
+index 559da7e..6b6e0ee 100755
+--- a/src/Plugin/Field/FieldFormatter/LcFieldReferenceFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/LcFieldReferenceFormatter.php
+@@ -27,28 +27,28 @@ class LcFieldReferenceFormatter extends FormatterBase implements ContainerFactor
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The alias manager.
+    *
+-   * @var \Drupal\path_alias\AliasManager
++   * @var AliasManager
+    */
+   protected $aliasManager;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The renderer service.
+    *
+-   * @var \Drupal\Core\Render\Renderer
++   * @var Renderer
+    */
+   protected $renderer;
+ 
+diff --git a/src/Plugin/Field/FieldWidget/LcFieldReferenceWidget.php b/src/Plugin/Field/FieldWidget/LcFieldReferenceWidget.php
+index f09e079..7e61222 100755
+--- a/src/Plugin/Field/FieldWidget/LcFieldReferenceWidget.php
++++ b/src/Plugin/Field/FieldWidget/LcFieldReferenceWidget.php
+@@ -34,21 +34,21 @@ class LcFieldReferenceWidget extends WidgetBase implements ContainerFactoryPlugi
+   /**
+    * The entity bundle info manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfo
++   * @var EntityTypeBundleInfo
+    */
+   protected $entityBundleInfo;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManager
++   * @var EntityFieldManager
+    */
+   protected $entityFieldManager;
+ 
+@@ -277,7 +277,7 @@ class LcFieldReferenceWidget extends WidgetBase implements ContainerFactoryPlugi
+    *
+    * @param array $form
+    *   The complete form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The FormStateInterface object.
+    */
+   public function ajaxEntityContent(array &$form, FormStateInterface &$form_state) {
+@@ -301,7 +301,7 @@ class LcFieldReferenceWidget extends WidgetBase implements ContainerFactoryPlugi
+    *
+    * @param array $form
+    *   The complete form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The FormStateInterface object.
+    */
+   public function ajaxEntityFields(array &$form, FormStateInterface &$form_state) {
+diff --git a/src/Plugin/Layout/LcBase.php b/src/Plugin/Layout/LcBase.php
+index b5be40e..33de928 100755
+--- a/src/Plugin/Layout/LcBase.php
++++ b/src/Plugin/Layout/LcBase.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\layoutcomponents\Plugin\Layout;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\layout_builder\SectionComponent;
++use Drupal\Core\Form\FormState;
++use Drupal\layoutcomponents\Form\LcUpdateColumn;
++use Drupal\layoutcomponents\Form\LcConfigureSection;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Form\SubformStateInterface;
+ use Drupal\Core\Layout\LayoutDefault;
+@@ -25,56 +30,56 @@ class LcBase extends LayoutDefault implements ContainerFactoryPluginInterface {
+   /**
+    * Layoutcomponents manager.
+    *
+-   * @var \Drupal\layoutcomponents\LcLayoutsManager
++   * @var LcLayoutsManager
+    */
+   protected $manager;
+ 
+   /**
+    * Config factory object.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected $configFactory;
+ 
+   /**
+    * Layoutcomponents manager.
+    *
+-   * @var \Drupal\layoutcomponents\Api\Text
++   * @var Text
+    */
+   protected $lcApiText;
+ 
+   /**
+    * Layoutcomponents manager.
+    *
+-   * @var \Drupal\layoutcomponents\Api\Color
++   * @var Color
+    */
+   protected $lcApiColor;
+ 
+   /**
+    * Layoutcomponents manager.
+    *
+-   * @var \Drupal\layoutcomponents\Api\Select
++   * @var Select
+    */
+   protected $lcApiSelect;
+ 
+   /**
+    * Layoutcomponents manager.
+    *
+-   * @var \Drupal\layoutcomponents\Api\Slider
++   * @var Slider
+    */
+   protected $lcApiSlider;
+ 
+   /**
+    * Layoutcomponents manager.
+    *
+-   * @var \Drupal\layoutcomponents\Api\Checkbox
++   * @var Checkbox
+    */
+   protected $lcApiCheckbox;
+ 
+   /**
+    * Layoutcomponents manager.
+    *
+-   * @var \Drupal\layoutcomponents\Api\Media
++   * @var Media
+    */
+   protected $lcApiMedia;
+ 
+@@ -113,7 +118,7 @@ class LcBase extends LayoutDefault implements ContainerFactoryPluginInterface {
+    *   Default region array.
+    */
+   protected function getRegionDefaults() {
+-    /** @var \Drupal\Core\Config\Config $lc */
++    /** @var Config $lc */
+     $lc = \Drupal::getContainer()->get('config.factory')->getEditable('layoutcomponents.column');
+ 
+     return [
+@@ -182,7 +187,7 @@ class LcBase extends LayoutDefault implements ContainerFactoryPluginInterface {
+   public function defaultConfiguration() {
+     $configuration = parent::defaultConfiguration();
+ 
+-    /** @var \Drupal\Core\Config\Config $lc */
++    /** @var Config $lc */
+     $lc = \Drupal::getContainer()->get('config.factory')->getEditable('layoutcomponents.section');
+ 
+     $configuration += [
+@@ -359,18 +364,18 @@ class LcBase extends LayoutDefault implements ContainerFactoryPluginInterface {
+   /**
+    * Provides list of region components.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   FormState object.
+    * @param string $region
+    *   Current region.
+    *
+-   * @return array|\Drupal\layout_builder\SectionComponent[]
++   * @return array|SectionComponent[]
+    *   List of region component.
+    */
+   private function getComponents(FormStateInterface $form_state, string $region) {
+-    /** @var \Drupal\Core\Form\FormState $complete_form_state */
++    /** @var FormState $complete_form_state */
+     $complete_form_state = $form_state instanceof SubformStateInterface ? $form_state->getCompleteFormState() : $form_state;
+-    /** @var \Drupal\layoutcomponents\Form\LcUpdateColumn $callback_object */
++    /** @var LcUpdateColumn $callback_object */
+     $callback_object = $complete_form_state->getBuildInfo()['callback_object'];
+     $section_storage = $callback_object->getSectionStorage();
+     $build_info = $complete_form_state->getBuildInfo();
+@@ -389,7 +394,7 @@ class LcBase extends LayoutDefault implements ContainerFactoryPluginInterface {
+    *
+    * @param array $form
+    *   The complete form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The FormStateInterface object.
+    * @param string $region
+    *   The region.
+@@ -989,7 +994,7 @@ class LcBase extends LayoutDefault implements ContainerFactoryPluginInterface {
+    *
+    * @param array $form
+    *   The complete form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The FormStateInterface object.
+    */
+   public function setAdministrativeTitle(array &$form, FormStateInterface $form_state) {
+@@ -1279,16 +1284,16 @@ class LcBase extends LayoutDefault implements ContainerFactoryPluginInterface {
+    *
+    * @param array $form
+    *   The complete form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The FormStateInterface object.
+    */
+   public function setAdminsitrativeSection(array &$form, FormStateInterface $form_state) {
+     $is_default_storage = FALSE;
+ 
+-    /** @var \Drupal\Core\Form\FormState $complete_form_state */
++    /** @var FormState $complete_form_state */
+     $complete_form_state = $form_state instanceof SubformStateInterface ? $form_state->getCompleteFormState() : $form_state;
+ 
+-    /** @var \Drupal\layoutcomponents\Form\LcConfigureSection $callback */
++    /** @var LcConfigureSection $callback */
+     $section_storage = $complete_form_state->getBuildInfo()['callback_object']->getSectionStorage();
+     if ($section_storage instanceof DefaultsSectionStorage) {
+       $is_default_storage = TRUE;

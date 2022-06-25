@@ -1,0 +1,1922 @@
+diff --git a/bynder.api.php b/bynder.api.php
+index ab3adb2..58f3c3a 100644
+--- a/bynder.api.php
++++ b/bynder.api.php
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Form\FormStateInterface;
++use Drupal\bynder\Plugin\EntityBrowser\Widget\BynderSearch;
+ /**
+  * @file
+  * Hooks related to Bynder.
+@@ -11,7 +13,6 @@ use Drupal\media\MediaInterface;
+  * @addtogroup hooks
+  * @{
+  */
+-
+ /**
+  * Alter the search query passed to the Bynder API.
+  *
+@@ -21,15 +22,15 @@ use Drupal\media\MediaInterface;
+  *
+  * @param array $query
+  *   An associative array containing the query fields and values.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state of the entity browser form.
+- * @param \Drupal\bynder\Plugin\EntityBrowser\Widget\BynderSearch $widget
++ * @param BynderSearch $widget
+  *   The entity browser widget plugin.
+  *
+  * @see hook_form_entity_browser_ENTITY_BROWSER_ID_form_alter()
+  * @see \Drupal\bynder\BynderApi::getMediaList()
+  */
+-function hook_bynder_search_query_alter(array &$query, \Drupal\Core\Form\FormStateInterface $form_state, \Drupal\bynder\Plugin\EntityBrowser\Widget\BynderSearch $widget) {
++function hook_bynder_search_query_alter(array &$query, FormStateInterface $form_state, BynderSearch $widget) {
+   if ($property_value = $form_state->getValue(['filters', 'my_property'])) {
+     $query['property_my_property'] = $property_value;
+   }
+@@ -38,7 +39,7 @@ function hook_bynder_search_query_alter(array &$query, \Drupal\Core\Form\FormSta
+ /**
+  * Allows modules to alter the media entity based on updated bynder metadata.
+  *
+- * @param \Drupal\media\MediaInterface $media
++ * @param MediaInterface $media
+  *   The media entity.
+  * @param array $item
+  *   The raw bynder metadata about the media asset.
+diff --git a/bynder.install b/bynder.install
+index 6deb3de..6c9a9ca 100644
+--- a/bynder.install
++++ b/bynder.install
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\bynder\Plugin\media\Source\Bynder;
++use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
++use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
++use Drupal\Core\Extension\ModuleExtensionList;
+ /**
+  * @file
+  * Install, uninstall and update hooks for Bynder module.
+@@ -44,7 +48,7 @@ function bynder_requirements($phase) {
+  * Implements hook_install().
+  */
+ function bynder_install() {
+-  $source = drupal_get_path('module', 'bynder') . '/images/icons';
++  $source = \Drupal::service('extension.list.module')->getPath('bynder') . '/images/icons';
+   $destination = \Drupal::config('media.settings')->get('icon_base_uri');
+   \Drupal::service('file_system')->prepareDirectory($destination, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS);
+   $files = \Drupal::service('file_system')->scanDirectory($source, '/.*\.(svg|png|jpg|jpeg|gif)$/');
+@@ -139,7 +143,7 @@ function bynder_update_8008() {
+ 
+   // Create a field instance for each of the Bynder media types.
+   foreach (\Drupal::service('bynder')->getBynderMediaTypes() as $media_type_id => $media_type) {
+-    /** @var \Drupal\bynder\Plugin\media\Source\Bynder $source */
++    /** @var Bynder $source */
+     $source = $media_type->getSource();
+     if (!$metadata_field_storage) {
+       $metadata_field_storage = $source->createMetadataFieldStorage();
+@@ -149,13 +153,13 @@ function bynder_update_8008() {
+     $metadata_field = $source->createMetadataField($media_type);
+     $metadata_field->save();
+ 
+-    /** @var \Drupal\Core\Entity\Display\EntityFormDisplayInterface $form_display */
++    /** @var EntityFormDisplayInterface $form_display */
+     $form_display = $entity_type_manager->getStorage('entity_form_display')->load("media.$media_type_id.default");
+     if ($form_display) {
+       $form_display->removeComponent(BynderMetadataItem::METADATA_FIELD_NAME)->save();
+     }
+ 
+-    /** @var \Drupal\Core\Entity\Display\EntityViewDisplayInterface $view_display */
++    /** @var EntityViewDisplayInterface $view_display */
+     $view_display = $entity_type_manager->getStorage('entity_view_display')->load("media.$media_type_id.default");
+     if ($view_display) {
+       $view_display->removeComponent(BynderMetadataItem::METADATA_FIELD_NAME)->save();
+@@ -167,7 +171,7 @@ function bynder_update_8008() {
+  * Enables the bynder_usage submodule.
+  */
+ function bynder_update_8009() {
+-  /** @var \Drupal\Core\Extension\ModuleExtensionList $module_list */
++  /** @var ModuleExtensionList $module_list */
+   $module_list = \Drupal::service('extension.list.module');
+   if ($module_list->exists('entity_usage')) {
+     \Drupal::service('module_installer')->install(['bynder_usage']);
+@@ -182,7 +186,7 @@ function bynder_update_8009() {
+  * Enables the jquery_ui_tooltip module.
+  */
+ function bynder_update_8300() {
+-  /** @var \Drupal\Core\Extension\ModuleExtensionList $module_list */
++  /** @var ModuleExtensionList $module_list */
+   $module_list = \Drupal::service('extension.list.module');
+   if ($module_list->exists('jquery_ui_tooltip')) {
+     \Drupal::service('module_installer')->install(['jquery_ui_tooltip']);
+diff --git a/bynder.module b/bynder.module
+index de57bd1..09d1261 100644
+--- a/bynder.module
++++ b/bynder.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ /**
+  * @file
+  * Provides bynder integration.
+@@ -67,7 +68,7 @@ function bynder_theme($existing, $type, $theme, $path) {
+  */
+ function bynder_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+   if ('media_bynder_edit_form' == $form_id) {
+-    /** @var \Drupal\media\MediaInterface $entity */
++    /** @var MediaInterface $entity */
+     $entity = $form_state->getBuildInfo()['callback_object']->getEntity();
+     if ($entity->getSource() instanceof Bynder && $url = bynder_media_url($entity)) {
+       $form['edit_on_bynder'] = [
+@@ -84,10 +85,10 @@ function bynder_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+ /**
+  * Returns edit link for Bynder asset.
+  *
+- * @param \Drupal\media\MediaInterface $media
++ * @param MediaInterface $media
+  *   The media entity with bynder as type provider.
+  *
+- * @return bool|\Drupal\Core\Url
++ * @return bool|Url
+  *   Returns edit link for Bynder asset or FALSE.
+  */
+ function bynder_media_url(MediaInterface $media) {
+@@ -112,7 +113,7 @@ function bynder_entity_extra_field_info() {
+   $extra = [];
+ 
+   foreach (MediaType::loadMultiple() as $type) {
+-    /** @var \Drupal\media\Entity\MediaType $type */
++    /** @var MediaType $type */
+     if ($type->getSource() instanceof Bynder) {
+       $extra['media'][$type->id()]['form']['edit_on_bynder'] = [
+         'label' => t('Edit on Bynder'),
+@@ -185,7 +186,7 @@ function bynder_get_applicable_label_translation(array $option) {
+  * @param array|false $property_options
+  *   Property options as returned from Bynder API.
+  *
+- * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++ * @return TranslatableMarkup
+  *   A label for a given restriction level.
+  */
+ function get_media_restriction($property_options) {
+@@ -240,7 +241,7 @@ function bynder_media_type_insert(MediaTypeInterface $media_type) {
+   }
+   // Create a metadata field on new Bynder media types.
+   if ($media_type->getSource() instanceof Bynder) {
+-    /** @var \Drupal\bynder\Plugin\media\Source\Bynder $source */
++    /** @var Bynder $source */
+     $source = $media_type->getSource();
+     $metadata_field_storage = FieldStorageConfig::loadByName('media', BynderMetadataItem::METADATA_FIELD_NAME);
+     if (!$metadata_field_storage) {
+@@ -263,5 +264,5 @@ function bynder_ckeditor_css_alter(array &$css, Editor $editor) {
+ 
+     // Add the bynder usage CSS so that the bynder logo is positioned over the
+     // asset on hover and is sized appropriately.
+-    $css[] = drupal_get_path('module', 'bynder') . '/css/bynder.formatter.css';
++    $css[] = \Drupal::service('extension.list.module')->getPath('bynder') . '/css/bynder.formatter.css';
+ }
+diff --git a/modules/bynder_sns/src/EventSubscriber/NotificationSubscriber.php b/modules/bynder_sns/src/EventSubscriber/NotificationSubscriber.php
+index f7303d2..f57ac5e 100644
+--- a/modules/bynder_sns/src/EventSubscriber/NotificationSubscriber.php
++++ b/modules/bynder_sns/src/EventSubscriber/NotificationSubscriber.php
+@@ -22,41 +22,41 @@ class NotificationSubscriber implements EventSubscriberInterface {
+   /**
+    * The bynder service.
+    *
+-   * @var \Drupal\bynder\BynderServiceInterface
++   * @var BynderServiceInterface
+    */
+   protected $bynder;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The logger factory.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * NotifcationSubscriber constructor.
+    *
+-   * @param \Drupal\bynder\BynderServiceInterface $bynder
++   * @param BynderServiceInterface $bynder
+    *   The bynder service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger factory.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    */
+   public function __construct(BynderServiceInterface $bynder, EntityTypeManagerInterface $entity_type_manager, LoggerChannelFactoryInterface $logger_factory, ConfigFactoryInterface $config_factory) {
+     $this->bynder = $bynder;
+diff --git a/modules/bynder_usage/src/EventSubscriber/UsageEventSubscriber.php b/modules/bynder_usage/src/EventSubscriber/UsageEventSubscriber.php
+index fa80bde..539fe21 100644
+--- a/modules/bynder_usage/src/EventSubscriber/UsageEventSubscriber.php
++++ b/modules/bynder_usage/src/EventSubscriber/UsageEventSubscriber.php
+@@ -25,7 +25,7 @@ class UsageEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Bynder api service.
+    *
+-   * @var \Drupal\bynder\BynderApiInterface
++   * @var BynderApiInterface
+    *   Bynder api service.
+    */
+   protected $bynderApi;
+@@ -33,25 +33,25 @@ class UsageEventSubscriber implements EventSubscriberInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * UsageEventSubscriber constructor.
+    *
+-   * @param \Drupal\bynder\BynderApiInterface $bynder_api_service
++   * @param BynderApiInterface $bynder_api_service
+    *   Bynder api service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+    */
+   public function __construct(BynderApiInterface $bynder_api_service, EntityTypeManagerInterface $entity_type_manager, RequestStack $request_stack) {
+@@ -73,7 +73,7 @@ class UsageEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Returns the remote media ID.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   The media to get the remote ID for.
+    *
+    * @return mixed|null
+@@ -91,10 +91,10 @@ class UsageEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Returns the canonical URL for the given entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The source entity.
+    *
+-   * @return \Drupal\Core\Url|null
++   * @return Url|null
+    *   The absolute URL of the given entity.
+    */
+   protected function getEntityUrl(EntityInterface $entity) {
+@@ -121,7 +121,7 @@ class UsageEventSubscriber implements EventSubscriberInterface {
+       return NULL;
+     }
+ 
+-    /** @var \Drupal\media\MediaInterface $media */
++    /** @var MediaInterface $media */
+     $media = $this->entityTypeManager->getStorage('media')
+       ->load($event->getTargetEntityId());
+     if (!isset($media)) {
+@@ -258,7 +258,7 @@ class UsageEventSubscriber implements EventSubscriberInterface {
+    */
+   public function onDeleteByTargetEntity(EntityUsageEvent $event) {
+     if ($event->getTargetEntityType() === 'media') {
+-      /** @var \Drupal\media\MediaInterface $media */
++      /** @var MediaInterface $media */
+       $media = $this->entityTypeManager->getStorage('media')->load($event->getTargetEntityId());
+       if ($media) {
+         $remote_id = $this->getRemoteMediaId($media);
+diff --git a/modules/lightning/bynder_lightning.install b/modules/lightning/bynder_lightning.install
+index a1d9e07..0a0b9ef 100644
+--- a/modules/lightning/bynder_lightning.install
++++ b/modules/lightning/bynder_lightning.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\entity_browser\Entity\EntityBrowser;
+ /**
+  * @file
+  * Install, uninstall and update hooks for Bynder Lighting module.
+@@ -35,7 +36,7 @@ function bynder_lightning_install() {
+     return;
+   }
+ 
+-  /** @var \Drupal\entity_browser\Entity\EntityBrowser $browser */
++  /** @var EntityBrowser $browser */
+   $browser = \Drupal::entityTypeManager()->getStorage('entity_browser')->load(
+     'media_browser'
+   );
+diff --git a/src/BynderApi.php b/src/BynderApi.php
+index 3c28a7e..dacbee7 100644
+--- a/src/BynderApi.php
++++ b/src/BynderApi.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bynder;
+ 
++use Drupal\Core\Logger\LoggerChannelFactory;
+ use Bynder\Api\BynderClient;
+ use Bynder\Api\Impl\PermanentTokens\Configuration;
+ use Drupal\Component\Datetime\TimeInterface;
+@@ -70,7 +71,7 @@ class BynderApi implements BynderApiInterface {
+   /**
+    * Bynder Api instance.
+    *
+-   * @var \Bynder\Api\BynderClient
++   * @var BynderClient
+    */
+   protected $bynderApi;
+ 
+@@ -87,66 +88,66 @@ class BynderApi implements BynderApiInterface {
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The logger factory.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactory
++   * @var LoggerChannelFactory
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * The active session.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Session\SessionInterface
++   * @var SessionInterface
+    */
+   protected $session;
+ 
+   /**
+    * The state service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The cache service.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cache;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface $time
++   * @var TimeInterface $time
+    */
+   protected $time;
+ 
+   /**
+    * The configuration object.
+    *
+-   * @var \Bynder\Api\Impl\PermanentTokens\Configuration|\Bynder\Api\Impl\OAuth2\Configuration
++   * @var Configuration|\Bynder\Api\Impl\OAuth2\Configuration
+    */
+   protected $bynderConfiguration;
+ 
+   /**
+    * BynderApi constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   Logger factory.
+-   * @param \Symfony\Component\HttpFoundation\Session\SessionInterface $session
++   * @param SessionInterface $session
+    *   The session service.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state service.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
++   * @param CacheBackendInterface $cache
+    *   The cache service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+    */
+   public function __construct(
+diff --git a/src/BynderApiInterface.php b/src/BynderApiInterface.php
+index fc500aa..7a938a4 100644
+--- a/src/BynderApiInterface.php
++++ b/src/BynderApiInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\bynder;
+ 
++use Bynder\Api\Impl\AssetBankManager;
++use Drupal\Core\Url;
+ /**
+  * Provides Drupal 8 Bynder API.
+  *
+@@ -12,7 +14,7 @@ interface BynderApiInterface {
+   /**
+    * Gets an instance of the asset bank manager to use for DAM queries.
+    *
+-   * @return \Bynder\Api\Impl\AssetBankManager
++   * @return AssetBankManager
+    *   An instance of the asset bank manager using the request handler.
+    */
+   public function getAssetBankManager();
+@@ -25,7 +27,7 @@ interface BynderApiInterface {
+    *
+    * @see ::finishOAuthTokenRetrieval()
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   Url to redirect the user to.
+    */
+   public function initiateOAuthTokenRetrieval();
+@@ -70,19 +72,19 @@ interface BynderApiInterface {
+   public function setBynderConfiguration(array $config);
+ 
+   /**
+-  * Creates an asset usage entry in Bynder.
+-  *
+-  * @param string $asset_id
+-  *    Bynder asset ID.
+-  * @param \Drupal\Core\Url $usage_url
+-  *    Url where the asset is being used (node url).
+-  * @param string $creation_date
+-  *    Date the asset was added to the page, in the DATE_ISO8601 format.
+-  * @param string $additional_info
+-  *    Any additional info to be displayed with the entry information.
+-  *
+-  * @return mixed
+-  */
++   * Creates an asset usage entry in Bynder.
++   *
++   * @param string $asset_id
++   *    Bynder asset ID.
++   * @param Url $usage_url
++   *    Url where the asset is being used (node url).
++   * @param string $creation_date
++   *    Date the asset was added to the page, in the DATE_ISO8601 format.
++   * @param string $additional_info
++   *    Any additional info to be displayed with the entry information.
++   *
++   * @return mixed
++   */
+   public function addAssetUsage($asset_id, $usage_url, $creation_date, $additional_info = null);
+ 
+ 
+diff --git a/src/BynderService.php b/src/BynderService.php
+index b7d52e1..8264b13 100644
+--- a/src/BynderService.php
++++ b/src/BynderService.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\bynder;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\media\MediaTypeInterface;
++use Drupal\media\MediaInterface;
+ use Drupal\bynder\Plugin\Field\FieldType\BynderMetadataItem;
+ use Drupal\bynder\Plugin\media\Source\Bynder;
+ use Drupal\Component\Datetime\TimeInterface;
+@@ -36,75 +40,75 @@ class BynderService implements BynderServiceInterface {
+   /**
+    * The Bynder API.
+    *
+-   * @var \Drupal\bynder\BynderApi
++   * @var BynderApi
+    */
+   protected $bynderApi;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The logger.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The state service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The media storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $mediaStorage;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * BynderMetadataService constructor.
+    *
+-   * @param \Drupal\bynder\BynderApiInterface $bynder_api
++   * @param BynderApiInterface $bynder_api
+    *   The Bynder API service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   Logger factory.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(BynderApiInterface $bynder_api, EntityTypeManagerInterface $entity_type_manager, LoggerChannelFactoryInterface $logger_factory, StateInterface $state, TimeInterface $time, ConfigFactoryInterface $config_factory, ModuleHandlerInterface $module_handler = NULL) {
+@@ -123,7 +127,7 @@ class BynderService implements BynderServiceInterface {
+    */
+   public function getBynderMediaTypes() {
+     $bynder_media_types = [];
+-    /** @var \Drupal\media\MediaTypeInterface $media_type */
++    /** @var MediaTypeInterface $media_type */
+     foreach ($this->entityTypeManager->getStorage('media_type')->loadMultiple() as $media_type_id => $media_type) {
+       if ($media_type->getSource() instanceof Bynder) {
+         $bynder_media_types[$media_type_id] = $media_type;
+@@ -208,7 +212,7 @@ class BynderService implements BynderServiceInterface {
+ 
+     $media_ids = $query->execute();
+ 
+-    /** @var \Drupal\media\MediaInterface[] $media_entities */
++    /** @var MediaInterface[] $media_entities */
+     $media_entities = $this->mediaStorage->loadMultiple($media_ids);
+ 
+     $bynder_media_entities = [];
+@@ -265,7 +269,7 @@ class BynderService implements BynderServiceInterface {
+     $updated_entities = [];
+     foreach ($media_list as $index => $item) {
+       $media_entity = $bynder_media_entities[$item['id']];
+-      /** @var \Drupal\bynder\Plugin\media\Source\Bynder $source */
++      /** @var Bynder $source */
+       $source = $media_entity->getSource();
+       $remote_metadata = $source->filterRemoteMetadata($item);
+ 
+diff --git a/src/BynderServiceInterface.php b/src/BynderServiceInterface.php
+index 33fadd4..0b218cb 100644
+--- a/src/BynderServiceInterface.php
++++ b/src/BynderServiceInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\bynder;
+ 
++use Drupal\media\MediaTypeInterface;
++use Drupal\media\MediaInterface;
+ /**
+  * Provides methods to manage the Bynder module.
+  */
+@@ -17,7 +19,7 @@ interface BynderServiceInterface {
+   /**
+    * Returns the Bynder media types.
+    *
+-   * @return \Drupal\media\MediaTypeInterface[]
++   * @return MediaTypeInterface[]
+    *   A list of Bynder media types.
+    */
+   public function getBynderMediaTypes();
+@@ -50,11 +52,11 @@ interface BynderServiceInterface {
+   /**
+    * Updates a set of media entities based on the remote metadata information.
+    *
+-   * @param \Drupal\media\MediaInterface[] $bynder_media_entities
++   * @param MediaInterface[] $bynder_media_entities
+    *   A list of media entities with a bynder source, keyed by the bynder ID,
+    *   updates entities are removed from the list.
+    *
+-   * @return \Drupal\media\MediaInterface[]
++   * @return MediaInterface[]
+    *   A list of updated media entities.
+    */
+   public function updateMediaEntities(array &$bynder_media_entities);
+diff --git a/src/Controller/BynderMediaUsage.php b/src/Controller/BynderMediaUsage.php
+index 9113526..be26b1e 100644
+--- a/src/Controller/BynderMediaUsage.php
++++ b/src/Controller/BynderMediaUsage.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\bynder\Controller;
+ 
++use Drupal\node\NodeInterface;
++use Drupal\media\MediaTypeInterface;
++use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
++use Drupal\media\Entity\Media;
+ use Drupal\bynder\BynderApiInterface;
+ use Drupal\bynder\Plugin\media\Source\Bynder;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -20,32 +24,32 @@ class BynderMediaUsage extends ControllerBase {
+   /**
+    * The Bynder API service.
+    *
+-   * @var \Drupal\bynder\BynderApiInterface
++   * @var BynderApiInterface
+    */
+   protected $bynder;
+ 
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Renderer object.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * Constructs a BynderMediaUsage class instance.
+    *
+-   * @param \Drupal\bynder\BynderApiInterface $bynder
++   * @param BynderApiInterface $bynder
+    *   The Bynder API service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer_object
++   * @param RendererInterface $renderer_object
+    *   Renderer object.
+    */
+   public function __construct(BynderApiInterface $bynder, ConfigFactoryInterface $config_factory, RendererInterface $renderer_object) {
+@@ -68,18 +72,18 @@ class BynderMediaUsage extends ControllerBase {
+   /**
+    * The Bynder media usage info.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   Represents an HTTP request.
+    *
+    * @return mixed
+    *   Bynder media usage list.
+    */
+   public function bynderMediaInfo(Request $request) {
+-    /** @var \Drupal\node\NodeInterface $node */
++    /** @var NodeInterface $node */
+     $node = $this->entityTypeManager()->getStorage('node')->load($request->attributes->get('node'));
+     $media_types = $this->entityTypeManager()->getStorage('media_type')->loadMultiple();
+     $bynder_types = array_filter($media_types, function ($type) {
+-      /** @var \Drupal\media\MediaTypeInterface $type */
++      /** @var MediaTypeInterface $type */
+       return $type->getSource() instanceof Bynder;
+     });
+     $entity_reference_fields = array_filter($node->getFields(), function ($field) {
+@@ -94,9 +98,9 @@ class BynderMediaUsage extends ControllerBase {
+     $rows = [];
+     $entities = [];
+ 
+-    /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface $field */
++    /** @var EntityReferenceFieldItemListInterface $field */
+     foreach ($entity_reference_fields as $field) {
+-      /** @var \Drupal\media\Entity\Media $entity */
++      /** @var Media $entity */
+       foreach ($field->referencedEntities() as $entity) {
+         if (in_array($entity->bundle(), array_keys($bynder_types))) {
+           $entities[] = $entity;
+diff --git a/src/Controller/BynderOAuthLogin.php b/src/Controller/BynderOAuthLogin.php
+index 065bd2f..36f70ca 100644
+--- a/src/Controller/BynderOAuthLogin.php
++++ b/src/Controller/BynderOAuthLogin.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\bynder\Controller;
+ 
++use Drupal\Core\Access\AccessResultInterface;
++use Drupal\entity_browser\Entity\EntityBrowser;
+ use Drupal\bynder\BynderApiInterface;
+ use Drupal\bynder\Exception\UnableToConnectException;
+ use Drupal\bynder\Plugin\EntityBrowser\Widget\BynderSearch;
+@@ -24,23 +26,23 @@ class BynderOAuthLogin extends ControllerBase {
+   /**
+    * The Bynder API service.
+    *
+-   * @var \Drupal\bynder\BynderApiInterface
++   * @var BynderApiInterface
+    */
+   protected $bynder;
+ 
+   /**
+    * The logger factory service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Constructs a BynderOAuthLogin class instance.
+    *
+-   * @param \Drupal\bynder\BynderApiInterface $bynder
++   * @param BynderApiInterface $bynder
+    *   The Bynder API service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger
++   * @param LoggerChannelFactoryInterface $logger
+    *   The logger factory service.
+    */
+   public function __construct(BynderApiInterface $bynder, LoggerChannelFactoryInterface $logger) {
+@@ -88,10 +90,10 @@ class BynderOAuthLogin extends ControllerBase {
+   /**
+    * Checks access to oAuth login.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Run access checks for this account.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   Access result.
+    */
+   public function access(AccountInterface $account) {
+@@ -100,7 +102,7 @@ class BynderOAuthLogin extends ControllerBase {
+     }
+ 
+     $browsers = $this->entityTypeManager()->getStorage('entity_browser')->loadMultiple();
+-    /** @var \Drupal\entity_browser\Entity\EntityBrowser $browser */
++    /** @var EntityBrowser $browser */
+     foreach ($browsers as $browser) {
+       if ($account->hasPermission('access ' . $browser->id() . ' entity browser pages')) {
+         foreach ($browser->getWidgets() as $widget) {
+diff --git a/src/Controller/BynderTagSearchService.php b/src/Controller/BynderTagSearchService.php
+index 1114300..650af87 100644
+--- a/src/Controller/BynderTagSearchService.php
++++ b/src/Controller/BynderTagSearchService.php
+@@ -23,23 +23,23 @@ class BynderTagSearchService extends ControllerBase {
+   /**
+    * The Bynder API service.
+    *
+-   * @var \Drupal\bynder\BynderApiInterface
++   * @var BynderApiInterface
+    */
+   protected $bynder;
+ 
+   /**
+    * The logger factory service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Constructs a BynderTagSearchService class instance.
+    *
+-   * @param \Drupal\bynder\BynderApiInterface $bynder
++   * @param BynderApiInterface $bynder
+    *   The Bynder API service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger
++   * @param LoggerChannelFactoryInterface $logger
+    *   The logger factory service.
+    */
+   public function __construct(BynderApiInterface $bynder, LoggerChannelFactoryInterface $logger) {
+diff --git a/src/EventSubscriber/BynderConfigHashGenerator.php b/src/EventSubscriber/BynderConfigHashGenerator.php
+index 6db5c5a..f9cca3c 100644
+--- a/src/EventSubscriber/BynderConfigHashGenerator.php
++++ b/src/EventSubscriber/BynderConfigHashGenerator.php
+@@ -17,14 +17,14 @@ class BynderConfigHashGenerator implements EventSubscriberInterface {
+   /**
+    * The state service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * Constructs a BynderConfigHashGenerator object.
+    *
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state service.
+    */
+   public function __construct(StateInterface $state) {
+@@ -34,7 +34,7 @@ class BynderConfigHashGenerator implements EventSubscriberInterface {
+   /**
+    * Generates hash based on active Bynder config and saves it into state.
+    *
+-   * @param \Drupal\Core\Config\ConfigCrudEvent $event
++   * @param ConfigCrudEvent $event
+    *   The Event to process.
+    */
+   public function onChange(ConfigCrudEvent $event) {
+diff --git a/src/Form/BynderConfigurationForm.php b/src/Form/BynderConfigurationForm.php
+index a8210a4..cd8fb74 100644
+--- a/src/Form/BynderConfigurationForm.php
++++ b/src/Form/BynderConfigurationForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bynder\Form;
+ 
++use Drupal\bynder\BynderService;
+ use Drupal\bynder\BynderApiInterface;
+ use Drupal\Core\Ajax\AjaxResponse;
+ use Drupal\Core\Ajax\ReplaceCommand;
+@@ -22,7 +23,7 @@ class BynderConfigurationForm extends ConfigFormBase {
+   /**
+    * Bynder api service.
+    *
+-   * @var \Drupal\bynder\BynderApiInterface
++   * @var BynderApiInterface
+    *   Bynder api service.
+    */
+   protected $bynder;
+@@ -30,14 +31,14 @@ class BynderConfigurationForm extends ConfigFormBase {
+   /**
+    * The renderer service.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -58,13 +59,13 @@ class BynderConfigurationForm extends ConfigFormBase {
+   /**
+    * Constructs a BynderConfigurationForm object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\bynder\BynderApiInterface $bynder
++   * @param BynderApiInterface $bynder
+    *   The Bynder API service.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, BynderApiInterface $bynder, RendererInterface $renderer, ModuleHandlerInterface $module_handler) {
+@@ -445,7 +446,7 @@ class BynderConfigurationForm extends ConfigFormBase {
+    *   The context array.
+    */
+   public static function updateMetadataBatchWorker(array &$context) {
+-    /** @var \Drupal\bynder\BynderService $bynder */
++    /** @var BynderService $bynder */
+     $bynder = \Drupal::service('bynder');
+ 
+     if (empty($context['sandbox']['total'])) {
+diff --git a/src/Plugin/EntityBrowser/Widget/BynderSearch.php b/src/Plugin/EntityBrowser/Widget/BynderSearch.php
+index 78839ae..d1d1a75 100644
+--- a/src/Plugin/EntityBrowser/Widget/BynderSearch.php
++++ b/src/Plugin/EntityBrowser/Widget/BynderSearch.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bynder\Plugin\EntityBrowser\Widget;
+ 
++use Drupal\media\MediaTypeInterface;
+ use Drupal\bynder\Exception\BundleNotBynderException;
+ use Drupal\bynder\Exception\BundleNotExistException;
+ use Drupal\bynder\Plugin\media\Source\Bynder;
+@@ -41,7 +42,7 @@ class BynderSearch extends BynderWidgetBase {
+     $form['submit_text']['#access'] = FALSE;
+ 
+     foreach ($this->entityTypeManager->getStorage('media_type')->loadMultiple() as $type) {
+-      /** @var \Drupal\media\MediaTypeInterface $type */
++      /** @var MediaTypeInterface $type */
+       if ($type->getSource() instanceof Bynder) {
+         $form['media_type']['#options'][$type->id()] = $type->label();
+       }
+@@ -102,7 +103,7 @@ class BynderSearch extends BynderWidgetBase {
+     $image_source_field = NULL;
+     $source_fields = [];
+     if ($this->configuration['media_type']) {
+-      /** @var \Drupal\media\MediaTypeInterface $image_type */
++      /** @var MediaTypeInterface $image_type */
+       $image_type = $this->entityTypeManager->getStorage('media_type')
+         ->load($this->configuration['media_type']);
+       $image_source_field = $image_type->getSource()->getConfiguration()['source_field'];
+@@ -112,7 +113,7 @@ class BynderSearch extends BynderWidgetBase {
+     $document_type = NULL;
+     $document_source_field = NULL;
+     if ($this->configuration['media_type_document']) {
+-      /** @var \Drupal\media\MediaTypeInterface $document_type */
++      /** @var MediaTypeInterface $document_type */
+       $document_type = $this->entityTypeManager->getStorage('media_type')
+         ->load($this->configuration['media_type_document']);
+       $document_source_field = $document_type->getSource()->getConfiguration()['source_field'];
+@@ -124,7 +125,7 @@ class BynderSearch extends BynderWidgetBase {
+     $video_type = NULL;
+     $video_source_field = NULL;
+     if ($this->configuration['media_type_video']) {
+-      /** @var \Drupal\media\MediaTypeInterface $video_type */
++      /** @var MediaTypeInterface $video_type */
+       $video_type = $this->entityTypeManager->getStorage('media_type')
+         ->load($this->configuration['media_type_video']);
+       $video_source_field = $video_type->getSource()->getConfiguration()['source_field'];
+@@ -238,7 +239,7 @@ class BynderSearch extends BynderWidgetBase {
+       return TRUE;
+     }
+     if ($this->configuration['media_type_document']) {
+-      /** @var \Drupal\media\MediaTypeInterface $type */
++      /** @var MediaTypeInterface $type */
+       $type = $this->entityTypeManager->getStorage('media_type')
+         ->load($this->configuration['media_type_document']);
+ 
+@@ -256,7 +257,7 @@ class BynderSearch extends BynderWidgetBase {
+       return TRUE;
+     }
+     if ($this->configuration['media_type_video']) {
+-      /** @var \Drupal\media\MediaTypeInterface $type */
++      /** @var MediaTypeInterface $type */
+       $type = $this->entityTypeManager->getStorage('media_type')
+         ->load($this->configuration['media_type_video']);
+ 
+diff --git a/src/Plugin/EntityBrowser/Widget/BynderUpload.php b/src/Plugin/EntityBrowser/Widget/BynderUpload.php
+index c0ebe65..003732b 100644
+--- a/src/Plugin/EntityBrowser/Widget/BynderUpload.php
++++ b/src/Plugin/EntityBrowser/Widget/BynderUpload.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\bynder\Plugin\EntityBrowser\Widget;
+ 
++use Drupal\media\MediaTypeInterface;
++use Drupal\Core\File\FileSystemInterface;
+ use Drupal\bynder\BynderApiInterface;
+ use Drupal\bynder\Exception\BrandNotSetException;
+ use Drupal\bynder\Exception\BundleNotBynderException;
+@@ -50,7 +52,7 @@ class BynderUpload extends BynderWidgetBase {
+   /**
+    * The session service.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Session\SessionInterface
++   * @var SessionInterface
+    */
+   protected $session;
+ 
+@@ -63,23 +65,23 @@ class BynderUpload extends BynderWidgetBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   Event dispatcher service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\entity_browser\WidgetValidationManager $validation_manager
++   * @param WidgetValidationManager $validation_manager
+    *   The Widget Validation Manager service.
+-   * @param \Drupal\bynder\BynderApiInterface $bynder_api
++   * @param BynderApiInterface $bynder_api
+    *   Bynder API service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   Logger factory.
+-   * @param \Symfony\Component\HttpFoundation\Session\SessionInterface $session
++   * @param SessionInterface $session
+    *   The session service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EventDispatcherInterface $event_dispatcher, EntityTypeManagerInterface $entity_type_manager, WidgetValidationManager $validation_manager, BynderApiInterface $bynder_api, ConfigFactoryInterface $config_factory, LoggerChannelFactoryInterface $logger_factory, SessionInterface $session, LanguageManagerInterface $language_manager, RequestStack $request_stack) {
+@@ -220,7 +222,7 @@ class BynderUpload extends BynderWidgetBase {
+    */
+   public function submit(array &$element, array &$form, FormStateInterface $form_state) {
+     if (!empty($form_state->getTriggeringElement()['#bynder_upload_submit'])) {
+-      /** @var \Drupal\media\MediaTypeInterface $type */
++      /** @var MediaTypeInterface $type */
+       $type = $this->entityTypeManager->getStorage('media_type')
+         ->load($this->configuration['media_type']);
+ 
+@@ -311,7 +313,7 @@ class BynderUpload extends BynderWidgetBase {
+    */
+   public static function batchUploadFiles($file, $brand, $description, $tags, $metaproperty_options, &$context) {
+     try {
+-      /** @var \Drupal\Core\File\FileSystemInterface $file_system */
++      /** @var FileSystemInterface $file_system */
+       $file_system = \Drupal::service('file_system');
+       $data = [
+         'filePath' => $file_system->realpath($file['path']),
+@@ -421,7 +423,7 @@ class BynderUpload extends BynderWidgetBase {
+    *
+    * @param array $element
+    *   Upload form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state object.
+    */
+   protected function clearFormValues(array &$element, FormStateInterface $form_state) {
+@@ -437,7 +439,7 @@ class BynderUpload extends BynderWidgetBase {
+     $form = parent::buildConfigurationForm($form, $form_state);
+ 
+     foreach ($this->entityTypeManager->getStorage('media_type')->loadMultiple() as $type) {
+-      /** @var \Drupal\media\MediaTypeInterface $type */
++      /** @var MediaTypeInterface $type */
+       if ($type->getSource() instanceof Bynder) {
+         $form['media_type']['#options'][$type->id()] = $type->label();
+       }
+diff --git a/src/Plugin/EntityBrowser/Widget/BynderWidgetBase.php b/src/Plugin/EntityBrowser/Widget/BynderWidgetBase.php
+index 8fe5f92..a0b8272 100644
+--- a/src/Plugin/EntityBrowser/Widget/BynderWidgetBase.php
++++ b/src/Plugin/EntityBrowser/Widget/BynderWidgetBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\bynder\Plugin\EntityBrowser\Widget;
+ 
++use Drupal\Core\Logger\LoggerChannelFactory;
++use Drupal\media\MediaTypeInterface;
+ use Drupal\bynder\BynderApiInterface;
+ use Drupal\bynder\Exception\BundleNotBynderException;
+ use Drupal\bynder\Exception\BundleNotExistException;
+@@ -26,35 +28,35 @@ abstract class BynderWidgetBase extends WidgetBase {
+   /**
+    * Bynder API service.
+    *
+-   * @var \Drupal\bynder\BynderApiInterface
++   * @var BynderApiInterface
+    */
+   protected $bynderApi;
+ 
+   /**
+    * The logger factory.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactory
++   * @var LoggerChannelFactory
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $config;
+ 
+@@ -67,21 +69,21 @@ abstract class BynderWidgetBase extends WidgetBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   Event dispatcher service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\entity_browser\WidgetValidationManager $validation_manager
++   * @param WidgetValidationManager $validation_manager
+    *   The Widget Validation Manager service.
+-   * @param \Drupal\bynder\BynderApiInterface $bynder_api
++   * @param BynderApiInterface $bynder_api
+    *   Bynder API service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   Logger factory.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EventDispatcherInterface $event_dispatcher, EntityTypeManagerInterface $entity_type_manager, WidgetValidationManager $validation_manager, BynderApiInterface $bynder_api, LoggerChannelFactoryInterface $logger_factory, LanguageManagerInterface $language_manager, RequestStack $request_stack, ConfigFactoryInterface $config_factory) {
+@@ -170,7 +172,7 @@ abstract class BynderWidgetBase extends WidgetBase {
+    */
+   protected function checkType() {
+     if ($this->configuration['media_type']) {
+-      /** @var \Drupal\media\MediaTypeInterface $type */
++      /** @var MediaTypeInterface $type */
+       $type = $this->entityTypeManager->getStorage('media_type')
+         ->load($this->configuration['media_type']);
+ 
+diff --git a/src/Plugin/Field/FieldFormatter/BynderDocumentFormatter.php b/src/Plugin/Field/FieldFormatter/BynderDocumentFormatter.php
+index 570828f..34672c0 100644
+--- a/src/Plugin/Field/FieldFormatter/BynderDocumentFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/BynderDocumentFormatter.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bynder\Plugin\Field\FieldFormatter;
+ 
++use Drupal\media\MediaInterface;
+ use Drupal\bynder\Plugin\media\Source\Bynder;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -81,7 +82,7 @@ class BynderDocumentFormatter extends BynderFormatterBase implements ContainerFa
+ 
+     foreach ($items as $delta => $item) {
+ 
+-      /** @var \Drupal\media\MediaInterface $media */
++      /** @var MediaInterface $media */
+       $media = $is_entityreference ? $item->entity : $items->getEntity();
+       if (!$media) {
+         continue;
+diff --git a/src/Plugin/Field/FieldFormatter/BynderFormatter.php b/src/Plugin/Field/FieldFormatter/BynderFormatter.php
+index c209c3d..de1241f 100644
+--- a/src/Plugin/Field/FieldFormatter/BynderFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/BynderFormatter.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\bynder\Plugin\Field\FieldFormatter;
+ 
++use Drupal\Core\Entity\EntityRepositoryInterface;
++use Drupal\media\MediaInterface;
++use Drupal\media\MediaSourceInterface;
+ use Drupal\bynder\Plugin\media\Source\Bynder;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Field\FieldItemListInterface;
+@@ -25,7 +28,7 @@ class BynderFormatter extends BynderFormatterBase implements ContainerFactoryPlu
+   /**
+    * The entity repository service.
+    *
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface;
++   * @var EntityRepositoryInterface ;
+    */
+   protected $entityRepository;
+ 
+@@ -190,11 +193,11 @@ class BynderFormatter extends BynderFormatterBase implements ContainerFactoryPlu
+     $is_entityreference = $this->fieldDefinition->getType() == 'entity_reference';
+ 
+     foreach ($items as $delta => $item) {
+-      /** @var \Drupal\media\MediaInterface $media_entity */
++      /** @var MediaInterface $media_entity */
+       if ($media_entity = $is_entityreference ? $item->entity : $items->getEntity()) {
+-        /** @var \Drupal\media\MediaInterface $media_entity */
++        /** @var MediaInterface $media_entity */
+         $media_entity = $this->entityRepository->getTranslationFromContext($media_entity, $langcode);
+-        /** @var \Drupal\media\MediaSourceInterface $source_plugin */
++        /** @var MediaSourceInterface $source_plugin */
+         $source_plugin = $media_entity->getSource();
+         if ($source_plugin instanceof Bynder && ($thumbnails = $source_plugin->getMetadata($media_entity, 'thumbnail_urls'))) {
+           $element['#attached']['library'][] = 'bynder/formatter';
+diff --git a/src/Plugin/Field/FieldFormatter/BynderFormatterBase.php b/src/Plugin/Field/FieldFormatter/BynderFormatterBase.php
+index d5f7012..8ccb5b3 100644
+--- a/src/Plugin/Field/FieldFormatter/BynderFormatterBase.php
++++ b/src/Plugin/Field/FieldFormatter/BynderFormatterBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bynder\Plugin\Field\FieldFormatter;
+ 
++use Drupal\media\MediaTypeInterface;
+ use Drupal\bynder\BynderApiInterface;
+ use Drupal\bynder\Plugin\media\Source\Bynder;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -23,42 +24,42 @@ abstract class BynderFormatterBase extends FormatterBase implements ContainerFac
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The Bynder API service.
+    *
+-   * @var \Drupal\bynder\BynderApiInterface
++   * @var BynderApiInterface
+    */
+   protected $bynder;
+ 
+   /**
+    * Renderer object.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The entity field manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -69,7 +70,7 @@ abstract class BynderFormatterBase extends FormatterBase implements ContainerFac
+    *   The plugin_id for the formatter.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The definition of the field to which the formatter is associated.
+    * @param array $settings
+    *   The formatter settings.
+@@ -79,17 +80,17 @@ abstract class BynderFormatterBase extends FormatterBase implements ContainerFac
+    *   The view mode.
+    * @param array $third_party_settings
+    *   Any third party settings.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   The current user.
+-   * @param \Drupal\bynder\BynderApiInterface $bynder
++   * @param BynderApiInterface $bynder
+    *   The Bynder API service.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer_object
++   * @param RendererInterface $renderer_object
+    *   Renderer object.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, $label, $view_mode, array $third_party_settings, ConfigFactoryInterface $config_factory, AccountProxyInterface $current_user, BynderApiInterface $bynder, RendererInterface $renderer_object, EntityFieldManagerInterface $entity_field_manager, EntityTypeManagerInterface $entity_type_manager) {
+@@ -141,7 +142,7 @@ abstract class BynderFormatterBase extends FormatterBase implements ContainerFac
+     $bundles = [];
+     if ($handler_settings && is_array($handler_settings['target_bundles'])) {
+       foreach ($handler_settings['target_bundles'] as $bundle) {
+-        /** @var \Drupal\media\MediaTypeInterface $type */
++        /** @var MediaTypeInterface $type */
+         $type = $this->entityTypeManager->getStorage('media_type')->load($bundle);
+         if ($type && ($type->getSource() instanceof Bynder)) {
+           $bundles[] = $type;
+@@ -149,7 +150,7 @@ abstract class BynderFormatterBase extends FormatterBase implements ContainerFac
+       }
+     }
+     else {
+-      /** @var \Drupal\media\MediaTypeInterface $type */
++      /** @var MediaTypeInterface $type */
+       foreach ($this->entityTypeManager->getStorage('media_type')->loadMultiple() as $type) {
+         if ($type && ($type->getSource() instanceof Bynder)) {
+           $bundles[] = $type;
+@@ -182,7 +183,7 @@ abstract class BynderFormatterBase extends FormatterBase implements ContainerFac
+           }
+           elseif (is_array($handler_settings['target_bundles'])) {
+             foreach ($handler_settings['target_bundles'] as $bundle) {
+-              /** @var \Drupal\media\MediaTypeInterface $type */
++              /** @var MediaTypeInterface $type */
+               $type = \Drupal::entityTypeManager()->getStorage('media_type')->load($bundle);
+               if ($type->getSource() instanceof Bynder) {
+                 return TRUE;
+@@ -204,7 +205,7 @@ abstract class BynderFormatterBase extends FormatterBase implements ContainerFac
+         return FALSE;
+       }
+ 
+-      /** @var \Drupal\media\MediaTypeInterface $type_entity */
++      /** @var MediaTypeInterface $type_entity */
+       if (!($type_entity = $field_definition->getTargetBundle()) || !($type_entity = MediaType::load($field_definition->getTargetBundle()))) {
+         return FALSE;
+       }
+diff --git a/src/Plugin/Field/FieldFormatter/BynderVideoFormatter.php b/src/Plugin/Field/FieldFormatter/BynderVideoFormatter.php
+index 4424f07..2a050f5 100644
+--- a/src/Plugin/Field/FieldFormatter/BynderVideoFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/BynderVideoFormatter.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bynder\Plugin\Field\FieldFormatter;
+ 
++use Drupal\media\MediaInterface;
+ use Drupal\bynder\Plugin\media\Source\Bynder;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Field\FieldItemListInterface;
+@@ -109,7 +110,7 @@ class BynderVideoFormatter extends BynderFormatterBase implements ContainerFacto
+ 
+     foreach ($items as $delta => $item) {
+ 
+-      /** @var \Drupal\media\MediaInterface $media */
++      /** @var MediaInterface $media */
+       $media = $is_entityreference ? $item->entity : $items->getEntity();
+       if (!$media) {
+         continue;
+diff --git a/src/Plugin/QueueWorker/BynderTestImageRemove.php b/src/Plugin/QueueWorker/BynderTestImageRemove.php
+index f230f83..d09f664 100644
+--- a/src/Plugin/QueueWorker/BynderTestImageRemove.php
++++ b/src/Plugin/QueueWorker/BynderTestImageRemove.php
+@@ -30,7 +30,7 @@ class BynderTestImageRemove extends QueueWorkerBase implements ContainerFactoryP
+   /**
+    * Bynder api service.
+    *
+-   * @var \Drupal\bynder\BynderApiInterface
++   * @var BynderApiInterface
+    *   Bynder api service.
+    */
+   protected $bynder;
+@@ -38,7 +38,7 @@ class BynderTestImageRemove extends QueueWorkerBase implements ContainerFactoryP
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+@@ -51,9 +51,9 @@ class BynderTestImageRemove extends QueueWorkerBase implements ContainerFactoryP
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\bynder\BynderApiInterface $bynder
++   * @param BynderApiInterface $bynder
+    *   The Bynder API service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+    */
+   public function __construct(
+diff --git a/src/Plugin/media/Source/Bynder.php b/src/Plugin/media/Source/Bynder.php
+index c43dd83..5265231 100644
+--- a/src/Plugin/media/Source/Bynder.php
++++ b/src/Plugin/media/Source/Bynder.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\bynder\Plugin\media\Source;
+ 
++use Drupal\field\FieldStorageConfigInterface;
++use Drupal\field\FieldConfigInterface;
+ use Drupal\bynder\BynderApiInterface;
+ use Drupal\bynder\Plugin\Field\FieldType\BynderMetadataItem;
+ use Drupal\Component\Datetime\TimeInterface;
+@@ -40,7 +42,7 @@ class Bynder extends MediaSourceBase {
+   /**
+    * Bynder api service.
+    *
+-   * @var \Drupal\bynder\BynderApiInterface
++   * @var BynderApiInterface
+    *   Bynder api service.
+    */
+   protected $bynderApi;
+@@ -48,14 +50,14 @@ class Bynder extends MediaSourceBase {
+   /**
+    * Account proxy.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $accountProxy;
+ 
+   /**
+    * The url generator.
+    *
+-   * @var \Drupal\Core\Routing\UrlGeneratorInterface
++   * @var UrlGeneratorInterface
+    */
+   protected $urlGenerator;
+ 
+@@ -69,28 +71,28 @@ class Bynder extends MediaSourceBase {
+   /**
+    * The logger factory service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The cache service.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cache;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -110,25 +112,25 @@ class Bynder extends MediaSourceBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager service.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   Entity field manager service.
+-   * @param \Drupal\Core\Field\FieldTypePluginManagerInterface $field_type_manager
++   * @param FieldTypePluginManagerInterface $field_type_manager
+    *   The field type plugin manager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+-   * @param \Drupal\bynder\BynderApiInterface $bynder_api_service
++   * @param BynderApiInterface $bynder_api_service
+    *   Bynder api service.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $account_proxy
++   * @param AccountProxyInterface $account_proxy
+    *   Account proxy.
+-   * @param \Drupal\Core\Routing\UrlGeneratorInterface $url_generator
++   * @param UrlGeneratorInterface $url_generator
+    *   The url generator service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger
++   * @param LoggerChannelFactoryInterface $logger
+    *   The logger factory service.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
++   * @param CacheBackendInterface $cache
+    *   The cache service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, FieldTypePluginManagerInterface $field_type_manager, ConfigFactoryInterface $config_factory, BynderApiInterface $bynder_api_service, AccountProxyInterface $account_proxy, UrlGeneratorInterface $url_generator, LoggerChannelFactoryInterface $logger, CacheBackendInterface $cache, TimeInterface $time, ModuleHandlerInterface $module_handler) {
+@@ -223,7 +225,7 @@ class Bynder extends MediaSourceBase {
+   /**
+    * Ensures the given media entity has Bynder metadata information in place.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   The media entity.
+    * @param bool $force
+    *   (optional) By default, this will not attempt to check for updated
+@@ -322,7 +324,7 @@ class Bynder extends MediaSourceBase {
+   /**
+    * Compares the local metadata and the remote metadata in case it changed.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   The media entity.
+    * @param array $remote_metadata
+    *   The remote metadata.
+@@ -411,7 +413,7 @@ class Bynder extends MediaSourceBase {
+   /**
+    * Creates the metadata field storage definition.
+    *
+-   * @return \Drupal\field\FieldStorageConfigInterface
++   * @return FieldStorageConfigInterface
+    *   The unsaved field storage definition.
+    */
+   public function createMetadataFieldStorage() {
+@@ -428,10 +430,10 @@ class Bynder extends MediaSourceBase {
+   /**
+    * Creates the metadata field definition.
+    *
+-   * @param \Drupal\media\MediaTypeInterface $type
++   * @param MediaTypeInterface $type
+    *   The media type.
+    *
+-   * @return \Drupal\field\FieldConfigInterface
++   * @return FieldConfigInterface
+    *   The unsaved field definition. The field storage definition, if new,
+    *   should also be unsaved.
+    */
+diff --git a/tests/src/Functional/BynderCreateMediaTest.php b/tests/src/Functional/BynderCreateMediaTest.php
+index e7ea990..43c44ce 100644
+--- a/tests/src/Functional/BynderCreateMediaTest.php
++++ b/tests/src/Functional/BynderCreateMediaTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\bynder\Functional;
+ 
++use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
++use Drupal\media\MediaInterface;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\field\Entity\FieldConfig;
+@@ -38,7 +40,7 @@ class BynderCreateMediaTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->drupalCreateContentType(['type' => 'media_entity_ct', 'name' => 'Media Type']);
+ 
+@@ -67,7 +69,7 @@ class BynderCreateMediaTest extends BrowserTestBase {
+       ],
+     ])->save();
+ 
+-    /** @var \Drupal\Core\Entity\Display\EntityFormDisplayInterface $form_display */
++    /** @var EntityFormDisplayInterface $form_display */
+     $form_display = $this->container->get('entity_type.manager')
+       ->getStorage('entity_form_display')
+       ->load('node.media_entity_ct.default');
+@@ -169,9 +171,9 @@ class BynderCreateMediaTest extends BrowserTestBase {
+           ],
+           'keyword' => 'london',
+           'thumbnails' => [
+-            'mini' => file_create_url($image_1->uri),
+-            'webimage' => file_create_url($image_1->uri),
+-            'thul' => file_create_url($image_1->uri),
++            'mini' => \Drupal::service('file_url_generator')->generateAbsoluteString($image_1->uri),
++            'webimage' => \Drupal::service('file_url_generator')->generateAbsoluteString($image_1->uri),
++            'thul' => \Drupal::service('file_url_generator')->generateAbsoluteString($image_1->uri),
+           ],
+         ],
+         [
+@@ -187,9 +189,9 @@ class BynderCreateMediaTest extends BrowserTestBase {
+           ],
+           'keyword' => 'paris',
+           'thumbnails' => [
+-            'mini' => file_create_url($image_2->uri),
+-            'webimage' => file_create_url($image_2->uri),
+-            'thul' => file_create_url($image_2->uri),
++            'mini' => \Drupal::service('file_url_generator')->generateAbsoluteString($image_2->uri),
++            'webimage' => \Drupal::service('file_url_generator')->generateAbsoluteString($image_2->uri),
++            'thul' => \Drupal::service('file_url_generator')->generateAbsoluteString($image_2->uri),
+           ],
+         ],
+         [
+@@ -200,9 +202,9 @@ class BynderCreateMediaTest extends BrowserTestBase {
+             0 => 'pdf',
+           ],
+           'thumbnails' => [
+-            'mini' => file_create_url($image_2->uri),
+-            'webimage' => file_create_url($image_2->uri),
+-            'thul' => file_create_url($image_2->uri),
++            'mini' => \Drupal::service('file_url_generator')->generateAbsoluteString($image_2->uri),
++            'webimage' => \Drupal::service('file_url_generator')->generateAbsoluteString($image_2->uri),
++            'thul' => \Drupal::service('file_url_generator')->generateAbsoluteString($image_2->uri),
+           ],
+           'original' => 'https://example.getbynder.com/m/important.pdf',
+         ],
+@@ -247,7 +249,7 @@ class BynderCreateMediaTest extends BrowserTestBase {
+     $medias = \Drupal::entityTypeManager()->getStorage('media')->loadMultiple();
+     $this->assertEquals(3, count($medias));
+ 
+-    /** @var \Drupal\media\MediaInterface $media */
++    /** @var MediaInterface $media */
+     foreach ($medias as $media) {
+       switch ($media->get('field_bynder_id')->value) {
+         case '4DFD39C5-1234-1234-8714AFEE1A617618':
+diff --git a/tests/src/Functional/BynderFormatterTest.php b/tests/src/Functional/BynderFormatterTest.php
+index 2f95224..2d44079 100644
+--- a/tests/src/Functional/BynderFormatterTest.php
++++ b/tests/src/Functional/BynderFormatterTest.php
+@@ -34,7 +34,7 @@ class BynderFormatterTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->drupalLogin($this->drupalCreateUser([
+@@ -100,7 +100,7 @@ class BynderFormatterTest extends BrowserTestBase {
+       'fields[field_entity_reference][type]' => 'bynder',
+       'fields[field_entity_reference][region]' => 'content',
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save'));
++    $this->submitForm($edit, t('Save'));
+ 
+     $this->assertSession()->pageTextContains('Derivative: webimage');
+     $this->getSession()->getPage()->pressButton('field_entity_reference_settings_edit');
+@@ -150,7 +150,7 @@ class BynderFormatterTest extends BrowserTestBase {
+     $this->assertSession()->optionExists('fields[field_entity_reference][settings_edit_form][settings][title_field]', 'field_string_long');
+ 
+     $this->drupalGet('admin/structure/types/manage/page/form-display');
+-    $this->drupalPostForm(NULL, ['fields[field_entity_reference][region]' => 'content'], t('Save'));
++    $this->submitForm(['fields[field_entity_reference][region]' => 'content'], t('Save'));
+ 
+     $this->drupalGet('admin/structure/media/manage/media_type/display');
+     $this->assertSession()->optionExists('fields[field_entity_reference][type]', 'bynder');
+@@ -163,9 +163,9 @@ class BynderFormatterTest extends BrowserTestBase {
+       'id' => '123',
+       'name' => 'Bynder name',
+       'thumbnails' => [
+-        'mini' => file_create_url($images[0]->uri),
+-        'webimage' => file_create_url($images[1]->uri),
+-        'thul' => file_create_url($images[2]->uri),
++        'mini' => \Drupal::service('file_url_generator')->generateAbsoluteString($images[0]->uri),
++        'webimage' => \Drupal::service('file_url_generator')->generateAbsoluteString($images[1]->uri),
++        'thul' => \Drupal::service('file_url_generator')->generateAbsoluteString($images[2]->uri),
+       ],
+       'propertyOptions' => [
+         0 => "6EF40BA8-E011-4758-80C12BDCA70DDF4F",
+diff --git a/tests/src/Functional/BynderWidgetsTest.php b/tests/src/Functional/BynderWidgetsTest.php
+index 51870aa..4b3b89f 100644
+--- a/tests/src/Functional/BynderWidgetsTest.php
++++ b/tests/src/Functional/BynderWidgetsTest.php
+@@ -30,7 +30,7 @@ class BynderWidgetsTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $account = $this->drupalCreateUser(['access bynder entity browser pages', 'dropzone upload files']);
+     $this->drupalLogin($account);
+diff --git a/tests/src/Functional/MediaEntityTypePluginTest.php b/tests/src/Functional/MediaEntityTypePluginTest.php
+index c1aa3fc..59e732d 100644
+--- a/tests/src/Functional/MediaEntityTypePluginTest.php
++++ b/tests/src/Functional/MediaEntityTypePluginTest.php
+@@ -32,7 +32,7 @@ class MediaEntityTypePluginTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->drupalLogin($this->drupalCreateUser([
+       'administer media types',
+@@ -96,7 +96,7 @@ class MediaEntityTypePluginTest extends BrowserTestBase {
+       'limited' => 0,
+       'thumbnails' => [
+         'mini' => 'https://d2csxpduxe849s.cloudfront.net/media/2AF9718D.jpg',
+-        'webimage' => file_create_url($image->uri),
++        'webimage' => \Drupal::service('file_url_generator')->generateAbsoluteString($image->uri),
+         'thul' => 'https://d2csxpduxe849s.cloudfront.net/media/9F22A5BA1D47.jpg',
+       ],
+       'views' => 6,
+diff --git a/tests/src/Functional/UsageTest.php b/tests/src/Functional/UsageTest.php
+index d15778b..34c0f1d 100644
+--- a/tests/src/Functional/UsageTest.php
++++ b/tests/src/Functional/UsageTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\bynder\Functional;
+ 
++use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
++use Drupal\Core\Url;
+ use Drupal\bynder\BynderApi;
+ use Drupal\bynder_test_module\BynderApiTest;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+@@ -37,7 +39,7 @@ class UsageTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->createMediaType('image', ['id' => 'generic']);
+@@ -72,7 +74,7 @@ class UsageTest extends BrowserTestBase {
+           ],
+         ])->save();
+ 
+-      /** @var \Drupal\Core\Entity\Display\EntityFormDisplayInterface $form_display */
++      /** @var EntityFormDisplayInterface $form_display */
+       $form_display = $this->container->get('entity_type.manager')
+         ->getStorage('entity_form_display')
+         ->load('node.host.default');
+@@ -139,7 +141,8 @@ class UsageTest extends BrowserTestBase {
+     // Create alias.
+     $edit['path[0][value]'] = '/node/' . $host_node->id();
+     $edit['alias[0][value]'] = '/' . $this->randomMachineName(8);
+-    $this->drupalPostForm('admin/config/search/path/add', $edit, t('Save'));
++    $this->drupalGet('admin/config/search/path/add');
++    $this->submitForm($edit, t('Save'));
+ 
+     $this->drupalGet('node/' . $host_node->id() . '/edit');
+     $this->getSession()->getPage()->fillField('field_reference_node[0][target_id]', '');
+@@ -173,7 +176,7 @@ class UsageTest extends BrowserTestBase {
+     $this->assertEquals($bynder_media->field_media_uuid->value, $state['asset_id']);
+     $this->assertTrue(is_string($state['timestamp']));
+ 
+-    $url = \Drupal\Core\Url::fromRoute(
++    $url = Url::fromRoute(
+       'entity.node.canonical',
+       ['node' => $host_node->id()]
+     )->setAbsolute(TRUE)->toString();
+diff --git a/tests/src/FunctionalJavascript/BynderUploadWidgetTest.php b/tests/src/FunctionalJavascript/BynderUploadWidgetTest.php
+index d19cc3d..c8c2b73 100644
+--- a/tests/src/FunctionalJavascript/BynderUploadWidgetTest.php
++++ b/tests/src/FunctionalJavascript/BynderUploadWidgetTest.php
+@@ -10,6 +10,8 @@
+ 
+ namespace Drupal\Tests\bynder\FunctionalJavascript;
+ 
++use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
++use Drupal\entity_browser\Entity\EntityBrowser;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+@@ -50,7 +52,7 @@ class BynderUploadWidgetTest extends WebDriverTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->drupalCreateContentType(['type' => 'media_entity_ct', 'name' => 'Media Type']);
+@@ -80,7 +82,7 @@ class BynderUploadWidgetTest extends WebDriverTestBase {
+       ],
+     ])->save();
+ 
+-    /** @var \Drupal\Core\Entity\Display\EntityFormDisplayInterface $form_display */
++    /** @var EntityFormDisplayInterface $form_display */
+     $form_display = $this->container->get('entity_type.manager')
+       ->getStorage('entity_form_display')
+       ->load('node.media_entity_ct.default');
+@@ -255,7 +257,7 @@ class BynderUploadWidgetTest extends WebDriverTestBase {
+     $this->getSession()->getPage()->selectFieldOption('Brand', 'Brand Name');
+     $this->getSession()->getPage()->pressButton('Save');
+ 
+-    $entity_browser = \Drupal\entity_browser\Entity\EntityBrowser::load('bynder');
++    $entity_browser = EntityBrowser::load('bynder');
+     $this->assertTrue($entity_browser->getWidgets()->count() == 1);
+     $widget_uuid = $entity_browser->getWidgets()->getInstanceIds();
+     $widget_uuid = reset($widget_uuid);
+@@ -293,7 +295,7 @@ class BynderUploadWidgetTest extends WebDriverTestBase {
+     $this->getSession()->getPage()->pressButton('Save');
+     $this->assertSession()->pageTextContains('The entity browser Bynder has been updated.');
+ 
+-    $entity_browser = \Drupal\entity_browser\Entity\EntityBrowser::load('bynder');
++    $entity_browser = EntityBrowser::load('bynder');
+     $this->assertTrue($entity_browser->getWidgets()->count() == 1);
+     $widget_uuid = $entity_browser->getWidgets()->getInstanceIds();
+     $widget_uuid = reset($widget_uuid);
+diff --git a/tests/src/FunctionalJavascript/BynderUsageTest.php b/tests/src/FunctionalJavascript/BynderUsageTest.php
+index 39f4059..46c7943 100644
+--- a/tests/src/FunctionalJavascript/BynderUsageTest.php
++++ b/tests/src/FunctionalJavascript/BynderUsageTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\bynder\FunctionalJavascript;
+ 
++use Drupal\user\UserInterface;
++use Drupal\user\RoleInterface;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\FunctionalJavascriptTests\WebDriverTestBase;
+ use Drupal\user\Entity\Role;
+@@ -16,14 +18,14 @@ class BynderUsageTest extends WebDriverTestBase {
+   /**
+    * User for testing.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $testUser;
+ 
+   /**
+    * Role for testing.
+    *
+-   * @var \Drupal\user\RoleInterface
++   * @var RoleInterface
+    */
+   protected $testRole;
+ 
+@@ -47,7 +49,7 @@ class BynderUsageTest extends WebDriverTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->createContentType(['type' => 'page']);
+diff --git a/tests/src/FunctionalJavascript/ConfigurationFormTest.php b/tests/src/FunctionalJavascript/ConfigurationFormTest.php
+index 9bd973c..fbcdb72 100644
+--- a/tests/src/FunctionalJavascript/ConfigurationFormTest.php
++++ b/tests/src/FunctionalJavascript/ConfigurationFormTest.php
+@@ -24,7 +24,7 @@ class ConfigurationFormTest extends WebDriverTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->drupalLogin($this->drupalCreateUser([
+diff --git a/tests/src/Unit/BynderApiUnitTest.php b/tests/src/Unit/BynderApiUnitTest.php
+index 93bed42..289ed88 100644
+--- a/tests/src/Unit/BynderApiUnitTest.php
++++ b/tests/src/Unit/BynderApiUnitTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\bynder\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Tests\UnitTestCase;
+ use League\OAuth2\Client\Token\AccessToken;
+ use Symfony\Component\HttpFoundation\Session\SessionInterface;
+@@ -19,6 +20,7 @@ use Drupal\Component\Datetime\TimeInterface;
+  */
+ class BynderApiUnitTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * @covers ::hasAccessToken
+    *

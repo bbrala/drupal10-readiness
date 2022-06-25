@@ -1,0 +1,990 @@
+diff --git a/cloudconvert.module b/cloudconvert.module
+index 3bb4754..5a7b244 100644
+--- a/cloudconvert.module
++++ b/cloudconvert.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\cloudconvert\Entity\CloudConvertTaskInterface;
+ /**
+  * @file
+  * Module file for the cloudconvert module.
+@@ -28,7 +29,7 @@ function cloudconvert_theme(): array {
+  */
+ function cloudconvert_theme_suggestions_cloudconvert_task(array $variables): array {
+   $suggestions = [];
+-  /** @var \Drupal\cloudconvert\Entity\CloudConvertTaskInterface $entity */
++  /** @var CloudConvertTaskInterface $entity */
+   $entity = $variables['elements']['#cloudconvert_task'];
+   $sanitized_view_mode = str_replace('.', '_', $variables['elements']['#view_mode']);
+ 
+diff --git a/modules/media_thumbnail/cloudconvert_media_thumbnail.module b/modules/media_thumbnail/cloudconvert_media_thumbnail.module
+index cc40118..47eb9c5 100644
+--- a/modules/media_thumbnail/cloudconvert_media_thumbnail.module
++++ b/modules/media_thumbnail/cloudconvert_media_thumbnail.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\cloudconvert_media_thumbnail\MediaThumbnailManager;
+ /**
+  * @file
+  * Module file for media_thumbnail.
+@@ -11,7 +12,7 @@ use Drupal\media\MediaInterface;
+  * Implements hook_ENTITY_TYPE_insert().
+  */
+ function cloudconvert_media_thumbnail_media_insert(MediaInterface $media) {
+-  /** @var \Drupal\cloudconvert_media_thumbnail\MediaThumbnailManager $mediaThumbnailManager */
++  /** @var MediaThumbnailManager $mediaThumbnailManager */
+   $mediaThumbnailManager = Drupal::service('cloudconvert_media_thumbnail.manager');
+   try {
+     $mediaThumbnailManager->createThumbnailJob($media);
+@@ -25,7 +26,7 @@ function cloudconvert_media_thumbnail_media_insert(MediaInterface $media) {
+  * Implements hook_ENTITY_TYPE_update().
+  */
+ function cloudconvert_media_thumbnail_media_update(MediaInterface $media) {
+-  /** @var \Drupal\cloudconvert_media_thumbnail\MediaThumbnailManager $mediaThumbnailManager */
++  /** @var MediaThumbnailManager $mediaThumbnailManager */
+   $mediaThumbnailManager = Drupal::service('cloudconvert_media_thumbnail.manager');
+   if (!$mediaThumbnailManager->mediaSourceHasChanged($media)) {
+     return;
+diff --git a/modules/media_thumbnail/src/EventSubscriber/MediaThumbnailSubscriber.php b/modules/media_thumbnail/src/EventSubscriber/MediaThumbnailSubscriber.php
+index ef16b3a..5afd85f 100644
+--- a/modules/media_thumbnail/src/EventSubscriber/MediaThumbnailSubscriber.php
++++ b/modules/media_thumbnail/src/EventSubscriber/MediaThumbnailSubscriber.php
+@@ -2,6 +2,13 @@
+ 
+ namespace Drupal\cloudconvert_media_thumbnail\EventSubscriber;
+ 
++use Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException;
++use Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
++use Drupal\media\MediaTypeInterface;
+ use Drupal\cloudconvert\Event\CloudConvertFinishEvent;
+ use Drupal\Component\Render\PlainTextOutput;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+@@ -26,32 +33,32 @@ class MediaThumbnailSubscriber implements EventSubscriberInterface, ContainerInj
+   /**
+    * Entity Type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+   /**
+    * Token.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected Token $token;
+ 
+   /**
+    * File system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   private FileSystemInterface $fileSystem;
+ 
+   /**
+    * MediaThumbnailSubscriber constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity Type Manager.
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   Token.
+-   * @param \Drupal\Core\File\FileSystemInterface $fileSystem
++   * @param FileSystemInterface $fileSystem
+    *   File system.
+    */
+   public function __construct(EntityTypeManagerInterface $entityTypeManager, Token $token, FileSystemInterface $fileSystem) {
+@@ -71,8 +78,8 @@ class MediaThumbnailSubscriber implements EventSubscriberInterface, ContainerInj
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException
+-   * @throws \Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException
++   * @throws ServiceNotFoundException
++   * @throws ServiceCircularReferenceException
+    */
+   public static function create(ContainerInterface $container) {
+     return new static(
+@@ -85,12 +92,12 @@ class MediaThumbnailSubscriber implements EventSubscriberInterface, ContainerInj
+   /**
+    * The finish media task event handler to set the thumbnail.
+    *
+-   * @param \Drupal\cloudconvert\Event\CloudConvertFinishEvent $event
++   * @param CloudConvertFinishEvent $event
+    *   Cloud Convert Finish Event.
+    *
+    * @throws \InvalidArgumentException
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Core\Entity\EntityStorageException|\Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws EntityStorageException|PluginNotFoundException
+    */
+   public function finishMediaTask(CloudConvertFinishEvent $event): void {
+     $cloudConvertTask = $event->getCloudConvertTask();
+@@ -99,9 +106,9 @@ class MediaThumbnailSubscriber implements EventSubscriberInterface, ContainerInj
+       return;
+     }
+ 
+-    /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface $mediaField */
++    /** @var EntityReferenceFieldItemListInterface $mediaField */
+     $mediaField = $cloudConvertTask->get('field_media');
+-    /** @var \Drupal\media\MediaInterface[] $mediaItems */
++    /** @var MediaInterface[] $mediaItems */
+     $mediaItems = $mediaField->referencedEntities();
+     $media = reset($mediaItems);
+     $fileStorage = $this->entityTypeManager->getStorage('file');
+@@ -110,7 +117,7 @@ class MediaThumbnailSubscriber implements EventSubscriberInterface, ContainerInj
+     $thumbnailDirectory = $this->getThumbnailDirectory($media);
+     $thumbnailUri = $this->fileSystem->move($event->getResult(), $thumbnailDirectory . '/' . $fileInfo['basename']);
+ 
+-    /** @var \Drupal\file\FileInterface $file */
++    /** @var FileInterface $file */
+     $file = $fileStorage->create(['uri' => $thumbnailUri]);
+     if ($owner = $media->getOwner()) {
+       $file->setOwner($owner);
+@@ -124,18 +131,18 @@ class MediaThumbnailSubscriber implements EventSubscriberInterface, ContainerInj
+   /**
+    * Get the thumbnail directory.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   Media Entity.
+    *
+    * @return string
+    *   Directory location.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   private function getThumbnailDirectory(MediaInterface $media) {
+     $mediaTypeId = $media->bundle();
+     $mediaTypeStorage = $this->entityTypeManager->getStorage('media_type');
+-    /** @var \Drupal\media\MediaTypeInterface $mediaType */
++    /** @var MediaTypeInterface $mediaType */
+     $mediaType = $mediaTypeStorage->load($mediaTypeId);
+     $fieldName = $mediaType->getSource()->getConfiguration()['source_field'];
+     $fieldDefinition = $media->getFieldDefinition($fieldName);
+@@ -152,12 +159,12 @@ class MediaThumbnailSubscriber implements EventSubscriberInterface, ContainerInj
+   /**
+    * Set the new file as the thumbnail.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   Media Entity.
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   File Entity.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   private function setThumbnail(MediaInterface $media, FileInterface $file) {
+     $media->set('thumbnail', $file);
+diff --git a/modules/media_thumbnail/src/MediaThumbnailManager.php b/modules/media_thumbnail/src/MediaThumbnailManager.php
+index 93c99a3..4644cfa 100644
+--- a/modules/media_thumbnail/src/MediaThumbnailManager.php
++++ b/modules/media_thumbnail/src/MediaThumbnailManager.php
+@@ -2,6 +2,15 @@
+ 
+ namespace Drupal\cloudconvert_media_thumbnail;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException;
++use Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\cloudconvert\Entity\CloudConvertTaskTypeInterface;
++use Drupal\file\FileInterface;
++use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
++use Drupal\Core\Entity\EntityInterface;
+ use CloudConvert\Models\Job;
+ use CloudConvert\Models\Task;
+ use Drupal\cloudconvert\CloudConvertProcessor;
+@@ -24,28 +33,28 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+   /**
+    * Cloud Convert Processor.
+    *
+-   * @var \Drupal\cloudconvert\CloudConvertProcessor
++   * @var CloudConvertProcessor
+    */
+   protected CloudConvertProcessor $cloudConvertProcessor;
+ 
+   /**
+    * Entity Type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+   /**
+    * Queue Factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected QueueFactory $queueFactory;
+ 
+   /**
+    * Media Type Storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected EntityStorageInterface $mediaTypeStorage;
+ 
+@@ -59,24 +68,24 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   private ConfigFactoryInterface $configFactory;
+ 
+   /**
+    * MediaThumbnailManager constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity Type Manager.
+-   * @param \Drupal\cloudconvert\CloudConvertProcessor $cloudConvertProcessor
++   * @param CloudConvertProcessor $cloudConvertProcessor
+    *   Cloud Convert Processor.
+-   * @param \Drupal\Core\Queue\QueueFactory $queueFactory
++   * @param QueueFactory $queueFactory
+    *   Queue Factory.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   Config factory.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(EntityTypeManagerInterface $entityTypeManager, CloudConvertProcessor $cloudConvertProcessor, QueueFactory $queueFactory, ConfigFactoryInterface $configFactory) {
+     $this->entityTypeManager = $entityTypeManager;
+@@ -89,9 +98,9 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException
+-   * @throws \Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException|\Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws ServiceNotFoundException
++   * @throws ServiceCircularReferenceException
++   * @throws InvalidPluginDefinitionException|PluginNotFoundException
+    */
+   public static function create(ContainerInterface $container) {
+     return new static(
+@@ -105,12 +114,12 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+   /**
+    * Creates a job into cloudconvert to create a thumbnail.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   The media.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function createThumbnailJob(MediaInterface $media) {
+     $file = $this->getMediaFile($media);
+@@ -120,7 +129,7 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+     }
+ 
+     $cloudConvertTaskTypeStorage = $this->entityTypeManager->getStorage('cloudconvert_task_type');
+-    /** @var \Drupal\cloudconvert\Entity\CloudConvertTaskTypeInterface $cloudConvertTaskType */
++    /** @var CloudConvertTaskTypeInterface $cloudConvertTaskType */
+     $cloudConvertTaskType = $cloudConvertTaskTypeStorage->load('media_thumbnail');
+     $cloudConvertTask = $this->cloudConvertProcessor->createTask($cloudConvertTaskType, $file);
+     $cloudConvertTask->set('field_media', $media);
+@@ -160,10 +169,10 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+   /**
+    * Get the Media File.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   Media Entity.
+    *
+-   * @return \Drupal\file\FileInterface
++   * @return FileInterface
+    *   File Entity.
+    *
+    * @throws \InvalidArgumentException
+@@ -171,10 +180,10 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+   private function getMediaFile(MediaInterface $media) {
+     $mediaType = $this->getMediaType($media);
+     $fieldName = $this->getSourceFieldName($mediaType);
+-    /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface $field */
++    /** @var EntityReferenceFieldItemListInterface $field */
+     $field = $media->get($fieldName);
+ 
+-    /** @var \Drupal\file\FileInterface[] $files */
++    /** @var FileInterface[] $files */
+     $files = $field->referencedEntities();
+ 
+     return reset($files);
+@@ -183,10 +192,10 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+   /**
+    * Get the Media Type.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   Media Entity.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   Media Type Config Entity.
+    */
+   private function getMediaType(MediaInterface $media) {
+@@ -197,7 +206,7 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+   /**
+    * Get the Source field name.
+    *
+-   * @param \Drupal\media\MediaTypeInterface $mediaType
++   * @param MediaTypeInterface $mediaType
+    *   Media Type Config Entity.
+    *
+    * @return string
+@@ -212,7 +221,7 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+   /**
+    * Validate if thumbnail generation is needed.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   Media Entity.
+    *
+    * @return bool
+@@ -229,7 +238,7 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+   /**
+    * Validate if the thumbnail is already created.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   Media Entity.
+    *
+    * @return bool
+@@ -247,14 +256,14 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+       $iconsBaseUri . '/video.png',
+     ];
+ 
+-    /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface $thumbnailField */
++    /** @var EntityReferenceFieldItemListInterface $thumbnailField */
+     $thumbnailField = $media->get('thumbnail');
+     $files = $thumbnailField->referencedEntities();
+     if (empty($files)) {
+       return FALSE;
+     }
+ 
+-    /** @var \Drupal\file\FileInterface $thumbnail */
++    /** @var FileInterface $thumbnail */
+     $thumbnail = reset($files);
+     $fileUri = $thumbnail->getFileUri();
+ 
+@@ -298,7 +307,7 @@ class MediaThumbnailManager implements ContainerInjectionInterface, MediaThumbna
+   /**
+    * Check if a translation value of the field is changed.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   Media Entity.
+    * @param string $fieldName
+    *   Field Name.
+diff --git a/modules/media_thumbnail/src/MediaThumbnailManagerInterface.php b/modules/media_thumbnail/src/MediaThumbnailManagerInterface.php
+index 50eac4a..d07d962 100644
+--- a/modules/media_thumbnail/src/MediaThumbnailManagerInterface.php
++++ b/modules/media_thumbnail/src/MediaThumbnailManagerInterface.php
+@@ -14,7 +14,7 @@ interface MediaThumbnailManagerInterface {
+   /**
+    * Validate if the media source field value is changed.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   Media Entity.
+    *
+    * @return bool
+diff --git a/src/CloudConvertProcessor.php b/src/CloudConvertProcessor.php
+index b429541..56b3b66 100644
+--- a/src/CloudConvertProcessor.php
++++ b/src/CloudConvertProcessor.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\cloudconvert;
+ 
++use Drupal\Core\Queue\QueueInterface;
+ use CloudConvert\CloudConvert;
+ use Drupal\cloudconvert\Entity\CloudConvertTaskInterface;
+ use Drupal\cloudconvert\Entity\CloudConvertTaskTypeInterface;
+@@ -31,7 +32,7 @@ class CloudConvertProcessor implements ContainerInjectionInterface, CloudConvert
+   /**
+    * Entity Type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+@@ -45,34 +46,34 @@ class CloudConvertProcessor implements ContainerInjectionInterface, CloudConvert
+   /**
+    * Config Factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected ConfigFactory $configFactory;
+ 
+   /**
+    * Queue Factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected QueueFactory $queueFactory;
+ 
+   /**
+    * File system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   private FileSystemInterface $fileSystem;
+ 
+   /**
+    * Construct a CloudConvertProcessor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Config\ConfigFactory $configFactory
++   * @param ConfigFactory $configFactory
+    *   Config factory.
+-   * @param \Drupal\Core\Queue\QueueFactory $queueFactory
++   * @param QueueFactory $queueFactory
+    *   QueueFactory.
+-   * @param \Drupal\Core\File\FileSystemInterface $fileSystem
++   * @param FileSystemInterface $fileSystem
+    *   File system.
+    */
+   public function __construct(EntityTypeManagerInterface $entityTypeManager, ConfigFactory $configFactory, QueueFactory $queueFactory, FileSystemInterface $fileSystem) {
+@@ -154,7 +155,7 @@ class CloudConvertProcessor implements ContainerInjectionInterface, CloudConvert
+   /**
+    * Create a Queue Item.
+    *
+-   * @param \Drupal\cloudconvert\Entity\CloudConvertTaskInterface $cloudConvertTask
++   * @param CloudConvertTaskInterface $cloudConvertTask
+    *   Cloud Convert Task Entity.
+    * @param string $queueName
+    *   Queue.
+@@ -162,7 +163,7 @@ class CloudConvertProcessor implements ContainerInjectionInterface, CloudConvert
+    *   List of parameters.
+    */
+   private function createQueueItem(CloudConvertTaskInterface $cloudConvertTask, $queueName, array $parameters = []) {
+-    /** @var \Drupal\Core\Queue\QueueInterface $queueName */
++    /** @var QueueInterface $queueName */
+     $queue = $this->queueFactory->get($queueName);
+     $item = new \stdClass();
+     $item->cloudconvert_task_id = $cloudConvertTask->id();
+diff --git a/src/CloudConvertProcessorInterface.php b/src/CloudConvertProcessorInterface.php
+index c597112..b0351cc 100644
+--- a/src/CloudConvertProcessorInterface.php
++++ b/src/CloudConvertProcessorInterface.php
+@@ -17,12 +17,12 @@ interface CloudConvertProcessorInterface {
+   /**
+    * Create a cloud convert task for given file entity.
+    *
+-   * @param \Drupal\cloudconvert\Entity\CloudConvertTaskTypeInterface $cloudConvertTaskType
++   * @param CloudConvertTaskTypeInterface $cloudConvertTaskType
+    *   Cloud Convert Task Type Config Entity.
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   File Entity.
+    *
+-   * @return \Drupal\cloudconvert\Entity\CloudConvertTaskInterface
++   * @return CloudConvertTaskInterface
+    *   Cloud Convert Task Entity.
+    */
+   public function createTask(CloudConvertTaskTypeInterface $cloudConvertTaskType, FileInterface $file);
+@@ -30,7 +30,7 @@ interface CloudConvertProcessorInterface {
+   /**
+    * Download the file and create a file entity.
+    *
+-   * @param \Drupal\cloudconvert\Entity\CloudConvertTaskInterface $cloudConvertTask
++   * @param CloudConvertTaskInterface $cloudConvertTask
+    *   Cloud Convert Process.
+    *
+    * @return string
+@@ -41,7 +41,7 @@ interface CloudConvertProcessorInterface {
+   /**
+    * Get the CloudConvert API.
+    *
+-   * @return \CloudConvert\CloudConvert
++   * @return CloudConvert
+    *   Cloud Convert API.
+    */
+   public function getCloudConvertApi(): CloudConvert;
+@@ -49,7 +49,7 @@ interface CloudConvertProcessorInterface {
+   /**
+    * Create a Queue Item to finish a process.
+    *
+-   * @param \Drupal\cloudconvert\Entity\CloudConvertTaskInterface $cloudConvertTask
++   * @param CloudConvertTaskInterface $cloudConvertTask
+    *   Cloud Convert Task Entity.
+    */
+   public function createFinishQueueItem(CloudConvertTaskInterface $cloudConvertTask);
+diff --git a/src/CloudConvertTaskAccessControlHandler.php b/src/CloudConvertTaskAccessControlHandler.php
+index 7b72c8a..f8bd341 100644
+--- a/src/CloudConvertTaskAccessControlHandler.php
++++ b/src/CloudConvertTaskAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\cloudconvert;
+ 
++use Drupal\cloudconvert\Entity\CloudConvertTaskInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,7 +19,7 @@ class CloudConvertTaskAccessControlHandler extends EntityAccessControlHandler {
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\cloudconvert\Entity\CloudConvertTaskInterface $entity */
++    /** @var CloudConvertTaskInterface $entity */
+     switch ($operation) {
+       case 'view':
+         return AccessResult::allowedIfHasPermission($account, 'view published cloudconvert task entities');
+diff --git a/src/CloudConvertTaskHtmlRouteProvider.php b/src/CloudConvertTaskHtmlRouteProvider.php
+index 1ffbf44..19ec2ca 100644
+--- a/src/CloudConvertTaskHtmlRouteProvider.php
++++ b/src/CloudConvertTaskHtmlRouteProvider.php
+@@ -33,10 +33,10 @@ class CloudConvertTaskHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/CloudConvertTaskListBuilder.php b/src/CloudConvertTaskListBuilder.php
+index c9bed37..6dd2ad5 100644
+--- a/src/CloudConvertTaskListBuilder.php
++++ b/src/CloudConvertTaskListBuilder.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\cloudconvert;
+ 
++use Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException;
++use Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Datetime\DateFormatter;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+@@ -20,7 +24,7 @@ class CloudConvertTaskListBuilder extends EntityListBuilder {
+   /**
+    * DateFormatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+@@ -35,10 +39,10 @@ class CloudConvertTaskListBuilder extends EntityListBuilder {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException
+-   * @throws \Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws ServiceNotFoundException
++   * @throws ServiceCircularReferenceException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public static function createInstance(ContainerInterface $container, EntityTypeInterface $entity_type) {
+     return new static(
+diff --git a/src/Controller/WebHookController.php b/src/Controller/WebHookController.php
+index c211b5a..6dd96e9 100644
+--- a/src/Controller/WebHookController.php
++++ b/src/Controller/WebHookController.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\cloudconvert\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use GuzzleHttp\Exception\InvalidArgumentException;
++use Drupal\cloudconvert\Entity\CloudConvertTask;
++use Drupal\Core\Access\AccessResultAllowed;
++use Drupal\Core\Access\AccessResultForbidden;
+ use Drupal\cloudconvert\CloudConvertProcessorInterface;
+ use Drupal\cloudconvert\Event\CloudConvertErrorEvent;
+ use Drupal\Core\Access\AccessResult;
+@@ -26,43 +32,43 @@ class WebHookController extends ControllerBase {
+   /**
+    * Current Request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request|null
++   * @var Request|null
+    */
+   protected ?Request $currentRequest;
+ 
+   /**
+    * Queue Factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected QueueFactory $queueFactory;
+ 
+   /**
+    * Cloud Convert Processor.
+    *
+-   * @var \Drupal\cloudconvert\CloudConvertProcessorInterface
++   * @var CloudConvertProcessorInterface
+    */
+   protected CloudConvertProcessorInterface $cloudConvertProcessor;
+ 
+   /**
+    * Event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   private EventDispatcherInterface $eventDispatcher;
+ 
+   /**
+    * Construct the webhook controller.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   EntityType manager.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   Request stack.
+-   * @param \Drupal\Core\Queue\QueueFactory $queueFactory
++   * @param QueueFactory $queueFactory
+    *   Queue factory.
+-   * @param \Drupal\cloudconvert\CloudConvertProcessorInterface $cloudConvertProcessor
++   * @param CloudConvertProcessorInterface $cloudConvertProcessor
+    *   Cloud convert processor.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $eventDispatcher
++   * @param EventDispatcherInterface $eventDispatcher
+    *   Event dispatcher.
+    */
+   public function __construct(EntityTypeManagerInterface $entityTypeManager, RequestStack $requestStack, QueueFactory $queueFactory, CloudConvertProcessorInterface $cloudConvertProcessor, EventDispatcherInterface $eventDispatcher) {
+@@ -89,15 +95,15 @@ class WebHookController extends ControllerBase {
+   /**
+    * Callback to handle a cloudconvert finished request.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The request done on the webhook endpoint.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   JSON Response.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \GuzzleHttp\Exception\InvalidArgumentException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws InvalidArgumentException
+    */
+   public function webhook(Request $request): JsonResponse {
+     $taskData = json_decode($request->getContent(), TRUE);
+@@ -109,13 +115,13 @@ class WebHookController extends ControllerBase {
+       ['process_id' => $taskData['job']['id']]
+     );
+ 
+-    /** @var \Drupal\cloudconvert\Entity\CloudConvertTask $cloudConvertTask */
++    /** @var CloudConvertTask $cloudConvertTask */
+     $cloudConvertTask = reset($cloudConvertTasks);
+     if ($taskData['event'] === 'job.failed') {
+       $cloudConvertTask->setStep('Finished');
+       $cloudConvertTask->save();
+       $event = new CloudConvertErrorEvent($cloudConvertTask, $taskData);
+-      $this->eventDispatcher->dispatch(CloudConvertErrorEvent::ERROR, $event);
++      $this->eventDispatcher->dispatch($event, CloudConvertErrorEvent::ERROR);
+       return new JsonResponse();
+     }
+ 
+@@ -136,15 +142,15 @@ class WebHookController extends ControllerBase {
+   /**
+    * Access validation.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Contains a account entity.
+    *
+-   * @return \Drupal\Core\Access\AccessResultAllowed|\Drupal\Core\Access\AccessResultForbidden
++   * @return AccessResultAllowed|AccessResultForbidden
+    *   Access Result Allowed or Forbidden.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \GuzzleHttp\Exception\InvalidArgumentException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws InvalidArgumentException
+    */
+   public function access(AccountInterface $account) {
+     $request = $this->currentRequest;
+diff --git a/src/Entity/CloudConvertTask.php b/src/Entity/CloudConvertTask.php
+index 1db843f..cf7b2d9 100644
+--- a/src/Entity/CloudConvertTask.php
++++ b/src/Entity/CloudConvertTask.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\cloudconvert\Entity;
+ 
++use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Field\BaseFieldDefinition;
+ use Drupal\Core\Entity\ContentEntityBase;
+@@ -304,7 +305,7 @@ class CloudConvertTask extends ContentEntityBase implements CloudConvertTaskInte
+    * @throws \InvalidArgumentException
+    */
+   public function getOriginalFile() {
+-    /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface $originalFileField */
++    /** @var EntityReferenceFieldItemListInterface $originalFileField */
+     $originalFileField = $this->get('original_file_id');
+     $files = $originalFileField->referencedEntities();
+     return reset($files);
+diff --git a/src/Entity/CloudConvertTaskInterface.php b/src/Entity/CloudConvertTaskInterface.php
+index d58aed9..b9b3265 100644
+--- a/src/Entity/CloudConvertTaskInterface.php
++++ b/src/Entity/CloudConvertTaskInterface.php
+@@ -142,7 +142,7 @@ interface CloudConvertTaskInterface extends ContentEntityInterface, EntityChange
+   /**
+    * Get the Original File.
+    *
+-   * @return \Drupal\file\FileInterface
++   * @return FileInterface
+    *   Original File Entity.
+    */
+   public function getOriginalFile();
+@@ -150,7 +150,7 @@ interface CloudConvertTaskInterface extends ContentEntityInterface, EntityChange
+   /**
+    * Set the Original File.
+    *
+-   * @param \Drupal\file\FileInterface $originalFile
++   * @param FileInterface $originalFile
+    *   Original File Entity.
+    *
+    * @return \Drupal\cloudconvert\Entity\CloudConvertTaskInterface
+diff --git a/src/Event/CloudConvertBaseEvent.php b/src/Event/CloudConvertBaseEvent.php
+index c0dbd6a..bb0dfe9 100644
+--- a/src/Event/CloudConvertBaseEvent.php
++++ b/src/Event/CloudConvertBaseEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\cloudconvert\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\cloudconvert\Entity\CloudConvertTaskInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Abstract Class CloudConvertFinishTask.
+@@ -15,7 +15,7 @@ abstract class CloudConvertBaseEvent extends Event {
+   /**
+    * The Cloud Convert Task.
+    *
+-   * @var \Drupal\cloudconvert\Entity\CloudConvertTaskInterface
++   * @var CloudConvertTaskInterface
+    */
+   protected CloudConvertTaskInterface $cloudConvertTask;
+ 
+@@ -29,7 +29,7 @@ abstract class CloudConvertBaseEvent extends Event {
+   /**
+    * CloudConvertFinishTask constructor.
+    *
+-   * @param \Drupal\cloudconvert\Entity\CloudConvertTaskInterface $cloudConvertTask
++   * @param CloudConvertTaskInterface $cloudConvertTask
+    *   Cloud Convert Task Entity.
+    * @param mixed $result
+    *   Result.
+@@ -42,7 +42,7 @@ abstract class CloudConvertBaseEvent extends Event {
+   /**
+    * Get the Cloud Convert Task.
+    *
+-   * @return \Drupal\cloudconvert\Entity\CloudConvertTaskInterface
++   * @return CloudConvertTaskInterface
+    *   Cloud Convert Task Entity.
+    */
+   public function getCloudConvertTask(): CloudConvertTaskInterface {
+diff --git a/src/Form/CloudConvertTaskSettingsForm.php b/src/Form/CloudConvertTaskSettingsForm.php
+index 3cca688..9c92004 100644
+--- a/src/Form/CloudConvertTaskSettingsForm.php
++++ b/src/Form/CloudConvertTaskSettingsForm.php
+@@ -27,7 +27,7 @@ class CloudConvertTaskSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state): void {
+@@ -38,7 +38,7 @@ class CloudConvertTaskSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index ab44fab..45051b7 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\cloudconvert\Form;
+ 
++use Drupal\Core\Config\ConfigValueException;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -53,7 +54,7 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Core\Config\ConfigValueException
++   * @throws ConfigValueException
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $cloudConvertSettings = $this->configFactory->getEditable('cloudconvert.settings');
+diff --git a/src/Plugin/EventSubscriber/CloudConvertErrorSubscriber.php b/src/Plugin/EventSubscriber/CloudConvertErrorSubscriber.php
+index 41f36e9..210485e 100644
+--- a/src/Plugin/EventSubscriber/CloudConvertErrorSubscriber.php
++++ b/src/Plugin/EventSubscriber/CloudConvertErrorSubscriber.php
+@@ -14,14 +14,14 @@ class CloudConvertErrorSubscriber implements EventSubscriberInterface {
+   /**
+    * The logger channel to log to.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   private LoggerChannelInterface $loggerChanner;
+ 
+   /**
+    * CloudConvertErrorSubscriber constructor.
+    *
+-   * @param \Drupal\Core\Logger\LoggerChannelInterface $loggerChannel
++   * @param LoggerChannelInterface $loggerChannel
+    *   The default logger channel.
+    */
+   public function __construct(LoggerChannelInterface $loggerChannel) {
+@@ -38,7 +38,7 @@ class CloudConvertErrorSubscriber implements EventSubscriberInterface {
+   /**
+    * Acts on a cloudconvert failed job.
+    *
+-   * @param \Drupal\cloudconvert\Event\CloudConvertErrorEvent $event
++   * @param CloudConvertErrorEvent $event
+    *   The error event.
+    */
+   public function onCloudConvertError(CloudConvertErrorEvent $event): void {
+diff --git a/src/Plugin/QueueWorker/CloudConvertFinishProcessor.php b/src/Plugin/QueueWorker/CloudConvertFinishProcessor.php
+index 9e892a7..3529f03 100644
+--- a/src/Plugin/QueueWorker/CloudConvertFinishProcessor.php
++++ b/src/Plugin/QueueWorker/CloudConvertFinishProcessor.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\cloudconvert\Plugin\QueueWorker;
+ 
++use Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException;
++use Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\cloudconvert\Entity\CloudConvertTaskInterface;
++use Drupal\cloudconvert\Entity\CloudConvertTaskTypeInterface;
+ use Drupal\cloudconvert\CloudConvertProcessorInterface;
+ use Drupal\cloudconvert\Event\CloudConvertFinishEvent;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -24,21 +29,21 @@ class CloudConvertFinishProcessor extends QueueWorkerBase implements ContainerFa
+   /**
+    * Entity Type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+   /**
+    * CloudConvert Processor.
+    *
+-   * @var \Drupal\cloudconvert\CloudConvertProcessorInterface
++   * @var CloudConvertProcessorInterface
+    */
+   protected CloudConvertProcessorInterface $cloudConvertProcessor;
+ 
+   /**
+    * Event Dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected EventDispatcherInterface $eventDispatcher;
+ 
+@@ -55,8 +60,8 @@ class CloudConvertFinishProcessor extends QueueWorkerBase implements ContainerFa
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException
+-   * @throws \Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException
++   * @throws ServiceNotFoundException
++   * @throws ServiceCircularReferenceException
+    */
+   public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition) {
+     return new static(
+@@ -72,7 +77,7 @@ class CloudConvertFinishProcessor extends QueueWorkerBase implements ContainerFa
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   public function processItem($data) {
+     $cloudConvertTaskStorage = $this->entityTypeManager->getStorage('cloudconvert_task');
+@@ -83,7 +88,7 @@ class CloudConvertFinishProcessor extends QueueWorkerBase implements ContainerFa
+     }
+ 
+     $cloudConvertTaskId = $data->cloudconvert_task_id;
+-    /** @var \Drupal\cloudconvert\Entity\CloudConvertTaskInterface $cloudConvertTask */
++    /** @var CloudConvertTaskInterface $cloudConvertTask */
+     $cloudConvertTask = $cloudConvertTaskStorage->load($cloudConvertTaskId);
+ 
+     if (!$cloudConvertTask) {
+@@ -91,7 +96,7 @@ class CloudConvertFinishProcessor extends QueueWorkerBase implements ContainerFa
+     }
+ 
+     $cloudConvertTaskTypeId = $cloudConvertTask->bundle();
+-    /** @var \Drupal\cloudconvert\Entity\CloudConvertTaskTypeInterface $cloudConvertTaskType */
++    /** @var CloudConvertTaskTypeInterface $cloudConvertTaskType */
+     $cloudConvertTaskType = $cloudConvertTaskTypeStorage->load($cloudConvertTaskTypeId);
+ 
+     $processMethod = $cloudConvertTaskType->getFinishMethod();

@@ -1,0 +1,1031 @@
+diff --git a/contact_emails.module b/contact_emails.module
+index cc4a9ad..d15dae8 100644
+--- a/contact_emails.module
++++ b/contact_emails.module
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\contact\MessageInterface;
++use Drupal\contact_emails\ContactEmailStorageInterface;
+ /**
+  * @file
+  * Contains contact_emails.module..
+@@ -29,8 +33,8 @@ function contact_emails_help($route_name, RouteMatchInterface $route_match) {
+ /**
+  * Implements hook_mail_alter().
+  *
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++ * @throws InvalidPluginDefinitionException
++ * @throws PluginNotFoundException
+  */
+ function contact_emails_mail_alter(&$message) {
+ 
+@@ -40,12 +44,12 @@ function contact_emails_mail_alter(&$message) {
+     'contact_page_mail',
+   ];
+   if (in_array($message['id'], $contact_form_ids)) {
+-    /** @var \Drupal\contact\MessageInterface $contact_message */
++    /** @var MessageInterface $contact_message */
+     if ($contact_message = $message['params']['contact_message']) {
+       $contact_form = $contact_message->getContactForm();
+       $contact_form_id = $contact_form->id();
+ 
+-      /** @var \Drupal\contact_emails\ContactEmailStorageInterface $storage */
++      /** @var ContactEmailStorageInterface $storage */
+       $storage = \Drupal::entityTypeManager()->getStorage('contact_email');
+ 
+       if ($storage->hasContactEmails($contact_form_id)) {
+@@ -71,14 +75,14 @@ function contact_emails_mail_alter(&$message) {
+ /**
+  * Implements hook_form_FORM_ID_alter().
+  *
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++ * @throws InvalidPluginDefinitionException
++ * @throws PluginNotFoundException
+  */
+ function contact_emails_form_contact_form_edit_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+   if (isset($form['id']['#default_value'])) {
+     $contact_form_id = $form['id']['#default_value'];
+ 
+-    /** @var \Drupal\contact_emails\ContactEmailStorageInterface $storage */
++    /** @var ContactEmailStorageInterface $storage */
+     $storage = \Drupal::entityTypeManager()->getStorage('contact_email');
+ 
+     // Disable default contact email if we have at least one contact_emails
+diff --git a/src/ContactEmailListBuilder.php b/src/ContactEmailListBuilder.php
+index c08aac8..cb997d7 100644
+--- a/src/ContactEmailListBuilder.php
++++ b/src/ContactEmailListBuilder.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\contact_emails;
+ 
++use Drupal\contact\ContactFormInterface;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\contact_emails\Entity\ContactEmailInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+@@ -30,8 +32,7 @@ class ContactEmailListBuilder extends EntityListBuilder {
+    */
+   public function buildRow(EntityInterface $entity) {
+     /* @var $entity \Drupal\contact_emails\Entity\ContactEmailInterface */
+-
+-    /** @var \Drupal\contact\ContactFormInterface $contact_form */
++    /** @var ContactFormInterface $contact_form */
+     $contact_form = $entity->get('contact_form')->entity;
+ 
+     $row['id'] = $entity->id();
+@@ -63,7 +64,7 @@ class ContactEmailListBuilder extends EntityListBuilder {
+   /**
+    * Gets the recipient text to display.
+    *
+-   * @param \Drupal\contact_emails\Entity\ContactEmailInterface $entity
++   * @param ContactEmailInterface $entity
+    *   The contact email entity.
+    *
+    * @return string
+@@ -104,18 +105,18 @@ class ContactEmailListBuilder extends EntityListBuilder {
+   /**
+    * Get the description of recipient field value.
+    *
+-   * @param \Drupal\contact_emails\Entity\ContactEmailInterface $entity
++   * @param ContactEmailInterface $entity
+    *   The email.
+    * @param string $fieldName
+    *   The field name.
+    * @param string $fieldType
+    *   The field type.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The description of the field.
+    */
+   protected function recipientFieldValue(ContactEmailInterface $entity, $fieldName, $fieldType) {
+-    /** @var \Drupal\contact_emails\ContactEmails $contactEmails */
++    /** @var ContactEmails $contactEmails */
+     $contactEmails = \Drupal::service('contact_emails.helper');
+ 
+     $contactFormId = $entity->get('contact_form')->target_id;
+diff --git a/src/ContactEmailStorageInterface.php b/src/ContactEmailStorageInterface.php
+index aef867b..08bfe91 100644
+--- a/src/ContactEmailStorageInterface.php
++++ b/src/ContactEmailStorageInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\contact_emails;
+ 
++use Drupal\contact_emails\Entity\ContactEmailInterface;
+ use Drupal\Core\Entity\ContentEntityStorageInterface;
+ 
+ /**
+@@ -30,7 +31,7 @@ interface ContactEmailStorageInterface extends ContentEntityStorageInterface {
+    * @param bool $enabled_only
+    *   Whether or not to filter by enabled emails only.
+    *
+-   * @return \Drupal\contact_emails\Entity\ContactEmailInterface[]
++   * @return ContactEmailInterface[]
+    *   The valid contact emails.
+    */
+   public function loadValid($contact_form_id, $enabled_only = FALSE);
+diff --git a/src/ContactEmailer.php b/src/ContactEmailer.php
+index 58a4844..7a8f130 100644
+--- a/src/ContactEmailer.php
++++ b/src/ContactEmailer.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\contact_emails;
+ 
++use Egulias\EmailValidator\EmailValidator;
++use Drupal\contact\MessageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Utility\EmailValidatorInterface;
+ use Drupal\contact_emails\Entity\ContactEmailInterface;
+ use Drupal\Core\Mail\MailManagerInterface;
+@@ -21,28 +25,28 @@ class ContactEmailer {
+   /**
+    * Drupal\Core\Mail\MailManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+   protected $mailManager;
+ 
+   /**
+    * Drupal\contact_emails\ContactEmails definition.
+    *
+-   * @var \Drupal\contact_emails\ContactEmails
++   * @var ContactEmails
+    */
+   protected $contactEmails;
+ 
+   /**
+    * Drupal\Core\Session\AccountProxy definition.
+    *
+-   * @var \Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $currentUser;
+ 
+   /**
+    * Egulias\EmailValidator\EmailValidator definition.
+    *
+-   * @var \Egulias\EmailValidator\EmailValidator
++   * @var EmailValidator
+    */
+   protected $emailValidator;
+ 
+@@ -56,29 +60,29 @@ class ContactEmailer {
+   /**
+    * Contact message entity.
+    *
+-   * @var \Drupal\contact\MessageInterface
++   * @var MessageInterface
+    */
+   protected $contactMessage;
+ 
+   /**
+    * Drupal messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Mail\MailManagerInterface $plugin_manager_mail
++   * @param MailManagerInterface $plugin_manager_mail
+    *   MailManagerInterface.
+-   * @param \Drupal\contact_emails\ContactEmails $contact_emails
++   * @param ContactEmails $contact_emails
+    *   ContactEmails.
+-   * @param \Drupal\Core\Session\AccountProxy $current_user
++   * @param AccountProxy $current_user
+    *   AccountProxy.
+-   * @param \Drupal\Component\Utility\EmailValidatorInterface $email_validator
++   * @param EmailValidatorInterface $email_validator
+    *   EmailValidatorInterface.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   MessengerInterface.
+    */
+   public function __construct(
+@@ -109,11 +113,11 @@ class ContactEmailer {
+   /**
+    * Send the emails.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function sendEmails() {
+-    /** @var \Drupal\contact_emails\ContactEmailStorageInterface $storage */
++    /** @var ContactEmailStorageInterface $storage */
+     $storage = \Drupal::entityTypeManager()->getStorage('contact_email');
+     $contact_emails = $storage->loadValid($this->contactForm, TRUE);
+     if ($contact_emails) {
+@@ -148,7 +152,7 @@ class ContactEmailer {
+   /**
+    * Get who to send the email to.
+    *
+-   * @param \Drupal\contact_emails\Entity\ContactEmailInterface $email
++   * @param ContactEmailInterface $email
+    *   The email settings.
+    *
+    * @return string
+diff --git a/src/ContactEmails.php b/src/ContactEmails.php
+index 2c30b1f..8eb49bb 100644
+--- a/src/ContactEmails.php
++++ b/src/ContactEmails.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\contact_emails;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\contact_emails\Entity\ContactEmailInterface;
++use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityTypeBundleInfoInterface;
+@@ -20,21 +24,21 @@ class ContactEmails {
+   /**
+    * Drupal\Core\Cache\CacheBackendInterface definition.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cache;
+ 
+   /**
+    * Drupal\Core\Entity\EntityFieldManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * Drupal\Core\Entity\EntityTypeBundleInfoInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityTypeBundleInfo;
+ 
+@@ -60,8 +64,8 @@ class ContactEmails {
+    * @return array
+    *   An array of contact form ids that have at least 1 email.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getContactFormsWithEmails($from_cache = TRUE) {
+     $cid = 'contact_emails:contact_forms_with_emails';
+@@ -71,13 +75,13 @@ class ContactEmails {
+       $contact_forms = $cache->data;
+     }
+     else {
+-      /** @var \Drupal\contact_emails\ContactEmailStorageInterface $storage */
++      /** @var ContactEmailStorageInterface $storage */
+       $storage = \Drupal::entityTypeManager()->getStorage('contact_email');
+       $emails = $storage->loadMultiple();
+ 
+       $contact_forms = [];
+ 
+-      /** @var \Drupal\contact_emails\Entity\ContactEmailInterface $email */
++      /** @var ContactEmailInterface $email */
+       foreach ($emails as $email) {
+         $formId = $email->get('contact_form')->target_id;
+         if (array_search($formId, $contact_forms) === FALSE) {
+@@ -97,8 +101,8 @@ class ContactEmails {
+    * This should be called whenever a contact email is created, updated, or
+    * deleted.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function rebuildCache() {
+ 
+@@ -125,7 +129,7 @@ class ContactEmails {
+       return $field_definition instanceof FieldConfigInterface;
+     });
+     if ($fields) {
+-      /** @var \Drupal\Core\Field\FieldDefinitionInterface $field */
++      /** @var FieldDefinitionInterface $field */
+       foreach ($fields as $field) {
+         $type = $field->getType();
+         if ($type == $field_type) {
+@@ -189,7 +193,7 @@ class ContactEmails {
+         });
+ 
+         if ($bundle_fields) {
+-          /** @var \Drupal\Core\Field\FieldDefinitionInterface $bundle_field */
++          /** @var FieldDefinitionInterface $bundle_field */
+           foreach ($bundle_fields as $bundle_field) {
+             $type = $bundle_field->getType();
+ 
+diff --git a/src/ContactEmailsTestBase.php b/src/ContactEmailsTestBase.php
+index fbb99dc..a4366cc 100644
+--- a/src/ContactEmailsTestBase.php
++++ b/src/ContactEmailsTestBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\contact_emails;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Tests\BrowserTestBase;
+ use Drupal\user\UserInterface;
+ 
+@@ -25,9 +26,9 @@ class ContactEmailsTestBase extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+     $this->createUserAndLogin();
+     $this->createBaseContactForm();
+@@ -36,7 +37,7 @@ class ContactEmailsTestBase extends BrowserTestBase {
+   /**
+    * Creates the admin user and logs in.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   protected function createUserAndLogin() {
+     // Create the user.
+@@ -58,7 +59,8 @@ class ContactEmailsTestBase extends BrowserTestBase {
+       'recipients' => 'test@example.com',
+       'contact_storage_submit_text' => 'Send message',
+     ];
+-    $this->drupalPostForm('admin/structure/contact/add', $params, t('Save'));
++    $this->drupalGet('admin/structure/contact/add');
++    $this->submitForm($params, t('Save'));
+   }
+ 
+   /**
+@@ -84,16 +86,20 @@ class ContactEmailsTestBase extends BrowserTestBase {
+       'label' => 'Email address',
+       'field_name' => 'email_address',
+     ];
+-    $this->drupalPostForm('admin/structure/contact/manage/contact_emails_test_form/fields/add-field', $params, t('Save and continue'));
++    $this->drupalGet('admin/structure/contact/manage/contact_emails_test_form/fields/add-field');
++    $this->submitForm($params, t('Save and continue'));
+ 
+     // Save the default base field settings.
+-    $this->drupalPostForm(NULL, [], t('Save field settings'));
++    $this->submitForm([], t('Save field settings'));
+ 
+     // Save the field settings.
+-    $this->drupalPostForm(NULL, [], t('Save settings'));
++    $this->submitForm([], t('Save settings'));
+ 
+     // Assert that the field exists.
+-    $this->assertText('field_email_address', 'Field email address exists.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('field_email_address');
+   }
+ 
+   /**
+@@ -110,7 +116,8 @@ class ContactEmailsTestBase extends BrowserTestBase {
+       'recipients' => 'test@example.com',
+       'contact_storage_submit_text' => 'Send message',
+     ];
+-    $this->drupalPostForm('admin/structure/contact/add', $params, t('Save'));
++    $this->drupalGet('admin/structure/contact/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Add an email field to be referenced.
+     $params = [
+@@ -118,16 +125,20 @@ class ContactEmailsTestBase extends BrowserTestBase {
+       'label' => 'Email reference',
+       'field_name' => 'email_reference',
+     ];
+-    $this->drupalPostForm('admin/structure/contact/manage/contact_reference_test_form/fields/add-field', $params, t('Save and continue'));
++    $this->drupalGet('admin/structure/contact/manage/contact_reference_test_form/fields/add-field');
++    $this->submitForm($params, t('Save and continue'));
+ 
+     // Save the default base field settings.
+-    $this->drupalPostForm(NULL, [], t('Save field settings'));
++    $this->submitForm([], t('Save field settings'));
+ 
+     // Save the field settings.
+-    $this->drupalPostForm(NULL, [], t('Save settings'));
++    $this->submitForm([], t('Save settings'));
+ 
+     // Assert that the field exists.
+-    $this->assertText('field_email_reference', 'Field email address exists.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('field_email_reference');
+ 
+     // Add an email field to reference the new form's field.
+     $params = [
+@@ -135,28 +146,33 @@ class ContactEmailsTestBase extends BrowserTestBase {
+       'label' => 'Reference',
+       'field_name' => 'reference',
+     ];
+-    $this->drupalPostForm('admin/structure/contact/manage/contact_emails_test_form/fields/add-field', $params, t('Save and continue'));
++    $this->drupalGet('admin/structure/contact/manage/contact_emails_test_form/fields/add-field');
++    $this->submitForm($params, t('Save and continue'));
+ 
+     // Save the default base field settings.
+     $params = [
+       'settings[target_type]' => 'contact_message',
+     ];
+-    $this->drupalPostForm(NULL, $params, t('Save field settings'));
++    $this->submitForm($params, t('Save field settings'));
+ 
+     // Save the field settings.
+     $params = [
+       'settings[handler_settings][target_bundles][contact_reference_test_form]' => 'contact_reference_test_form',
+     ];
+-    $this->drupalPostForm(NULL, $params, t('Save settings'));
++    $this->submitForm($params, t('Save settings'));
+ 
+     // Assert that the field exists.
+-    $this->assertText('field_reference', 'Field reference exists.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('field_reference');
+ 
+     // Save the display settings to make the reference a simple select.
+     $params = [
+       'fields[field_reference][type]' => 'options_select',
+     ];
+-    $this->drupalPostForm('admin/structure/contact/manage/contact_emails_test_form/form-display', $params, t('Save'));
++    $this->drupalGet('admin/structure/contact/manage/contact_emails_test_form/form-display');
++    $this->submitForm($params, t('Save'));
+ 
+     // Submit the refernce contact form on the front-end of the website.
+     $params = [
+@@ -164,10 +180,14 @@ class ContactEmailsTestBase extends BrowserTestBase {
+       'message[0][value]' => 'Submission Test Form Body',
+       'field_email_reference[0][value]' => 'email-via-reference@test.com',
+     ];
+-    $this->drupalPostForm('contact/contact_reference_test_form', $params, t('Send message'));
++    $this->drupalGet('contact/contact_reference_test_form');
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that it says message has been sent.
+-    $this->assertText('Your message has been sent.', 'Message sent successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Your message has been sent.');
+   }
+ 
+ }
+diff --git a/src/Entity/ContactEmail.php b/src/Entity/ContactEmail.php
+index 514b26d..5a7a77e 100644
+--- a/src/Entity/ContactEmail.php
++++ b/src/Entity/ContactEmail.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\contact_emails\Entity;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\FieldableEntityInterface;
+ use Drupal\contact\MessageInterface;
+ use Drupal\Core\Entity\EntityChangedTrait;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -375,7 +378,7 @@ class ContactEmail extends ContentEntityBase implements ContactEmailInterface {
+    *
+    * @param string $string
+    *   The string value such as the subject or body.
+-   * @param \Drupal\contact\MessageInterface $message
++   * @param MessageInterface $message
+    *   The contact message.
+    *
+    * @return string
+@@ -481,7 +484,7 @@ class ContactEmail extends ContentEntityBase implements ContactEmailInterface {
+   /**
+    * Get email address from the sender of the contact message.
+    *
+-   * @param \Drupal\contact\MessageInterface $message
++   * @param MessageInterface $message
+    *   The contact message.
+    *
+    * @return string
+@@ -494,7 +497,7 @@ class ContactEmail extends ContentEntityBase implements ContactEmailInterface {
+   /**
+    * Get email address from a field.
+    *
+-   * @param \Drupal\contact\MessageInterface $message
++   * @param MessageInterface $message
+    *   The contact message.
+    * @param object $field
+    *   The target field on the message.
+@@ -523,7 +526,7 @@ class ContactEmail extends ContentEntityBase implements ContactEmailInterface {
+   /**
+    * Get email address from a field.
+    *
+-   * @param \Drupal\contact\MessageInterface $message
++   * @param MessageInterface $message
+    *   The contact message.
+    * @param object $field
+    *   The target field on the message.
+@@ -531,8 +534,8 @@ class ContactEmail extends ContentEntityBase implements ContactEmailInterface {
+    * @return array
+    *   An array of emails.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getEmailFromReferencedField(MessageInterface $message, $field) {
+     $results = [];
+@@ -557,7 +560,7 @@ class ContactEmail extends ContentEntityBase implements ContactEmailInterface {
+ 
+       if ($referenced_entity_id > 0) {
+         $storage = \Drupal::entityTypeManager()->getStorage($entity_type);
+-        /** @var \Drupal\Core\Entity\FieldableEntityInterface $entity */
++        /** @var FieldableEntityInterface $entity */
+         $entity = $storage->load($referenced_entity_id);
+         if ($emails = $entity->get($email_field_name)->getValue()) {
+           foreach ($emails as $email) {
+diff --git a/src/Entity/ContactEmailInterface.php b/src/Entity/ContactEmailInterface.php
+index dbf27d7..4ccbf2f 100644
+--- a/src/Entity/ContactEmailInterface.php
++++ b/src/Entity/ContactEmailInterface.php
+@@ -16,7 +16,7 @@ interface ContactEmailInterface extends ContentEntityInterface, EntityChangedInt
+   /**
+    * Get the email subject.
+    *
+-   * @param \Drupal\contact\MessageInterface $message
++   * @param MessageInterface $message
+    *   The contact message.
+    *
+    * @return string
+@@ -27,7 +27,7 @@ interface ContactEmailInterface extends ContentEntityInterface, EntityChangedInt
+   /**
+    * Get the email body.
+    *
+-   * @param \Drupal\contact\MessageInterface $message
++   * @param MessageInterface $message
+    *   The contact message.
+    *
+    * @return string
+@@ -38,7 +38,7 @@ interface ContactEmailInterface extends ContentEntityInterface, EntityChangedInt
+   /**
+    * Get the email body format.
+    *
+-   * @param \Drupal\contact\MessageInterface $message
++   * @param MessageInterface $message
+    *   The contact message.
+    *
+    * @return string
+@@ -49,7 +49,7 @@ interface ContactEmailInterface extends ContentEntityInterface, EntityChangedInt
+   /**
+    * Get the email recipient(s).
+    *
+-   * @param \Drupal\contact\MessageInterface $message
++   * @param MessageInterface $message
+    *   The contact message.
+    *
+    * @return array
+@@ -60,7 +60,7 @@ interface ContactEmailInterface extends ContentEntityInterface, EntityChangedInt
+   /**
+    * Get the reply-to email address.
+    *
+-   * @param \Drupal\contact\MessageInterface $message
++   * @param MessageInterface $message
+    *   The contact message.
+    *
+    * @return string
+diff --git a/src/Form/ContactEmailForm.php b/src/Form/ContactEmailForm.php
+index 171ad6a..e6cdc56 100644
+--- a/src/Form/ContactEmailForm.php
++++ b/src/Form/ContactEmailForm.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\contact_emails\Form;
+ 
++use Drupal\contact\ContactFormInterface;
++use Drupal\contact_emails\Entity\ContactEmailInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\contact_emails\ContactEmailStorageInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\contact\Entity\ContactForm;
+ use Drupal\contact_emails\ContactEmails;
+@@ -19,20 +24,20 @@ class ContactEmailForm extends ContentEntityForm {
+   /**
+    * Drupal\contact_emails\ContactEmails definition.
+    *
+-   * @var \Drupal\contact_emails\ContactEmails
++   * @var ContactEmails
+    */
+   protected $contactEmails;
+ 
+   /**
+    * Constructs a ContentEntityForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository service.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\contact_emails\ContactEmails $contact_emails
++   * @param ContactEmails $contact_emails
+    *   The contact emails service.
+    */
+   public function __construct(EntityRepositoryInterface $entity_repository, EntityTypeBundleInfoInterface $entity_type_bundle_info, TimeInterface $time, ContactEmails $contact_emails) {
+@@ -264,14 +269,14 @@ class ContactEmailForm extends ContentEntityForm {
+   /**
+    * Get the contact form from the current request.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    *
+-   * @return \Drupal\contact\ContactFormInterface
++   * @return ContactFormInterface
+    *   The contact form.
+    */
+   protected function getContactForm(FormStateInterface $form_state) {
+-    /** @var \Drupal\contact_emails\Entity\ContactEmailInterface $entity */
++    /** @var ContactEmailInterface $entity */
+     $entity = $this->entity;
+ 
+     if (!$entity->get('contact_form')->isEmpty()) {
+@@ -283,7 +288,7 @@ class ContactEmailForm extends ContentEntityForm {
+       $contactForm = (is_array($value)) ? $value[0]['target_id'] : NULL;
+     }
+ 
+-    /** @var \Drupal\contact\ContactFormInterface $contactForm */
++    /** @var ContactFormInterface $contactForm */
+     if (empty($contactForm)) {
+       $contactForm = \Drupal::routeMatch()->getParameter('contact_form');
+     }
+@@ -299,7 +304,7 @@ class ContactEmailForm extends ContentEntityForm {
+    * Get body potentially with format.
+    */
+   protected function getBody($form, $form_state) {
+-    /** @var \Drupal\contact_emails\Entity\ContactEmailInterface $entity */
++    /** @var ContactEmailInterface $entity */
+     $entity = $this->buildEntity($form, $form_state);
+     return !$entity->get('message')->isEmpty() ? $entity->get('message') : '';
+   }
+@@ -361,13 +366,13 @@ class ContactEmailForm extends ContentEntityForm {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $values = $form_state->getValues();
+ 
+-    /** @var \Drupal\contact_emails\ContactEmailStorageInterface $storage */
++    /** @var ContactEmailStorageInterface $storage */
+     $storage = \Drupal::entityTypeManager()->getStorage('contact_email');
+ 
+     // Warn the user if they are disabling the core contact emails for the
+diff --git a/src/Tests/ContactEmailsDefaultEmailTest.php b/src/Tests/ContactEmailsDefaultEmailTest.php
+index 0ac22cd..d79f65e 100644
+--- a/src/Tests/ContactEmailsDefaultEmailTest.php
++++ b/src/Tests/ContactEmailsDefaultEmailTest.php
+@@ -37,21 +37,32 @@ class ContactEmailsDefaultEmailTest extends ContactEmailsTestBase {
+       'reply_to_type[0][value]' => 'default',
+       'status[value]' => TRUE,
+     ];
+-    $this->drupalPostForm('/admin/structure/contact/manage/contact_emails_test_form/emails/add', $params, t('Save'));
++    $this->drupalGet('/admin/structure/contact/manage/contact_emails_test_form/emails/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Submit the contact form on the front-end of the website.
+     $params = [
+       'subject[0][value]' => 'Submission Test Form Subject',
+       'message[0][value]' => 'Submission Test Form Body',
+     ];
+-    $this->drupalPostForm('/contact/contact_emails_test_form', $params, t('Send message'));
++    $this->drupalGet('/contact/contact_emails_test_form');
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that it says message has been sent.
+-    $this->assertText('Your message has been sent.', 'Message sent successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Your message has been sent.');
+ 
+     // Assert subject and body.
+-    $this->assertText('Contact Emails Test Form Subject', 'Message subject set successfully.');
+-    $this->assertText('Contact Emails Test Form Body', 'Message body set successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Contact Emails Test Form Subject');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Contact Emails Test Form Body');
+   }
+ 
+ }
+diff --git a/src/Tests/ContactEmailsRecipientReferenceTest.php b/src/Tests/ContactEmailsRecipientReferenceTest.php
+index bf03561..bf8fbe1 100644
+--- a/src/Tests/ContactEmailsRecipientReferenceTest.php
++++ b/src/Tests/ContactEmailsRecipientReferenceTest.php
+@@ -42,7 +42,8 @@ class ContactEmailsRecipientReferenceTest extends ContactEmailsTestBase {
+       'reply_to_type[0][value]' => 'default',
+       'status[value]' => TRUE,
+     ];
+-    $this->drupalPostForm('/admin/structure/contact/manage/contact_emails_test_form/emails/add', $params, t('Save'));
++    $this->drupalGet('/admin/structure/contact/manage/contact_emails_test_form/emails/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Open the contact form on the front-end.
+     $this->drupalGet('/contact/contact_emails_test_form');
+@@ -58,10 +59,13 @@ class ContactEmailsRecipientReferenceTest extends ContactEmailsTestBase {
+       'message[0][value]' => 'Submission Test Form Body',
+       'field_reference' => $last_option->getValue(),
+     ];
+-    $this->drupalPostForm(NULL, $params, t('Send message'));
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that the message to is the email of the currently logged in user.
+-    $this->assertText('Message-to:email-via-reference@test.com', 'Message to set successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Message-to:email-via-reference@test.com');
+   }
+ 
+ }
+diff --git a/src/Tests/ContactEmailsRecipientTest.php b/src/Tests/ContactEmailsRecipientTest.php
+index 2c2d87e..afbbf60 100644
+--- a/src/Tests/ContactEmailsRecipientTest.php
++++ b/src/Tests/ContactEmailsRecipientTest.php
+@@ -40,17 +40,22 @@ class ContactEmailsRecipientTest extends ContactEmailsTestBase {
+       'reply_to_type[0][value]' => 'default',
+       'status[value]' => TRUE,
+     ];
+-    $this->drupalPostForm('/admin/structure/contact/manage/contact_emails_test_form/emails/add', $params, t('Save'));
++    $this->drupalGet('/admin/structure/contact/manage/contact_emails_test_form/emails/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Submit the contact form on the front-end of the website.
+     $params = [
+       'subject[0][value]' => 'Submission Test Form Subject',
+       'message[0][value]' => 'Submission Test Form Body',
+     ];
+-    $this->drupalPostForm('/contact/contact_emails_test_form', $params, t('Send message'));
++    $this->drupalGet('/contact/contact_emails_test_form');
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that the to is the default site email.
+-    $this->assertText('Message-to:site-default-mail@test.com', 'Message to set to default successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Message-to:site-default-mail@test.com');
+   }
+ 
+   /**
+@@ -70,7 +75,8 @@ class ContactEmailsRecipientTest extends ContactEmailsTestBase {
+       'reply_to_type[0][value]' => 'default',
+       'status[value]' => TRUE,
+     ];
+-    $this->drupalPostForm('/admin/structure/contact/manage/contact_emails_test_form/emails/add', $params, t('Save'));
++    $this->drupalGet('/admin/structure/contact/manage/contact_emails_test_form/emails/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Submit the contact form on the front-end of the website.
+     $params = [
+@@ -78,10 +84,14 @@ class ContactEmailsRecipientTest extends ContactEmailsTestBase {
+       'message[0][value]' => 'Submission Test Form Body',
+       'field_email_address[0][value]' => 'email.in.field@test.com',
+     ];
+-    $this->drupalPostForm('/contact/contact_emails_test_form', $params, t('Send message'));
++    $this->drupalGet('/contact/contact_emails_test_form');
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that the message to is the value of the field.
+-    $this->assertText('Message-to:email.in.field@test.com', 'Message to set successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Message-to:email.in.field@test.com');
+   }
+ 
+   /**
+@@ -98,17 +108,22 @@ class ContactEmailsRecipientTest extends ContactEmailsTestBase {
+       'reply_to_type[0][value]' => 'default',
+       'status[value]' => TRUE,
+     ];
+-    $this->drupalPostForm('/admin/structure/contact/manage/contact_emails_test_form/emails/add', $params, t('Save'));
++    $this->drupalGet('/admin/structure/contact/manage/contact_emails_test_form/emails/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Submit the contact form on the front-end of the website.
+     $params = [
+       'subject[0][value]' => 'Submission Test Form Subject',
+       'message[0][value]' => 'Submission Test Form Body',
+     ];
+-    $this->drupalPostForm('/contact/contact_emails_test_form', $params, t('Send message'));
++    $this->drupalGet('/contact/contact_emails_test_form');
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that the message to is the email of the currently logged in user.
+-    $this->assertText('Message-to:' . \Drupal::currentUser()->getEmail(), 'Message to set successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Message-to:' . \Drupal::currentUser()->getEmail());
+   }
+ 
+   /**
+@@ -126,17 +141,22 @@ class ContactEmailsRecipientTest extends ContactEmailsTestBase {
+       'reply_to_type[0][value]' => 'default',
+       'status[value]' => TRUE,
+     ];
+-    $this->drupalPostForm('/admin/structure/contact/manage/contact_emails_test_form/emails/add', $params, t('Save'));
++    $this->drupalGet('/admin/structure/contact/manage/contact_emails_test_form/emails/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Submit the contact form on the front-end of the website.
+     $params = [
+       'subject[0][value]' => 'Submission Test Form Subject',
+       'message[0][value]' => 'Submission Test Form Body',
+     ];
+-    $this->drupalPostForm('/contact/contact_emails_test_form', $params, t('Send message'));
++    $this->drupalGet('/contact/contact_emails_test_form');
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that the message to is the email of the currently logged in user.
+-    $this->assertText('Message-to:manual-email-1@test.com, manual-email-2@test.com', 'Message to set successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Message-to:manual-email-1@test.com, manual-email-2@test.com');
+   }
+ 
+ }
+diff --git a/src/Tests/ContactEmailsReplyToReferenceTest.php b/src/Tests/ContactEmailsReplyToReferenceTest.php
+index dfde898..a3202e9 100644
+--- a/src/Tests/ContactEmailsReplyToReferenceTest.php
++++ b/src/Tests/ContactEmailsReplyToReferenceTest.php
+@@ -42,7 +42,8 @@ class ContactEmailsReplyToReferenceTest extends ContactEmailsTestBase {
+       'reply_to_reference[0][value]' => 'field_reference.contact_message.contact_reference_test_form.field_email_reference',
+       'status[value]' => TRUE,
+     ];
+-    $this->drupalPostForm('/admin/structure/contact/manage/contact_emails_test_form/emails/add', $params, t('Save'));
++    $this->drupalGet('/admin/structure/contact/manage/contact_emails_test_form/emails/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Open the contact form on the front-end.
+     $this->drupalGet('/contact/contact_emails_test_form');
+@@ -58,10 +59,13 @@ class ContactEmailsReplyToReferenceTest extends ContactEmailsTestBase {
+       'message[0][value]' => 'Submission Test Form Body',
+       'field_reference' => $last_option->getValue(),
+     ];
+-    $this->drupalPostForm(NULL, $params, t('Send message'));
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that the message to is the email of the currently logged in user.
+-    $this->assertText('Message-reply-to:email-via-reference@test.com', 'Message reply-to set successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Message-reply-to:email-via-reference@test.com');
+   }
+ 
+ }
+diff --git a/src/Tests/ContactEmailsReplyToTest.php b/src/Tests/ContactEmailsReplyToTest.php
+index f85f9d5..6e2332a 100644
+--- a/src/Tests/ContactEmailsReplyToTest.php
++++ b/src/Tests/ContactEmailsReplyToTest.php
+@@ -40,17 +40,22 @@ class ContactEmailsReplyToTest extends ContactEmailsTestBase {
+       'reply_to_type[0][value]' => 'default',
+       'status[value]' => TRUE,
+     ];
+-    $this->drupalPostForm('/admin/structure/contact/manage/contact_emails_test_form/emails/add', $params, t('Save'));
++    $this->drupalGet('/admin/structure/contact/manage/contact_emails_test_form/emails/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Submit the contact form on the front-end of the website.
+     $params = [
+       'subject[0][value]' => 'Submission Test Form Subject',
+       'message[0][value]' => 'Submission Test Form Body',
+     ];
+-    $this->drupalPostForm('/contact/contact_emails_test_form', $params, t('Send message'));
++    $this->drupalGet('/contact/contact_emails_test_form');
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that the reply-to is the default site email.
+-    $this->assertText('Message-reply-to:site-default-mail@test.com', 'Message to set to default successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Message-reply-to:site-default-mail@test.com');
+   }
+ 
+   /**
+@@ -70,7 +75,8 @@ class ContactEmailsReplyToTest extends ContactEmailsTestBase {
+       'reply_to_field[0][value]' => 'field_email_address',
+       'status[value]' => TRUE,
+     ];
+-    $this->drupalPostForm('/admin/structure/contact/manage/contact_emails_test_form/emails/add', $params, t('Save'));
++    $this->drupalGet('/admin/structure/contact/manage/contact_emails_test_form/emails/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Submit the contact form on the front-end of the website.
+     $params = [
+@@ -78,10 +84,14 @@ class ContactEmailsReplyToTest extends ContactEmailsTestBase {
+       'message[0][value]' => 'Submission Test Form Body',
+       'field_email_address[0][value]' => 'email.in.field@test.com',
+     ];
+-    $this->drupalPostForm('/contact/contact_emails_test_form', $params, t('Send message'));
++    $this->drupalGet('/contact/contact_emails_test_form');
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that it says message has been sent.
+-    $this->assertText('Message-reply-to:email.in.field@test.com', 'Message reply-to set successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Message-reply-to:email.in.field@test.com');
+   }
+ 
+   /**
+@@ -98,17 +108,22 @@ class ContactEmailsReplyToTest extends ContactEmailsTestBase {
+       'reply_to_type[0][value]' => 'submitter',
+       'status[value]' => TRUE,
+     ];
+-    $this->drupalPostForm('/admin/structure/contact/manage/contact_emails_test_form/emails/add', $params, t('Save'));
++    $this->drupalGet('/admin/structure/contact/manage/contact_emails_test_form/emails/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Submit the contact form on the front-end of the website.
+     $params = [
+       'subject[0][value]' => 'Submission Test Form Subject',
+       'message[0][value]' => 'Submission Test Form Body',
+     ];
+-    $this->drupalPostForm('/contact/contact_emails_test_form', $params, t('Send message'));
++    $this->drupalGet('/contact/contact_emails_test_form');
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that the message to is the email of the currently logged in user.
+-    $this->assertText('Message-reply-to:' . \Drupal::currentUser()->getEmail(), 'Message to set successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Message-reply-to:' . \Drupal::currentUser()->getEmail());
+   }
+ 
+   /**
+@@ -126,17 +141,22 @@ class ContactEmailsReplyToTest extends ContactEmailsTestBase {
+       'reply_to_email[0][value]' => 'manual-email-1@test.com',
+       'status[value]' => TRUE,
+     ];
+-    $this->drupalPostForm('/admin/structure/contact/manage/contact_emails_test_form/emails/add', $params, t('Save'));
++    $this->drupalGet('/admin/structure/contact/manage/contact_emails_test_form/emails/add');
++    $this->submitForm($params, t('Save'));
+ 
+     // Submit the contact form on the front-end of the website.
+     $params = [
+       'subject[0][value]' => 'Submission Test Form Subject',
+       'message[0][value]' => 'Submission Test Form Body',
+     ];
+-    $this->drupalPostForm('/contact/contact_emails_test_form', $params, t('Send message'));
++    $this->drupalGet('/contact/contact_emails_test_form');
++    $this->submitForm($params, t('Send message'));
+ 
+     // Assert that the message to is the email of the currently logged in user.
+-    $this->assertText('Message-reply-to:manual-email-1@test.com', 'Message reply-to set successfully.');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Message-reply-to:manual-email-1@test.com');
+   }
+ 
+ }

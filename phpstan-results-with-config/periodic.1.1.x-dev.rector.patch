@@ -1,0 +1,185 @@
+diff --git a/periodic.info.yml b/periodic.info.yml
+index f3e600a..2703ef2 100644
+--- a/periodic.info.yml
++++ b/periodic.info.yml
+@@ -1,4 +1,4 @@
+ name: 'Periodic'
+ type: module
+ description: 'Utility for throttling execution of tasks'
+-core_version_requirement: ^8.9 || ^9
++core_version_requirement: ^8.9 || ^9 || ^10
+diff --git a/periodic.module b/periodic.module
+index de14cdc..c1f92ff 100644
+--- a/periodic.module
++++ b/periodic.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\periodic\PeriodicManager;
++use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+ /**
+  * @file
+  * Periodic module hook implementations.
+@@ -12,9 +14,9 @@ use Drupal\periodic\Event\PeriodicEvent;
+  * Implements hook_cron().
+  */
+ function periodic_cron() {
+-  /** @var \Drupal\periodic\PeriodicManager $periodManager */
++  /** @var PeriodicManager $periodManager */
+   $periodManager = \Drupal::service('periodic.manager');
+-  /** @var \Symfony\Component\EventDispatcher\EventDispatcherInterface $eventDispatcher */
++  /** @var EventDispatcherInterface $eventDispatcher */
+   $eventDispatcher = Drupal::service('event_dispatcher');
+ 
+   $periods = [
+@@ -29,7 +31,7 @@ function periodic_cron() {
+       // Argument order is set for compatibility with Drupal 8.9.
+       // Will be updated when compatibility is updated to ^9.1.
+       // @see https://www.drupal.org/node/3154407
+-      $eventDispatcher->dispatch($name, new PeriodicEvent());
++      $eventDispatcher->dispatch(new PeriodicEvent(), $name);
+     }
+   }
+ }
+diff --git a/src/Event/PeriodicEvent.php b/src/Event/PeriodicEvent.php
+index d5d30c5..6e16bf8 100644
+--- a/src/Event/PeriodicEvent.php
++++ b/src/Event/PeriodicEvent.php
+@@ -2,7 +2,7 @@
+ 
+ namespace Drupal\periodic\Event;
+ 
+-use Symfony\Component\EventDispatcher\Event;
++use Symfony\Contracts\EventDispatcher\Event;
+ 
+ /**
+  * Event for periodic tasks.
+diff --git a/src/PeriodicManager.php b/src/PeriodicManager.php
+index 2f9e61a..64da055 100644
+--- a/src/PeriodicManager.php
++++ b/src/PeriodicManager.php
+@@ -30,23 +30,23 @@ class PeriodicManager implements DestructableInterface {
+   /**
+    * The State service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The Time service.
+    *
+-   * @var \Drupal\Component\Datetime\Time
++   * @var Time
+    */
+   protected $time;
+ 
+   /**
+    * Initialize Period Manager service.
+    *
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The State service.
+-   * @param \Drupal\Component\Datetime\Time $time
++   * @param Time $time
+    *   The Time service.
+    */
+   public function __construct(StateInterface $state, Time $time) {
+diff --git a/tests/src/Unit/CronTest.php b/tests/src/Unit/CronTest.php
+index f4e008e..53d5c1d 100644
+--- a/tests/src/Unit/CronTest.php
++++ b/tests/src/Unit/CronTest.php
+@@ -2,12 +2,14 @@
+ 
+ namespace Drupal\Tests\periodic\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Prophecy\Prophecy\ObjectProphecy;
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\periodic\PeriodicEvents;
+ use Drupal\periodic\PeriodicManager;
+ use Drupal\Tests\UnitTestCase;
+ use Prophecy\Argument;
+-use Symfony\Component\EventDispatcher\Event;
+ use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+ 
+ require __DIR__ . '/../../../periodic.module';
+@@ -19,17 +21,18 @@ require __DIR__ . '/../../../periodic.module';
+  */
+ class CronTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Mocked Event Dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface|\Prophecy\Prophecy\ObjectProphecy
++   * @var EventDispatcherInterface|ObjectProphecy
+    */
+   private $eventDispatcher;
+ 
+   /**
+    * Mocked Periodic Manager.
+    *
+-   * @var \Drupal\periodic\PeriodicManager|\Prophecy\Prophecy\ObjectProphecy
++   * @var PeriodicManager|ObjectProphecy
+    */
+   private $periodicManager;
+ 
+diff --git a/tests/src/Unit/PeriodicManagerTest.php b/tests/src/Unit/PeriodicManagerTest.php
+index fad4f01..ba04615 100644
+--- a/tests/src/Unit/PeriodicManagerTest.php
++++ b/tests/src/Unit/PeriodicManagerTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\periodic\Unit;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Component\Datetime\Time;
+ use Drupal\Core\State\State;
+ use Drupal\periodic\Event\PeriodicEvent;
+@@ -20,21 +21,21 @@ class PeriodicManagerTest extends UnitTestCase {
+   /**
+    * Mock Time service.
+    *
+-   * @var \Drupal\Component\Datetime\Time|\PHPUnit\Framework\MockObject\MockObject
++   * @var Time|MockObject
+    */
+   private $time;
+ 
+   /**
+    * Mock State service.
+    *
+-   * @var \Drupal\Core\State\State|\PHPUnit\Framework\MockObject\MockObject
++   * @var State|MockObject
+    */
+   private $state;
+ 
+   /**
+    * A Periodic Manager instance for testing.
+    *
+-   * @var \Drupal\periodic\PeriodicManager
++   * @var PeriodicManager
+    */
+   private $manager;
+ 
+@@ -44,16 +45,12 @@ class PeriodicManagerTest extends UnitTestCase {
+   public function setUp(): void {
+     parent::setUp();
+ 
+-    $this->time = $this->getMockBuilder(Time::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->time = $this->createMock(Time::class);
+     $this->time->expects($this->any())
+       ->method('getRequestTime')
+       ->willReturn(946684800);
+ 
+-    $this->state = $this->getMockBuilder(State::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->state = $this->createMock(State::class);
+ 
+     $this->manager = new PeriodicManager($this->state, $this->time);
+   }

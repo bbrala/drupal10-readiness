@@ -1,0 +1,494 @@
+diff --git a/modules/cloudflarepurger/src/EventSubscriber/CloudFlareCacheTagHeaderGenerator.php b/modules/cloudflarepurger/src/EventSubscriber/CloudFlareCacheTagHeaderGenerator.php
+index d398a9c..a1968f1 100644
+--- a/modules/cloudflarepurger/src/EventSubscriber/CloudFlareCacheTagHeaderGenerator.php
++++ b/modules/cloudflarepurger/src/EventSubscriber/CloudFlareCacheTagHeaderGenerator.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\cloudflarepurger\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\ResponseEvent;
+ use Drupal\Core\Cache\CacheableResponseInterface;
+-use Symfony\Component\HttpKernel\Event\FilterResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ 
+@@ -33,10 +33,10 @@ class CloudFlareCacheTagHeaderGenerator implements EventSubscriberInterface {
+   /**
+    * Generates a 'Cache-Tag' header in the format expected by CloudFlare.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\FilterResponseEvent $event
++   * @param ResponseEvent $event
+    *   The event to process.
+    */
+-  public function onResponse(FilterResponseEvent $event) {
++  public function onResponse(ResponseEvent $event) {
+     if (!$event->isMasterRequest()) {
+       return;
+     }
+diff --git a/modules/cloudflarepurger/tests/src/Unit/DiagnosticCheckTestBase.php b/modules/cloudflarepurger/tests/src/Unit/DiagnosticCheckTestBase.php
+index 0cbb61d..09e2f51 100644
+--- a/modules/cloudflarepurger/tests/src/Unit/DiagnosticCheckTestBase.php
++++ b/modules/cloudflarepurger/tests/src/Unit/DiagnosticCheckTestBase.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\cloudflarepurger\Unit;
+ 
++use Drupal\Core\state\StateInterface;
++use Drupal\cloudflare\CloudFlareStateInterface;
++use Drupal\cloudflare\Timestamp;
++use Drupal\cloudflare\CloudFlareComposerDependenciesCheckInterface;
+ use Drupal\Tests\UnitTestCase;
+ use Drupal\Core\KeyValueStore\KeyValueMemoryFactory;
+ use Drupal\Core\Cache\MemoryBackend;
+@@ -18,47 +22,45 @@ abstract class DiagnosticCheckTestBase extends UnitTestCase {
+   /**
+    * The dependency injection container.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+   /**
+    * Tracks Drupal states.
+    *
+-   * @var \Drupal\Core\state\StateInterface
++   * @var StateInterface
+    */
+   protected $drupalState;
+ 
+   /**
+    * Tracks rate limits associated with CloudFlare Api.
+    *
+-   * @var \Drupal\cloudflare\CloudFlareStateInterface
++   * @var CloudFlareStateInterface
+    */
+   protected $cloudflareState;
+ 
+   /**
+    * Provides timestamps.
+    *
+-   * @var \Drupal\cloudflare\Timestamp
++   * @var Timestamp
+    */
+   protected $timestampStub;
+ 
+   /**
+    * Provides check for composer dependencies.
+    *
+-   * @var \Drupal\cloudflare\CloudFlareComposerDependenciesCheckInterface
++   * @var CloudFlareComposerDependenciesCheckInterface
+    */
+   protected $composerDependencyStub;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+     $this->drupalState = new CoreState(new KeyValueMemoryFactory(), new MemoryBackend('test'), new NullLockBackend());
+-    $this->timestampStub = $this->getMockBuilder('Drupal\cloudflare\Timestamp')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->timestampStub = $this->createMock('Drupal\cloudflare\Timestamp');
+     $this->cloudflareState = new CloudFlareState($this->drupalState, $this->timestampStub);
+ 
+     $this->container = new ContainerBuilder();
+diff --git a/src/CloudFlareComposerDependenciesCheckInterface.php b/src/CloudFlareComposerDependenciesCheckInterface.php
+index ddbaa03..082bb78 100644
+--- a/src/CloudFlareComposerDependenciesCheckInterface.php
++++ b/src/CloudFlareComposerDependenciesCheckInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\cloudflare;
+ 
++use Drupal\cloudflare\Exception\ComposerDependencyException;
+ /**
+  * Tests that Composer dependencies for CloudFlare are met.
+  */
+@@ -19,7 +20,7 @@ interface CloudFlareComposerDependenciesCheckInterface {
+   /**
+    * Asserts that composer dependencies for CloudFlare are met.
+    *
+-   * @throws \Drupal\cloudflare\Exception\ComposerDependencyException
++   * @throws ComposerDependencyException
+    *   Exception thrown if composer dependencies are met.
+    */
+   public function assert();
+diff --git a/src/CloudFlareZoneInterface.php b/src/CloudFlareZoneInterface.php
+index c19deb3..9f7ef9e 100644
+--- a/src/CloudFlareZoneInterface.php
++++ b/src/CloudFlareZoneInterface.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\cloudflare;
+ 
++use CloudFlarePhpSdk\Exceptions\CloudFlareApiException;
++use CloudFlarePhpSdk\Exceptions\CloudFlareInvalidCredentialException;
++use CloudFlarePhpSdk\Exceptions\CloudFlareTimeoutException;
++use CloudFlarePhpSdk\Exceptions\CloudFlareException;
+ use CloudFlarePhpSdk\ApiTypes\Zone\ZoneSettings;
+ 
+ /**
+@@ -12,7 +16,7 @@ interface CloudFlareZoneInterface {
+   /**
+    * Updates a zone's settings from CloudFlare's API.
+    *
+-   * @param \CloudFlarePhpSdk\ApiTypes\Zone\ZoneSettings $zone_settings
++   * @param ZoneSettings $zone_settings
+    *   The updated settings object.
+    */
+   public function updateZoneSettings(ZoneSettings $zone_settings);
+@@ -20,7 +24,7 @@ interface CloudFlareZoneInterface {
+   /**
+    * Gets the zone's settings from CloudFlare's API.
+    *
+-   * @return \CloudFlarePhpSdk\ApiTypes\Zone\ZoneSettings|null
++   * @return ZoneSettings|null
+    *   Zone settings retrieved from the CloudFlareAPI. NULL if unable to
+    *   retrieve.
+    */
+@@ -32,7 +36,7 @@ interface CloudFlareZoneInterface {
+    * @return array
+    *   A array of CloudFlareZones objects from the current CloudFlare account.
+    *
+-   * @throws \CloudFlarePhpSdk\Exceptions\CloudFlareApiException
++   * @throws CloudFlareApiException
+    *   Application level error returned from the API.
+    */
+   public function listZones();
+@@ -44,16 +48,16 @@ interface CloudFlareZoneInterface {
+    *   The secret Api key used to authenticate against CloudFlare.
+    * @param string $email
+    *   Email of the account used to authenticate against CloudFlare.
+-   * @param \Drupal\cloudflare\CloudFlareComposerDependenciesCheckInterface $composer_dependency_check
++   * @param CloudFlareComposerDependenciesCheckInterface $composer_dependency_check
+    *   Checks that composer dependencies are met.
+-   * @param \Drupal\cloudflare\CloudFlareStateInterface $state
++   * @param CloudFlareStateInterface $state
+    *   Tracks rate limits associated with CloudFlare Api.
+    *
+-   * @throws CloudFlarePhpSdk\Exceptions\CloudFlareInvalidCredentialException
++   * @throws CloudFlareInvalidCredentialException
+    *   Thrown if $apikey and $email fail to authenticate against the Api.
+-   * @throws CloudFlarePhpSdk\Exceptions\CloudFlareTimeoutException
++   * @throws CloudFlareTimeoutException
+    *   Thrown if the connection to the Api times out.
+-   * @throws CloudFlarePhpSdk\Exceptions\CloudFlareException
++   * @throws CloudFlareException
+    *   Thrown if an unknown exception occurs when connecting to the Api.
+    */
+   public static function assertValidCredentials($apikey, $email, CloudFlareComposerDependenciesCheckInterface $composer_dependency_check, CloudFlareStateInterface $state);
+diff --git a/src/ComposerDependenciesCheck.php b/src/ComposerDependenciesCheck.php
+index 5421b1b..ff11b3f 100644
+--- a/src/ComposerDependenciesCheck.php
++++ b/src/ComposerDependenciesCheck.php
+@@ -20,7 +20,7 @@ class ComposerDependenciesCheck implements CloudFlareComposerDependenciesCheckIn
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+@@ -36,7 +36,7 @@ class ComposerDependenciesCheck implements CloudFlareComposerDependenciesCheckIn
+   /**
+    * ComposerDependenciesCheck constructor.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+    */
+   public function __construct(LoggerInterface $logger) {
+diff --git a/src/EventSubscriber/ClientIpRestore.php b/src/EventSubscriber/ClientIpRestore.php
+index 197beb0..67c1430 100644
+--- a/src/EventSubscriber/ClientIpRestore.php
++++ b/src/EventSubscriber/ClientIpRestore.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\cloudflare\EventSubscriber;
+ 
++use Drupal\Core\Config\Config;
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Core\Url;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Cache\CacheBackendInterface;
+@@ -10,7 +12,6 @@ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use GuzzleHttp\ClientInterface;
+ use GuzzleHttp\Exception\RequestException;
+ use Symfony\Component\HttpKernel\KernelEvents;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\HttpFoundation\IpUtils;
+ use Psr\Log\LoggerInterface;
+@@ -32,28 +33,28 @@ class ClientIpRestore implements EventSubscriberInterface {
+   /**
+    * Cache backend service.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cache;
+ 
+   /**
+    * The settings configuration.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * The HTTP client to fetch the feed data with.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+@@ -67,13 +68,13 @@ class ClientIpRestore implements EventSubscriberInterface {
+   /**
+    * Constructs a ClientIpRestore.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
++   * @param CacheBackendInterface $cache
+    *   Cache backend.
+-   * @param \GuzzleHttp\ClientInterface $http_client
++   * @param ClientInterface $http_client
+    *   A Guzzle client object.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, CacheBackendInterface $cache, ClientInterface $http_client, LoggerInterface $logger) {
+@@ -96,7 +97,7 @@ class ClientIpRestore implements EventSubscriberInterface {
+   /**
+    * Restores the origination client IP delivered to Drupal from CloudFlare.
+    */
+-  public function onRequest(GetResponseEvent $event) {
++  public function onRequest(RequestEvent $event) {
+     if (!$this->isClientIpRestoreEnabled) {
+       return;
+     }
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 662dc13..d0ec617 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -36,35 +36,35 @@ class SettingsForm extends FormBase implements ContainerInjectionInterface {
+   /**
+    * Wrapper to access the CloudFlare zone api.
+    *
+-   * @var \Drupal\cloudflare\CloudFlareZoneInterface
++   * @var CloudFlareZoneInterface
+    */
+   protected $zoneApi;
+ 
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * A logger instance for CloudFlare.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Tracks rate limits associated with CloudFlare API.
+    *
+-   * @var \Drupal\cloudflare\CloudFlareStateInterface
++   * @var CloudFlareStateInterface
+    */
+   protected $state;
+ 
+   /**
+    * Checks that the composer dependencies for CloudFlare are met.
+    *
+-   * @var \Drupal\cloudflare\CloudFlareComposerDependenciesCheckInterface
++   * @var CloudFlareComposerDependenciesCheckInterface
+    */
+   protected $cloudFlareComposerDependenciesCheck;
+ 
+@@ -108,17 +108,17 @@ class SettingsForm extends FormBase implements ContainerInjectionInterface {
+   /**
+    * Constructs a new CloudFlareAdminSettingsForm.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\cloudflare\CloudFlareStateInterface $state
++   * @param CloudFlareStateInterface $state
+    *   Tracks rate limits associated with CloudFlare API.
+-   * @param \Drupal\cloudflare\CloudFlareZoneInterface $zone_api
++   * @param CloudFlareZoneInterface $zone_api
+    *   ZoneApi instance for accessing api.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+    * @param \Drupal\Component\Utility\EmailValidator|\Egulias\EmailValidator\EmailValidator $email_validator
+    *   The email validator.
+-   * @param \Drupal\cloudflare\CloudFlareComposerDependenciesCheckInterface $check_interface
++   * @param CloudFlareComposerDependenciesCheckInterface $check_interface
+    *   Checks if composer dependencies are met.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, CloudFlareStateInterface $state, CloudFlareZoneInterface $zone_api, LoggerInterface $logger, $email_validator, CloudFlareComposerDependenciesCheckInterface $check_interface) {
+@@ -175,7 +175,7 @@ class SettingsForm extends FormBase implements ContainerInjectionInterface {
+   /**
+    * Builds credentials section for inclusion in the settings form.
+    *
+-   * @param \Drupal\Core\Config\Config $config
++   * @param Config $config
+    *   The readonly configuration.
+    *
+    * @return array
+@@ -208,7 +208,7 @@ class SettingsForm extends FormBase implements ContainerInjectionInterface {
+   /**
+    * Builds zone selection section for inclusion in the settings form.
+    *
+-   * @param \Drupal\Core\Config\Config $config
++   * @param Config $config
+    *   The readonly configuration.
+    *
+    * @return array
+@@ -265,7 +265,7 @@ class SettingsForm extends FormBase implements ContainerInjectionInterface {
+   /**
+    * Builds general config section for inclusion in the settings form.
+    *
+-   * @param \Drupal\Core\Config\Config $config
++   * @param Config $config
+    *   The readonly configuration.
+    *
+    * @return array
+diff --git a/src/Form/ZoneSelectionForm.php b/src/Form/ZoneSelectionForm.php
+index 4cc2bde..d38a553 100644
+--- a/src/Form/ZoneSelectionForm.php
++++ b/src/Form/ZoneSelectionForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\cloudflare\Form;
+ 
++use CloudFlarePhpSdk\ApiTypes\Zone\Zone;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Form\FormBase;
+@@ -25,21 +26,21 @@ class ZoneSelectionForm extends FormBase implements ContainerInjectionInterface
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Wrapper to access the CloudFlare zone api.
+    *
+-   * @var \Drupal\cloudflare\CloudFlareZoneInterface
++   * @var CloudFlareZoneInterface
+    */
+   protected $zoneApi;
+ 
+   /**
+    * A logger instance for CloudFlare.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+@@ -83,11 +84,11 @@ class ZoneSelectionForm extends FormBase implements ContainerInjectionInterface
+   /**
+    * Constructs a new ZoneSelectionForm.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\cloudflare\CloudFlareZoneInterface $zone_api
++   * @param CloudFlareZoneInterface $zone_api
+    *   ZoneApi instance for accessing api.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+    * @param bool $composer_dependencies_met
+    *   Checks that the composer dependencies for CloudFlare are met.
+@@ -227,10 +228,10 @@ class ZoneSelectionForm extends FormBase implements ContainerInjectionInterface
+   /**
+    * Retrieves suggestions for zone autocompletion.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   A JSON response containing autocomplete suggestions.
+    */
+   public function autocompleteZone(Request $request) {
+@@ -238,7 +239,7 @@ class ZoneSelectionForm extends FormBase implements ContainerInjectionInterface
+     $matches = [];
+ 
+     // Tracks if the current CloudFlare account has multiple zones.
+-    /** @var \CloudFlarePhpSdk\ApiTypes\Zone\Zone $zone */
++    /** @var Zone $zone */
+     foreach ($this->zoneApi->listZones() as $zone) {
+       if (stripos($zone->getName(), $zone_autocomplete_text) === 0) {
+         $matches[] = ['value' => $zone->getZoneId(), 'label' => $zone->getName()];
+diff --git a/src/State.php b/src/State.php
+index b2127c4..dd7488d 100644
+--- a/src/State.php
++++ b/src/State.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\cloudflare;
+ 
++use Drupal\CloudFlare\CloudFlareTimestampInterface;
+ use Drupal\Core\State\StateInterface;
+ use DateTime;
+ 
+@@ -18,23 +19,23 @@ class State implements CloudFlareStateInterface {
+   /**
+    * Tracks rate limits associated with CloudFlare Api.
+    *
+-   * @var \Drupal\cloudflare\CloudFlareStateInterface
++   * @var CloudFlareStateInterface
+    */
+   protected $state;
+ 
+   /**
+    * Timestamp service.
+    *
+-   * @var \Drupal\CloudFlare\CloudFlareTimestampInterface
++   * @var CloudFlareTimestampInterface
+    */
+   protected $timestamper;
+ 
+   /**
+    * State constructor.
+    *
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The drupal state service.
+-   * @param \Drupal\CloudFlare\CloudFlareTimestampInterface $timestamper
++   * @param CloudFlareTimestampInterface $timestamper
+    *   Cloudflare timestamp service.
+    */
+   public function __construct(StateInterface $state, CloudFlareTimestampInterface $timestamper) {

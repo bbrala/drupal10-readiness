@@ -1,0 +1,231 @@
+diff --git a/autotrader_csv.info.yml b/autotrader_csv.info.yml
+index ed4e1a3..d8194be 100644
+--- a/autotrader_csv.info.yml
++++ b/autotrader_csv.info.yml
+@@ -3,8 +3,7 @@ description: Autotrader CSV provides a CSV file that can be uploaded to an FTP s
+ package: Custom
+ 
+ type: module
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ 
+ test_dependencies:
+  - drupal:image
+diff --git a/autotrader_csv.module b/autotrader_csv.module
+index 757db1f..18b73f1 100644
+--- a/autotrader_csv.module
++++ b/autotrader_csv.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\file\Entity\File;
+ /**
+  * @file
+  * Autotrader CSV module file.
+@@ -62,7 +64,7 @@ function autotrader_csv_cron() {
+  * @return array
+  *   Returns an array with the real path and file object if successful.
+  *
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++ * @throws InvalidPluginDefinitionException
+  */
+ function autotrader_csv_create_csv(array $content_types = NULL, $filename = NULL) {
+   if ($content_types == NULL) {
+@@ -79,7 +81,7 @@ function autotrader_csv_create_csv(array $content_types = NULL, $filename = NULL
+     ->execute();
+   // @todo - Work out a performance enhancement here. This won't scale.
+   $nodes = \Drupal::entityTypeManager()->getStorage('node')->loadMultiple($nids);
+-  /** @var Drupal\file\Entity\File $file */
++  /** @var File $file */
+   $node_exporter = \Drupal::service('autotrader_csv.node_exporter');
+   $node_exporter->setup($nodes, $filename);
+   $file = $node_exporter->toFile();
+diff --git a/src/Annotation/AutotraderCsvNodeExport.php b/src/Annotation/AutotraderCsvNodeExport.php
+index ccaaf7e..c571b71 100644
+--- a/src/Annotation/AutotraderCsvNodeExport.php
++++ b/src/Annotation/AutotraderCsvNodeExport.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\autotrader_csv\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -25,7 +26,7 @@ class AutotraderCsvNodeExport extends Plugin {
+   /**
+    * The label of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/NodeExporter.php b/src/NodeExporter.php
+index 31f106c..e1e93d6 100644
+--- a/src/NodeExporter.php
++++ b/src/NodeExporter.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\autotrader_csv;
+ 
++use Drupal\node\NodeInterface;
++use Drupal\autotrader_csv\Plugin\AutotraderCsvNodeExportBase;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\autotrader_csv\Plugin\AutotraderCsvNodeExportManager;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -18,7 +20,7 @@ class NodeExporter implements NodeExporterInterface, ContainerFactoryPluginInter
+   /**
+    * The node to export the records for.
+    *
+-   * @var \Drupal\node\NodeInterface[]
++   * @var NodeInterface[]
+    */
+   protected $nodes;
+ 
+@@ -34,14 +36,14 @@ class NodeExporter implements NodeExporterInterface, ContainerFactoryPluginInter
+    *
+    * We use this to get all of the NodeExporter plugins.
+    *
+-   * @var \Drupal\autotrader_csv\Plugin\AutotraderCsvNodeExportManager
++   * @var AutotraderCsvNodeExportManager
+    */
+   protected $bundleExportManager;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\autotrader_csv\Plugin\AutotraderCsvNodeExportManager $bundle_export_manager
++   * @param AutotraderCsvNodeExportManager $bundle_export_manager
+    *   The NodeExporter plugin manager service. We're injecting this service
+    *   so that we can use it to access the NodeExporter plugins.
+    */
+@@ -53,7 +55,7 @@ class NodeExporter implements NodeExporterInterface, ContainerFactoryPluginInter
+    * {@inheritdoc}
+    */
+   public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition) {
+-    /** @var \Drupal\autotrader_csv\Plugin\AutotraderCsvNodeExportManager $bundle_export_manager */
++    /** @var AutotraderCsvNodeExportManager $bundle_export_manager */
+     $bundle_export_manager = $container->get('plugin.manager.autotrader_csv_node_export');
+     return new static($bundle_export_manager);
+   }
+@@ -61,7 +63,7 @@ class NodeExporter implements NodeExporterInterface, ContainerFactoryPluginInter
+   /**
+    * Constructs an NodeExporter object.
+    *
+-   * @param \Drupal\node\NodeInterface[] $nodes
++   * @param NodeInterface[] $nodes
+    *   The nodes to export the records for.
+    * @param string $filename
+    *   The filename to write the exported records to. NULL can be given when not
+@@ -87,7 +89,7 @@ class NodeExporter implements NodeExporterInterface, ContainerFactoryPluginInter
+     $lines = $this->generateRecords();
+     $lines = implode(PHP_EOL, $lines);
+     // @todo - Allow for private storage.
+-    return file_save_data($lines, 'public://' . $this->filename, FileSystemInterface::EXISTS_REPLACE);
++    return \Drupal::service('file.repository')->writeData($lines, 'public://' . $this->filename, FileSystemInterface::EXISTS_REPLACE);
+   }
+ 
+   /**
+@@ -106,7 +108,7 @@ class NodeExporter implements NodeExporterInterface, ContainerFactoryPluginInter
+       $plugin_definitions = $this->bundleExportManager->getDefinitions();
+       $plugin_id = $node->bundle();
+       if (in_array($plugin_id, array_keys($plugin_definitions))) {
+-        /** @var \Drupal\autotrader_csv\Plugin\AutotraderCsvNodeExportBase $plugin */
++        /** @var AutotraderCsvNodeExportBase $plugin */
+         try {
+           $plugin = $this->bundleExportManager->createInstance($plugin_id);
+           $plugin->setNode($node);
+diff --git a/src/Plugin/AutotraderCsvNodeExportBase.php b/src/Plugin/AutotraderCsvNodeExportBase.php
+index 83ee281..d8c6409 100644
+--- a/src/Plugin/AutotraderCsvNodeExportBase.php
++++ b/src/Plugin/AutotraderCsvNodeExportBase.php
+@@ -42,21 +42,21 @@ abstract class AutotraderCsvNodeExportBase extends PluginBase implements Autotra
+   /**
+    * Stores the configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The node we're exporting.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   public $node;
+ 
+@@ -76,9 +76,9 @@ abstract class AutotraderCsvNodeExportBase extends PluginBase implements Autotra
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager) {
+@@ -90,7 +90,7 @@ abstract class AutotraderCsvNodeExportBase extends PluginBase implements Autotra
+   /**
+    * Creates a AutotraderCsvNodeExportBase instance.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The Drupal global container.
+    * @param array $configuration
+    *   A configuration array containing information about the plugin instance.
+@@ -103,9 +103,9 @@ abstract class AutotraderCsvNodeExportBase extends PluginBase implements Autotra
+    *   The object that is created using dependency injection.
+    */
+   public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition) {
+-    /** @var \Drupal\Core\Config\ConfigFactoryInterface $config_factory */
++    /** @var ConfigFactoryInterface $config_factory */
+     $config_factory = $container->get('config.factory');
+-    /** @var \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager */
++    /** @var EntityTypeManagerInterface $entity_type_manager */
+     $entity_type_manager = $container->get('entity_type.manager');
+     return new static(
+       $configuration,
+diff --git a/src/Plugin/AutotraderCsvNodeExportInterface.php b/src/Plugin/AutotraderCsvNodeExportInterface.php
+index a00f645..875e4a6 100644
+--- a/src/Plugin/AutotraderCsvNodeExportInterface.php
++++ b/src/Plugin/AutotraderCsvNodeExportInterface.php
+@@ -14,7 +14,7 @@ interface AutotraderCsvNodeExportInterface extends ContainerFactoryPluginInterfa
+   /**
+    * Tell the object which node it's working on.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The node that this exporter is working on.
+    */
+   public function setNode(NodeInterface $node);
+diff --git a/src/Plugin/AutotraderCsvNodeExportManager.php b/src/Plugin/AutotraderCsvNodeExportManager.php
+index eaeea8c..5578169 100644
+--- a/src/Plugin/AutotraderCsvNodeExportManager.php
++++ b/src/Plugin/AutotraderCsvNodeExportManager.php
+@@ -17,9 +17,9 @@ class AutotraderCsvNodeExportManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {

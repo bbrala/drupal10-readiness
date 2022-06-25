@@ -1,0 +1,1289 @@
+diff --git a/entity_export_csv.info.yml b/entity_export_csv.info.yml
+index 1eda345..14d5183 100644
+--- a/entity_export_csv.info.yml
++++ b/entity_export_csv.info.yml
+@@ -1,7 +1,6 @@
+ name: 'Entity Export CSV'
+ type: module
+ description: 'Export Content Entity to CSV.'
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ package: 'Export'
+ configure: entity_export_csv.settings
+diff --git a/src/Annotation/FieldTypeExport.php b/src/Annotation/FieldTypeExport.php
+index 5088128..7a8e5cd 100644
+--- a/src/Annotation/FieldTypeExport.php
++++ b/src/Annotation/FieldTypeExport.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_export_csv\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -25,7 +26,7 @@ class FieldTypeExport extends Plugin {
+   /**
+    * The label of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -41,7 +42,7 @@ class FieldTypeExport extends Plugin {
+   /**
+    * The plugin description.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Controller/EntityExportCsvDownload.php b/src/Controller/EntityExportCsvDownload.php
+index 73d4e25..36ffcbc 100644
+--- a/src/Controller/EntityExportCsvDownload.php
++++ b/src/Controller/EntityExportCsvDownload.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\entity_export_csv\Controller;
+ 
++use Symfony\Component\HttpFoundation\Request;
++use Symfony\Component\HttpFoundation\Response;
+ use Drupal\Core\Access\CsrfTokenGenerator;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+@@ -22,23 +24,23 @@ class EntityExportCsvDownload implements ContainerInjectionInterface {
+   /**
+    * The request.
+    *
+-   * @var null|\Symfony\Component\HttpFoundation\Request
++   * @var null|Request
+    */
+   protected $request;
+ 
+   /**
+    * The csrf token generator.
+    *
+-   * @var \Drupal\Core\Access\CsrfTokenGenerator
++   * @var CsrfTokenGenerator
+    */
+   protected $csrfToken;
+ 
+   /**
+    * The entity export csv download constructor.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\Access\CsrfTokenGenerator $csrf_token
++   * @param CsrfTokenGenerator $csrf_token
+    *   The csrf token generator.
+    */
+   public function __construct(RequestStack $request_stack, CsrfTokenGenerator $csrf_token) {
+@@ -121,7 +123,7 @@ class EntityExportCsvDownload implements ContainerInjectionInterface {
+   /**
+    * Download entity content exported file.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   The response.
+    */
+   public function downloadExport() {
+@@ -144,7 +146,7 @@ class EntityExportCsvDownload implements ContainerInjectionInterface {
+   /**
+    * Get current request object.
+    *
+-   * @return null|\Symfony\Component\HttpFoundation\Request
++   * @return null|Request
+    *   The request.
+    */
+   protected function getRequest() {
+diff --git a/src/EntityExportCsvBatch.php b/src/EntityExportCsvBatch.php
+index e2bb255..cc7d0db 100644
+--- a/src/EntityExportCsvBatch.php
++++ b/src/EntityExportCsvBatch.php
+@@ -2,6 +2,16 @@
+ 
+ namespace Drupal\entity_export_csv;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\entity_export_csv\Plugin\FieldTypeExportManagerInterface;
++use Drupal\entity_export_csv\Plugin\FieldTypeExportInterface;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\Core\Access\CsrfTokenGenerator;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Core\StreamWrapper\PrivateStream;
+@@ -51,16 +61,16 @@ class EntityExportCsvBatch {
+    * @param array $context
+    *   An array of the batch context.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginException
++   * @throws PluginNotFoundException
+    */
+   public static function export($entity_type_id, $bundle, array $fields, $langcode, array $conditions, $delimiter, array &$context) {
+     $limit = 50;
+     $messenger = \Drupal::messenger();
+-    /** @var \Drupal\entity_export_csv\EntityExportCsvManagerInterface $entity_export_csv_manager */
++    /** @var EntityExportCsvManagerInterface $entity_export_csv_manager */
+     $entity_export_csv_manager = \Drupal::service('entity_export_csv.manager');
+-    /** @var \Drupal\entity_export_csv\Plugin\FieldTypeExportManagerInterface $field_type_export_manager */
++    /** @var FieldTypeExportManagerInterface $field_type_export_manager */
+     $field_type_export_manager = \Drupal::service('plugin.manager.field_type_export');
+     $definitions = $entity_export_csv_manager->getBundleFields($entity_type_id, $bundle, TRUE);
+ 
+@@ -102,7 +112,7 @@ class EntityExportCsvBatch {
+           continue;
+         }
+         try {
+-          /** @var \Drupal\entity_export_csv\Plugin\FieldTypeExportInterface $field_type_exporter */
++          /** @var FieldTypeExportInterface $field_type_exporter */
+           $field_type_exporter = $field_type_export_manager->createInstance($exporter, $configuration);
+           $field_headers = $field_type_exporter->getHeaders($field_definition);
+           $headers = array_merge($headers, $field_headers);
+@@ -122,9 +132,9 @@ class EntityExportCsvBatch {
+       fclose($handle);
+     }
+ 
+-    /** @var \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager */
++    /** @var EntityTypeManagerInterface $entity_type_manager */
+     $entity_type_manager = \Drupal::service('entity_type.manager');
+-    /** @var \Drupal\Core\Entity\EntityTypeInterface $entity_type_definition */
++    /** @var EntityTypeInterface $entity_type_definition */
+     $entity_type_definition = $entity_type_manager->getDefinition($entity_type_id);
+     $storage = $entity_type_manager->getStorage($entity_type_id);
+     $query = $storage->getQuery();
+@@ -194,7 +204,7 @@ class EntityExportCsvBatch {
+           continue;
+         }
+         try {
+-          /** @var \Drupal\entity_export_csv\Plugin\FieldTypeExportInterface $field_type_exporter */
++          /** @var FieldTypeExportInterface $field_type_exporter */
+           $field_type_exporter = $field_type_export_manager->createInstance($exporter, $configuration);
+           $field_values = $field_type_exporter->export($entity, $field_definition);
+           $row = array_merge($row, $field_values);
+@@ -269,7 +279,7 @@ class EntityExportCsvBatch {
+    *   The token related to the file uri.
+    */
+   protected static function getToken($file_uri) {
+-    /** @var \Drupal\Core\Access\CsrfTokenGenerator $csrf_token */
++    /** @var CsrfTokenGenerator $csrf_token */
+     $csrf_token = \Drupal::service('csrf_token');
+     return $csrf_token->get($file_uri);
+   }
+@@ -287,10 +297,10 @@ class EntityExportCsvBatch {
+    * @return false|string
+    *   The file path or false
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public static function prepareExportFile($entity_type_id, $bundle, array &$context) {
+-    /** @var \Drupal\Core\File\FileSystemInterface $file_system */
++    /** @var FileSystemInterface $file_system */
+     $file_system = \Drupal::service('file_system');
+     $private_system_file = PrivateStream::basePath();
+     if (!$private_system_file) {
+@@ -303,7 +313,7 @@ class EntityExportCsvBatch {
+     $time = time();
+     $filename = $entity_type_id . '_' . $bundle . '_' . $time . '.csv';
+     $destination = $directory . '/' . $filename;
+-    $file = file_save_data('', $destination, FileSystemInterface::EXISTS_REPLACE);
++    $file = \Drupal::service('file.repository')->writeData('', $destination, FileSystemInterface::EXISTS_REPLACE);
+     $file->setTemporary();
+     $file->save();
+     $file_path = $file_system->realpath($destination);
+@@ -320,7 +330,7 @@ class EntityExportCsvBatch {
+    */
+   public static function getBundleFieldDefinitions($entity_type_id, $bundle) {
+     $options = [];
+-    /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager */
++    /** @var EntityFieldManagerInterface $entity_field_manager */
+     $entity_field_manager = \Drupal::service('entity_field.manager');
+     $fields = $entity_field_manager->getFieldDefinitions($entity_type_id, $bundle);
+     foreach ($fields as $field_name => $field_definition) {
+diff --git a/src/EntityExportCsvHtmlRouteProvider.php b/src/EntityExportCsvHtmlRouteProvider.php
+index ed12797..f7ba5fe 100644
+--- a/src/EntityExportCsvHtmlRouteProvider.php
++++ b/src/EntityExportCsvHtmlRouteProvider.php
+@@ -38,12 +38,12 @@ class EntityExportCsvHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    * @param string $action
+    *   The action form.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getFormRoute(EntityTypeInterface $entity_type, $action) {
+diff --git a/src/EntityExportCsvManager.php b/src/EntityExportCsvManager.php
+index 4d6d370..7585d81 100644
+--- a/src/EntityExportCsvManager.php
++++ b/src/EntityExportCsvManager.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\entity_export_csv;
+ 
++use Drupal\Core\Routing\CurrentRouteMatch;
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Component\Datetime\Time;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\ContentEntityTypeInterface;
+@@ -30,120 +33,120 @@ class EntityExportCsvManager implements EntityExportCsvManagerInterface {
+   /**
+    * Drupal\Core\Config\ConfigFactoryInterface definition.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The current route match service.
+    *
+-   * @var \Drupal\Core\Routing\CurrentRouteMatch
++   * @var CurrentRouteMatch
+    */
+   protected $currentRouteMatch;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The field type export manager.
+    *
+-   * @var \Drupal\entity_export_csv\Plugin\FieldTypeExportManagerInterface
++   * @var FieldTypeExportManagerInterface
+    */
+   protected $manager;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The entity type bundle info service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityTypeBundleInfo;
+ 
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\Time
++   * @var Time
+    */
+   protected $time;
+ 
+   /**
+    * The state service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * EntityActivityManager constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\entity_export_csv\Plugin\FieldTypeExportManagerInterface $manager
++   * @param FieldTypeExportManagerInterface $manager
+    *   The field type export manager.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle info service.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   The event dispatcher.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue
++   * @param QueueFactory $queue
+    *   The queue factory.
+-   * @param \Drupal\Component\Datetime\Time $time
++   * @param Time $time
+    *   The time service.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, EntityRepositoryInterface $entity_repository, LanguageManagerInterface $language_manager, EntityFieldManagerInterface $entity_field_manager, FieldTypeExportManagerInterface $manager, AccountProxyInterface $current_user, EntityTypeBundleInfoInterface $entity_type_bundle_info, EventDispatcherInterface $event_dispatcher, QueueFactory $queue, Time $time, StateInterface $state) {
+@@ -165,7 +168,7 @@ class EntityExportCsvManager implements EntityExportCsvManagerInterface {
+    * {@inheritdoc}
+    */
+   public function getSupportedContentEntityTypes($return_object = TRUE) {
+-    /** @var \Drupal\Core\Entity\ContentEntityTypeInterface[] $entity_types */
++    /** @var ContentEntityTypeInterface[] $entity_types */
+     $entity_types = $this->entityTypeManager->getDefinitions();
+     foreach ($entity_types as $entity_type_id => $entity_type) {
+       if (!$entity_type instanceof ContentEntityTypeInterface) {
+@@ -257,7 +260,7 @@ class EntityExportCsvManager implements EntityExportCsvManagerInterface {
+       }
+     }
+     $event = new EntityExportCsvFieldsSupportedEvent($options, $entity_type_id, $bundle, $return_field_definition);
+-    $this->eventDispatcher->dispatch(EntityExportCsvEvents::ENTITY_EXPORT_CSV_FIELDS_SUPPORTED, $event);
++    $this->eventDispatcher->dispatch($event, EntityExportCsvEvents::ENTITY_EXPORT_CSV_FIELDS_SUPPORTED);
+     $options = $event->getFields();
+     return $options;
+   }
+@@ -272,7 +275,7 @@ class EntityExportCsvManager implements EntityExportCsvManagerInterface {
+       $options = array_intersect_key($options, $bundle_fields_settings);
+     }
+     $event = new EntityExportCsvFieldsEnabledEvent($options, $entity_type_id, $bundle, $return_field_definition);
+-    $this->eventDispatcher->dispatch(EntityExportCsvEvents::ENTITY_EXPORT_CSV_FIELDS_ENABLE, $event);
++    $this->eventDispatcher->dispatch($event, EntityExportCsvEvents::ENTITY_EXPORT_CSV_FIELDS_ENABLE);
+     $options = $event->getFields();
+     return $options;
+   }
+@@ -280,7 +283,7 @@ class EntityExportCsvManager implements EntityExportCsvManagerInterface {
+   /**
+    * Get configuration object.
+    *
+-   * @return \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @return Config|ImmutableConfig
+    *   The config object.
+    */
+   protected function getConfiguration() {
+diff --git a/src/EntityExportCsvManagerInterface.php b/src/EntityExportCsvManagerInterface.php
+index e116c46..5dd7c26 100644
+--- a/src/EntityExportCsvManagerInterface.php
++++ b/src/EntityExportCsvManagerInterface.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\entity_export_csv;
+ 
++use Drupal\Core\Field\FieldDefinitionInterface;
++use Drupal\entity_export_csv\Entity\EntityExportCsvInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ /**
+  * Interface EntityExportCsvManagerInterface.
+  */
+@@ -75,7 +79,7 @@ interface EntityExportCsvManagerInterface {
+    * @param bool $return_field_definition
+    *   Return the field definitions or label.
+    *
+-   * @return array|\Drupal\Core\Field\FieldDefinitionInterface[]
++   * @return array|FieldDefinitionInterface[]
+    *   An array of field label or field definition, keyed by the field name.
+    */
+   public function getBundleFields($entity_type_id, $bundle, $return_field_definition = FALSE);
+@@ -90,7 +94,7 @@ interface EntityExportCsvManagerInterface {
+    * @param bool $return_field_definition
+    *   Return the field definitions or label.
+    *
+-   * @return array|\Drupal\Core\Field\FieldDefinitionInterface[]
++   * @return array|FieldDefinitionInterface[]
+    *   An array of field label or field definition, keyed by the field name.
+    */
+   public function getBundleFieldsEnabled($entity_type_id, $bundle, $return_field_definition = FALSE);
+@@ -103,7 +107,7 @@ interface EntityExportCsvManagerInterface {
+    * @param string $bundle
+    *   The bundle id.
+    *
+-   * @return array|\Drupal\Core\Field\FieldDefinitionInterface[]
++   * @return array|FieldDefinitionInterface[]
+    *   An array of field label or field definition, keyed by the field name.
+    */
+   public function getBundleFieldDefinitions($entity_type_id, $bundle);
+@@ -114,18 +118,18 @@ interface EntityExportCsvManagerInterface {
+    * @param string $entity_type_id
+    *   The entity type id.
+    *
+-   * @return \Drupal\entity_export_csv\Entity\EntityExportCsvInterface[]
++   * @return EntityExportCsvInterface[]
+    *   The entity export csv config entities.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function getConfigurations($entity_type_id = '');
+ 
+   /**
+    * Sort the fields given the fields configuration default value order.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface[] $fields
++   * @param FieldDefinitionInterface[] $fields
+    *   An array of field definition keyed by the field name.
+    * @param array $default_values
+    *   An array of field values configuration keyed by the field name.
+diff --git a/src/Event/EntityExportCsvFieldsEvent.php b/src/Event/EntityExportCsvFieldsEvent.php
+index 1365e86..ca55edb 100644
+--- a/src/Event/EntityExportCsvFieldsEvent.php
++++ b/src/Event/EntityExportCsvFieldsEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\entity_export_csv\Event;
+ 
+-use Symfony\Component\EventDispatcher\Event;
+-
++use Symfony\Contracts\EventDispatcher\Event;
++use Drupal\Core\Field\FieldDefinitionInterface;
+ /**
+  * Defines the fields event.
+  *
+@@ -16,7 +16,7 @@ class EntityExportCsvFieldsEvent extends Event {
+   /**
+    * An array of field definition (or label) keyed by the field name.
+    *
+-   * @var array|\Drupal\Core\Field\FieldDefinitionInterface[]
++   * @var array|FieldDefinitionInterface[]
+    */
+   protected $fields;
+ 
+diff --git a/src/Form/EntityExportCsv.php b/src/Form/EntityExportCsv.php
+index 7eea1c9..dbc8b7c 100644
+--- a/src/Form/EntityExportCsv.php
++++ b/src/Form/EntityExportCsv.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_export_csv\Form;
+ 
++use Drupal\entity_export_csv\Plugin\FieldTypeExportInterface;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Form\FormBase;
+@@ -22,43 +23,43 @@ class EntityExportCsv extends FormBase {
+   /**
+    * The FieldTypeExportManager.
+    *
+-   * @var \Drupal\entity_export_csv\Plugin\FieldTypeExportManagerInterface
++   * @var FieldTypeExportManagerInterface
+    */
+   protected $fieldTypeExportManager;
+ 
+   /**
+    * Drupal\user\UserDataInterface definition.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * The entity export csv manager.
+    *
+-   * @var \Drupal\entity_export_csv\EntityExportCsvManagerInterface
++   * @var EntityExportCsvManagerInterface
+    */
+   protected $manager;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Define entity export csv form constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+-   * @param \Drupal\entity_export_csv\Plugin\FieldTypeExportManagerInterface $field_type_export_manager
++   * @param FieldTypeExportManagerInterface $field_type_export_manager
+    *   The field type export manager.
+-   * @param \Drupal\user\UserDataInterface $user_data
++   * @param UserDataInterface $user_data
+    *   The user data service.
+-   * @param \Drupal\entity_export_csv\EntityExportCsvManagerInterface $entity_export_csv_manager
++   * @param EntityExportCsvManagerInterface $entity_export_csv_manager
+    *   The entity export csv manager service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, FieldTypeExportManagerInterface $field_type_export_manager, UserDataInterface $user_data, EntityExportCsvManagerInterface $entity_export_csv_manager, LanguageManagerInterface $language_manager) {
+@@ -262,7 +263,7 @@ class EntityExportCsv extends FormBase {
+           // @TODO handle configuration values
+           $configuration_default = isset($user_default_values[$field_name]['form']['options']) ? $user_default_values[$field_name]['form']['options'] : [];
+           $configuration = $this->getElementPropertyValue(['fields', $field_name, 'form', 'options'], $form_state, $configuration_default, $triggering_element);
+-          /** @var \Drupal\entity_export_csv\Plugin\FieldTypeExportInterface $plugin */
++          /** @var FieldTypeExportInterface $plugin */
+           $plugin = $this->fieldTypeExportManager->createInstance($default_exporter_value, $configuration);
+           $form['bundle_wrapper']['fields'][$field_name]['form']['options'] = $plugin->buildConfigurationForm([], $form_state, $definition);
+         }
+diff --git a/src/Form/EntityExportCsvDisableForm.php b/src/Form/EntityExportCsvDisableForm.php
+index bd3779d..2d0273e 100644
+--- a/src/Form/EntityExportCsvDisableForm.php
++++ b/src/Form/EntityExportCsvDisableForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_export_csv\Form;
+ 
++use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ use Drupal;
+ use Drupal\Core\Entity\EntityConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -46,7 +47,7 @@ class EntityExportCsvDisableForm extends EntityConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityInterface $entity */
++    /** @var ConfigEntityInterface $entity */
+     $entity = $this->entity;
+     $entity->disable()->save();
+ 
+diff --git a/src/Form/EntityExportCsvEnableForm.php b/src/Form/EntityExportCsvEnableForm.php
+index 6f8f881..d8c2d6c 100644
+--- a/src/Form/EntityExportCsvEnableForm.php
++++ b/src/Form/EntityExportCsvEnableForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_export_csv\Form;
+ 
++use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ use Drupal;
+ use Drupal\Core\Entity\EntityConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -46,7 +47,7 @@ class EntityExportCsvEnableForm extends EntityConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityInterface $entity */
++    /** @var ConfigEntityInterface $entity */
+     $entity = $this->entity;
+     $entity->enable()->save();
+ 
+diff --git a/src/Form/EntityExportCsvForm.php b/src/Form/EntityExportCsvForm.php
+index 5345c25..d5a8336 100644
+--- a/src/Form/EntityExportCsvForm.php
++++ b/src/Form/EntityExportCsvForm.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\entity_export_csv\Form;
+ 
++use Drupal\user\UserDataInterface;
++use Drupal\entity_export_csv\Entity\EntityExportCsvInterface;
++use Drupal\entity_export_csv\Plugin\FieldTypeExportInterface;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -20,39 +23,39 @@ class EntityExportCsvForm extends EntityForm {
+   /**
+    * The FieldTypeExportManager.
+    *
+-   * @var \Drupal\entity_export_csv\Plugin\FieldTypeExportManagerInterface
++   * @var FieldTypeExportManagerInterface
+    */
+   protected $fieldTypeExportManager;
+ 
+   /**
+    * Drupal\user\UserDataInterface definition.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * The entity export csv manager.
+    *
+-   * @var \Drupal\entity_export_csv\EntityExportCsvManagerInterface
++   * @var EntityExportCsvManagerInterface
+    */
+   protected $manager;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Define entity export csv form constructor.
+    *
+-   * @param \Drupal\entity_export_csv\Plugin\FieldTypeExportManagerInterface $field_type_export_manager
++   * @param FieldTypeExportManagerInterface $field_type_export_manager
+    *   The field type export manager.
+-   * @param \Drupal\entity_export_csv\EntityExportCsvManagerInterface $entity_export_csv_manager
++   * @param EntityExportCsvManagerInterface $entity_export_csv_manager
+    *   The entity export csv manager service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(FieldTypeExportManagerInterface $field_type_export_manager, EntityExportCsvManagerInterface $entity_export_csv_manager, LanguageManagerInterface $language_manager) {
+@@ -77,7 +80,7 @@ class EntityExportCsvForm extends EntityForm {
+    */
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+-    /** @var \Drupal\entity_export_csv\Entity\EntityExportCsvInterface $entity_export_csv */
++    /** @var EntityExportCsvInterface $entity_export_csv */
+     $entity_export_csv = $this->entity;
+ 
+     $form['label'] = [
+@@ -247,7 +250,7 @@ class EntityExportCsvForm extends EntityForm {
+           // @TODO handle configuration values
+           $configuration_default = isset($fields_default_values[$field_name]['form']['options']) ? $fields_default_values[$field_name]['form']['options'] : [];
+           $configuration = $this->getElementPropertyValue(['fields', $field_name, 'form', 'options'], $form_state, $configuration_default);
+-          /** @var \Drupal\entity_export_csv\Plugin\FieldTypeExportInterface $plugin */
++          /** @var FieldTypeExportInterface $plugin */
+           $plugin = $this->fieldTypeExportManager->createInstance($default_exporter_value, $configuration);
+           $form['bundle_wrapper']['fields'][$field_name]['form']['options'] = $plugin->buildConfigurationForm([], $form_state, $definition);
+         }
+diff --git a/src/Form/EntityExportCsvSettings.php b/src/Form/EntityExportCsvSettings.php
+index fe4648e..d577bb3 100644
+--- a/src/Form/EntityExportCsvSettings.php
++++ b/src/Form/EntityExportCsvSettings.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\entity_export_csv\Form;
+ 
++use Drupal\Core\Entity\ContentEntityTypeInterface;
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityTypeBundleInfoInterface;
+@@ -20,28 +23,28 @@ class EntityExportCsvSettings extends ConfigFormBase {
+   /**
+    * Drupal\Core\Entity\EntityTypeManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Drupal\Core\Entity\EntityTypeBundleInfoInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityTypeBundleInfo;
+ 
+   /**
+    * Drupal\Core\Entity\EntityFieldManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The entity export csv manager.
+    *
+-   * @var \Drupal\entity_export_csv\EntityExportCsvManagerInterface
++   * @var EntityExportCsvManagerInterface
+    */
+   protected $manager;
+ 
+@@ -106,7 +109,7 @@ class EntityExportCsvSettings extends ConfigFormBase {
+     $entity_types = $this->manager->getSupportedContentEntityTypes(TRUE);
+     // We do not use here a checkboxes to be able later to
+     // enable / disable per bundle too.
+-    /** @var \Drupal\Core\Entity\ContentEntityTypeInterface $entity_type */
++    /** @var ContentEntityTypeInterface $entity_type */
+     foreach ($entity_types as $entity_type_id => $entity_type) {
+       $form['entity_types'][$entity_type_id] = [
+         '#type' => 'container',
+@@ -248,7 +251,7 @@ class EntityExportCsvSettings extends ConfigFormBase {
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -265,7 +268,7 @@ class EntityExportCsvSettings extends ConfigFormBase {
+    *
+    * @param array|string $property
+    *   The property.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    * @param mixed $default
+    *   The default value.
+@@ -305,7 +308,7 @@ class EntityExportCsvSettings extends ConfigFormBase {
+   /**
+    * Get configuration object.
+    *
+-   * @return \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @return Config|ImmutableConfig
+    *   The configuration object.
+    */
+   protected function getConfiguration() {
+diff --git a/src/Form/EntityExportCsvTrait.php b/src/Form/EntityExportCsvTrait.php
+index d596802..eec5135 100644
+--- a/src/Form/EntityExportCsvTrait.php
++++ b/src/Form/EntityExportCsvTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_export_csv\Form;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+ /**
+@@ -28,7 +29,7 @@ trait EntityExportCsvTrait {
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -43,7 +44,7 @@ trait EntityExportCsvTrait {
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -58,7 +59,7 @@ trait EntityExportCsvTrait {
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -75,7 +76,7 @@ trait EntityExportCsvTrait {
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -88,7 +89,7 @@ trait EntityExportCsvTrait {
+   /**
+    * Get entity content export settings.
+    *
+-   * @return \Drupal\Core\Config\ImmutableConfig
++   * @return ImmutableConfig
+    *   The configuration instance.
+    */
+   protected function getConfiguration() {
+@@ -100,7 +101,7 @@ trait EntityExportCsvTrait {
+    *
+    * @param array|string $property
+    *   The property.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    * @param mixed $default
+    *   The default value.
+diff --git a/src/Plugin/FieldTypeExport/DateRangeExport.php b/src/Plugin/FieldTypeExport/DateRangeExport.php
+index 842308d..cafb597 100644
+--- a/src/Plugin/FieldTypeExport/DateRangeExport.php
++++ b/src/Plugin/FieldTypeExport/DateRangeExport.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\entity_export_csv\Plugin\FieldTypeExport;
+ 
++use Drupal\Core\Datetime\DateFormatInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Datetime\DrupalDateTime;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -122,7 +125,7 @@ class DateRangeExport extends FieldTypeExportBase {
+     $options = parent::getFormatExportOptions($field_definition);
+     $date_formats = [];
+     foreach ($this->entityTypeManager->getStorage('date_format')->loadMultiple() as $machine_name => $value) {
+-      $date_formats[$machine_name] = $this->t('@name format: @date', ['@name' => $value->label(), '@date' => $this->dateFormatter->format(REQUEST_TIME, $machine_name)]);
++      $date_formats[$machine_name] = $this->t('@name format: @date', ['@name' => $value->label(), '@date' => $this->dateFormatter->format(\Drupal::time()->getRequestTime(), $machine_name)]);
+     }
+     $date_formats['custom'] = $this->t('Custom');
+     return $options + $date_formats;
+@@ -136,12 +139,12 @@ class DateRangeExport extends FieldTypeExportBase {
+    * @param string $langcode
+    *   The langcode of the language to use.
+    *
+-   * @return \Drupal\Core\Datetime\DateFormatInterface|null
++   * @return DateFormatInterface|null
+    *   The configuration entity for the date format in the given language for
+    *   non-custom formats, NULL otherwise.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getDateFormat($format, $langcode) {
+     if (!isset($this->dateFormats[$format][$langcode])) {
+diff --git a/src/Plugin/FieldTypeExport/DateTimeExport.php b/src/Plugin/FieldTypeExport/DateTimeExport.php
+index c320748..52b7e51 100644
+--- a/src/Plugin/FieldTypeExport/DateTimeExport.php
++++ b/src/Plugin/FieldTypeExport/DateTimeExport.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_export_csv\Plugin\FieldTypeExport;
+ 
++use Drupal\Core\Datetime\DateFormatInterface;
+ use Drupal\Core\Datetime\DrupalDateTime;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -116,7 +117,7 @@ class DateTimeExport extends FieldTypeExportBase {
+     $options = parent::getFormatExportOptions($field_definition);
+     $date_formats = [];
+     foreach ($this->entityTypeManager->getStorage('date_format')->loadMultiple() as $machine_name => $value) {
+-      $date_formats[$machine_name] = $this->t('@name format: @date', ['@name' => $value->label(), '@date' => $this->dateFormatter->format(REQUEST_TIME, $machine_name)]);
++      $date_formats[$machine_name] = $this->t('@name format: @date', ['@name' => $value->label(), '@date' => $this->dateFormatter->format(\Drupal::time()->getRequestTime(), $machine_name)]);
+     }
+     $date_formats['custom'] = $this->t('Custom');
+     return $options + $date_formats;
+@@ -130,7 +131,7 @@ class DateTimeExport extends FieldTypeExportBase {
+    * @param string $langcode
+    *   The langcode of the language to use.
+    *
+-   * @return \Drupal\Core\Datetime\DateFormatInterface|null
++   * @return DateFormatInterface|null
+    *   The configuration entity for the date format in the given language for
+    *   non-custom formats, NULL otherwise.
+    */
+diff --git a/src/Plugin/FieldTypeExport/TimestampExport.php b/src/Plugin/FieldTypeExport/TimestampExport.php
+index 8adf845..aca809f 100644
+--- a/src/Plugin/FieldTypeExport/TimestampExport.php
++++ b/src/Plugin/FieldTypeExport/TimestampExport.php
+@@ -48,7 +48,7 @@ class TimestampExport extends FieldTypeExportBase {
+     $date_formats = [];
+     $date_formats[''] = $this->t('None');
+     foreach ($this->entityTypeManager->getStorage('date_format')->loadMultiple() as $machine_name => $value) {
+-      $date_formats[$machine_name] = $this->t('@name format: @date', ['@name' => $value->label(), '@date' => $this->dateFormatter->format(REQUEST_TIME, $machine_name)]);
++      $date_formats[$machine_name] = $this->t('@name format: @date', ['@name' => $value->label(), '@date' => $this->dateFormatter->format(\Drupal::time()->getRequestTime(), $machine_name)]);
+     }
+     $date_formats['custom'] = $this->t('Custom');
+ 
+@@ -99,7 +99,7 @@ class TimestampExport extends FieldTypeExportBase {
+     $options = parent::getFormatExportOptions($field_definition);
+     $date_formats = [];
+     foreach ($this->entityTypeManager->getStorage('date_format')->loadMultiple() as $machine_name => $value) {
+-      $date_formats[$machine_name] = $this->t('@name format: @date', ['@name' => $value->label(), '@date' => $this->dateFormatter->format(REQUEST_TIME, $machine_name)]);
++      $date_formats[$machine_name] = $this->t('@name format: @date', ['@name' => $value->label(), '@date' => $this->dateFormatter->format(\Drupal::time()->getRequestTime(), $machine_name)]);
+     }
+     $date_formats['custom'] = $this->t('Custom');
+     return $options + $date_formats;
+diff --git a/src/Plugin/FieldTypeExportBase.php b/src/Plugin/FieldTypeExportBase.php
+index a2d4b39..df84f2d 100644
+--- a/src/Plugin/FieldTypeExportBase.php
++++ b/src/Plugin/FieldTypeExportBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_export_csv\Plugin;
+ 
++use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Component\Plugin\PluginBase;
+ use Drupal\Component\Utility\NestedArray;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -35,56 +36,56 @@ abstract class FieldTypeExportBase extends PluginBase implements FieldTypeExport
+   /**
+    * Drupal\Core\Entity\EntityTypeManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Drupal\Core\Datetime\DateFormatterInterface definition.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Drupal\Core\Extension\ModuleHandlerInterface definition.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Drupal\Core\Entity\EntityRepositoryInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+   /**
+    * Drupal\Core\Entity\EntityFieldManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The language manager service.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The field properties.
+    *
+-   * @var \Drupal\Core\TypedData\DataDefinitionInterface[]
++   * @var DataDefinitionInterface[]
+    */
+   protected $properties = [];
+ 
+@@ -97,19 +98,19 @@ abstract class FieldTypeExportBase extends PluginBase implements FieldTypeExport
+    *   The plugin_id for the plugin instance.
+    * @param string $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, DateFormatterInterface $date_formatter, ModuleHandlerInterface $module_handler, EntityRepositoryInterface $entity_repository, EntityFieldManagerInterface $entity_field_manager, LanguageManagerInterface $language_manager, ConfigFactoryInterface $config_factory) {
+@@ -314,9 +315,9 @@ abstract class FieldTypeExportBase extends PluginBase implements FieldTypeExport
+ 
+     $property_names = $this->getPropertiesSelected($field_definition);
+     if ($entity->hasField($field_name)) {
+-      /** @var \Drupal\Core\Field\FieldItemListInterface $field_items */
++      /** @var FieldItemListInterface $field_items */
+       $field_items = $entity->get($field_name);
+-      /** @var \Drupal\Core\Field\FieldItemInterface $field_item */
++      /** @var FieldItemInterface $field_item */
+       foreach ($field_items as $index => $field_item) {
+         foreach ($property_names as $property_name) {
+           $values[$index][$property_name] = $this->massageExportPropertyValue($field_item, $property_name, $field_definition, $options);
+@@ -367,7 +368,7 @@ abstract class FieldTypeExportBase extends PluginBase implements FieldTypeExport
+   /**
+    * Get the field properties selected.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    *
+    * @return array|mixed
+@@ -437,7 +438,7 @@ abstract class FieldTypeExportBase extends PluginBase implements FieldTypeExport
+   /**
+    * Is the field is multiple ?
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    *
+    * @return bool|int
+@@ -526,7 +527,7 @@ abstract class FieldTypeExportBase extends PluginBase implements FieldTypeExport
+    *
+    * @param string $property_name
+    *   The property name.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    *
+    * @return mixed|string
+@@ -575,7 +576,7 @@ abstract class FieldTypeExportBase extends PluginBase implements FieldTypeExport
+   /**
+    * Get the properties options to export.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    *
+    * @return array
+@@ -593,7 +594,7 @@ abstract class FieldTypeExportBase extends PluginBase implements FieldTypeExport
+   /**
+    * Get the format options to export.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    *
+    * @return array
+@@ -642,7 +643,7 @@ abstract class FieldTypeExportBase extends PluginBase implements FieldTypeExport
+   /**
+    * Get the main property name of a field.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    *
+    * @return string
+@@ -672,7 +673,7 @@ abstract class FieldTypeExportBase extends PluginBase implements FieldTypeExport
+    *
+    * Any plugin can override this method to enforce the behavior.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    *
+    * @return bool
+diff --git a/src/Plugin/FieldTypeExportInterface.php b/src/Plugin/FieldTypeExportInterface.php
+index 1684b34..c5fadd7 100644
+--- a/src/Plugin/FieldTypeExportInterface.php
++++ b/src/Plugin/FieldTypeExportInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_export_csv\Plugin;
+ 
++use Drupal\Core\TypedData\DataDefinitionInterface;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+@@ -18,9 +19,9 @@ interface FieldTypeExportInterface extends PluginInspectionInterface {
+    *
+    * @param array $form
+    *   The configuration form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form_state object.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    *
+    * @return mixed
+@@ -33,7 +34,7 @@ interface FieldTypeExportInterface extends PluginInspectionInterface {
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    */
+   public function validateConfigurationForm(array $form, FormStateInterface $form_state);
+@@ -62,9 +63,9 @@ interface FieldTypeExportInterface extends PluginInspectionInterface {
+   /**
+    * Export the value of a field.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity to export.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    * @param array $options
+    *   An array of additionnal options.
+@@ -77,10 +78,10 @@ interface FieldTypeExportInterface extends PluginInspectionInterface {
+   /**
+    * Gets the field's properties.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $definition
++   * @param FieldDefinitionInterface $definition
+    *   The field definition.
+    *
+-   * @return array|\Drupal\Core\TypedData\DataDefinitionInterface[]
++   * @return array|DataDefinitionInterface[]
+    *   The field properties.
+    */
+   public function getFieldProperties(FieldDefinitionInterface $definition);
+@@ -88,11 +89,11 @@ interface FieldTypeExportInterface extends PluginInspectionInterface {
+   /**
+    * Massage the field item property value to CSV value.
+    *
+-   * @param \Drupal\Core\Field\FieldItemInterface $field_item
++   * @param FieldItemInterface $field_item
+    *   The field item.
+    * @param string $property_name
+    *   The property name.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    * @param array $options
+    *   An array of optional options.
+@@ -105,7 +106,7 @@ interface FieldTypeExportInterface extends PluginInspectionInterface {
+   /**
+    * Get the header columns for a field.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    *
+    * @return array
+@@ -116,7 +117,7 @@ interface FieldTypeExportInterface extends PluginInspectionInterface {
+   /**
+    * Get the columns to generate during the export.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    *
+    * @return int
+@@ -127,7 +128,7 @@ interface FieldTypeExportInterface extends PluginInspectionInterface {
+   /**
+    * Get the header label for a field.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    *
+    * @return string
+@@ -138,9 +139,9 @@ interface FieldTypeExportInterface extends PluginInspectionInterface {
+   /**
+    * Import a value into a field.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity to export.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+    * @param string $property_name
+    *   The field property to import.
+diff --git a/src/Plugin/FieldTypeExportManager.php b/src/Plugin/FieldTypeExportManager.php
+index 93f311a..02581e5 100644
+--- a/src/Plugin/FieldTypeExportManager.php
++++ b/src/Plugin/FieldTypeExportManager.php
+@@ -17,9 +17,9 @@ class FieldTypeExportManager extends DefaultPluginManager implements FieldTypeEx
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/tests/src/Functional/LoadTest.php b/tests/src/Functional/LoadTest.php
+index 13016f4..9c3e217 100644
+--- a/tests/src/Functional/LoadTest.php
++++ b/tests/src/Functional/LoadTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\entity_export_csv\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Url;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -22,14 +23,14 @@ class LoadTest extends BrowserTestBase {
+   /**
+    * A user with permission to administer site configuration.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->user = $this->drupalCreateUser(['administer site configuration']);
+     $this->drupalLogin($this->user);

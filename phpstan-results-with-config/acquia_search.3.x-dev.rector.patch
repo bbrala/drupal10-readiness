@@ -1,0 +1,772 @@
+diff --git a/acquia_search.info.yml b/acquia_search.info.yml
+index a7b6836..b192956 100644
+--- a/acquia_search.info.yml
++++ b/acquia_search.info.yml
+@@ -2,7 +2,7 @@ name: Acquia Search
+ type: module
+ description: Provides integration between your Drupal site and Acquia's hosted search service.
+ package: Acquia
+-core_version_requirement: ^8.9 || ^9
++core_version_requirement: ^9.3 || ^10
+ dependencies:
+  - search_api_solr:search_api_solr
+  - drupal:views
+diff --git a/acquia_search.install b/acquia_search.install
+index 5b68353..0ac77fc 100644
+--- a/acquia_search.install
++++ b/acquia_search.install
+@@ -31,7 +31,7 @@ function acquia_search_requirements($phase) {
+       $requirements['acquia_search_ssl']['description'] = t('In order to protect the privacy of your content with the Acquia Search module you must have SSL support enabled in PHP on your host.');
+     }
+ 
+-    /** @var \Drupal\search_api\Entity\Server[] $servers */
++    /** @var Server[] $servers */
+     $servers = Server::loadMultiple();
+ 
+     $acquia_servers = array_filter($servers, function (Server $server) {
+diff --git a/acquia_search.module b/acquia_search.module
+index f3ddfd3..11975d6 100644
+--- a/acquia_search.module
++++ b/acquia_search.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\search_api\Entity\Index;
++use Drupal\search_api\IndexInterface;
++use Drupal\Component\Plugin\Exception\PluginException;
+ /**
+  * @file
+  * Integration between Drupal and Acquia's hosted Solr search service.
+@@ -44,13 +47,13 @@ function acquia_search_entity_operation_alter(array &$operations, EntityInterfac
+  * Flag when a certain server should be enforcing read-only mode.
+  */
+ function acquia_search_search_api_server_load(array $entities) {
+-  /** @var \Drupal\search_api\Entity\Server[] $entities */
++  /** @var Server[] $entities */
+   $acquia_servers = array_filter($entities, function ($server) {
+     return Runtime::isAcquiaServer($server);
+   });
+ 
+   foreach ($acquia_servers as $server) {
+-    /** @var \Drupal\search_api\Entity\Server $server */
++    /** @var Server $server */
+     $backend_config = $server->getBackendConfig();
+ 
+     unset($backend_config['overridden_by_acquia_search']);
+@@ -71,7 +74,7 @@ function acquia_search_search_api_server_load(array $entities) {
+  */
+ function acquia_search_search_api_index_load($entities) {
+   // Loop through the Index entities.
+-  /** @var \Drupal\search_api\Entity\Index $index */
++  /** @var Index $index */
+   foreach ($entities as &$index) {
+ 
+     // Check for server-less indexes.
+@@ -123,7 +126,7 @@ function acquia_search_form_search_api_server_status_alter(&$form) {
+     return;
+   }
+ 
+-  /** @var \Drupal\search_api\Entity\Server $server */
++  /** @var Server $server */
+   if (!Runtime::isAcquiaServer($server)) {
+     return;
+   }
+@@ -178,7 +181,7 @@ function acquia_search_form_search_api_server_edit_form_alter(&$form) {
+  */
+ function acquia_search_form_search_api_index_edit_form_alter(&$form, FormState $form_state) {
+ 
+-  /** @var \Drupal\search_api\Entity\Server $server */
++  /** @var Server $server */
+   $server = Server::load($form['server']['#default_value']);
+ 
+   if (!$server) {
+@@ -201,7 +204,7 @@ function acquia_search_form_search_api_index_edit_form_alter(&$form, FormState $
+ 
+   $settings = [];
+   $default_settings = ['use_edismax' => TRUE];
+-  /** @var \Drupal\search_api\IndexInterface $search_index */
++  /** @var IndexInterface $search_index */
+   $search_index = $form_state->getFormObject()->getEntity();
+   if (!$search_index->isNew()) {
+     $settings = $search_index->getThirdPartySettings('acquia_search');
+@@ -276,13 +279,13 @@ function acquia_search_theme_registry_alter(&$theme_registry) {
+  *
+  * Theme override for Search API index status page.
+  *
+- * @throws \Drupal\Component\Plugin\Exception\PluginException
+- * @throws \Drupal\search_api\SearchApiException
++ * @throws PluginException
++ * @throws SearchApiException
+  */
+ function acquia_search_preprocess_search_api_index(array &$variables) {
+-  /** @var \Drupal\search_api\Entity\Index $index */
++  /** @var Index $index */
+   $index = $variables['index'];
+-  /** @var \Drupal\search_api\Entity\Server $server */
++  /** @var Server $server */
+   $server = Server::load($index->get('server'));
+ 
+   if (!$server || !Runtime::isAcquiaServer($server)) {
+@@ -311,11 +314,11 @@ function acquia_search_preprocess_search_api_index(array &$variables) {
+  * @param array $variables
+  *   Variables.
+  *
+- * @throws \Drupal\Component\Plugin\Exception\PluginException
+- * @throws \Drupal\search_api\SearchApiException
++ * @throws PluginException
++ * @throws SearchApiException
+  */
+ function acquia_search_preprocess_search_api_server(array &$variables) {
+-  /** @var \Drupal\search_api\Entity\Server $server */
++  /** @var Server $server */
+   $server = $variables['server'];
+ 
+   if (!Runtime::isAcquiaServer($server)) {
+diff --git a/acquia_search.post_update.php b/acquia_search.post_update.php
+index c995908..743d061 100644
+--- a/acquia_search.post_update.php
++++ b/acquia_search.post_update.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Extension\ModuleInstallerInterface;
+ /**
+  * @file
+  * Search Solr updates once other modules have made their own updates.
+@@ -29,7 +30,7 @@ function acquia_search_post_update_move_search_modules() {
+   }
+ 
+   // Uninstall Search API Solr Multilingual if its still around.
+-  /** @var \Drupal\Core\Extension\ModuleInstallerInterface $module_installer */
++  /** @var ModuleInstallerInterface $module_installer */
+   $module_installer = \Drupal::service('module_installer');
+   if (\Drupal::moduleHandler()->moduleExists('search_api_solr_multilingual')) {
+     $module_installer->uninstall(['search_api_solr_multilingual']);
+diff --git a/src/AcquiaSearchApiClient.php b/src/AcquiaSearchApiClient.php
+index 740705f..fcd6a98 100644
+--- a/src/AcquiaSearchApiClient.php
++++ b/src/AcquiaSearchApiClient.php
+@@ -25,14 +25,14 @@ class AcquiaSearchApiClient {
+   /**
+    * Cache backend.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cache;
+ 
+   /**
+    * The HTTP client to fetch the feed data with.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $client;
+ 
+@@ -51,9 +51,9 @@ class AcquiaSearchApiClient {
+    *
+    * @param array $auth_info
+    *   Authorization array.
+-   * @param \GuzzleHttp\Client $http_client
++   * @param Client $http_client
+    *   HTTP client.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
++   * @param CacheBackendInterface $cache
+    *   Cache backend.
+    */
+   public function __construct(array $auth_info, Client $http_client, CacheBackendInterface $cache) {
+diff --git a/src/Client/Adapter/TimeoutAwarePsr18Adapter.php b/src/Client/Adapter/TimeoutAwarePsr18Adapter.php
+index 79e18b8..2b2c836 100644
+--- a/src/Client/Adapter/TimeoutAwarePsr18Adapter.php
++++ b/src/Client/Adapter/TimeoutAwarePsr18Adapter.php
+@@ -27,14 +27,14 @@ class TimeoutAwarePsr18Adapter implements AdapterInterface, TimeoutAwareInterfac
+   /**
+    * Solarium Psr18 Adapter.
+    *
+-   * @var \Solarium\Core\Client\Adapter\Psr18Adapter
++   * @var Psr18Adapter
+    */
+   protected $psr18Adapter;
+ 
+   /**
+    * Constructor of TimeoutAwarePsr18Adapter.
+    *
+-   * @param \Psr\Http\Client\ClientInterface $httpClient
++   * @param ClientInterface $httpClient
+    *   Guzzle HTTP Client.
+    */
+   public function __construct(ClientInterface $httpClient) {
+@@ -68,12 +68,12 @@ class TimeoutAwarePsr18Adapter implements AdapterInterface, TimeoutAwareInterfac
+   /**
+    * Executes request.
+    *
+-   * @param \Solarium\Core\Client\Request $request
++   * @param Request $request
+    *   Solarium Request.
+-   * @param \Solarium\Core\Client\Endpoint $endpoint
++   * @param Endpoint $endpoint
+    *   Solarium Endpoint.
+    *
+-   * @return \Solarium\Core\Client\Response
++   * @return Response
+    *   Solarium response object.
+    */
+   public function execute(Request $request, Endpoint $endpoint): Response {
+diff --git a/src/Commands/AcquiaSearchCommands.php b/src/Commands/AcquiaSearchCommands.php
+index 803de64..54ad0d8 100644
+--- a/src/Commands/AcquiaSearchCommands.php
++++ b/src/Commands/AcquiaSearchCommands.php
+@@ -24,14 +24,14 @@ class AcquiaSearchCommands extends DrushCommands {
+   /**
+    * Cache service.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   private $cache;
+ 
+   /**
+    * AcquiaSearchCommands constructor.
+    *
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
++   * @param CacheBackendInterface $cache
+    *   Cache backend service.
+    */
+   public function __construct(CacheBackendInterface $cache) {
+diff --git a/src/EventSubscriber/SearchSubscriber.php b/src/EventSubscriber/SearchSubscriber.php
+index 1cdd30e..5e4efe4 100644
+--- a/src/EventSubscriber/SearchSubscriber.php
++++ b/src/EventSubscriber/SearchSubscriber.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\acquia_search\EventSubscriber;
+ 
++use Solarium\Core\Event\PreExecuteRequest;
++use Solarium\Core\Client\Request;
++use Solarium\Core\Event\PostExecuteRequest;
+ use Drupal\acquia_search\AcquiaCryptConnector;
+ use Drupal\acquia_search\Helper\Flood;
+ use Drupal\acquia_search\Helper\Runtime;
+@@ -65,12 +68,12 @@ class SearchSubscriber extends AbstractPlugin implements EventSubscriberInterfac
+   /**
+    * Build Acquia Search Solr Authenticator.
+    *
+-   * @param \Solarium\Core\Event\PreExecuteRequest|\Drupal\search_api_solr\Solarium\EventDispatcher\EventProxy $event
++   * @param PreExecuteRequest|\Drupal\search_api_solr\Solarium\EventDispatcher\EventProxy $event
+    *   PreExecuteRequest event.
+    */
+   public function preExecuteRequest($event) {
+     /** @var \Solarium\Core\Event\PreExecuteRequest $event */
+-    /** @var \Solarium\Core\Client\Request $request */
++    /** @var Request $request */
+     $request = $event->getRequest();
+ 
+     if (!($this->client instanceof Client)) {
+@@ -125,17 +128,17 @@ class SearchSubscriber extends AbstractPlugin implements EventSubscriberInterfac
+   /**
+    * Validate response.
+    *
+-   * @param \Solarium\Core\Event\PostExecuteRequest|\Drupal\search_api_solr\Solarium\EventDispatcher\EventProxy $event
++   * @param PostExecuteRequest|\Drupal\search_api_solr\Solarium\EventDispatcher\EventProxy $event
+    *   postExecuteRequest event.
+    *
+-   * @throws \Solarium\Exception\HttpException
++   * @throws HttpException
+    */
+   public function postExecuteRequest($event) {
+     if (!($this->client instanceof Client)) {
+       return;
+     }
+ 
+-    /** @var \Solarium\Core\Event\PostExecuteRequest $event */
++    /** @var PostExecuteRequest $event */
+     $response = $event->getResponse();
+ 
+     if ($response->getStatusCode() != 200) {
+@@ -157,17 +160,17 @@ class SearchSubscriber extends AbstractPlugin implements EventSubscriberInterfac
+   /**
+    * Validate the hmac for the response body.
+    *
+-   * @param \Solarium\Core\Client\Response $response
++   * @param Response $response
+    *   Solarium Response.
+    * @param string $nonce
+    *   Nonce.
+    * @param string $url
+    *   Url.
+    *
+-   * @return \Solarium\Core\Client\Response
++   * @return Response
+    *   Solarium Response.
+    *
+-   * @throws \Solarium\Exception\HttpException
++   * @throws HttpException
+    */
+   protected function authenticateResponse(Response $response, $nonce, $url) {
+ 
+diff --git a/src/Helper/Messages.php b/src/Helper/Messages.php
+index d9367e9..16ccae3 100644
+--- a/src/Helper/Messages.php
++++ b/src/Helper/Messages.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\acquia_search\Helper;
+ 
++use Drupal\Component\Render\MarkupInterface;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\search_api\SearchApiException;
++use Drupal\search_api_solr\Plugin\search_api\backend\SearchApiSolrBackend;
+ use Drupal\acquia_search\Plugin\SolrConnector\SearchApiSolrAcquiaConnector;
+ use Drupal\Core\Render\Markup;
+ use Drupal\Core\StringTranslation\TranslatableMarkup;
+@@ -90,18 +94,18 @@ class Messages {
+   /**
+    * Returns formatted message about Acquia Search connection details.
+    *
+-   * @param \Drupal\search_api\Entity\Server $server
++   * @param Server $server
+    *   Search server configuration entity.
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface|string
++   * @return MarkupInterface|string
+    *   Formatted message about Acquia Search connection details.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
+-   * @throws \Drupal\search_api\SearchApiException
++   * @throws PluginException
++   * @throws SearchApiException
+    */
+   public static function getSearchStatusMessage(Server $server) {
+ 
+-    /** @var \Drupal\search_api_solr\Plugin\search_api\backend\SearchApiSolrBackend $backend */
++    /** @var SearchApiSolrBackend $backend */
+     $backend = $server->getBackend();
+     $configuration = $backend->getSolrConnector()->getConfiguration();
+ 
+@@ -136,7 +140,7 @@ class Messages {
+    * @param int $override
+    *   Override mode. Read-only or core auto selected.
+    *
+-   * @return array|\Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return array|TranslatableMarkup
+    *   Text describing the current override mode.
+    */
+   public static function getOverriddenModeMessage(int $override) {
+@@ -158,7 +162,7 @@ class Messages {
+    * @param array $configuration
+    *   A configuration array containing scheme, host, port and path.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   Translatable markup showing the current URL based on configuration.
+    */
+   public static function getServerUrlMessage(array $configuration): TranslatableMarkup {
+@@ -180,7 +184,7 @@ class Messages {
+    * @param string|int|null $server_id
+    *   Server ID.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   Translatable markup describing current server.
+    */
+   public static function getServerIdMessage($server_id): TranslatableMarkup {
+@@ -190,13 +194,13 @@ class Messages {
+   /**
+    * Get text describing availability for the given server.
+    *
+-   * @param \Drupal\search_api\Entity\Server $server
++   * @param Server $server
+    *   Search server configuration entity.
+    *
+-   * @return array|\Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return array|TranslatableMarkup
+    *   Solr server availability message.
+    *
+-   * @throws \Drupal\search_api\SearchApiException
++   * @throws SearchApiException
+    */
+   public static function getServerAvailabilityMessage(Server $server) {
+ 
+@@ -213,13 +217,13 @@ class Messages {
+   /**
+    * Get message describing authentication status for the given server.
+    *
+-   * @param \Drupal\search_api\Entity\Server $server
++   * @param Server $server
+    *   Search server configuration entity.
+    *
+-   * @return array|\Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return array|TranslatableMarkup
+    *   Solr server authentication status message.
+    *
+-   * @throws \Drupal\search_api\SearchApiException
++   * @throws SearchApiException
+    */
+   public static function getServerAuthCheckMessage(Server $server) {
+ 
+diff --git a/src/Helper/Runtime.php b/src/Helper/Runtime.php
+index b200294..6a6a112 100644
+--- a/src/Helper/Runtime.php
++++ b/src/Helper/Runtime.php
+@@ -17,7 +17,7 @@ class Runtime {
+   /**
+    * Preferred search core service.
+    *
+-   * @var \Drupal\acquia_search\PreferredSearchCore
++   * @var PreferredSearchCore
+    */
+   protected static $preferredSearchCoreService;
+ 
+@@ -60,7 +60,7 @@ class Runtime {
+    * Helps to determines which search core should be used and whether it is
+    * available within the subscription.
+    *
+-   * @return \Drupal\acquia_search\PreferredSearchCore
++   * @return PreferredSearchCore
+    *   Preferred search core service.
+    */
+   public static function getPreferredSearchCoreService(): PreferredSearchCore {
+@@ -117,7 +117,7 @@ class Runtime {
+    * @param string $application_uuid
+    *   Acquia application UUID.
+    *
+-   * @return \Drupal\acquia_search\AcquiaSearchApiClient
++   * @return AcquiaSearchApiClient
+    *   Acquia Search API Client.
+    */
+   public static function getAcquiaSearchApiClient(string $application_uuid = NULL): AcquiaSearchApiClient {
+@@ -142,7 +142,7 @@ class Runtime {
+   /**
+    * Determine whether given server belongs to an Acquia search server.
+    *
+-   * @param \Drupal\search_api\Entity\Server $server
++   * @param Server $server
+    *   A search server configuration entity.
+    *
+    * @return bool
+diff --git a/src/Plugin/SolrConnector/SearchApiSolrAcquiaConnector.php b/src/Plugin/SolrConnector/SearchApiSolrAcquiaConnector.php
+index d2671dd..8170a77 100644
+--- a/src/Plugin/SolrConnector/SearchApiSolrAcquiaConnector.php
++++ b/src/Plugin/SolrConnector/SearchApiSolrAcquiaConnector.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\acquia_search\Plugin\SolrConnector;
+ 
++use Drupal\acquia_search\EventSubscriber\SearchSubscriber;
++use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\acquia_search\Client\Adapter\TimeoutAwarePsr18Adapter;
+ use Drupal\acquia_search\Helper\Messages;
+ use Drupal\acquia_search\Helper\Runtime;
+@@ -50,21 +52,21 @@ class SearchApiSolrAcquiaConnector extends SolrConnectorPluginBase {
+   /**
+    * Centralized place for accessing and updating Acquia Search Solr settings.
+    *
+-   * @var \Drupal\acquia_search\Helper\Storage
++   * @var Storage
+    */
+   protected $storage;
+ 
+   /**
+    * Event subscriber.
+    *
+-   * @var \Drupal\acquia_search\EventSubscriber\SearchSubscriber
++   * @var SearchSubscriber
+    */
+   protected $searchSubscriber;
+ 
+   /**
+    * A cache backend interface.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cache;
+ 
+@@ -122,7 +124,7 @@ class SearchApiSolrAcquiaConnector extends SolrConnectorPluginBase {
+    *
+    * @param array $configuration
+    *   Solr connection configuration.
+-   * @param \Drupal\acquia_search\PreferredSearchCore $preferred_core_service
++   * @param PreferredSearchCore $preferred_core_service
+    *   Service for determining the preferred search core.
+    *
+    * @return array
+diff --git a/tests/src/Kernel/Migrate/d7/MigrateAcquiaSearchConfigurationTest.php b/tests/src/Kernel/Migrate/d7/MigrateAcquiaSearchConfigurationTest.php
+index e9c656a..837c5f6 100644
+--- a/tests/src/Kernel/Migrate/d7/MigrateAcquiaSearchConfigurationTest.php
++++ b/tests/src/Kernel/Migrate/d7/MigrateAcquiaSearchConfigurationTest.php
+@@ -33,11 +33,11 @@ class MigrateAcquiaSearchConfigurationTest extends MigrateDrupal7TestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->loadFixture(implode(DIRECTORY_SEPARATOR, [
+       DRUPAL_ROOT,
+-      drupal_get_path('module', 'acquia_search'),
++      \Drupal::service('extension.list.module')->getPath('acquia_search'),
+       'tests',
+       'fixtures',
+       'drupal7.php',
+diff --git a/tests/src/Unit/AcquiaSearchApiClientTest.php b/tests/src/Unit/AcquiaSearchApiClientTest.php
+index 7aad987..18030ce 100644
+--- a/tests/src/Unit/AcquiaSearchApiClientTest.php
++++ b/tests/src/Unit/AcquiaSearchApiClientTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\acquia_search\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Prophecy\Prophecy\ObjectProphecy;
+ use Drupal\acquia_search\AcquiaSearchApiClient;
+ use Drupal\acquia_search\Helper\Storage;
+ use Drupal\Component\Datetime\Time;
+@@ -26,24 +28,25 @@ use Psr\Http\Message\StreamInterface;
+  */
+ class AcquiaSearchApiClientTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * GuzzleHttp Client.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $guzzleClient;
+ 
+   /**
+    * Cache backend.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $cacheBackend;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+ 
+     parent::setUp();
+ 
+@@ -123,7 +126,7 @@ class AcquiaSearchApiClientTest extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function tearDown() {
++  protected function tearDown(): void {
+     parent::tearDown();
+     $container = new ContainerBuilder();
+     \Drupal::setContainer($container);
+diff --git a/tests/src/Unit/Commands/AcquiaSearchCommandsTest.php b/tests/src/Unit/Commands/AcquiaSearchCommandsTest.php
+index 02d4d87..dd63389 100644
+--- a/tests/src/Unit/Commands/AcquiaSearchCommandsTest.php
++++ b/tests/src/Unit/Commands/AcquiaSearchCommandsTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\acquia_search\Unit\Commands {
+ 
++  use Prophecy\PhpUnit\ProphecyTrait;
++  use Prophecy\Prophecy\ObjectProphecy;
+   use Drupal\acquia_search\Commands\AcquiaSearchCommands;
+   use Drupal\acquia_search\Helper\Storage;
+   use Drupal\Component\Datetime\Time;
+@@ -27,38 +29,39 @@ namespace Drupal\Tests\acquia_search\Unit\Commands {
+    */
+   class AcquiaSearchCommandsTest extends UnitTestCase {
+ 
++    use ProphecyTrait;
+     /**
+      * OutputInterface.
+      *
+-     * @var \Prophecy\Prophecy\ObjectProphecy
++     * @var ObjectProphecy
+      */
+     protected $output;
+ 
+     /**
+      * Command.
+      *
+-     * @var \Drupal\acquia_search\Commands\AcquiaSearchCommands
++     * @var AcquiaSearchCommands
+      */
+     protected $command;
+ 
+     /**
+      * CacheBackendInterface.
+      *
+-     * @var \Prophecy\Prophecy\ObjectProphecy
++     * @var ObjectProphecy
+      */
+     protected $cache;
+ 
+     /**
+      * GuzzleHttp Client.
+      *
+-     * @var \Prophecy\Prophecy\ObjectProphecy
++     * @var ObjectProphecy
+      */
+     protected $guzzleClient;
+ 
+     /**
+      * {@inheritdoc}
+      */
+-    protected function setUp() {
++    protected function setUp(): void {
+       parent::setUp();
+ 
+       $state = $this->prophesize(State::class);
+diff --git a/tests/src/Unit/Helper/RuntimeTest.php b/tests/src/Unit/Helper/RuntimeTest.php
+index 755687a..7ad3a2f 100644
+--- a/tests/src/Unit/Helper/RuntimeTest.php
++++ b/tests/src/Unit/Helper/RuntimeTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\acquia_search\Unit\Helper;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Prophecy\Prophecy\ObjectProphecy;
+ use Drupal\acquia_search\Helper\Runtime;
+ use Drupal\acquia_search\Helper\Storage;
+ use Drupal\Component\Datetime\Time;
+@@ -26,38 +28,39 @@ use Psr\Http\Message\StreamInterface;
+  */
+ class RuntimeTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Cache backend.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $cacheBackend;
+ 
+   /**
+    * The Acquia Search Solr module config.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $config;
+ 
+   /**
+    * GuzzleHttp Client.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $guzzleClient;
+ 
+   /**
+    * The Drupal module handler.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $state = $this->prophesize(State::class);
+@@ -140,7 +143,7 @@ class RuntimeTest extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function tearDown() {
++  protected function tearDown(): void {
+     parent::tearDown();
+     $container = new ContainerBuilder();
+     \Drupal::setContainer($container);
+diff --git a/tests/src/Unit/Helper/StorageTest.php b/tests/src/Unit/Helper/StorageTest.php
+index 4a45fd6..30cade5 100644
+--- a/tests/src/Unit/Helper/StorageTest.php
++++ b/tests/src/Unit/Helper/StorageTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\acquia_search\Unit\Helper;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\acquia_search\Helper\Storage;
+ use Drupal\Component\Uuid\Php;
+ use Drupal\Core\Config\Config;
+@@ -19,10 +20,11 @@ use Prophecy\Argument;
+  */
+ class StorageTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $state = $this->prophesize(State::class);
+@@ -67,7 +69,7 @@ class StorageTest extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function tearDown() {
++  protected function tearDown(): void {
+     parent::tearDown();
+     $container = new ContainerBuilder();
+     \Drupal::setContainer($container);
+diff --git a/tests/src/Unit/PreferredSearchCoreTest.php b/tests/src/Unit/PreferredSearchCoreTest.php
+index 1e14ccc..2ec5396 100644
+--- a/tests/src/Unit/PreferredSearchCoreTest.php
++++ b/tests/src/Unit/PreferredSearchCoreTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\acquia_search\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Prophecy\Prophecy\ObjectProphecy;
+ use Drupal\acquia_search\Helper\Storage;
+ use Drupal\acquia_search\PreferredSearchCore;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -18,24 +20,25 @@ use Prophecy\Argument;
+  */
+ class PreferredSearchCoreTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * The Acquia Search Solr module config.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $config;
+ 
+   /**
+    * The Drupal module handler.
+    *
+-   * @var \Prophecy\Prophecy\ObjectProphecy
++   * @var ObjectProphecy
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $state = $this->prophesize(State::class);
+@@ -68,7 +71,7 @@ class PreferredSearchCoreTest extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function tearDown() {
++  protected function tearDown(): void {
+     parent::tearDown();
+     $container = new ContainerBuilder();
+     \Drupal::setContainer($container);

@@ -1,0 +1,625 @@
+diff --git a/content_packager.info.yml b/content_packager.info.yml
+index 9f41c0d..36c3616 100644
+--- a/content_packager.info.yml
++++ b/content_packager.info.yml
+@@ -3,8 +3,7 @@ description: Makes it easy to collect an export of content entities and any medi
+ package: Custom
+ 
+ type: module
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ 
+ dependencies:
+   - drupal:media
+diff --git a/content_packager.module b/content_packager.module
+index 6822b2b..545f5fd 100644
+--- a/content_packager.module
++++ b/content_packager.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\File\FileSystem;
+ /**
+  * @file
+  * Provides a method to compile and bundle/package content and associated media.
+@@ -86,8 +89,8 @@ function content_packager_accepted_field_types() {
+  * @return array
+  *   A list of arrays containing the $view_id and $display_id.
+  *
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++ * @throws InvalidPluginDefinitionException
++ * @throws PluginNotFoundException
+  */
+ function content_packager_get_rest_export_views() {
+ 
+@@ -139,7 +142,7 @@ function content_packager_get_rest_export_views() {
+  *
+  * @param array $form_element
+  *   The form element containing the name of the directory to check.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The current state of the form.
+  *
+  * @see \system_check_directory()
+@@ -174,7 +177,7 @@ function content_packager_check_directory_form(array $form_element, FormStateInt
+  */
+ function content_packager_prepare_directory($uri) {
+   $logger = \Drupal::logger('content_packager');
+-  /** @var \Drupal\Core\File\FileSystem $file_system */
++  /** @var FileSystem $file_system */
+   $file_system = \Drupal::service('file_system');
+   $errors = [];
+   if (!is_dir($uri) && !$file_system->mkdir($uri, NULL, TRUE)) {
+@@ -208,7 +211,7 @@ function content_packager_package_uri() {
+ /**
+  * Verify whether the content packager has processed a given entity.
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  *   The entity to verify.
+  *
+  * @return bool
+@@ -224,7 +227,7 @@ function content_packager_is_processed(EntityInterface $entity) {
+ /**
+  * Mark a particular entity as processed.
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  *   The entity to mark as 'processed'.
+  */
+ function content_packager_add_processed(EntityInterface $entity) {
+diff --git a/src/Annotation/PackageSource.php b/src/Annotation/PackageSource.php
+index 4b19649..64b9a45 100644
+--- a/src/Annotation/PackageSource.php
++++ b/src/Annotation/PackageSource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\content_packager\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
++use Drupal\Core\Plugin\PluginWithFormsInterface;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -28,7 +30,7 @@ class PackageSource extends Plugin {
+   /**
+    * The title of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -37,7 +39,7 @@ class PackageSource extends Plugin {
+   /**
+    * The description of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -49,7 +51,7 @@ class PackageSource extends Plugin {
+    * Key-value pairs of classes that implement PluginWithFormsInterface.
+    * Keys used will be 'package' and 'configure'.
+    *
+-   * @var \Drupal\Core\Plugin\PluginWithFormsInterface[]
++   * @var PluginWithFormsInterface[]
+    * @see \Drupal\content_packager\Plugin\source\RestPackageSource
+    *
+    * @see \Drupal\content_packager\Plugin\source\JsonApiPackageSource
+diff --git a/src/BatchOperations.php b/src/BatchOperations.php
+index fa95a63..d05ce17 100644
+--- a/src/BatchOperations.php
++++ b/src/BatchOperations.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\content_packager;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\views\Views;
+ 
+ /**
+@@ -162,8 +164,8 @@ class BatchOperations {
+    * @param array $context
+    *   The batch context array.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public static function copyEntityFiles(array $entity_infos, $package_uri, array $options, array &$context) {
+     if (!isset($context['results']['failed']['copy'])) {
+diff --git a/src/EntityProcessor.php b/src/EntityProcessor.php
+index 337f616..f63e073 100644
+--- a/src/EntityProcessor.php
++++ b/src/EntityProcessor.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\content_packager;
+ 
++use Drupal\file\Plugin\Field\FieldType\FileFieldItemList;
++use Drupal\Core\Field\EntityReferenceFieldItemList;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\FieldableEntityInterface;
+ 
+@@ -15,7 +17,7 @@ class EntityProcessor {
+   /**
+    * Dig up URIs from fields on an entity (and referenced entities).
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to process.
+    * @param array $options
+    *   The image styles we want to generate URIs for and the fields we want
+@@ -40,7 +42,7 @@ class EntityProcessor {
+     if ($fieldable !== TRUE) {
+       return $uris;
+     }
+-    /** @var \Drupal\Core\Entity\FieldableEntityInterface $entity */
++    /** @var FieldableEntityInterface $entity */
+     $fields = $entity->getFields();
+ 
+     foreach ($fields as $field) {
+@@ -60,17 +62,17 @@ class EntityProcessor {
+ 
+       switch ($type) {
+         case 'file':
+-          /** @var \Drupal\file\Plugin\Field\FieldType\FileFieldItemList $field */
++          /** @var FileFieldItemList $field */
+           $uris = array_merge(FieldProcessor::processFileField($field), $uris);
+           break;
+ 
+         case 'image':
+-          /** @var \Drupal\file\Plugin\Field\FieldType\FileFieldItemList $field */
++          /** @var FileFieldItemList $field */
+           $uris = array_merge(FieldProcessor::processImageField($field, $options), $uris);
+           break;
+ 
+         case 'entity_reference':
+-          /** @var \Drupal\Core\Field\EntityReferenceFieldItemList $field */
++          /** @var EntityReferenceFieldItemList $field */
+           $uris = array_merge(FieldProcessor::processEntityRefField($field, $options), $uris);
+           break;
+       }
+diff --git a/src/FieldProcessor.php b/src/FieldProcessor.php
+index 2dc291f..91740d9 100644
+--- a/src/FieldProcessor.php
++++ b/src/FieldProcessor.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\content_packager;
+ 
++use Drupal\file\Plugin\Field\FieldType\FileItem;
++use Drupal\image\Plugin\Field\FieldType\ImageItem;
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Field\EntityReferenceFieldItemList;
+ use Drupal\file\Entity\File;
+ use Drupal\file\Plugin\Field\FieldType\FileFieldItemList;
+@@ -17,7 +20,7 @@ class FieldProcessor {
+   /**
+    * Convert file field items into file URIs to be packaged.
+    *
+-   * @param \Drupal\file\Plugin\Field\FieldType\FileFieldItemList $fieldItemList
++   * @param FileFieldItemList $fieldItemList
+    *   File field items to turn into URLs.
+    *
+    * @return array
+@@ -26,7 +29,7 @@ class FieldProcessor {
+   public static function processFileField(FileFieldItemList $fieldItemList) {
+     $uris = [];
+ 
+-    /** @var \Drupal\file\Plugin\Field\FieldType\FileItem $item */
++    /** @var FileItem $item */
+     foreach ($fieldItemList as $item) {
+       $value = $item->getValue();
+       $file = File::load($value['target_id']);
+@@ -39,7 +42,7 @@ class FieldProcessor {
+   /**
+    * Convert image field items into file URIs to be packaged.
+    *
+-   * @param \Drupal\file\Plugin\Field\FieldType\FileFieldItemList $fieldItemList
++   * @param FileFieldItemList $fieldItemList
+    *   File field items to turn into URLs.
+    * @param array $options
+    *   Options, used to refine/filter behavior during packaging.
+@@ -54,7 +57,7 @@ class FieldProcessor {
+     $styles_to_pack = $options['image_styles'];
+     $include_original = \Drupal::config('content_packager.settings')->get('include_orig_image');
+ 
+-    /** @var \Drupal\image\Plugin\Field\FieldType\ImageItem $item */
++    /** @var ImageItem $item */
+     foreach ($fieldItemList as $item) {
+       $value = $item->getValue();
+ 
+@@ -66,7 +69,7 @@ class FieldProcessor {
+ 
+       $styles = ImageStyle::loadMultiple($styles_to_pack);
+ 
+-      /** @var \Drupal\image\Entity\ImageStyle $style */
++      /** @var ImageStyle $style */
+       foreach ($styles as $style) {
+         $style_uri = self::generateImageStyle($primary_uri, $style);
+         if ($style_uri) {
+@@ -85,7 +88,7 @@ class FieldProcessor {
+    *
+    * @param string $image_uri
+    *   The image URI.
+-   * @param \Drupal\image\Entity\ImageStyle $style
++   * @param ImageStyle $style
+    *   The style we want to derive for $image_uri.
+    *
+    * @return bool|string
+@@ -106,7 +109,7 @@ class FieldProcessor {
+   /**
+    * Convert image field items into file URIs to be packaged.
+    *
+-   * @param \Drupal\Core\Field\EntityReferenceFieldItemList $fieldItemList
++   * @param EntityReferenceFieldItemList $fieldItemList
+    *   File field items to turn into URLs.
+    * @param array $options
+    *   Options, used to refine/filter behavior during packaging.
+@@ -118,7 +121,7 @@ class FieldProcessor {
+   public static function processEntityRefField(EntityReferenceFieldItemList $fieldItemList, array $options) {
+     $uris = [];
+ 
+-    /** @var \Drupal\Core\Entity\EntityInterface $item */
++    /** @var EntityInterface $item */
+     foreach ($fieldItemList->referencedEntities() as $item) {
+       $temp = EntityProcessor::processEntity($item, $options);
+       $uris = array_merge($temp, $uris);
+diff --git a/src/Form/ContentPackagerAdmin.php b/src/Form/ContentPackagerAdmin.php
+index 4ef388d..db903e8 100644
+--- a/src/Form/ContentPackagerAdmin.php
++++ b/src/Form/ContentPackagerAdmin.php
+@@ -26,20 +26,20 @@ class ContentPackagerAdmin extends ConfigFormBase {
+   /**
+    * The source plugin manager.
+    *
+-   * @var \Drupal\content_packager\Plugin\SourcePluginManager
++   * @var SourcePluginManager
+    */
+   protected $pluginManager;
+ 
+   /**
+    * Constructs a ContentPackagerAdmin object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\File\FileSystem $file_system
++   * @param FileSystem $file_system
+    *   The file system service.
+-   * @param \Drupal\Core\Path\PathValidator $validator
++   * @param PathValidator $validator
+    *   The path validator service.
+-   * @param \Drupal\content_packager\Plugin\SourcePluginManager $plugin_manager
++   * @param SourcePluginManager $plugin_manager
+    *   The Content Packager source plugin manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, FileSystem $file_system, PathValidator $validator, SourcePluginManager $plugin_manager) {
+@@ -149,7 +149,7 @@ class ContentPackagerAdmin extends ConfigFormBase {
+       '#default_value' => $config->get('include_orig_image'),
+     ];
+ 
+-    /** @var \Drupal\image\Entity\ImageStyle $style */
++    /** @var ImageStyle $style */
+     foreach ($styles as $style) {
+       $style_id = $style->getName();
+ 
+diff --git a/src/Form/CreatePackage.php b/src/Form/CreatePackage.php
+index 00236ea..2bede1a 100644
+--- a/src/Form/CreatePackage.php
++++ b/src/Form/CreatePackage.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\content_packager\Form;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\content_packager\Plugin\SourcePluginManager;
+@@ -22,21 +24,21 @@ class CreatePackage extends FormBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+    * The file system service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   private $fileSystem;
+ 
+   /**
+    * The source plugin manager.
+    *
+-   * @var \Drupal\content_packager\Plugin\SourcePluginManager
++   * @var SourcePluginManager
+    */
+   protected $pluginManager;
+ 
+@@ -50,13 +52,13 @@ class CreatePackage extends FormBase {
+   /**
+    * Constructs a \Drupal\content_packager\Form\CreatePackage object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\content_packager\Plugin\SourcePluginManager $plugin_manager
++   * @param SourcePluginManager $plugin_manager
+    *   The Content Packager source plugin manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManager $typeManager
++   * @param EntityTypeManager $typeManager
+    *   The Entity Type manager.
+-   * @param \Drupal\Core\File\FileSystem $fileSystem
++   * @param FileSystem $fileSystem
+    *   The file system helpers.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, SourcePluginManager $plugin_manager, EntityTypeManager $typeManager, FileSystem $fileSystem) {
+@@ -180,7 +182,7 @@ class CreatePackage extends FormBase {
+       return;
+     }
+ 
+-    $url = file_create_url($full_package_uri);
++    $url = \Drupal::service('file_url_generator')->generateAbsoluteString($full_package_uri);
+ 
+     $form['existing_file'] = [
+       '#type' => 'details',
+@@ -284,7 +286,7 @@ class CreatePackage extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function zip(array &$form, FormStateInterface $form_state) {
+diff --git a/src/JsonApiHelper.php b/src/JsonApiHelper.php
+index bc7610c..3e1b8fb 100644
+--- a/src/JsonApiHelper.php
++++ b/src/JsonApiHelper.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\content_packager;
+ 
++use Symfony\Component\HttpKernel\HttpKernel;
++use Symfony\Component\HttpFoundation\RequestStack;
+ use Drupal\Component\Serialization\Json;
+ use Symfony\Component\HttpFoundation\Request;
+ use Symfony\Component\HttpKernel\HttpKernelInterface;
+@@ -26,9 +28,9 @@ class JsonApiHelper {
+    *   An array of individual parsed JSON:API results converted into PHP data.
+    */
+   public static function retrievePagesFromUri($uri) {
+-    /** @var \Symfony\Component\HttpKernel\HttpKernel $http_kernel */
++    /** @var HttpKernel $http_kernel */
+     $http_kernel = \Drupal::service('http_kernel.basic');
+-    /** @var \Symfony\Component\HttpFoundation\RequestStack $request_stack */
++    /** @var RequestStack $request_stack */
+     $request_stack = \Drupal::service('request_stack');
+ 
+     $content = [];
+diff --git a/src/Plugin/PackageSourceBase.php b/src/Plugin/PackageSourceBase.php
+index bbc52f8..c862aaf 100644
+--- a/src/Plugin/PackageSourceBase.php
++++ b/src/Plugin/PackageSourceBase.php
+@@ -24,7 +24,7 @@ abstract class PackageSourceBase extends PluginBase implements PackageSourceInte
+   /**
+    * The plugin form factory service.
+    *
+-   * @var \Drupal\Core\Plugin\PluginFormFactoryInterface
++   * @var PluginFormFactoryInterface
+    */
+   private $pluginFormFactory;
+ 
+@@ -37,7 +37,7 @@ abstract class PackageSourceBase extends PluginBase implements PackageSourceInte
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Plugin\PluginFormFactoryInterface $plugin_form_factory
++   * @param PluginFormFactoryInterface $plugin_form_factory
+    *   Plugin form factory to discover and instantiate plugin forms.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, PluginFormFactoryInterface $plugin_form_factory) {
+diff --git a/src/Plugin/PackageSourceInterface.php b/src/Plugin/PackageSourceInterface.php
+index 2ecc731..2c96f7f 100644
+--- a/src/Plugin/PackageSourceInterface.php
++++ b/src/Plugin/PackageSourceInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\content_packager\Plugin;
+ 
++use Drupal\Core\Plugin\PluginFormInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Plugin\PluginWithFormsInterface;
+ 
+@@ -23,10 +24,10 @@ interface PackageSourceInterface extends PluginWithFormsInterface {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state for entire "Create package" form.
+    *
+-   * @return \Drupal\Core\Plugin\PluginFormInterface
++   * @return PluginFormInterface
+    *   The "create package" plugin form for the source.
+    */
+   public function getPackageForm(array $form, FormStateInterface $form_state);
+@@ -52,10 +53,10 @@ interface PackageSourceInterface extends PluginWithFormsInterface {
+    *
+    * @param array $form
+    *   The "Configure Package" form specific to this data source.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state for entire "Create package" form.
+    *
+-   * @return \Drupal\Core\Plugin\PluginFormInterface
++   * @return PluginFormInterface
+    *   The configure plugin form for the source.
+    */
+   public function getConfigureForm(array $form, FormStateInterface $form_state);
+@@ -73,7 +74,7 @@ interface PackageSourceInterface extends PluginWithFormsInterface {
+    *
+    * @param array $form
+    *   The configuration form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state for entire "Create package" form.
+    */
+   public function submitConfigureForm(array $form, FormStateInterface $form_state);
+diff --git a/src/Plugin/SourcePluginManager.php b/src/Plugin/SourcePluginManager.php
+index 4ec93bd..ef084c8 100644
+--- a/src/Plugin/SourcePluginManager.php
++++ b/src/Plugin/SourcePluginManager.php
+@@ -22,9 +22,9 @@ class SourcePluginManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cacheBackend
++   * @param CacheBackendInterface $cacheBackend
+    *   Cache backend instance to use.
+    */
+   public function __construct(\Traversable $namespaces, ModuleHandlerInterface $module_handler, CacheBackendInterface $cacheBackend) {
+diff --git a/src/PluginForm/JsonApiSourceConfig.php b/src/PluginForm/JsonApiSourceConfig.php
+index 05f69b0..0a87561 100644
+--- a/src/PluginForm/JsonApiSourceConfig.php
++++ b/src/PluginForm/JsonApiSourceConfig.php
+@@ -23,7 +23,7 @@ class JsonApiSourceConfig extends PluginFormBase implements ContainerInjectionIn
+   /**
+    * JsonApiSourcePackage constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory) {
+@@ -42,7 +42,7 @@ class JsonApiSourceConfig extends PluginFormBase implements ContainerInjectionIn
+   /**
+    * Sets the config factory for this form.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    *
+    * @return $this
+diff --git a/src/PluginForm/JsonApiSourcePackage.php b/src/PluginForm/JsonApiSourcePackage.php
+index 3e18370..adf7c3c 100644
+--- a/src/PluginForm/JsonApiSourcePackage.php
++++ b/src/PluginForm/JsonApiSourcePackage.php
+@@ -27,7 +27,7 @@ class JsonApiSourcePackage extends PluginFormBase implements ContainerInjectionI
+   /**
+    * JsonApiSourcePackage constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory) {
+@@ -46,7 +46,7 @@ class JsonApiSourcePackage extends PluginFormBase implements ContainerInjectionI
+   /**
+    * Sets the config factory for this form.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    *
+    * @return $this
+diff --git a/src/PluginForm/RestSourcePackage.php b/src/PluginForm/RestSourcePackage.php
+index 60a74f9..c81bdcd 100644
+--- a/src/PluginForm/RestSourcePackage.php
++++ b/src/PluginForm/RestSourcePackage.php
+@@ -34,9 +34,9 @@ class RestSourcePackage extends PluginFormBase implements ContainerInjectionInte
+   /**
+    * RestSourcePackage constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, ModuleHandlerInterface $module_handler) {
+@@ -57,7 +57,7 @@ class RestSourcePackage extends PluginFormBase implements ContainerInjectionInte
+   /**
+    * Sets the config factory for this form.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    *
+    * @return $this
+diff --git a/tests/src/Functional/ContentPackagerDirectoryTest.php b/tests/src/Functional/ContentPackagerDirectoryTest.php
+index 031629d..44db49c 100644
+--- a/tests/src/Functional/ContentPackagerDirectoryTest.php
++++ b/tests/src/Functional/ContentPackagerDirectoryTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\content_packager\Functional;
+ 
++use Drupal\user\UserInterface;
++use Drupal\file\FileInterface;
+ use Drupal\content_packager\BatchOperations;
+ use Drupal\Tests\BrowserTestBase;
+ use Drupal\Tests\image\Kernel\ImageFieldCreationTrait;
+@@ -32,14 +34,14 @@ class ContentPackagerDirectoryTest extends BrowserTestBase {
+   /**
+    * An user with administration permissions.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->user = $this->drupalCreateUser([
+       'access administration pages',
+@@ -54,7 +56,7 @@ class ContentPackagerDirectoryTest extends BrowserTestBase {
+   /**
+    * Retrieves a sample file of the specified type.
+    *
+-   * @return \Drupal\file\FileInterface
++   * @return FileInterface
+    *   A test File object with filesize added.
+    */
+   public function getTestFile($type_name, $size = NULL) {
+@@ -75,7 +77,7 @@ class ContentPackagerDirectoryTest extends BrowserTestBase {
+     $this->drupalGet('admin/config/content/content_packager');
+     $this->assertSession()->statusCodeEquals(200);
+ 
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'package_scheme' => 'public://',
+       'package_destination' => 'test_folder',
+     ], t('Save configuration'));
+@@ -118,7 +120,7 @@ class ContentPackagerDirectoryTest extends BrowserTestBase {
+     $this->drupalGet('admin/config/content/content_packager');
+     $this->assertSession()->statusCodeEquals(200);
+ 
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'package_scheme' => 'public://',
+       'package_destination' => 'test_folder',
+     ], t('Save configuration'));

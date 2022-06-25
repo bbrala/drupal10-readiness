@@ -1,0 +1,254 @@
+diff --git a/mentions.info.yml b/mentions.info.yml
+index 84a315e..275026d 100644
+--- a/mentions.info.yml
++++ b/mentions.info.yml
+@@ -1,7 +1,7 @@
+ name: Mentions
+ type: module
+ description: Record, render and react to specified patterns within content.
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^8 || ^9 || ^10
+ package: Filters
+ configure: entity.mentions_type.list
+ dependencies:
+diff --git a/mentions.module b/mentions.module
+index ddfbcf4..6e8c403 100644
+--- a/mentions.module
++++ b/mentions.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\filter\FilterFormatInterface;
++use Drupal\mentions\Plugin\Filter\MentionsFilter;
++use Symfony\Contracts\EventDispatcher\Event;
+ /**
+  * @file
+  * Code for the mentions module.
+@@ -7,7 +10,6 @@
+ 
+ use Drupal\Core\Routing\RouteMatchInterface;
+ use Drupal\Core\Url;
+-use Symfony\Component\EventDispatcher\Event;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Link;
+ 
+@@ -79,7 +81,7 @@ function mentions_insert_or_update(EntityInterface $entity, $update) {
+       array_push($fields_with_text, $field_definition->getName());
+     }
+   }
+-  /** @var \Drupal\filter\FilterFormatInterface[] $enabled_formats */
++  /** @var FilterFormatInterface[] $enabled_formats */
+   $enabled_formats = \Drupal::entityTypeManager()->getStorage('filter_format')->loadByProperties(['status' => TRUE]);
+   foreach ($fields_with_text as $text_field) {
+     $entity_text_field = $entity->get($text_field);
+@@ -89,7 +91,7 @@ function mentions_insert_or_update(EntityInterface $entity, $update) {
+       continue;
+     }
+     $filter_configuration = $enabled_formats[$format]->filters('filter_mentions')->getConfiguration();
+-    /** @var \Drupal\mentions\Plugin\Filter\MentionsFilter $filter_mentions */
++    /** @var MentionsFilter $filter_mentions */
+     $filter_mentions = \Drupal::service('plugin.manager.filter')->createInstance('filter_mentions', $filter_configuration);
+     if ($filter_mentions->shouldApplyFilter()) {
+       $mentions = $filter_mentions->getMentions($value);
+diff --git a/src/Annotation/Mention.php b/src/Annotation/Mention.php
+index e12c4d4..1e53b74 100644
+--- a/src/Annotation/Mention.php
++++ b/src/Annotation/Mention.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mentions\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -20,7 +21,7 @@ class Mention extends Plugin {
+   /**
+    * The name of the flavor.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Form/MentionsSettingsForm.php b/src/Form/MentionsSettingsForm.php
+index 75f6f1d..b0fd59f 100644
+--- a/src/Form/MentionsSettingsForm.php
++++ b/src/Form/MentionsSettingsForm.php
+@@ -18,7 +18,7 @@ class MentionsSettingsForm extends ConfigFormBase {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+diff --git a/src/Form/MentionsTypeForm.php b/src/Form/MentionsTypeForm.php
+index 5a6bb1c..ea05953 100644
+--- a/src/Form/MentionsTypeForm.php
++++ b/src/Form/MentionsTypeForm.php
+@@ -23,28 +23,28 @@ class MentionsTypeForm extends EntityForm implements ContainerInjectionInterface
+   /**
+    * The mentions plugin manager.
+    *
+-   * @var \Drupal\mentions\MentionsPluginManager
++   * @var MentionsPluginManager
+    */
+   protected $mentionsManager;
+ 
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity type repository service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeRepositoryInterface
++   * @var EntityTypeRepositoryInterface
+    */
+   protected $entityTypeRepository;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+diff --git a/src/MentionsController.php b/src/MentionsController.php
+index e0dd5f3..85264fa 100644
+--- a/src/MentionsController.php
++++ b/src/MentionsController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mentions;
+ 
++use Symfony\Component\HttpFoundation\Response;
+ use Drupal\Core\Controller\ControllerBase;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+ use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+@@ -19,14 +20,14 @@ class MentionsController extends ControllerBase {
+    *
+    * Taken from: commentPermalink.
+    *
+-   * @param \Drupal\mentions\MentionsInterface $mentions
++   * @param MentionsInterface $mentions
+    *   A mention entity.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   The mention listing set to the page on which the mention appears.
+    *
+-   * @throws \Symfony\Component\HttpKernel\Exception\NotFoundHttpException
+-   * @throws \Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException
++   * @throws NotFoundHttpException
++   * @throws AccessDeniedHttpException
+    */
+   public function mentionPermalink(MentionsInterface $mentions) {
+     if ($entity = $mentions->getMentionedEntity()) {
+diff --git a/src/MentionsPluginInterface.php b/src/MentionsPluginInterface.php
+index 58126b4..bdd1b39 100644
+--- a/src/MentionsPluginInterface.php
++++ b/src/MentionsPluginInterface.php
+@@ -54,9 +54,9 @@ interface MentionsPluginInterface extends ContainerFactoryPluginInterface {
+   /**
+    * The settingsCallback function.
+    *
+-   * @param \Drupal\Core\Form\FormInterface $form
++   * @param FormInterface $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    * @param mixed $type
+    *   The type.
+@@ -69,9 +69,9 @@ interface MentionsPluginInterface extends ContainerFactoryPluginInterface {
+   /**
+    * The settingsSubmitCallback function.
+    *
+-   * @param \Drupal\Core\Form\FormInterface $form
++   * @param FormInterface $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    * @param mixed $type
+    *   The type.
+@@ -84,7 +84,7 @@ interface MentionsPluginInterface extends ContainerFactoryPluginInterface {
+   /**
+    * The mentionPresaveCallback function.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity.
+    *
+    * @return mixed
+diff --git a/src/Plugin/Filter/MentionsFilter.php b/src/Plugin/Filter/MentionsFilter.php
+index e589d4a..36205fa 100644
+--- a/src/Plugin/Filter/MentionsFilter.php
++++ b/src/Plugin/Filter/MentionsFilter.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mentions\Plugin\Filter;
+ 
++use Drupal\mentions\Entity\MentionsTypeInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -31,17 +32,17 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class MentionsFilter extends FilterBase implements ContainerFactoryPluginInterface {
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+-   * @var \Drupal\mentions\MentionsPluginManager
++   * @var MentionsPluginManager
+    */
+   protected $mentionsManager;
+ 
+@@ -100,7 +101,7 @@ class MentionsFilter extends FilterBase implements ContainerFactoryPluginInterfa
+   public function getMentions($text) {
+     $mentions = [];
+     $enabledTypes = $this->entityTypeManager->getStorage('mentions_type')->loadMultiple($this->settings['mentions_filter']);
+-    /** @var \Drupal\mentions\Entity\MentionsTypeInterface $enabledType */
++    /** @var MentionsTypeInterface $enabledType */
+     foreach ($enabledTypes as $enabledType) {
+       $settings = $enabledType->getInputSettings();
+       $input_settings = [
+diff --git a/src/Plugin/Mentions/Entity.php b/src/Plugin/Mentions/Entity.php
+index 3a99496..618d3e9 100644
+--- a/src/Plugin/Mentions/Entity.php
++++ b/src/Plugin/Mentions/Entity.php
+@@ -23,14 +23,14 @@ class Entity implements MentionsPluginInterface {
+   /**
+    * Token service.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $tokenService;
+ 
+   /**
+    * Entity Type Manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 

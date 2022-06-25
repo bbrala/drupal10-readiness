@@ -1,0 +1,435 @@
+diff --git a/raven.module b/raven.module
+index d334869..903e689 100644
+--- a/raven.module
++++ b/raven.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use function Sentry\captureEvent;
+ /**
+  * @file
+  * Raven Drupal module.
+@@ -146,6 +147,6 @@ function raven_monitoring_run_sensors(array $results): void {
+     ];
+     $formatted_message = strtr($message, $message_placeholders);
+     $event->setMessage($message, $message_placeholders, $formatted_message);
+-    \Sentry\captureEvent($event);
++    captureEvent($event);
+   }
+ }
+diff --git a/src/Commands/RavenCommands.php b/src/Commands/RavenCommands.php
+index b84337b..a36576f 100644
+--- a/src/Commands/RavenCommands.php
++++ b/src/Commands/RavenCommands.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\raven\Commands;
+ 
++use function Sentry\captureMessage;
+ use Consolidation\AnnotatedCommand\CommandData;
+ use Drupal\raven\EventSubscriber\RequestSubscriber;
+ use Drupal\raven\Logger\Raven;
+@@ -18,14 +19,14 @@ class RavenCommands extends DrushCommands {
+   /**
+    * The @raven.request_subscriber service.
+    *
+-   * @var \Drupal\raven\EventSubscriber\RequestSubscriber|null
++   * @var RequestSubscriber|null
+    */
+   protected $eventSubscriber;
+ 
+   /**
+    * The @logger.raven service.
+    *
+-   * @var \Drupal\raven\Logger\Raven|null
++   * @var Raven|null
+    */
+   protected $ravenLogger;
+ 
+@@ -90,7 +91,7 @@ class RavenCommands extends DrushCommands {
+ 
+     $start = microtime(TRUE);
+ 
+-    $id = \Sentry\captureMessage($message, $severity);
++    $id = captureMessage($message, $severity);
+ 
+     if ($parent = SentrySdk::getCurrentHub()->getSpan()) {
+       $span = new SpanContext();
+diff --git a/src/Config/SecKitOverrides.php b/src/Config/SecKitOverrides.php
+index d6f898d..ab17536 100644
+--- a/src/Config/SecKitOverrides.php
++++ b/src/Config/SecKitOverrides.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\raven\Config;
+ 
++use Drupal\Core\Config\StorableConfigBase;
+ use Drupal\Core\Cache\CacheableMetadata;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Config\ConfigFactoryOverrideInterface;
+@@ -17,14 +18,14 @@ class SecKitOverrides implements ConfigFactoryOverrideInterface {
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Constructs the Security Kit config overrider.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory object.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory) {
+@@ -125,7 +126,7 @@ class SecKitOverrides implements ConfigFactoryOverrideInterface {
+    * @param string $collection
+    *   The configuration collection.
+    *
+-   * @return \Drupal\Core\Config\StorableConfigBase|null
++   * @return StorableConfigBase|null
+    *   The configuration object for the provided name and collection.
+    */
+   public function createConfigObject($name, $collection = StorageInterface::DEFAULT_COLLECTION) {
+diff --git a/src/EventSubscriber/CspSubscriber.php b/src/EventSubscriber/CspSubscriber.php
+index ca909d3..c058ecc 100644
+--- a/src/EventSubscriber/CspSubscriber.php
++++ b/src/EventSubscriber/CspSubscriber.php
+@@ -17,7 +17,7 @@ class CspSubscriber implements EventSubscriberInterface {
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   private $configFactory;
+ 
+@@ -36,7 +36,7 @@ class CspSubscriber implements EventSubscriberInterface {
+   /**
+    * CspSubscriber constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The config factory service.
+    */
+   public function __construct(ConfigFactoryInterface $configFactory) {
+diff --git a/src/EventSubscriber/RequestSubscriber.php b/src/EventSubscriber/RequestSubscriber.php
+index f726118..5048f9d 100644
+--- a/src/EventSubscriber/RequestSubscriber.php
++++ b/src/EventSubscriber/RequestSubscriber.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\raven\EventSubscriber;
+ 
++use Symfony\Component\DependencyInjection\ContainerInterface;
++use Sentry\Tracing\Transaction;
++use function Sentry\startTransaction;
+ use Consolidation\AnnotatedCommand\CommandData;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Database\Database;
+@@ -28,46 +31,46 @@ class RequestSubscriber implements EventSubscriberInterface, ContainerAwareInter
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface|null
++   * @var ConfigFactoryInterface|null
+    */
+   protected $configFactory;
+ 
+   /**
+    * {@inheritdoc}
+    *
+-   * @var \Symfony\Component\DependencyInjection\ContainerInterface|null
++   * @var ContainerInterface|null
+    */
+   protected $container;
+ 
+   /**
+    * Raven logger service.
+    *
+-   * @var \Drupal\raven\Logger\Raven|null
++   * @var Raven|null
+    */
+   protected $logger;
+ 
+   /**
+    * Time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface|null
++   * @var TimeInterface|null
+    */
+   protected $time;
+ 
+   /**
+    * The transaction for HTTP requests.
+    *
+-   * @var \Sentry\Tracing\Transaction|null
++   * @var Transaction|null
+    */
+   public $transaction;
+ 
+   /**
+    * Constructs the request subscriber.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory object.
+-   * @param \Drupal\raven\Logger\Raven $logger
++   * @param Raven $logger
+    *   The logger service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory = NULL, Raven $logger = NULL, TimeInterface $time = NULL) {
+@@ -88,7 +91,7 @@ class RequestSubscriber implements EventSubscriberInterface, ContainerAwareInter
+     $transactionContext->setName('drush ' . $commandData->input()->getArgument('command'));
+     $transactionContext->setOp('drush.command');
+     $transactionContext->setStartTimestamp($this->time->getRequestMicroTime());
+-    $this->transaction = \Sentry\startTransaction($transactionContext);
++    $this->transaction = startTransaction($transactionContext);
+     SentrySdk::getCurrentHub()->setSpan($this->transaction);
+     if ($config->get('database_tracing')) {
+       foreach (Database::getAllConnectionInfo() as $key => $info) {
+@@ -121,7 +124,7 @@ class RequestSubscriber implements EventSubscriberInterface, ContainerAwareInter
+       'http.url' => $request->getUri(),
+     ]);
+     $transactionContext->setStartTimestamp($this->time->getRequestMicroTime());
+-    $this->transaction = \Sentry\startTransaction($transactionContext);
++    $this->transaction = startTransaction($transactionContext);
+     SentrySdk::getCurrentHub()->setSpan($this->transaction);
+     if ($config->get('database_tracing')) {
+       foreach (Database::getAllConnectionInfo() as $key => $info) {
+diff --git a/src/Form/RavenConfigForm.php b/src/Form/RavenConfigForm.php
+index ff457f8..1c16087 100644
+--- a/src/Form/RavenConfigForm.php
++++ b/src/Form/RavenConfigForm.php
+@@ -239,7 +239,7 @@ class RavenConfigForm {
+    *
+    * @param mixed[] $form
+    *   The logging and errors config form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    */
+   public static function submitForm(array &$form, FormStateInterface $form_state): void {
+diff --git a/src/Logger/Raven.php b/src/Logger/Raven.php
+index 6b17d69..4e1f301 100644
+--- a/src/Logger/Raven.php
++++ b/src/Logger/Raven.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\raven\Logger;
+ 
++use function Sentry\init;
++use function Sentry\configureScope;
++use function Sentry\captureEvent;
++use function Sentry\captureException;
++use function Sentry\addBreadcrumb;
+ use Drupal\Component\ClassFinder\ClassFinder;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\DependencyInjection\DependencySerializationTrait;
+@@ -52,14 +57,14 @@ class Raven implements LoggerInterface {
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface|null
++   * @var AccountInterface|null
+    */
+   protected $currentUser;
+ 
+@@ -73,47 +78,47 @@ class Raven implements LoggerInterface {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The message's placeholders parser.
+    *
+-   * @var \Drupal\Core\Logger\LogMessageParserInterface
++   * @var LogMessageParserInterface
+    */
+   protected $parser;
+ 
+   /**
+    * Request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack|null
++   * @var RequestStack|null
+    */
+   protected $requestStack;
+ 
+   /**
+    * The settings array.
+    *
+-   * @var \Drupal\Core\Site\Settings
++   * @var Settings
+    */
+   protected $settings;
+ 
+   /**
+    * Constructs a Raven log object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory object.
+-   * @param \Drupal\Core\Logger\LogMessageParserInterface $parser
++   * @param LogMessageParserInterface $parser
+    *   The parser to use when extracting message variables.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    * @param string $environment
+    *   The kernel.environment parameter.
+-   * @param \Drupal\Core\Session\AccountInterface|null $current_user
++   * @param AccountInterface|null $current_user
+    *   The current user (optional).
+-   * @param \Symfony\Component\HttpFoundation\RequestStack|null $request_stack
++   * @param RequestStack|null $request_stack
+    *   The request stack (optional).
+-   * @param \Drupal\Core\Site\Settings|null $settings
++   * @param Settings|null $settings
+    *   The settings array (optional).
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, LogMessageParserInterface $parser, ModuleHandlerInterface $module_handler, $environment, AccountInterface $current_user = NULL, RequestStack $request_stack = NULL, Settings $settings = NULL) {
+@@ -207,7 +212,7 @@ class Raven implements LoggerInterface {
+         SentrySdk::init()->bindClient(ClientBuilder::create($options)->setLogger(Drush::logger())->getClient());
+       }
+       else {
+-        \Sentry\init($options);
++        init($options);
+       }
+     }
+     catch (\InvalidArgumentException $e) {
+@@ -217,7 +222,7 @@ class Raven implements LoggerInterface {
+       return NULL;
+     }
+     // Set default user context.
+-    \Sentry\configureScope(function (Scope $scope) use ($config): void {
++    configureScope(function (Scope $scope) use ($config): void {
+       $user = ['id' => $this->currentUser ? $this->currentUser->id() : 0];
+       if ($this->requestStack && ($request = $this->requestStack->getCurrentRequest())) {
+         $user['ip_address'] = $request->getClientIp();
+@@ -328,10 +333,10 @@ class Raven implements LoggerInterface {
+       $start = microtime(TRUE);
+       $rateLimit = $config->get('rate_limit');
+       if (!$rateLimit || $counter < $rateLimit) {
+-        \Sentry\captureEvent($event, EventHint::fromArray($eventHint));
++        captureEvent($event, EventHint::fromArray($eventHint));
+       }
+       elseif ($counter == $rateLimit) {
+-        \Sentry\captureException(new RateLimitException('Log event discarded due to rate limit exceeded; future log events will not be captured by Sentry.'));
++        captureException(new RateLimitException('Log event discarded due to rate limit exceeded; future log events will not be captured by Sentry.'));
+       }
+       $counter++;
+       if ($parent = SentrySdk::getCurrentHub()->getSpan()) {
+@@ -363,7 +368,7 @@ class Raven implements LoggerInterface {
+     }
+     $this->moduleHandler->alter('raven_breadcrumb', $breadcrumb);
+     if (!empty($breadcrumb['process'])) {
+-      \Sentry\addBreadcrumb(Breadcrumb::fromArray($breadcrumb['breadcrumb']));
++      addBreadcrumb(Breadcrumb::fromArray($breadcrumb['breadcrumb']));
+     }
+   }
+ 
+@@ -384,7 +389,7 @@ class Raven implements LoggerInterface {
+    */
+   public function onConsoleError(ConsoleErrorEvent $event): void {
+     if ($this->getClient()) {
+-      \Sentry\captureException($event->getError());
++      captureException($event->getError());
+     }
+   }
+ 
+diff --git a/src/Twig/TwigTracingExtension.php b/src/Twig/TwigTracingExtension.php
+index 23c7bd6..a80773f 100644
+--- a/src/Twig/TwigTracingExtension.php
++++ b/src/Twig/TwigTracingExtension.php
+@@ -19,7 +19,7 @@ class TwigTracingExtension extends AbstractExtension {
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+@@ -42,7 +42,7 @@ class TwigTracingExtension extends AbstractExtension {
+   /**
+    * This method is called before execution.
+    *
+-   * @param \Twig\Profiler\Profile $profile
++   * @param Profile $profile
+    *   The profiling data.
+    */
+   public function enter(Profile $profile): void {
+@@ -65,7 +65,7 @@ class TwigTracingExtension extends AbstractExtension {
+   /**
+    * This method is called when execution is finished.
+    *
+-   * @param \Twig\Profiler\Profile $profile
++   * @param Profile $profile
+    *   The profiling data.
+    */
+   public function leave(Profile $profile): void {
+@@ -90,7 +90,7 @@ class TwigTracingExtension extends AbstractExtension {
+   /**
+    * Gets a short description for the span.
+    *
+-   * @param \Twig\Profiler\Profile $profile
++   * @param Profile $profile
+    *   The profiling data.
+    */
+   private function getSpanDescription(Profile $profile): string {
+diff --git a/tests/src/Unit/ProxyConfigTest.php b/tests/src/Unit/ProxyConfigTest.php
+index 34123b8..156e3e9 100644
+--- a/tests/src/Unit/ProxyConfigTest.php
++++ b/tests/src/Unit/ProxyConfigTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\raven\Unit;
+ 
++use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\Logger\LogMessageParserInterface;
+ use Drupal\Core\Site\Settings;
+@@ -25,14 +26,14 @@ class ProxyConfigTest extends UnitTestCase {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The message's placeholders parser.
+    *
+-   * @var \Drupal\Core\Logger\LogMessageParserInterface
++   * @var LogMessageParserInterface
+    */
+   protected $parser;
+ 
+@@ -260,7 +261,7 @@ class ProxyConfigTest extends UnitTestCase {
+    * @dataProvider proxyConfigurationData
+    */
+   public function testProxyConfiguration(string $dsn, array $config, string $proxy): void {
+-    /** @var \Drupal\Core\Config\ConfigFactoryInterface $configFactory */
++    /** @var ConfigFactoryInterface $configFactory */
+     $configFactory = $this->getConfigFactoryStub([
+       'raven.settings' => [
+         'client_key' => $dsn,

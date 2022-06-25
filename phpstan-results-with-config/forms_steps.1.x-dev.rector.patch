@@ -1,0 +1,1964 @@
+diff --git a/forms_steps.install b/forms_steps.install
+index f715932..52122f4 100644
+--- a/forms_steps.install
++++ b/forms_steps.install
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Database\StatementInterface;
+ /**
+  * @file
+  * Installation hooks for forms_steps.
+@@ -18,7 +20,7 @@ function forms_steps_update_8101() {
+   $config_factory = \Drupal::configFactory();
+   $formsStepsConfigs = $config_factory->listAll('forms_steps.forms_steps.');
+   foreach ($formsStepsConfigs as $formsStepsConfig) {
+-    /** @var \Drupal\Core\Config\Config $config */
++    /** @var Config $config */
+     $config = $config_factory->getEditable($formsStepsConfig);
+ 
+     if ($config) {
+@@ -57,7 +59,7 @@ function forms_steps_update_8101() {
+     ])
+     ->isNotNull('field_forms_steps_id');
+ 
+-  /** @var \Drupal\Core\Database\StatementInterface $records */
++  /** @var StatementInterface $records */
+   $records = $query->execute();
+ 
+   // For each record we create a workflow instance.
+diff --git a/forms_steps.module b/forms_steps.module
+index 147d48d..5fa6bf6 100644
+--- a/forms_steps.module
++++ b/forms_steps.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\forms_steps\Service\FormsStepsManager;
+ /**
+  * @file
+  * Hook implementations for the forms_steps module.
+@@ -88,7 +89,7 @@ function forms_steps_entity_base_field_info(EntityTypeInterface $entity_type) {
+  * Manage all form modes and define FormClasses for each specific types.
+  */
+ function forms_steps_entity_type_alter(array &$entity_types) {
+-  /** @var \Drupal\forms_steps\Service\FormsStepsManager $formsStepsManager */
++  /** @var FormsStepsManager $formsStepsManager */
+   $formsStepsManager = \Drupal::service('forms_steps.manager');
+ 
+   $available_entity_types = $formsStepsManager->getAllFormModesDefinitions();
+diff --git a/src/Commands/FormsStepsCommands.php b/src/Commands/FormsStepsCommands.php
+index ce46d7b..7a56503 100644
+--- a/src/Commands/FormsStepsCommands.php
++++ b/src/Commands/FormsStepsCommands.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\forms_steps\Commands;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Uuid\UuidInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+@@ -21,22 +23,22 @@ class FormsStepsCommands extends DrushCommands {
+   /**
+    * EntityTypeManager Service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+    * UUID Service.
+    *
+-   * @var \Drupal\Component\Uuid\UuidInterface
++   * @var UuidInterface
+    */
+   private $uuidService;
+ 
+   /**
+    * Constructor().
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
+-   * @param \Drupal\Component\Uuid\UuidInterface $uuid_service
++   * @param EntityTypeManagerInterface $entity_type_manager
++   * @param UuidInterface $uuid_service
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, UuidInterface $uuid_service) {
+     parent::__construct();
+@@ -65,8 +67,8 @@ class FormsStepsCommands extends DrushCommands {
+    *  A list of options.
+    *
+    * @return array|void
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    * @command forms_steps:attach-entity
+    * @aliases fs-attach-entity
+    * @options instance_id An existing instance id.
+diff --git a/src/Controller/FormsStepsController.php b/src/Controller/FormsStepsController.php
+index 018e04f..6efe535 100644
+--- a/src/Controller/FormsStepsController.php
++++ b/src/Controller/FormsStepsController.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\forms_steps\Controller;
+ 
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Render\Element\Form;
++use Drupal\forms_steps\Entity\FormsSteps;
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\forms_steps\Entity\Workflow;
+@@ -31,10 +35,10 @@ class FormsStepsController extends ControllerBase {
+    * @return mixed
+    *   Form that match the input parameters.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\forms_steps\Exception\AccessDeniedException
+-   * @throws \Drupal\forms_steps\Exception\FormsStepsNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws AccessDeniedException
++   * @throws FormsStepsNotFoundException
+    */
+   public function step($forms_steps, $step, $instance_id = NULL) {
+     return self::getForm($forms_steps, $step, $instance_id);
+@@ -55,17 +59,17 @@ class FormsStepsController extends ControllerBase {
+    * @param null|int $instance_id
+    *   Instance ID of the forms steps reference to load.
+    *
+-   * @return \Drupal\Core\Render\Element\Form
++   * @return Form
+    *   Returns the Form.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\forms_steps\Exception\AccessDeniedException
+-   * @throws \Drupal\forms_steps\Exception\FormsStepsNotFoundException
+-   * @throws \Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws AccessDeniedException
++   * @throws FormsStepsNotFoundException
++   * @throws AccessDeniedHttpException
+    */
+   public static function getForm($forms_steps, $step, $instance_id = NULL) {
+-    /** @var \Drupal\forms_steps\Entity\FormsSteps $formsSteps */
++    /** @var FormsSteps $formsSteps */
+     $formsSteps = \Drupal::entityTypeManager()
+       ->getStorage('forms_steps')
+       ->load($forms_steps);
+@@ -127,7 +131,7 @@ class FormsStepsController extends ControllerBase {
+     $userRegistrationAccess = FALSE;
+     if ($step->entityType() == 'user') {
+       $account = User::load(\Drupal::currentUser()->id());
+-      /** @var  \Drupal\Core\Access\AccessResultInterface $registrationAccess */
++      /** @var AccessResultInterface $registrationAccess */
+       $registrationAccess = \Drupal::service('access_check.user.register')
+         ->access($account);
+       $userRegistrationAccess = $registrationAccess->isAllowed();
+diff --git a/src/Controller/FormsStepsListBuilder.php b/src/Controller/FormsStepsListBuilder.php
+index 6a23b6e..6f92f6f 100644
+--- a/src/Controller/FormsStepsListBuilder.php
++++ b/src/Controller/FormsStepsListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\forms_steps\Controller;
+ 
++use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityListBuilder;
+ use Drupal\Core\Url;
+@@ -43,7 +44,7 @@ class FormsStepsListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function getDefaultOperations(EntityInterface $entity) {
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityInterface $entity */
++    /** @var ConfigEntityInterface $entity */
+     $operations = parent::getDefaultOperations($entity);
+     $first_step = $entity->getFirstStep();
+ 
+diff --git a/src/Controller/WorkflowController.php b/src/Controller/WorkflowController.php
+index d446722..36603f2 100644
+--- a/src/Controller/WorkflowController.php
++++ b/src/Controller/WorkflowController.php
+@@ -16,7 +16,7 @@ class WorkflowController extends ControllerBase {
+   /**
+    * The repository for our specialized queries.
+    *
+-   * @var \Drupal\forms_steps\Repository\WorkflowRepository
++   * @var WorkflowRepository
+    */
+   protected $repository;
+ 
+@@ -32,7 +32,7 @@ class WorkflowController extends ControllerBase {
+   /**
+    * Construct a new controller.
+    *
+-   * @param \Drupal\forms_steps\Repository\WorkflowRepository $repository
++   * @param WorkflowRepository $repository
+    *   The repository service.
+    */
+   public function __construct(WorkflowRepository $repository) {
+diff --git a/src/Controller/WorkflowListBuilder.php b/src/Controller/WorkflowListBuilder.php
+index 906ee97..51f28d3 100644
+--- a/src/Controller/WorkflowListBuilder.php
++++ b/src/Controller/WorkflowListBuilder.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\forms_steps\Controller;
+ 
++use Drupal\Core\Config\Entity\ConfigEntityInterface;
++use Drupal\forms_steps\Service\FormsStepsManager;
++use Drupal\forms_steps\Entity\FormsSteps;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ use Drupal\Core\Url;
+@@ -57,13 +60,13 @@ class WorkflowListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function getDefaultOperations(EntityInterface $entity) {
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityInterface $entity */
++    /** @var ConfigEntityInterface $entity */
+     $operations = parent::getDefaultOperations($entity);
+-    /** @var \Drupal\forms_steps\Service\FormsStepsManager $formStepsManager */
++    /** @var FormsStepsManager $formStepsManager */
+     $formStepsManager = \Drupal::service('forms_steps.manager');
+ 
+     if ($entity->forms_steps->value) {
+-      /** @var \Drupal\forms_steps\Entity\FormsSteps $formsSteps */
++      /** @var FormsSteps $formsSteps */
+       $formsSteps = $formStepsManager->getFormsStepsById(
+         $entity->forms_steps->value
+       );
+diff --git a/src/Entity/FormsSteps.php b/src/Entity/FormsSteps.php
+index 6caa86b..2cd1f0b 100644
+--- a/src/Entity/FormsSteps.php
++++ b/src/Entity/FormsSteps.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\forms_steps\Entity;
+ 
++use Drupal\forms_steps\StepInterface;
++use Drupal\forms_steps\ProgressStepInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+ use Drupal\forms_steps\FormsStepsInterface;
+ use Drupal\forms_steps\Step;
+@@ -326,7 +328,7 @@ class FormsSteps extends ConfigEntityBase implements FormsStepsInterface {
+   /**
+    * Returns the previous step route.
+    *
+-   * @param \Drupal\forms_steps\Step $step
++   * @param Step $step
+    *   Current Step.
+    *
+    * @return null|string
+@@ -351,7 +353,7 @@ class FormsSteps extends ConfigEntityBase implements FormsStepsInterface {
+     if ($step_ids === NULL) {
+       $step_ids = array_keys($this->steps);
+     }
+-    /** @var \Drupal\forms_steps\StepInterface[] $steps */
++    /** @var StepInterface[] $steps */
+     $steps = array_combine($step_ids, array_map([$this, 'getStep'], $step_ids));
+     if (count($steps) > 1) {
+       // Sort Steps by weight and then label.
+@@ -377,7 +379,7 @@ class FormsSteps extends ConfigEntityBase implements FormsStepsInterface {
+       $progress_step_ids = array_keys($this->progress_steps);
+     }
+ 
+-    /** @var \Drupal\forms_steps\ProgressStepInterface[] $progress_steps */
++    /** @var ProgressStepInterface[] $progress_steps */
+     $progress_steps = array_combine($progress_step_ids, array_map([$this, 'getProgressStep'], $progress_step_ids));
+     if (count($progress_steps) > 1) {
+       // Sort Steps by weight and then label.
+diff --git a/src/Event/StepChangeEvent.php b/src/Event/StepChangeEvent.php
+index 46433b0..f3b6af6 100644
+--- a/src/Event/StepChangeEvent.php
++++ b/src/Event/StepChangeEvent.php
+@@ -2,10 +2,11 @@
+ 
+ namespace Drupal\forms_steps\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
++use Drupal\forms_steps\StepInterface;
+ use Drupal\Core\Form\FormState;
+ use Drupal\forms_steps\Entity\FormsSteps;
+ use Drupal\forms_steps\Step;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Event that is fired when before we switch from one step to another.
+@@ -17,39 +18,39 @@ class StepChangeEvent extends Event {
+   /**
+    * The FormsSteps object.
+    *
+-   * @var \Drupal\forms_steps\Entity\FormsSteps
++   * @var FormsSteps
+    */
+   public $formsSteps;
+ 
+   /**
+    * The current step.
+    *
+-   * @var \Drupal\forms_steps\StepInterface
++   * @var StepInterface
+    */
+   public $fromStep;
+ 
+   /**
+    * The step we are jumping to (can be previous one or next one).
+    *
+-   * @var \Drupal\forms_steps\StepInterface
++   * @var StepInterface
+    */
+   public $toStep;
+ 
+   /**
+    * The formState object.
+    *
+-   * @var \Drupal\Core\Form\FormState
++   * @var FormState
+    */
+   public $formState;
+ 
+   /**
+    * Constructs the object.
+    *
+-   * @param \Drupal\forms_steps\Entity\FormsSteps $forms_steps
++   * @param FormsSteps $forms_steps
+    *  The FormsSteps object.
+-   * @param \Drupal\forms_steps\Step $from_step
++   * @param Step $from_step
+    *  The step the user is currently on.
+-   * @param \Drupal\forms_steps\Step $to_step
++   * @param Step $to_step
+    *  The next/previous step the user is going to be redirected.
+    * @param FormState $form_state
+    *  The formState.
+diff --git a/src/EventSubscriber/RouteSubscriber.php b/src/EventSubscriber/RouteSubscriber.php
+index 76cb052..feb82c7 100644
+--- a/src/EventSubscriber/RouteSubscriber.php
++++ b/src/EventSubscriber/RouteSubscriber.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\forms_steps\EventSubscriber;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\State\StateInterface;
+@@ -29,14 +32,14 @@ class RouteSubscriber extends RouteSubscriberBase {
+   /**
+    * The forms steps storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $formsStepsStorage;
+ 
+   /**
+    * The state key value store.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+@@ -50,29 +53,29 @@ class RouteSubscriber extends RouteSubscriberBase {
+   /**
+    * EntityTypeManager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Constructs a \Drupal\forms_steps\EventSubscriber\RouteSubscriber instance.
+    *
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state key value store.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(
+     StateInterface $state,
+@@ -88,11 +91,11 @@ class RouteSubscriber extends RouteSubscriberBase {
+   /**
+    * Returns a set of route objects.
+    *
+-   * @return \Symfony\Component\Routing\RouteCollection
++   * @return RouteCollection
+    *   A route collection.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function routes() {
+     $collection = new RouteCollection();
+@@ -111,7 +114,7 @@ class RouteSubscriber extends RouteSubscriberBase {
+       $route_options['_admin_route'] = TRUE;
+     }
+ 
+-    /** @var \Drupal\forms_steps\Entity\FormsSteps $form_steps */
++    /** @var FormsSteps $form_steps */
+     foreach ($forms_steps as $form_steps) {
+       foreach ($form_steps->getSteps() as $step) {
+         $route = new Route(
+diff --git a/src/Form/FormsStepsAddForm.php b/src/Form/FormsStepsAddForm.php
+index 51feac0..f233296 100644
+--- a/src/Form/FormsStepsAddForm.php
++++ b/src/Form/FormsStepsAddForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\forms_steps\Form;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -68,8 +70,8 @@ class FormsStepsAddForm extends EntityForm {
+    *
+    * @return bool
+    *   TRUE if an entity with the same name already exists, FALSE otherwise.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function exists($id) {
+     $type = $this->entity->getEntityTypeId();
+diff --git a/src/Form/FormsStepsAlter.php b/src/Form/FormsStepsAlter.php
+index d78e2d5..83fc973 100644
+--- a/src/Form/FormsStepsAlter.php
++++ b/src/Form/FormsStepsAlter.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\forms_steps\Form;
+ 
++use Drupal\forms_steps\Service\FormsStepsManager;
++use Drupal\forms_steps\Entity\Workflow;
+ use Drupal\Core\Form\FormState;
+ use Drupal\forms_steps\Step;
+ use Drupal\Core\Routing\TrustedRedirectResponse;
+@@ -19,14 +21,14 @@ class FormsStepsAlter {
+    *
+    * @param array $form
+    *   Form to handle.
+-   * @param \Drupal\Core\Form\FormState $form_state
++   * @param FormState $form_state
+    *   Form State to handle.
+    */
+   public static function handle(array &$form, FormState $form_state) {
+-    /** @var \Drupal\forms_steps\Service\FormsStepsManager $formsStepsManager */
++    /** @var FormsStepsManager $formsStepsManager */
+     $formsStepsManager = \Drupal::service('forms_steps.manager');
+ 
+-    /** @var \Drupal\forms_steps\Step $step */
++    /** @var Step $step */
+     $step = $formsStepsManager->getStepByRoute(\Drupal::routeMatch()
+       ->getRouteName());
+ 
+@@ -40,7 +42,7 @@ class FormsStepsAlter {
+   /**
+    * Define the submit and cancel label using the step configuration.
+    *
+-   * @param \Drupal\forms_steps\Step $step
++   * @param Step $step
+    *   Current Step.
+    * @param array $form
+    *   Form to alter.
+@@ -60,7 +62,7 @@ class FormsStepsAlter {
+   /**
+    * Manage previous/next actions.
+    *
+-   * @param \Drupal\forms_steps\Step $step
++   * @param Step $step
+    *   Current Step.
+    * @param array $form
+    *   Form to alter.
+@@ -87,16 +89,16 @@ class FormsStepsAlter {
+    *
+    * @param array $form
+    *   Form to alter.
+-   * @param \Drupal\Core\Form\FormState $form_state
++   * @param FormState $form_state
+    *   Form State to update.
+    */
+   public static function setNextRoute(array &$form, FormState $form_state) {
+-    /** @var \Drupal\forms_steps\Service\FormsStepsManager $formsStepsManager */
++    /** @var FormsStepsManager $formsStepsManager */
+     $route = \Drupal::routeMatch();
+     $route_name = $route->getRouteName();
+     $formsStepsManager = \Drupal::service('forms_steps.manager');
+ 
+-    /** @var \Drupal\forms_steps\Entity\Workflow $workflowManager */
++    /** @var Workflow $workflowManager */
+     $workflowManager = \Drupal::service('forms_steps.workflow.manager');
+     $nextRoute = $formsStepsManager->getNextStepRoute($route_name);
+ 
+@@ -164,21 +166,21 @@ class FormsStepsAlter {
+    *
+    * @param array $form
+    *   Form to alter.
+-   * @param \Drupal\Core\Form\FormState $form_state
++   * @param FormState $form_state
+    *   Forms State to Update.
+    */
+   public static function setPreviousRoute(array &$form, FormState $form_state) {
+-    /** @var \Drupal\forms_steps\Service\FormsStepsManager $formsStepsManager */
++    /** @var FormsStepsManager $formsStepsManager */
+     $route = \Drupal::routeMatch();
+     $route_name = $route->getRouteName();
+ 
+-    /** @var \Drupal\forms_steps\Service\FormsStepsManager $formsStepsManager */
++    /** @var FormsStepsManager $formsStepsManager */
+     $formsStepsManager = \Drupal::service('forms_steps.manager');
+ 
+     $previousRoute = $formsStepsManager->getPreviousStepRoute($route_name);
+ 
+     if ($previousRoute) {
+-      /** @var \Drupal\forms_steps\Entity\Workflow $workflowManager */
++      /** @var Workflow $workflowManager */
+       $workflowManager = \Drupal::service('forms_steps.workflow.manager');
+ 
+       /** @var \Drupal\Core\Entity\Entity $entity */
+diff --git a/src/Form/FormsStepsEditForm.php b/src/Form/FormsStepsEditForm.php
+index b6d93d3..d95f8d8 100644
+--- a/src/Form/FormsStepsEditForm.php
++++ b/src/Form/FormsStepsEditForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\forms_steps\Form;
+ 
++use Drupal\forms_steps\FormsStepsInterface;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -20,14 +22,14 @@ class FormsStepsEditForm extends EntityForm {
+   /**
+    * PathValidatorInterface.
+    *
+-   * @var \Drupal\Core\Path\PathValidatorInterface
++   * @var PathValidatorInterface
+    */
+   protected $pathValidator;
+ 
+   /**
+    * RouteProvider.
+    *
+-   * @var \Drupal\Core\Routing\RouteProvider
++   * @var RouteProvider
+    */
+   protected $routeProvider;
+ 
+@@ -255,11 +257,15 @@ class FormsStepsEditForm extends EntityForm {
+         }
+ 
+         // Defines link.
+-        if (empty($progress_step->link())) {
++        // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++        // Please confirm that `$progress_step` is an instance of `\Drupal\Core\Entity\EntityInterface`. Only the method name and not the class name was checked for this replacement, so this may be a false positive.
++        if (empty($progress_step->toLink()->toString())) {
+           $link = $this->t('No link defined');
+         }
+         else {
+-          $step_id = $progress_step->link();
++          // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++          // Please confirm that `$progress_step` is an instance of `\Drupal\Core\Entity\EntityInterface`. Only the method name and not the class name was checked for this replacement, so this may be a false positive.
++          $step_id = $progress_step->toLink()->toString();
+           $link = $forms_steps->getStep($step_id)->label();
+         }
+ 
+@@ -395,7 +401,7 @@ class FormsStepsEditForm extends EntityForm {
+   protected function copyFormValuesToEntity(EntityInterface $entity, array $form, FormStateInterface $form_state) {
+     // This form can only set the forms steps ID, label and the weights
+     // for each step.
+-    /** @var \Drupal\forms_steps\FormsStepsInterface $entity */
++    /** @var FormsStepsInterface $entity */
+     $values = $form_state->getValues();
+     $entity->set('label', $values['label']);
+     $entity->set('id', $values['id']);
+@@ -433,7 +439,7 @@ class FormsStepsEditForm extends EntityForm {
+    *
+    * @param array $form
+    *   Form to alter.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Forms States to alter.
+    */
+   public function cancel(array $form, FormStateInterface $form_state) {
+@@ -444,10 +450,10 @@ class FormsStepsEditForm extends EntityForm {
+   /**
+    * Title callback: also display the Forms Steps label.
+    *
+-   * @param \Drupal\forms_steps\Entity\FormsSteps $forms_steps
++   * @param FormsSteps $forms_steps
+    *   Forms Steps to get label from.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   Translatable Title.
+    */
+   public function getTitle(FormsSteps $forms_steps) {
+diff --git a/src/Form/FormsStepsProgressStepAddForm.php b/src/Form/FormsStepsProgressStepAddForm.php
+index d46df8e..54237c1 100644
+--- a/src/Form/FormsStepsProgressStepAddForm.php
++++ b/src/Form/FormsStepsProgressStepAddForm.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\forms_steps\Form;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\forms_steps\FormsStepsInterface;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -105,11 +108,11 @@ class FormsStepsProgressStepAddForm extends EntityForm {
+    * @return bool
+    *   TRUE if the forms steps progress step exists, FALSE otherwise.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function exists($progress_step_id) {
+-    /** @var \Drupal\forms_steps\FormsStepsInterface $original_forms_steps */
++    /** @var FormsStepsInterface $original_forms_steps */
+     $original_forms_steps = $this->entityTypeManager
+       ->getStorage('forms_steps')
+       ->loadUnchanged($this->getEntity()->id());
+@@ -122,15 +125,15 @@ class FormsStepsProgressStepAddForm extends EntityForm {
+    * This form can only change values for a progress step, which is part of
+    * forms_steps.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity the current form should operate upon.
+    * @param array $form
+    *   A nested array of form elements comprising the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current progress step of the form.
+    */
+   protected function copyFormValuesToEntity(EntityInterface $entity, array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\forms_steps\FormsStepsInterface $entity */
++    /** @var FormsStepsInterface $entity */
+     $values = $form_state->getValues();
+ 
+     // This is fired twice so we have to check that the entity does not already
+@@ -144,7 +147,7 @@ class FormsStepsProgressStepAddForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\forms_steps\FormsStepsInterface $forms_steps */
++    /** @var FormsStepsInterface $forms_steps */
+     $forms_steps = $this->entity;
+     $forms_steps->save();
+ 
+diff --git a/src/Form/FormsStepsProgressStepDeleteForm.php b/src/Form/FormsStepsProgressStepDeleteForm.php
+index 3060f14..adeba06 100644
+--- a/src/Form/FormsStepsProgressStepDeleteForm.php
++++ b/src/Form/FormsStepsProgressStepDeleteForm.php
+@@ -15,7 +15,7 @@ class FormsStepsProgressStepDeleteForm extends ConfirmFormBase {
+   /**
+    * The forms_steps entity the progress step being deleted belongs to.
+    *
+-   * @var \Drupal\forms_steps\FormsStepsInterface
++   * @var FormsStepsInterface
+    */
+   protected $formsSteps;
+ 
+@@ -63,9 +63,9 @@ class FormsStepsProgressStepDeleteForm extends ConfirmFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+-   * @param \Drupal\forms_steps\FormsStepsInterface $forms_steps
++   * @param FormsStepsInterface $forms_steps
+    *   The forms_steps entity being edited.
+    * @param string|null $forms_steps_progress_step
+    *   The forms_steps progress step being deleted.
+diff --git a/src/Form/FormsStepsProgressStepEditForm.php b/src/Form/FormsStepsProgressStepEditForm.php
+index ad41d07..a30610e 100644
+--- a/src/Form/FormsStepsProgressStepEditForm.php
++++ b/src/Form/FormsStepsProgressStepEditForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\forms_steps\Form;
+ 
++use Drupal\forms_steps\FormsStepsInterface;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -90,13 +91,15 @@ class FormsStepsProgressStepEditForm extends EntityForm {
+         '#default_value' => $progress_step->activeRoutes(),
+       ];
+ 
++      // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++      // Please confirm that `$progress_step` is an instance of `\Drupal\Core\Entity\EntityInterface`. Only the method name and not the class name was checked for this replacement, so this may be a false positive.
+       $form['link'] = [
+         '#type' => 'select',
+         '#title' => $this->t('Link'),
+         '#description' => $this->t('Select the step for which the current progress step should redirect on click. Leave empty for no link on this progress step.'),
+         '#empty_option' => $this->t('- None -'),
+         '#options' => $options,
+-        '#default_value' => $progress_step->link(),
++        '#default_value' => $progress_step->toLink()->toString(),
+       ];
+ 
+       $form['link_visibility'] = [
+@@ -122,7 +125,7 @@ class FormsStepsProgressStepEditForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\forms_steps\FormsStepsInterface $forms_steps */
++    /** @var FormsStepsInterface $forms_steps */
+     $forms_steps = $this->entity;
+ 
+     $forms_steps->save();
+@@ -137,15 +140,15 @@ class FormsStepsProgressStepEditForm extends EntityForm {
+    *
+    * This form can only change values for a step, which is part of forms_steps.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity the current form should operate upon.
+    * @param array $form
+    *   A nested array of form elements comprising the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   protected function copyFormValuesToEntity(EntityInterface $entity, array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\forms_steps\FormsStepsInterface $entity */
++    /** @var FormsStepsInterface $entity */
+     $values = $form_state->getValues();
+ 
+     $entity->setProgressStepLabel($values['id'], $values['label']);
+diff --git a/src/Form/FormsStepsStepAddForm.php b/src/Form/FormsStepsStepAddForm.php
+index 1d9cb57..2c2f2b9 100644
+--- a/src/Form/FormsStepsStepAddForm.php
++++ b/src/Form/FormsStepsStepAddForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\forms_steps\Form;
+ 
++use Drupal\forms_steps\FormsStepsInterface;
++use Drupal\Core\Routing\RouteBuilder;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -21,12 +23,12 @@ class FormsStepsStepAddForm extends FormsStepsStepFormBase {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\forms_steps\FormsStepsInterface $forms_steps */
++    /** @var FormsStepsInterface $forms_steps */
+     $forms_steps = $this->entity;
+     $forms_steps->save();
+ 
+     // TODO: Check if there is a way to just update the current route ?!
+-    /** @var \Drupal\Core\Routing\RouteBuilder $routeBuilderService */
++    /** @var RouteBuilder $routeBuilderService */
+     $routeBuilderService = \Drupal::service('router.builder');
+     $routeBuilderService->rebuild();
+ 
+diff --git a/src/Form/FormsStepsStepDeleteForm.php b/src/Form/FormsStepsStepDeleteForm.php
+index 816512e..a45b659 100644
+--- a/src/Form/FormsStepsStepDeleteForm.php
++++ b/src/Form/FormsStepsStepDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\forms_steps\Form;
+ 
++use Drupal\Core\Routing\RouteBuilder;
+ use Drupal\forms_steps\FormsStepsInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -15,7 +16,7 @@ class FormsStepsStepDeleteForm extends ConfirmFormBase {
+   /**
+    * The forms_steps entity the step being deleted belongs to.
+    *
+-   * @var \Drupal\forms_steps\FormsStepsInterface
++   * @var FormsStepsInterface
+    */
+   protected $formsSteps;
+ 
+@@ -63,9 +64,9 @@ class FormsStepsStepDeleteForm extends ConfirmFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+-   * @param \Drupal\forms_steps\FormsStepsInterface $forms_steps
++   * @param FormsStepsInterface $forms_steps
+    *   The forms_steps entity being edited.
+    * @param string|null $forms_steps_step
+    *   The forms_steps step being deleted.
+@@ -94,7 +95,7 @@ class FormsStepsStepDeleteForm extends ConfirmFormBase {
+       ->save();
+ 
+     // TODO: Check if there is a way to just update the current route ?!
+-    /** @var \Drupal\Core\Routing\RouteBuilder $routeBuilderService */
++    /** @var RouteBuilder $routeBuilderService */
+     $routeBuilderService = \Drupal::service('router.builder');
+     $routeBuilderService->rebuild();
+ 
+diff --git a/src/Form/FormsStepsStepEditForm.php b/src/Form/FormsStepsStepEditForm.php
+index 0de84c0..91ad19f 100644
+--- a/src/Form/FormsStepsStepEditForm.php
++++ b/src/Form/FormsStepsStepEditForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\forms_steps\Form;
+ 
++use Drupal\forms_steps\FormsStepsInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Url;
+@@ -34,7 +35,7 @@ class FormsStepsStepEditForm extends FormsStepsStepFormBase {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\forms_steps\FormsStepsInterface $forms_steps */
++    /** @var FormsStepsInterface $forms_steps */
+     $forms_steps = $this->entity;
+ 
+     $forms_steps->save();
+diff --git a/src/Form/FormsStepsStepFormBase.php b/src/Form/FormsStepsStepFormBase.php
+index d50afdb..d8d8200 100644
+--- a/src/Form/FormsStepsStepFormBase.php
++++ b/src/Form/FormsStepsStepFormBase.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\forms_steps\Form;
+ 
++use Drupal\forms_steps\Entity\FormsSteps;
++use Drupal\forms_steps\Step;
++use Drupal\forms_steps\FormsStepsInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -27,14 +32,14 @@ class FormsStepsStepFormBase extends EntityForm {
+   /**
+    * EntityTypeManagerInterface.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * EntityDisplayRepositoryInterface.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+@@ -85,13 +90,13 @@ class FormsStepsStepFormBase extends EntityForm {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\forms_steps\Entity\FormsSteps $formsSteps */
++    /** @var FormsSteps $formsSteps */
+     $formsSteps = $this->getEntity();
+ 
+     $step = NULL;
+ 
+     try {
+-      /** @var \Drupal\forms_steps\Step $entity */
++      /** @var Step $entity */
+       $step = $formsSteps->getStep($this->stepId);
+     }
+     catch (\InvalidArgumentException $ex) {
+@@ -368,7 +373,7 @@ class FormsStepsStepFormBase extends EntityForm {
+ 
+     $steps = $formsSteps->getSteps();
+     $steps_options = [];
+-    /** @var \Drupal\forms_steps\Step $step */
++    /** @var Step $step */
+     foreach ($steps as $_step) {
+       $steps_options[$_step->id()] = $_step->label();
+     }
+@@ -428,16 +433,16 @@ class FormsStepsStepFormBase extends EntityForm {
+    *
+    * This form can only change values for a step, which is part of forms_steps.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity the current form should operate upon.
+    * @param array $form
+    *   A nested array of form elements comprising the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   protected function copyFormValuesToEntity(EntityInterface $entity, array $form, FormStateInterface $form_state) {
+     if ($form_state->isSubmitted()) {
+-      /** @var \Drupal\forms_steps\FormsStepsInterface $entity */
++      /** @var FormsStepsInterface $entity */
+       $values = $form_state->getValues();
+ 
+       if (!$entity->hasStep($values['id'])) {
+@@ -562,11 +567,11 @@ class FormsStepsStepFormBase extends EntityForm {
+    * @return bool
+    *   TRUE if the forms steps step exists, FALSE otherwise.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function exists($step_id) {
+-    /** @var \Drupal\forms_steps\FormsStepsInterface $original_forms_steps */
++    /** @var FormsStepsInterface $original_forms_steps */
+     $original_forms_steps = $this->entityTypeManager
+       ->getStorage('forms_steps')
+       ->loadUnchanged($this->getEntity()->id());
+@@ -578,7 +583,7 @@ class FormsStepsStepFormBase extends EntityForm {
+    *
+    * @param array $form
+    *   The referenced form to use.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form_state.
+    *
+    * @return array
+diff --git a/src/FormsStepsInterface.php b/src/FormsStepsInterface.php
+index 0f50cd9..e535a88 100644
+--- a/src/FormsStepsInterface.php
++++ b/src/FormsStepsInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\forms_steps;
+ 
++use Drupal\forms_steps\Entity\FormsSteps;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ 
+ /**
+@@ -77,7 +78,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+   /**
+    * Returns the current step route.
+    *
+-   * @param \Drupal\forms_steps\Step $step
++   * @param Step $step
+    *   Current Step.
+    *
+    * @return null|string
+@@ -88,7 +89,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+   /**
+    * Returns the next step route.
+    *
+-   * @param \Drupal\forms_steps\Step $step
++   * @param Step $step
+    *   Current Step.
+    *
+    * @return null|string
+@@ -102,7 +103,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string[] $step_ids
+    *   A list of step IDs to get. If NULL then all steps will be returned.
+    *
+-   * @return \Drupal\forms_steps\StepInterface[]
++   * @return StepInterface[]
+    *   An array of forms_steps steps.
+    *
+    * @throws \InvalidArgumentException
+@@ -117,7 +118,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    *   A list of progress step IDs to get. If NULL then all progress steps will
+    *   be returned.
+    *
+-   * @return \Drupal\forms_steps\ProgressStepInterface[]
++   * @return ProgressStepInterface[]
+    *   An array of forms_steps progress steps.
+    *
+    * @throws \InvalidArgumentException
+@@ -132,7 +133,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $steps
+    *   The forms_steps steps' IDs.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps step.
+    */
+   public function getLastStep($steps = NULL);
+@@ -143,7 +144,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $steps
+    *   The forms_steps steps' IDs.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps step.
+    */
+   public function getFirstStep($steps = NULL);
+@@ -154,7 +155,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $step_id
+    *   The step's ID.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps step.
+    *
+    * @throws \InvalidArgumentException
+@@ -168,7 +169,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $progress_step_id
+    *   The progress step's ID.
+    *
+-   * @return \Drupal\forms_steps\ProgressStepInterface
++   * @return ProgressStepInterface
+    *   The forms_steps progress step.
+    *
+    * @throws \InvalidArgumentException
+@@ -184,7 +185,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $label
+    *   The step's label.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    */
+   public function setStepLabel($step_id, $label);
+@@ -197,7 +198,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $label
+    *   The progress step's label.
+    *
+-   * @return \Drupal\forms_steps\ProgressStepInterface
++   * @return ProgressStepInterface
+    *   The forms_steps entity.
+    */
+   public function setProgressStepLabel($progress_step_id, $label);
+@@ -210,7 +211,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param int $weight
+    *   The step's weight.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    */
+   public function setStepWeight($step_id, $weight);
+@@ -223,7 +224,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param int $entityBundle
+    *   The step's entity bundle.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    */
+   public function setStepEntityBundle($step_id, $entityBundle);
+@@ -236,7 +237,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param int $entity_type
+    *   The step's entity type.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    */
+   public function setStepEntityType($step_id, $entity_type);
+@@ -249,7 +250,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param int $formMode
+    *   The step's form mode.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    */
+   public function setStepFormMode($step_id, $formMode);
+@@ -262,7 +263,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param int $url
+    *   The step's URL.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    */
+   public function setStepUrl($step_id, $url);
+@@ -275,7 +276,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $label
+    *   The step's submit label.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    */
+   public function setStepSubmitLabel($step_id, $label);
+@@ -288,7 +289,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $label
+    *   The step's cancel label.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    */
+   public function setStepCancelLabel($step_id, $label);
+@@ -301,7 +302,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $route
+    *   The step's cancel route.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    */
+   public function setStepCancelRoute($step_id, $route);
+@@ -311,10 +312,10 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    *
+    * @param string $step_id
+    *   The step ID to set the cancel step for.
+-   * @param \Drupal\forms_steps\Step $step
++   * @param Step $step
+    *   The step's cancel step.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    */
+   public function setStepCancelStep($step_id, Step $step);
+@@ -327,7 +328,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $mode
+    *   The step's cancel step mode.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    */
+   public function setStepCancelStepMode($step_id, $mode);
+@@ -340,7 +341,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param array $routes
+    *   The progress step's active routes.
+    *
+-   * @return \Drupal\forms_steps\ProgressStepInterface
++   * @return ProgressStepInterface
+    *   The forms_steps entity.
+    */
+   public function setProgressStepActiveRoutes($progress_step_id, array $routes);
+@@ -353,7 +354,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $link
+    *   The progress step's link.
+    *
+-   * @return \Drupal\forms_steps\ProgressStepInterface
++   * @return ProgressStepInterface
+    *   The forms_steps entity.
+    */
+   public function setProgressStepLink($progress_step_id, $link);
+@@ -366,7 +367,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param array $steps
+    *   The progress step's link visibility.
+    *
+-   * @return \Drupal\forms_steps\ProgressStepInterface
++   * @return ProgressStepInterface
+    *   The forms_steps entity.
+    */
+   public function setProgressStepLinkVisibility($progress_step_id, array $steps);
+@@ -377,7 +378,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $step_id
+    *   The step ID to delete.
+    *
+-   * @return \Drupal\forms_steps\StepInterface
++   * @return StepInterface
+    *   The forms_steps entity.
+    *
+    * @throws \InvalidArgumentException
+@@ -391,7 +392,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param string $progress_step_id
+    *   The progress step ID to delete.
+    *
+-   * @return \Drupal\forms_steps\ProgressStepInterface
++   * @return ProgressStepInterface
+    *   The forms_steps entity.
+    *
+    * @throws \InvalidArgumentException
+@@ -402,10 +403,10 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+   /**
+    * Returns the next step to $step.
+    *
+-   * @param \Drupal\forms_steps\Step $step
++   * @param Step $step
+    *   The current Step.
+    *
+-   * @return \Drupal\forms_steps\Step|null
++   * @return Step|null
+    *   Returns the next Step or null if no next step found.
+    */
+   public function getNextStep(Step $step);
+@@ -413,10 +414,10 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+   /**
+    * Returns the previous step to $step.
+    *
+-   * @param \Drupal\forms_steps\Step $step
++   * @param Step $step
+    *   The current Step.
+    *
+-   * @return \Drupal\forms_steps\Step|null
++   * @return Step|null
+    *   Returns the previous Step or first step if no previous step found.
+    */
+   public function getPreviousStep(Step $step);
+@@ -429,7 +430,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param mixed $label
+    *   Label to set.
+    *
+-   * @return \Drupal\forms_steps\Entity\FormsSteps
++   * @return FormsSteps
+    *   The forms steps.
+    */
+   public function setStepDeleteLabel($step_id, $label);
+@@ -442,7 +443,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param bool $state
+    *   State to set.
+    *
+-   * @return \Drupal\forms_steps\Entity\FormsSteps
++   * @return FormsSteps
+    *   The forms steps.
+    */
+   public function setStepDeleteState($step_id, $state);
+@@ -455,7 +456,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param mixed $label
+    *   Label to set.
+    *
+-   * @return \Drupal\forms_steps\Entity\FormsSteps
++   * @return FormsSteps
+    *   The forms steps.
+    */
+   public function setStepPreviousLabel($step_id, $label);
+@@ -468,7 +469,7 @@ interface FormsStepsInterface extends ConfigEntityInterface {
+    * @param bool $state
+    *   State to set.
+    *
+-   * @return \Drupal\forms_steps\Entity\FormsSteps
++   * @return FormsSteps
+    *   The forms steps.
+    */
+   public function setStepPreviousState($step_id, $state);
+diff --git a/src/Plugin/Block/FormsStepsProgressBarBlock.php b/src/Plugin/Block/FormsStepsProgressBarBlock.php
+index 3c13537..260486c 100644
+--- a/src/Plugin/Block/FormsStepsProgressBarBlock.php
++++ b/src/Plugin/Block/FormsStepsProgressBarBlock.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\forms_steps\Plugin\Block;
+ 
++use Drupal\forms_steps\Step;
++use Drupal\forms_steps\FormsStepsInterface;
+ use Drupal\Core\Routing\CurrentRouteMatch;
+ use Drupal\Core\Url;
+ use Drupal\Core\Link;
+@@ -37,28 +39,28 @@ class FormsStepsProgressBarBlock extends BlockBase implements ContainerFactoryPl
+   /**
+    * CurrentRouteMatch.
+    *
+-   * @var \Drupal\Core\Routing\CurrentRouteMatch
++   * @var CurrentRouteMatch
+    */
+   private $currentRouteMatch;
+ 
+   /**
+    * FormsStepsManager.
+    *
+-   * @var \Drupal\forms_steps\Service\FormsStepsManager
++   * @var FormsStepsManager
+    */
+   private $formsStepsManager;
+ 
+   /**
+    * FormsStepsHelper.
+    *
+-   * @var \Drupal\forms_steps\Service\FormsStepsHelper
++   * @var FormsStepsHelper
+    */
+   private $formsStepsHelper;
+ 
+   /**
+    * WorkflowRepository.
+    *
+-   * @var \Drupal\forms_steps\Repository\WorkflowRepository
++   * @var WorkflowRepository
+    */
+   private $workflowRepository;
+ 
+@@ -104,12 +106,12 @@ class FormsStepsProgressBarBlock extends BlockBase implements ContainerFactoryPl
+   public function build() {
+     $route = $this->currentRouteMatch->getRouteName();
+ 
+-    /** @var \Drupal\forms_steps\Step $step */
++    /** @var Step $step */
+     $step = $this->formsStepsManager->getStepByRoute($route);
+ 
+     // The block is rendered only if the current route is a forms steps route.
+     if ($step) {
+-      /** @var \Drupal\forms_steps\FormsStepsInterface $forms_steps */
++      /** @var FormsStepsInterface $forms_steps */
+       $forms_steps = $step->formsSteps();
+ 
+       // If the derivative id is the current step, we display
+@@ -143,7 +145,9 @@ class FormsStepsProgressBarBlock extends BlockBase implements ContainerFactoryPl
+                 $saved_steps_flat[$saved_step_next->id()] = $saved_step_next->id();
+               }
+             }
+-            $link_visibility_check = !in_array($progress_step->link(), $saved_steps_flat);
++            // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++            // Please confirm that `$progress_step` is an instance of `\Drupal\Core\Entity\EntityInterface`. Only the method name and not the class name was checked for this replacement, so this may be a false positive.
++            $link_visibility_check = !in_array($progress_step->toLink()->toString(), $saved_steps_flat);
+           }
+           else {
+             $link_visibility_check = !in_array($step->id(), $link_visibility);
+@@ -152,11 +156,15 @@ class FormsStepsProgressBarBlock extends BlockBase implements ContainerFactoryPl
+           // Display a simple label or the link.
+           // @todo: Manage the specific case of "No workflow instance id" for the first step to avoid having no links at all on this step.
+           //          if (empty($progress_step->link()) || $link_visibility_check || empty($instanceId)) {
+-          if (empty($progress_step->link()) || $link_visibility_check || empty($instanceId)) {
++          // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++          // Please confirm that `$progress_step` is an instance of `\Drupal\Core\Entity\EntityInterface`. Only the method name and not the class name was checked for this replacement, so this may be a false positive.
++          if (empty($progress_step->toLink()->toString()) || $link_visibility_check || empty($instanceId)) {
+             $item['#markup'] = $this->t($progress_step->label());
+           }
+           else {
+-            $link_step = $forms_steps->getStep($progress_step->link());
++            // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++            // Please confirm that `$progress_step` is an instance of `\Drupal\Core\Entity\EntityInterface`. Only the method name and not the class name was checked for this replacement, so this may be a false positive.
++            $link_step = $forms_steps->getStep($progress_step->toLink()->toString());
+             $options = [];
+             if ($instanceId) {
+               $options['instance_id'] = $instanceId;
+@@ -238,7 +246,7 @@ class FormsStepsProgressBarBlock extends BlockBase implements ContainerFactoryPl
+   public function getCacheTags() {
+     $route = $this->currentRouteMatch->getRouteName();
+ 
+-    /** @var \Drupal\forms_steps\Step $step */
++    /** @var Step $step */
+     $step = $this->formsStepsManager->getStepByRoute($route);
+ 
+     // Rebuild cache if the step is a new one.
+diff --git a/src/Plugin/Derivative/FormsStepsProgressBarBlock.php b/src/Plugin/Derivative/FormsStepsProgressBarBlock.php
+index 8a45fee..e6fccea 100644
+--- a/src/Plugin/Derivative/FormsStepsProgressBarBlock.php
++++ b/src/Plugin/Derivative/FormsStepsProgressBarBlock.php
+@@ -17,14 +17,14 @@ class FormsStepsProgressBarBlock extends DeriverBase implements ContainerDeriver
+   /**
+    * The forms steps storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $formStepsStorage;
+ 
+   /**
+    * Constructs new forms steps progress bar block.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $forms_steps_storage
++   * @param EntityStorageInterface $forms_steps_storage
+    *   The forms steps storage.
+    */
+   public function __construct(EntityStorageInterface $forms_steps_storage) {
+diff --git a/src/ProgressStep.php b/src/ProgressStep.php
+index ffd891b..c6e5483 100644
+--- a/src/ProgressStep.php
++++ b/src/ProgressStep.php
+@@ -10,7 +10,7 @@ class ProgressStep implements ProgressStepInterface {
+   /**
+    * The forms_steps the progress step is attached to.
+    *
+-   * @var \Drupal\forms_steps\FormsStepsInterface
++   * @var FormsStepsInterface
+    */
+   protected $formsSteps;
+ 
+diff --git a/src/Repository/WorkflowRepository.php b/src/Repository/WorkflowRepository.php
+index fd02d57..0314a6e 100644
+--- a/src/Repository/WorkflowRepository.php
++++ b/src/Repository/WorkflowRepository.php
+@@ -20,7 +20,7 @@ class WorkflowRepository {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+@@ -29,9 +29,9 @@ class WorkflowRepository {
+   /**
+    * Construct a repository object.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $translation
++   * @param TranslationInterface $translation
+    *   The translation service.
+    */
+   public function __construct(Connection $connection, TranslationInterface $translation) {
+diff --git a/src/Service/FormsStepsHelper.php b/src/Service/FormsStepsHelper.php
+index 50ded08..d45816f 100644
+--- a/src/Service/FormsStepsHelper.php
++++ b/src/Service/FormsStepsHelper.php
+@@ -14,23 +14,23 @@ class FormsStepsHelper {
+   /**
+    * FormsStepsManager.
+    *
+-   * @var \Drupal\forms_steps\Service\FormsStepsManager
++   * @var FormsStepsManager
+    */
+   protected $formsStepsManager;
+ 
+   /**
+    * CurrentRouteMatch.
+    *
+-   * @var \Drupal\Core\Routing\CurrentRouteMatch
++   * @var CurrentRouteMatch
+    */
+   private $currentRouteMatch;
+ 
+   /**
+    * FormsStepsHelper constructor.
+    *
+-   * @param \Drupal\forms_steps\Service\FormsStepsManager $forms_steps_manager
++   * @param FormsStepsManager $forms_steps_manager
+    *   Injected FormsStepsManager instance.
+-   * @param \Drupal\Core\Routing\CurrentRouteMatch $current_route_match
++   * @param CurrentRouteMatch $current_route_match
+    *   Injected current route match instance.
+    */
+   public function __construct(
+diff --git a/src/Service/FormsStepsManager.php b/src/Service/FormsStepsManager.php
+index d2abff6..70ba538 100644
+--- a/src/Service/FormsStepsManager.php
++++ b/src/Service/FormsStepsManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\forms_steps\Service;
+ 
++use Drupal\forms_steps\Step;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityDisplayRepository;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -17,23 +18,23 @@ class FormsStepsManager {
+   /**
+    * EntityDisplayRepository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepository
++   * @var EntityDisplayRepository
+    */
+   private $entityDisplayRepository;
+ 
+   /**
+    * EntityTypeManagerInterface.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   private $configFactory;
+ 
+   /**
+    * FormsStepsManager constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityDisplayRepository $entity_display_repository
++   * @param EntityDisplayRepository $entity_display_repository
+    *  Injected EntityDisplayRepository instance.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *  Injected ConfigFactoryInterface.
+    */
+   public function __construct(EntityDisplayRepository $entity_display_repository, ConfigFactoryInterface $config_factory) {
+@@ -56,7 +57,7 @@ class FormsStepsManager {
+     $matches = self::getRouteParameters($route_name);
+     if ($matches) {
+ 
+-      /** @var \Drupal\forms_steps\Entity\FormsSteps $formsSteps */
++      /** @var FormsSteps $formsSteps */
+       $formsSteps = FormsSteps::load($matches[1]);
+       if (!$formsSteps) {
+         return $nextRoute;
+@@ -78,17 +79,17 @@ class FormsStepsManager {
+    * @param mixed $route_name
+    *   Current route.
+    *
+-   * @return null|\Drupal\forms_steps\Step
++   * @return null|Step
+    *   Next Step.
+    */
+   public function getNextStep($route_name) {
+     $matches = self::getRouteParameters($route_name);
+     if ($matches) {
+ 
+-      /** @var \Drupal\forms_steps\Entity\FormsSteps $formsSteps */
++      /** @var FormsSteps $formsSteps */
+       $formsSteps = FormsSteps::load($matches[1]);
+       if ($formsSteps) {
+-        /** @var \Drupal\forms_steps\Step $nextStep */
++        /** @var Step $nextStep */
+         return $formsSteps->getNextStep($formsSteps->getStep($matches[2]));
+       }
+     }
+@@ -111,7 +112,7 @@ class FormsStepsManager {
+     $matches = self::getRouteParameters($route_name);
+     if ($matches) {
+ 
+-      /** @var \Drupal\forms_steps\Entity\FormsSteps $formsSteps */
++      /** @var FormsSteps $formsSteps */
+       $formsSteps = FormsSteps::load($matches[1]);
+       if (!$formsSteps) {
+         return $previousRoute;
+@@ -133,17 +134,17 @@ class FormsStepsManager {
+    * @param mixed $route_name
+    *   Current route.
+    *
+-   * @return null|\Drupal\forms_steps\Step
++   * @return null|Step
+    *   Previous Step.
+    */
+   public function getPreviousStep($route_name) {
+     $matches = self::getRouteParameters($route_name);
+     if ($matches) {
+ 
+-      /** @var \Drupal\forms_steps\Entity\FormsSteps $formsSteps */
++      /** @var FormsSteps $formsSteps */
+       $formsSteps = FormsSteps::load($matches[1]);
+       if (!$formsSteps) {
+-        /** @var \Drupal\forms_steps\Step $nextStep */
++        /** @var Step $nextStep */
+         return $formsSteps->getPreviousStep($formsSteps->getStep($matches[2]));
+       }
+     }
+@@ -164,7 +165,7 @@ class FormsStepsManager {
+     $matches = self::getRouteParameters($route_name);
+     if ($matches) {
+ 
+-      /** @var \Drupal\forms_steps\Entity\FormsSteps $formsSteps */
++      /** @var FormsSteps $formsSteps */
+       $formsSteps = FormsSteps::load($matches[1]);
+       if (!$formsSteps) {
+         return NULL;
+@@ -182,7 +183,7 @@ class FormsStepsManager {
+    * @param mixed $route_name
+    *   Current route.
+    *
+-   * @return null|\Drupal\forms_steps\Step
++   * @return null|Step
+    *   Returns the Step of the route.
+    */
+   public function getStepByRoute($route_name) {
+@@ -277,7 +278,7 @@ class FormsStepsManager {
+    *   Returns the Forms Steps.
+    */
+   public function getFormsStepsById(string $name) {
+-    /** @var \Drupal\forms_steps\Entity\FormsSteps $formsSteps */
++    /** @var FormsSteps $formsSteps */
+     $formsSteps = FormsSteps::load($name);
+     if (!$formsSteps) {
+       return NULL;
+diff --git a/src/Service/RouteHelper.php b/src/Service/RouteHelper.php
+index ee8fd9a..e9751a6 100644
+--- a/src/Service/RouteHelper.php
++++ b/src/Service/RouteHelper.php
+@@ -14,7 +14,7 @@ class RouteHelper {
+   /**
+    * Return the internal URL.
+    *
+-   * @param \Drupal\forms_steps\Step $step
++   * @param Step $step
+    *   The step in question.
+    * @param string $instance_id
+    *   The instance of the step to target.
+diff --git a/src/Service/WorkflowManager.php b/src/Service/WorkflowManager.php
+index d673d88..790f4e3 100644
+--- a/src/Service/WorkflowManager.php
++++ b/src/Service/WorkflowManager.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\forms_steps\Service;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\forms_steps\Step;
+ use Drupal\Component\Uuid\UuidInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Routing\CurrentRouteMatch;
+@@ -18,41 +22,41 @@ class WorkflowManager {
+   /**
+    * EntityTypeManager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+    * FormsStepsManager.
+    *
+-   * @var \Drupal\forms_steps\Service\FormsStepsManager
++   * @var FormsStepsManager
+    */
+   private $formsStepsManager;
+ 
+   /**
+    * UUID Service.
+    *
+-   * @var \Drupal\Component\Uuid\UuidInterface
++   * @var UuidInterface
+    */
+   private $uuidService;
+ 
+   /**
+    * CurrentRouteMatch.
+    *
+-   * @var \Drupal\Core\Routing\CurrentRouteMatch
++   * @var CurrentRouteMatch
+    */
+   private $currentRouteMatch;
+ 
+   /**
+    * WorkflowManager constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Injected EntityTypeManager instance.
+-   * @param \Drupal\forms_steps\Service\FormsStepsManager $forms_steps_manager
++   * @param FormsStepsManager $forms_steps_manager
+    *   Injected FormsStepsManager instance.
+-   * @param \Drupal\Component\Uuid\UuidInterface $uuid_service
++   * @param UuidInterface $uuid_service
+    *   Injected UUID instance.
+-   * @param \Drupal\Core\Routing\CurrentRouteMatch $current_route_match
++   * @param CurrentRouteMatch $current_route_match
+    *   Injected CurrentRouteMatch instance.
+    */
+   public function __construct(
+@@ -70,14 +74,14 @@ class WorkflowManager {
+   /**
+    * Returns the first workflow entry of the provided entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity instance to get the workflow from.
+    *
+-   * @return \Drupal\forms_steps\Entity\Workflow|null
++   * @return Workflow|null
+    *   Returns the workflow if found, null otherwise.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function getWorkflowByEntity(EntityInterface $entity) {
+     $workflow = NULL;
+@@ -96,14 +100,14 @@ class WorkflowManager {
+   /**
+    * Returns all workflow entries of the provided entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity instance to get the workflow from.
+    *
+    * @return array|null
+    *   Returns an array of workflows if found, null otherwise.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function getAllWorksflowByEntity(EntityInterface $entity) {
+     return $this->entityTypeManager
+@@ -120,12 +124,12 @@ class WorkflowManager {
+   /**
+    * Workflow info storage on hook_entity_presave().
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity that is going to be saved.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    * @throws \Drupal\entity_embed\Exception\EntityNotFoundException
+    */
+   public function entityPreSave(EntityInterface $entity) {
+@@ -139,7 +143,7 @@ class WorkflowManager {
+       && strcmp($entity->getEntityTypeId(), Workflow::ENTITY_TYPE) != 0
+     ) {
+ 
+-      /** @var \Drupal\forms_steps\Step $step */
++      /** @var Step $step */
+       $step = $this->formsStepsManager->getStepByRoute($currentRoute);
+ 
+       if (is_null($step)) {
+@@ -202,12 +206,12 @@ class WorkflowManager {
+   /**
+    * Workflow info storage on hook_entity_insert().
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity that is going to be inserted.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    * @throws \Drupal\entity_embed\Exception\EntityNotFoundException
+    */
+   public function entityInsert(EntityInterface $entity) {
+@@ -217,7 +221,7 @@ class WorkflowManager {
+       && strcmp($entity->getEntityTypeId(), Workflow::ENTITY_TYPE) != 0
+     ) {
+ 
+-      /** @var \Drupal\forms_steps\Step $step */
++      /** @var Step $step */
+       $step = $this->formsStepsManager->getStepByRoute($currentRoute);
+ 
+       if (is_null($step)) {
+diff --git a/src/Step.php b/src/Step.php
+index 82a5f23..4982716 100644
+--- a/src/Step.php
++++ b/src/Step.php
+@@ -10,7 +10,7 @@ class Step implements StepInterface {
+   /**
+    * The forms_steps the step is attached to.
+    *
+-   * @var \Drupal\forms_steps\FormsStepsInterface
++   * @var FormsStepsInterface
+    */
+   protected $formsSteps;
+ 
+diff --git a/src/StepInterface.php b/src/StepInterface.php
+index 42b9e62..39627c6 100644
+--- a/src/StepInterface.php
++++ b/src/StepInterface.php
+@@ -114,7 +114,7 @@ interface StepInterface {
+   /**
+    * Gets the cancel step.
+    *
+-   * @return \Drupal\forms_steps\Step
++   * @return Step
+    *   The cancel step.
+    */
+   public function cancelStep();
+@@ -122,7 +122,7 @@ interface StepInterface {
+   /**
+    * Set the cancel step.
+    *
+-   * @param \Drupal\forms_steps\Step $step
++   * @param Step $step
+    *   The step to go when the user click the cancel button.
+    */
+   public function setCancelStep(Step $step);
+@@ -170,7 +170,7 @@ interface StepInterface {
+   /**
+    * Get the forms steps object parent to this step.
+    *
+-   * @return \Drupal\forms_steps\Step
++   * @return Step
+    *   The forms steps object.
+    */
+   public function formsSteps();
+diff --git a/tests/src/Functional/FormsStepsNavigationTest.php b/tests/src/Functional/FormsStepsNavigationTest.php
+index eb39f10..dc9875c 100644
+--- a/tests/src/Functional/FormsStepsNavigationTest.php
++++ b/tests/src/Functional/FormsStepsNavigationTest.php
+@@ -35,7 +35,7 @@ class FormsStepsNavigationTest extends BrowserTestBase {
+   /**
+    * Setup the env for current test using trait methods.
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->formsStepsSetup();
+@@ -60,7 +60,7 @@ class FormsStepsNavigationTest extends BrowserTestBase {
+       ->pageTextContains($this->data['forms_steps']['steps'][1]['label']);
+ 
+     $value = 'This is an article Test Titre content';
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => $value,
+     ], t('Save'));
+ 
+@@ -71,7 +71,7 @@ class FormsStepsNavigationTest extends BrowserTestBase {
+     $this->assertSession()->pageTextContains($value);
+ 
+     $value2 = 'This is an article Test Titre content 2';
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => $value2,
+     ], t('Save'));
+ 
+@@ -81,7 +81,7 @@ class FormsStepsNavigationTest extends BrowserTestBase {
+     $this->assertStringContainsStringIgnoringCase($this->data['forms_steps']['steps'][3]['url'], $this->getUrl());
+ 
+     $value3 = 'This is a page Test Titre content';
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => $value3,
+     ], t('Save'));
+ 
+@@ -94,19 +94,19 @@ class FormsStepsNavigationTest extends BrowserTestBase {
+     $this->assertSession()->fieldValueEquals('title[0][value]', $value2);
+ 
+     // Access step 3.
+-    $this->drupalPostForm(NULL, [], 'Previous');
++    $this->submitForm([], 'Previous');
+     $this->assertSession()
+       ->pageTextContains($this->data['forms_steps']['steps'][3]['label']);
+     $this->assertSession()->fieldValueEquals('title[0][value]', $value3);
+ 
+     // Access step 2.
+-    $this->drupalPostForm(NULL, [], 'Previous');
++    $this->submitForm([], 'Previous');
+     $this->assertSession()
+       ->pageTextContains($this->data['forms_steps']['steps'][2]['label']);
+     $this->assertSession()->fieldValueEquals('title[0][value]', $value2);
+ 
+     // Access step 1.
+-    $this->drupalPostForm(NULL, [], 'Previous');
++    $this->submitForm([], 'Previous');
+     $this->assertSession()
+       ->pageTextContains($this->data['forms_steps']['steps'][1]['label']);
+     $this->assertSession()->fieldValueEquals('title[0][value]', $value2);
+diff --git a/tests/src/Functional/FormsStepsTest.php b/tests/src/Functional/FormsStepsTest.php
+index 2d142af..8c22d38 100644
+--- a/tests/src/Functional/FormsStepsTest.php
++++ b/tests/src/Functional/FormsStepsTest.php
+@@ -34,7 +34,7 @@ class FormsStepsTest extends BrowserTestBase {
+   /**
+    * Perform initial setup tasks that run before every test method.
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->formsStepsSetup();
+@@ -60,7 +60,7 @@ class FormsStepsTest extends BrowserTestBase {
+       );
+       $this->assertSession()->statusCodeEquals(200);
+       // Add a form mode.
+-      $this->drupalPostForm(NULL, [
++      $this->submitForm([
+         'label' => $form_display_mode['label'],
+         'id' => $form_display_mode['id'],
+       ], t('Save'));
+@@ -98,7 +98,7 @@ class FormsStepsTest extends BrowserTestBase {
+ 
+     // Activate Test Form Modes as a custom display mode.
+     foreach ($this->data['form_display_modes'] as $form_display_mode) {
+-      $this->drupalPostForm(NULL, [
++      $this->submitForm([
+         "display_modes_custom[${form_display_mode['id']}]" => $form_display_mode['id'],
+       ], t('Save'));
+ 
+@@ -117,7 +117,7 @@ class FormsStepsTest extends BrowserTestBase {
+       'form_mode_name' => $form_display_mode['id'],
+     ]));
+     $this->assertSession()->statusCodeEquals(200);
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'fields[title][region]' => 'content',
+       'fields[body][region]' => 'hidden',
+       'fields[status][region]' => 'hidden',
+@@ -131,7 +131,7 @@ class FormsStepsTest extends BrowserTestBase {
+     $this->drupalGet(Url::fromRoute('entity.forms_steps.add_form'));
+     $this->assertSession()->statusCodeEquals(200);
+     // Test the creation of a form step.
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'label' => $this->data['forms_steps']['label'],
+       'id' => $this->data['forms_steps']['id'],
+       'description' => $this->data['forms_steps']['description'],
+@@ -152,7 +152,7 @@ class FormsStepsTest extends BrowserTestBase {
+       $this->assertSession()->statusCodeEquals(200);
+ 
+       // Test the creation of an add step.
+-      $this->drupalPostForm(NULL, [
++      $this->submitForm([
+         'label' => $step['label'],
+         'id' => $step['id'],
+         'target_form_mode' => $step['target_form_mode'],
+@@ -181,7 +181,7 @@ class FormsStepsTest extends BrowserTestBase {
+       ->pageTextContains($this->data['forms_steps']['steps'][1]['label']);
+ 
+     $value = 'This is a Test Titre content';
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => $value,
+     ], t('Save'));
+ 
+diff --git a/tests/src/Kernel/KernelTestBase.php b/tests/src/Kernel/KernelTestBase.php
+index 8237219..0f8587a 100644
+--- a/tests/src/Kernel/KernelTestBase.php
++++ b/tests/src/Kernel/KernelTestBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\forms_steps\Kernel;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\user\Entity\Role;
+ use Drupal\user\Entity\User;
+@@ -73,10 +74,10 @@ abstract class KernelTestBase {
+    * @param array $permissions
+    *   (optional) Array of permission names to assign to user.
+    *
+-   * @return \Drupal\user\Entity\User
++   * @return User
+    *   The created user entity.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   protected function createUser(array $values = [], array $permissions = []) {
+     if ($permissions) {
+@@ -107,10 +108,10 @@ abstract class KernelTestBase {
+   /**
+    * Reloads the given entity from the storage and returns it.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to be reloaded.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   The reloaded entity.
+    */
+   protected function reloadEntity(EntityInterface $entity) {

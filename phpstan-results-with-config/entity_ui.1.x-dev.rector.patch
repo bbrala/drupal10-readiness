@@ -1,0 +1,1314 @@
+diff --git a/entity_ui.info.yml b/entity_ui.info.yml
+index 91dbb32..79d941f 100644
+--- a/entity_ui.info.yml
++++ b/entity_ui.info.yml
+@@ -1,6 +1,6 @@
+ name: 'Entity UI Builder'
+ type: module
+ description: 'Allows creation of UIs for entities.'
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.1 || ^10
+ dependencies:
+   - drupal:field_ui
+diff --git a/entity_ui.module b/entity_ui.module
+index 6de99e3..dbdb4f0 100644
+--- a/entity_ui.module
++++ b/entity_ui.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\entity_ui\Routing\TabRouteProvider;
++use Drupal\entity_ui\EntityHandler\BundleEntityCollection;
++use Drupal\entity_ui\EntityHandler\FieldUIWithoutBundleEntityProxy;
+ /**
+  * @file
+  * Provides an admin UI for building tabs on content entities.
+@@ -16,7 +19,7 @@ function entity_ui_entity_type_build(array &$entity_types) {
+     // we have to do it the sloppy way for now.
+     $providers = $entity_type->getRouteProviderClasses() ?: [];
+     if (empty($providers['entity_ui'])) {
+-      $providers['entity_ui'] = Drupal\entity_ui\Routing\TabRouteProvider::class;
++      $providers['entity_ui'] = TabRouteProvider::class;
+       $entity_type->setHandlerClass('route_provider', $providers);
+     }
+ 
+@@ -43,7 +46,7 @@ function entity_ui_entity_type_build(array &$entity_types) {
+         // our handler can't do anything, but this causes problems in tests and
+         // if we are enabled at the same time as entity type modules.
+         // See https://www.drupal.org/node/2896669.
+-        $entity_type->setHandlerClass('entity_ui_admin', \Drupal\entity_ui\EntityHandler\BundleEntityCollection::class);
++        $entity_type->setHandlerClass('entity_ui_admin', BundleEntityCollection::class);
+ 
+         // Done with this entity type.
+         continue;
+@@ -71,7 +74,7 @@ function entity_ui_entity_type_build(array &$entity_types) {
+     $field_ui_base_route_name = $entity_type->get('field_ui_base_route');
+ 
+     if ($field_ui_base_route_name) {
+-      $entity_type->setHandlerClass('entity_ui_admin', \Drupal\entity_ui\EntityHandler\FieldUIWithoutBundleEntityProxy::class);
++      $entity_type->setHandlerClass('entity_ui_admin', FieldUIWithoutBundleEntityProxy::class);
+ 
+       // Done with this entity type.
+       continue;
+diff --git a/src/Annotation/EntityTabContent.php b/src/Annotation/EntityTabContent.php
+index a370ae8..540c3d4 100644
+--- a/src/Annotation/EntityTabContent.php
++++ b/src/Annotation/EntityTabContent.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_ui\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -24,7 +25,7 @@ class EntityTabContent extends Plugin {
+   /**
+    * The label of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -33,7 +34,7 @@ class EntityTabContent extends Plugin {
+   /**
+    * The description of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Controller/EntityTabAddPage.php b/src/Controller/EntityTabAddPage.php
+index 75acf5f..b38f5b2 100644
+--- a/src/Controller/EntityTabAddPage.php
++++ b/src/Controller/EntityTabAddPage.php
+@@ -16,21 +16,21 @@ class EntityTabAddPage implements ContainerInjectionInterface {
+   /**
+    * The entity type manager
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The Entity Tab content plugin manager
+    *
+-   * @var \Drupal\entity_ui\Plugin\EntityTabContentManager
++   * @var EntityTabContentManager
+    */
+   protected $entityTabContentPluginManager;
+ 
+   /**
+    * Constructs a new EntityTabForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    * @param \Drupal\entity_ui\Plugin\EntityTabContentManager
+    *   The entity tab plugin manager.
+diff --git a/src/Controller/EntityTabController.php b/src/Controller/EntityTabController.php
+index 3cc5ee4..adc2505 100644
+--- a/src/Controller/EntityTabController.php
++++ b/src/Controller/EntityTabController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_ui\Controller;
+ 
++use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Routing\RouteMatchInterface;
+@@ -19,32 +20,32 @@ class EntityTabController implements ContainerInjectionInterface {
+   /**
+    * The entity type manager
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The currently active route match object.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $currentRouteMatch;
+ 
+   /**
+    * The Entity Tab content plugin manager
+    *
+-   * @var \Drupal\entity_ui\Plugin\EntityTabContentManager
++   * @var EntityTabContentManager
+    */
+   protected $entityTabContentPluginManager;
+ 
+   /**
+    * Constructs a new EntityTabController object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    * @param \Drupal\entity_ui\Plugin\EntityTabContentManager
+    *   The entity tab plugin manager.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $current_route_match
++   * @param RouteMatchInterface $current_route_match
+    *   The currently active route match object.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityTabContentManager $entity_tab_content_manager, RouteMatchInterface $current_route_match) {
+@@ -87,14 +88,14 @@ class EntityTabController implements ContainerInjectionInterface {
+   /**
+    * Access callback for the entity tab route.
+    *
+-   * @param \Symfony\Component\Routing\Route $route
++   * @param Route $route
+    *  The route to check access for.
+-   * @param \Drupal\Core\Routing\RouteMatch $route_match
++   * @param RouteMatch $route_match
+    *  The route match.
+-   * @param \Drupal\Core\Session\AccountProxy $account
++   * @param AccountProxy $account
+    *  The current user account.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *  The access result.
+    */
+   public function access(Route $route, RouteMatch $route_match, AccountProxy $account) {
+diff --git a/src/Entity/EntityTab.php b/src/Entity/EntityTab.php
+index ca1b04f..9fea851 100644
+--- a/src/Entity/EntityTab.php
++++ b/src/Entity/EntityTab.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\entity_ui\Entity;
+ 
++use Drupal\Core\Access\AccessResultInterface;
++use Drupal\entity_ui\Plugin\EntityTabLazyPluginCollection;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -122,7 +124,7 @@ class EntityTab extends ConfigEntityBase implements EntityTabInterface {
+   /**
+    * A collection to store the tab content plugin.
+    *
+-   * @var \Drupal\Core\Plugin\DefaultSingleLazyPluginCollection
++   * @var DefaultSingleLazyPluginCollection
+    */
+   protected $contentPluginCollection;
+ 
+@@ -151,10 +153,10 @@ class EntityTab extends ConfigEntityBase implements EntityTabInterface {
+   /**
+    * Checks the tab is set to apply to the target entity's bundle.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $target_entity
++   * @param EntityInterface $target_entity
+    *   The target entity that the entity tab is on.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   protected function hasBundleAccess(EntityInterface $target_entity) {
+@@ -245,7 +247,7 @@ class EntityTab extends ConfigEntityBase implements EntityTabInterface {
+    */
+   protected function getContentPluginCollection() {
+     if (!$this->contentPluginCollection) {
+-      $this->contentPluginCollection = new \Drupal\entity_ui\Plugin\EntityTabLazyPluginCollection(
++      $this->contentPluginCollection = new EntityTabLazyPluginCollection(
+         \Drupal::service('plugin.manager.entity_ui_tab_content'),
+         $this->content_plugin,
+         $this->content_config,
+diff --git a/src/Entity/EntityTabInterface.php b/src/Entity/EntityTabInterface.php
+index e364d28..f1e3c8f 100644
+--- a/src/Entity/EntityTabInterface.php
++++ b/src/Entity/EntityTabInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_ui\Entity;
+ 
++use Drupal\entity_ui\Plugin\EntityTabContentInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityWithPluginCollectionInterface;
+@@ -46,7 +47,7 @@ interface EntityTabInterface extends ConfigEntityInterface, EntityWithPluginColl
+   /**
+    * Gets the page title for this tab.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $target_entity
++   * @param EntityInterface $target_entity
+    *  The target entity of the tab entity.
+    *
+    * @return string
+@@ -81,7 +82,7 @@ interface EntityTabInterface extends ConfigEntityInterface, EntityWithPluginColl
+   /**
+    * Get the link type plugin for this flag.
+    *
+-   * @return \Drupal\entity_ui\Plugin\EntityTabContentInterface
++   * @return EntityTabContentInterface
+    *   The link type plugin for the flag.
+    */
+   public function getContentPlugin();
+diff --git a/src/EntityHandler/BasicFieldUI.php b/src/EntityHandler/BasicFieldUI.php
+index adff08b..1d49c87 100644
+--- a/src/EntityHandler/BasicFieldUI.php
++++ b/src/EntityHandler/BasicFieldUI.php
+@@ -25,11 +25,11 @@ class BasicFieldUI extends EntityUIAdminBase {
+   /**
+    * Constructs a new BasicFieldUI.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Routing\PreloadableRouteProviderInterface $route_provider
++   * @param PreloadableRouteProviderInterface $route_provider
+    *   The route provider service.
+    */
+   public function __construct(
+diff --git a/src/EntityHandler/BundleEntityCollection.php b/src/EntityHandler/BundleEntityCollection.php
+index f1b0ed8..d29692f 100644
+--- a/src/EntityHandler/BundleEntityCollection.php
++++ b/src/EntityHandler/BundleEntityCollection.php
+@@ -38,11 +38,11 @@ class BundleEntityCollection extends EntityUIAdminBase implements EntityUIAdminI
+   /**
+    * Constructs a new BundleEntityCollection.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Routing\PreloadableRouteProviderInterface $route_provider
++   * @param PreloadableRouteProviderInterface $route_provider
+    *   The route provider service.
+    */
+   public function __construct(
+diff --git a/src/EntityHandler/EntityTabListBuilder.php b/src/EntityHandler/EntityTabListBuilder.php
+index 266c215..c6015e8 100644
+--- a/src/EntityHandler/EntityTabListBuilder.php
++++ b/src/EntityHandler/EntityTabListBuilder.php
+@@ -33,42 +33,42 @@ class EntityTabListBuilder extends DraggableListBuilder {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The Entity Tab content plugin manager
+    *
+-   * @var \Drupal\entity_ui\Plugin\EntityTabContentManager
++   * @var EntityTabContentManager
+    */
+   protected $entityTabContentPluginManager;
+ 
+   /**
+    * The menu local task plugin manager
+    *
+-   * @var \Drupal\Core\Menu\LocalTaskManagerInterface
++   * @var LocalTaskManagerInterface
+    */
+   protected $localTaskManager;
+ 
+   /**
+    * The currently active route match object.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $currentRouteMatch;
+ 
+   /**
+    * The dynamic router service.
+    *
+-   * @var \Symfony\Component\Routing\Matcher\RequestMatcherInterface
++   * @var RequestMatcherInterface
+    */
+   protected $router;
+ 
+@@ -80,21 +80,21 @@ class EntityTabListBuilder extends DraggableListBuilder {
+   /**
+    * Constructs a new EntityTabListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    * @param \Drupal\entity_ui\Plugin\EntityTabContentManager
+    *   The entity tab plugin manager.
+-   * @param \Drupal\Core\Menu\LocalTaskManagerInterface $local_task_manager
++   * @param LocalTaskManagerInterface $local_task_manager
+    *   The local task manager.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $current_route_match
++   * @param RouteMatchInterface $current_route_match
+    *   The currently active route match object.
+-   * @param \Symfony\Component\Routing\Matcher\RequestMatcherInterface $router
++   * @param RequestMatcherInterface $router
+    *   The dynamic router service.
+    */
+   public function __construct(
+@@ -212,7 +212,7 @@ class EntityTabListBuilder extends DraggableListBuilder {
+   /**
+    * Builds the row for a hardcoded local task, i.e. from another module.
+    *
+-   * @param \Drupal\Core\Menu\LocalTaskInterface $task_plugin
++   * @param LocalTaskInterface $task_plugin
+    *  The task plugin for the tab.
+    *
+    * @return
+diff --git a/src/EntityHandler/EntityUIAdminBase.php b/src/EntityHandler/EntityUIAdminBase.php
+index f70914e..a8c1ff7 100644
+--- a/src/EntityHandler/EntityUIAdminBase.php
++++ b/src/EntityHandler/EntityUIAdminBase.php
+@@ -30,18 +30,18 @@ abstract class EntityUIAdminBase implements EntityHandlerInterface {
+   /**
+    * The route provider service.
+    *
+-   * @var \Drupal\Core\Routing\PreloadableRouteProviderInterface
++   * @var PreloadableRouteProviderInterface
+    */
+   protected $routeProvider;
+ 
+   /**
+    * Constructs a new EntityUIAdminBase.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Routing\PreloadableRouteProviderInterface $route_provider
++   * @param PreloadableRouteProviderInterface $route_provider
+    *   The route provider service.
+    */
+   public function __construct(
+@@ -82,10 +82,10 @@ abstract class EntityUIAdminBase implements EntityHandlerInterface {
+   /**
+    * Builds the route for the partial collection of entity UI tab entities.
+    *
+-   * @param \Symfony\Component\Routing\RouteCollection $route_collection
++   * @param RouteCollection $route_collection
+    *   The collection of routes built so far.
+    *
+-   * @return \Symfony\Component\Routing\Route
++   * @return Route
+    *  The route for the collection.
+    */
+   protected function getCollectionRoute(RouteCollection $route_collection) {
+@@ -110,7 +110,7 @@ abstract class EntityUIAdminBase implements EntityHandlerInterface {
+   /**
+    * Returns the path for the collection route.
+    *
+-   * @param \Symfony\Component\Routing\RouteCollection $route_collection
++   * @param RouteCollection $route_collection
+    *   The collection of routes built so far.
+    *
+    * @return string
+diff --git a/src/EntityHandler/EntityUIAdminInterface.php b/src/EntityHandler/EntityUIAdminInterface.php
+index 533c55e..4a7484f 100644
+--- a/src/EntityHandler/EntityUIAdminInterface.php
++++ b/src/EntityHandler/EntityUIAdminInterface.php
+@@ -30,7 +30,7 @@ interface EntityUIAdminInterface {
+    *
+    * @see \Drupal\entity_ui\Routing\AdminRouteProviderSubscriber
+    *
+-   * @param \Symfony\Component\Routing\RouteCollection $route_collection
++   * @param RouteCollection $route_collection
+    *   The collection of routes built so far.
+    *
+    * @return array
+diff --git a/src/EntityHandler/FieldUIWithoutBundleEntityProxy.php b/src/EntityHandler/FieldUIWithoutBundleEntityProxy.php
+index 2fa8d51..fcd9e89 100644
+--- a/src/EntityHandler/FieldUIWithoutBundleEntityProxy.php
++++ b/src/EntityHandler/FieldUIWithoutBundleEntityProxy.php
+@@ -35,18 +35,18 @@ class FieldUIWithoutBundleEntityProxy implements EntityHandlerInterface {
+   /**
+    * The route provider service.
+    *
+-   * @var \Drupal\Core\Routing\PreloadableRouteProviderInterface
++   * @var PreloadableRouteProviderInterface
+    */
+   protected $routeProvider;
+ 
+   /**
+    * Constructs a new EntityUIAdminBase.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Routing\PreloadableRouteProviderInterface $route_provider
++   * @param PreloadableRouteProviderInterface $route_provider
+    *   The route provider service.
+    */
+   public function __construct(
+@@ -74,7 +74,7 @@ class FieldUIWithoutBundleEntityProxy implements EntityHandlerInterface {
+   /**
+    * The real handler that this wraps.
+    *
+-   * @var \Drupal\entity_ui\EntityHandler\EntityUIAdminInterface
++   * @var EntityUIAdminInterface
+    */
+   protected $realHandler;
+ 
+@@ -121,7 +121,7 @@ class FieldUIWithoutBundleEntityProxy implements EntityHandlerInterface {
+    * it's not obtained in the same way depending on whether the router is being
+    * rebuilt or not.
+    *
+-   * @param \Symfony\Component\Routing\Route $field_ui_base_route
++   * @param Route $field_ui_base_route
+    *   The base route for the entity type this handler is for.
+    */
+   protected function setUpRealHandlerFromFieldUIBaseRoute(Route $field_ui_base_route) {
+@@ -134,11 +134,11 @@ class FieldUIWithoutBundleEntityProxy implements EntityHandlerInterface {
+       // hook_entity_bundle_info(). We detect this by the presence of a 'bundle'
+       // parameter at the end of the field UI route path, which Field UI module
+       // expects when the bundles are not config entities.
+-      $handler_class = \Drupal\entity_ui\EntityHandler\PlainBundlesEntityUIAdmin::class;
++      $handler_class = PlainBundlesEntityUIAdmin::class;
+     }
+     else {
+       // The entity type has only a single bundle.
+-      $handler_class = \Drupal\entity_ui\EntityHandler\BasicFieldUI::class;
++      $handler_class = BasicFieldUI::class;
+     }
+ 
+     $this->realHandler = $this->entityTypeManager->createHandlerInstance($handler_class, $this->entityType);
+diff --git a/src/EntityHandler/PlainBundlesEntityUIAdmin.php b/src/EntityHandler/PlainBundlesEntityUIAdmin.php
+index 36c9614..aeaea60 100644
+--- a/src/EntityHandler/PlainBundlesEntityUIAdmin.php
++++ b/src/EntityHandler/PlainBundlesEntityUIAdmin.php
+@@ -36,11 +36,11 @@ class PlainBundlesEntityUIAdmin extends EntityUIAdminBase implements EntityUIAdm
+   /**
+    * Constructs a new BasicFieldUI.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Routing\PreloadableRouteProviderInterface $route_provider
++   * @param PreloadableRouteProviderInterface $route_provider
+    *   The route provider service.
+    */
+   public function __construct(
+diff --git a/src/EntityTabsLoader.php b/src/EntityTabsLoader.php
+index 1564a10..055a8e0 100644
+--- a/src/EntityTabsLoader.php
++++ b/src/EntityTabsLoader.php
+@@ -13,14 +13,14 @@ class EntityTabsLoader {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a new EntityTabsLoader.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -30,7 +30,7 @@ class EntityTabsLoader {
+   /**
+    * Loads the entity tabs for a single target entity type.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $target_entity_type
++   * @param EntityTypeInterface $target_entity_type
+    *  The target entity type to load tabs for.
+    *
+    * @return
+diff --git a/src/EntityUiPermissions.php b/src/EntityUiPermissions.php
+index 3fc078b..bcd62e9 100644
+--- a/src/EntityUiPermissions.php
++++ b/src/EntityUiPermissions.php
+@@ -17,14 +17,14 @@ class EntityUiPermissions implements ContainerInjectionInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a new EntityUiPermissions instance.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Form/EntityTabDeleteForm.php b/src/Form/EntityTabDeleteForm.php
+index 090392f..59f069f 100644
+--- a/src/Form/EntityTabDeleteForm.php
++++ b/src/Form/EntityTabDeleteForm.php
+@@ -19,21 +19,21 @@ class EntityTabDeleteForm extends EntityConfirmFormBase {
+   /**
+    * The Entity Tab content plugin manager
+    *
+-   * @var \Drupal\entity_ui\Plugin\EntityTabContentManager
++   * @var EntityTabContentManager
+    */
+   protected $entityTabContentPluginManager;
+ 
+   /**
+    * The menu local task plugin manager.
+    *
+-   * @var \Drupal\Core\Menu\LocalTaskManagerInterface
++   * @var LocalTaskManagerInterface
+    */
+   protected $menuLocalTaskPluginManager;
+ 
+   /**
+    * The router builder service.
+    *
+-   * @var \Drupal\Core\Routing\RouteBuilderInterface
++   * @var RouteBuilderInterface
+    */
+   protected $routerBuilder;
+ 
+diff --git a/src/Form/EntityTabForm.php b/src/Form/EntityTabForm.php
+index a9c5226..e69d7f6 100644
+--- a/src/Form/EntityTabForm.php
++++ b/src/Form/EntityTabForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_ui\Form;
+ 
++use Symfony\Component\Routing\Route;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityTypeBundleInfoInterface;
+@@ -23,35 +24,35 @@ class EntityTabForm extends EntityForm {
+   /**
+    * The Entity Tab content plugin manager
+    *
+-   * @var \Drupal\entity_ui\Plugin\EntityTabContentManager
++   * @var EntityTabContentManager
+    */
+   protected $entityTabContentPluginManager;
+ 
+   /**
+    * The menu local task plugin manager.
+    *
+-   * @var \Drupal\Core\Menu\LocalTaskManagerInterface
++   * @var LocalTaskManagerInterface
+    */
+   protected $menuLocalTaskPluginManager;
+ 
+   /**
+    * The router builder service.
+    *
+-   * @var \Drupal\Core\Routing\RouteBuilderInterface
++   * @var RouteBuilderInterface
+    */
+   protected $routerBuilder;
+ 
+   /**
+    * The route provider to load routes by name.
+    *
+-   * @var \Drupal\Core\Routing\RouteProviderInterface
++   * @var RouteProviderInterface
+    */
+   protected $routeProvider;
+ 
+   /**
+    * The entity bundle info.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface;
++   * @var EntityTypeBundleInfoInterface ;
+    */
+   protected $bundleInfoService;
+ 
+@@ -370,7 +371,7 @@ class EntityTabForm extends EntityForm {
+    *  A path component, i.e. the part of the path that is appended to the
+    *  canonical URL.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *  The route, or NULL if nothing is found.
+    */
+   protected function getRouteForEntityPath($target_entity_type_id, $path_component) {
+diff --git a/src/Plugin/Derivative/ActionsConfigurableActionTabContentDeriver.php b/src/Plugin/Derivative/ActionsConfigurableActionTabContentDeriver.php
+index 98c30b1..fd3792b 100644
+--- a/src/Plugin/Derivative/ActionsConfigurableActionTabContentDeriver.php
++++ b/src/Plugin/Derivative/ActionsConfigurableActionTabContentDeriver.php
+@@ -20,16 +20,16 @@ class ActionsConfigurableActionTabContentDeriver extends DeriverBase implements
+   /**
+    * The action plugin manager.
+    *
+-   * @var \Drupal\Core\Action\ActionManager
++   * @var ActionManager
+    */
+   protected $pluginManagerAction;
+ 
+   /**
+    * Creates a deriver instance.
+    *
+-   * @param \Drupal\Core\Action\ActionManager $plugin_manager_action
++   * @param ActionManager $plugin_manager_action
+    *   The action plugin manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(ActionManager $plugin_manager_action, EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Plugin/Derivative/EntityLocalTasks.php b/src/Plugin/Derivative/EntityLocalTasks.php
+index 6d0cdd9..d6c412a 100644
+--- a/src/Plugin/Derivative/EntityLocalTasks.php
++++ b/src/Plugin/Derivative/EntityLocalTasks.php
+@@ -17,23 +17,23 @@ class EntityLocalTasks extends DeriverBase implements ContainerDeriverInterface
+   /**
+    * The entity type manager
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity tabs loader.
+    *
+-   * @var \Drupal\entity_ui\EntityTabsLoader
++   * @var EntityTabsLoader
+    */
+   protected $tabLoader;
+ 
+   /**
+    * Creates an SelectionBase object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\entity_ui\EntityTabsLoader $tab_query
++   * @param EntityTabsLoader $tab_query
+    *   The entity query object for entity tab entities.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityTabsLoader $tab_loader) {
+diff --git a/src/Plugin/Derivative/EntityTabsAdminLocalActions.php b/src/Plugin/Derivative/EntityTabsAdminLocalActions.php
+index a853c34..0e34006 100644
+--- a/src/Plugin/Derivative/EntityTabsAdminLocalActions.php
++++ b/src/Plugin/Derivative/EntityTabsAdminLocalActions.php
+@@ -20,16 +20,16 @@ class EntityTabsAdminLocalActions extends DeriverBase implements ContainerDerive
+   /**
+    * The entity type manager
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Creates an SelectionBase object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\Query\QueryInterface $tab_query
++   * @param QueryInterface $tab_query
+    *   The entity query object for entity tab entities.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Plugin/Derivative/EntityTabsAdminLocalTasks.php b/src/Plugin/Derivative/EntityTabsAdminLocalTasks.php
+index 03adf1c..cc00e6f 100644
+--- a/src/Plugin/Derivative/EntityTabsAdminLocalTasks.php
++++ b/src/Plugin/Derivative/EntityTabsAdminLocalTasks.php
+@@ -22,16 +22,16 @@ class EntityTabsAdminLocalTasks extends DeriverBase implements ContainerDeriverI
+   /**
+    * The entity type manager
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Creates an SelectionBase object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\Query\QueryInterface $tab_query
++   * @param QueryInterface $tab_query
+    *   The entity query object for entity tab entities.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Plugin/EntityTabContent/ActionsConfigurableAction.php b/src/Plugin/EntityTabContent/ActionsConfigurableAction.php
+index f3d6552..7be8a01 100644
+--- a/src/Plugin/EntityTabContent/ActionsConfigurableAction.php
++++ b/src/Plugin/EntityTabContent/ActionsConfigurableAction.php
+@@ -30,7 +30,7 @@ class ActionsConfigurableAction extends EntityTabContentBase implements Containe
+   /**
+    * The action plugin manager.
+    *
+-   * @var \Drupal\Core\Action\ActionManager
++   * @var ActionManager
+    */
+   protected $pluginManagerAction;
+ 
+@@ -43,7 +43,7 @@ class ActionsConfigurableAction extends EntityTabContentBase implements Containe
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Action\ActionManager $plugin_manager_action
++   * @param ActionManager $plugin_manager_action
+    *   The action plugin manager.
+    */
+   public function __construct(
+diff --git a/src/Plugin/EntityTabContent/EntityForm.php b/src/Plugin/EntityTabContent/EntityForm.php
+index 0bb64d3..0306682 100644
+--- a/src/Plugin/EntityTabContent/EntityForm.php
++++ b/src/Plugin/EntityTabContent/EntityForm.php
+@@ -26,14 +26,14 @@ class EntityForm extends EntityTabContentBase implements ContainerFactoryPluginI
+   /**
+    * The entity form builder service.
+    *
+-   * @var \Drupal\Core\Entity\EntityFormBuilderInterface
++   * @var EntityFormBuilderInterface
+    */
+   protected $entityFormBuilder;
+ 
+   /**
+    * The entity display repository service.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+@@ -46,9 +46,9 @@ class EntityForm extends EntityTabContentBase implements ContainerFactoryPluginI
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityFormBuilderInterface $entity_form_builder
++   * @param EntityFormBuilderInterface $entity_form_builder
+    *   The entity form builder service.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
++   * @param EntityDisplayRepositoryInterface $entity_display_repository
+    *   The entity display repository service.
+    */
+   public function __construct(
+diff --git a/src/Plugin/EntityTabContent/EntityView.php b/src/Plugin/EntityTabContent/EntityView.php
+index e996eed..f11b8dd 100644
+--- a/src/Plugin/EntityTabContent/EntityView.php
++++ b/src/Plugin/EntityTabContent/EntityView.php
+@@ -25,14 +25,14 @@ class EntityView extends EntityTabContentBase implements ContainerFactoryPluginI
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity display repository service.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+@@ -45,9 +45,9 @@ class EntityView extends EntityTabContentBase implements ContainerFactoryPluginI
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
++   * @param EntityDisplayRepositoryInterface $entity_display_repository
+    *   The entity display repository service.
+    */
+   public function __construct(
+diff --git a/src/Plugin/EntityTabContent/OwnerAssign.php b/src/Plugin/EntityTabContent/OwnerAssign.php
+index 293cb94..486d954 100644
+--- a/src/Plugin/EntityTabContent/OwnerAssign.php
++++ b/src/Plugin/EntityTabContent/OwnerAssign.php
+@@ -28,7 +28,7 @@ class OwnerAssign extends EntityTabContentFormBase implements EntityTabContentIn
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+@@ -41,7 +41,7 @@ class OwnerAssign extends EntityTabContentFormBase implements EntityTabContentIn
+    *   The plugin ID for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(
+diff --git a/src/Plugin/EntityTabContentBase.php b/src/Plugin/EntityTabContentBase.php
+index f38358d..c0b06c6 100644
+--- a/src/Plugin/EntityTabContentBase.php
++++ b/src/Plugin/EntityTabContentBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_ui\Plugin;
+ 
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Component\Plugin\PluginBase;
+ use Drupal\Component\Utility\NestedArray;
+ use Drupal\Core\Access\AccessResult;
+@@ -24,7 +25,7 @@ abstract class EntityTabContentBase extends PluginBase implements EntityTabConte
+   /**
+    * The entity bundle info.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface;
++   * @var EntityTypeBundleInfoInterface ;
+    */
+   protected $bundleInfoService;
+ 
+@@ -47,7 +48,7 @@ abstract class EntityTabContentBase extends PluginBase implements EntityTabConte
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface
+    *   The bundle info service.
+@@ -296,10 +297,10 @@ abstract class EntityTabContentBase extends PluginBase implements EntityTabConte
+    * For example, a tab that allows a user to publish an entity would deny
+    * access here when the entity is already published.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $target_entity
++   * @param EntityInterface $target_entity
+    *   The target entity that the entity tab is on.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   protected function hasLogicAccess(EntityInterface $target_entity) {
+@@ -312,12 +313,12 @@ abstract class EntityTabContentBase extends PluginBase implements EntityTabConte
+    * This should check the access based on the permissions defined in
+    * $this->getPermissions().
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user session for which to check access.
+-   * @param \Drupal\Core\Entity\EntityInterface $target_entity
++   * @param EntityInterface $target_entity
+    *   The target entity that the entity tab is on.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   protected function hasPermissionAccess(AccountInterface $account, EntityInterface $target_entity) {
+diff --git a/src/Plugin/EntityTabContentFormBase.php b/src/Plugin/EntityTabContentFormBase.php
+index 3990ef3..a3d87d8 100644
+--- a/src/Plugin/EntityTabContentFormBase.php
++++ b/src/Plugin/EntityTabContentFormBase.php
+@@ -30,7 +30,7 @@ abstract class EntityTabContentFormBase extends EntityTabContentBase implements
+   /**
+    * The form builder service.
+    *
+-   * @var \Drupal\Core\Form\FormBuilderInterface;
++   * @var FormBuilderInterface ;
+    */
+   protected $formBuilder;
+ 
+@@ -43,7 +43,7 @@ abstract class EntityTabContentFormBase extends EntityTabContentBase implements
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface
+    *   The bundle info service.
+@@ -114,10 +114,10 @@ abstract class EntityTabContentFormBase extends EntityTabContentBase implements
+    *
+    * This is a helper method to save having to figure out the build info.
+    *
+-   * @param \Drupal\Core\Form\FormBuilderInterface $form_state
++   * @param FormBuilderInterface $form_state
+    *  The form state.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *  The target entity.
+    */
+   protected function getTargetEntity(FormStateInterface $form_state) {
+diff --git a/src/Plugin/EntityTabContentInterface.php b/src/Plugin/EntityTabContentInterface.php
+index 2ab826f..c5253ef 100644
+--- a/src/Plugin/EntityTabContentInterface.php
++++ b/src/Plugin/EntityTabContentInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_ui\Plugin;
+ 
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -62,13 +63,13 @@ interface EntityTabContentInterface extends ConfigurableInterface, DependentPlug
+   /**
+    * Checks access to use the entity tab this plugin is for.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $target_entity
++   * @param EntityInterface $target_entity
+    *   The target entity that the entity tab is on.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   (optional) The user session for which to check access, or NULL to check
+    *   access for the current user. Defaults to NULL.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function access(EntityInterface $target_entity, AccountInterface $account = NULL);
+@@ -76,7 +77,7 @@ interface EntityTabContentInterface extends ConfigurableInterface, DependentPlug
+   /**
+    * Builds the content for the entity tab.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $target_entity
++   * @param EntityInterface $target_entity
+    *   The target entity that the entity tab is on.
+    *
+    * @return
+diff --git a/src/Plugin/EntityTabContentManager.php b/src/Plugin/EntityTabContentManager.php
+index eb9c325..9656958 100644
+--- a/src/Plugin/EntityTabContentManager.php
++++ b/src/Plugin/EntityTabContentManager.php
+@@ -20,9 +20,9 @@ class EntityTabContentManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Plugin/EntityTabLazyPluginCollection.php b/src/Plugin/EntityTabLazyPluginCollection.php
+index 694a22a..36d8ab4 100644
+--- a/src/Plugin/EntityTabLazyPluginCollection.php
++++ b/src/Plugin/EntityTabLazyPluginCollection.php
+@@ -21,7 +21,7 @@ class EntityTabLazyPluginCollection extends DefaultSingleLazyPluginCollection {
+   /**
+    * Constructs a new DefaultSingleLazyPluginCollection object.
+    *
+-   * @param \Drupal\Component\Plugin\PluginManagerInterface $manager
++   * @param PluginManagerInterface $manager
+    *   The manager to be used for instantiating plugins.
+    * @param string $instance_id
+    *   The ID of the plugin instance.
+diff --git a/src/Routing/AdminRouteProviderSubscriber.php b/src/Routing/AdminRouteProviderSubscriber.php
+index 29fd95c..9b20a8c 100644
+--- a/src/Routing/AdminRouteProviderSubscriber.php
++++ b/src/Routing/AdminRouteProviderSubscriber.php
+@@ -25,14 +25,14 @@ class AdminRouteProviderSubscriber implements EventSubscriberInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a new EntityRouteProviderSubscriber instance.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -42,7 +42,7 @@ class AdminRouteProviderSubscriber implements EventSubscriberInterface {
+   /**
+    * Provides routes on route rebuild time.
+    *
+-   * @param \Drupal\Core\Routing\RouteBuildEvent $event
++   * @param RouteBuildEvent $event
+    *   The route build event.
+    */
+   public function onDynamicRouteEvent(RouteBuildEvent $event) {
+diff --git a/src/Routing/TabRouteProvider.php b/src/Routing/TabRouteProvider.php
+index 7583fff..66d24ef 100644
+--- a/src/Routing/TabRouteProvider.php
++++ b/src/Routing/TabRouteProvider.php
+@@ -20,14 +20,14 @@ class TabRouteProvider implements EntityRouteProviderInterface, EntityHandlerInt
+   /**
+    * The entity tab loader.
+    *
+-   * @var \Drupal\entity_ui\EntityTabsLoader
++   * @var EntityTabsLoader
+    */
+   protected $entityTabLoader;
+ 
+   /**
+    * Constructs a new TabRouteProvider.
+    *
+-   * @param \Drupal\entity_ui\EntityTabsLoader $entity_tab_loader
++   * @param EntityTabsLoader $entity_tab_loader
+    *   The entity tab loader.
+    */
+   public function __construct(EntityTabsLoader $entity_tab_loader) {
+diff --git a/src/TargetEntityTypes.php b/src/TargetEntityTypes.php
+index a6bb0e2..7febeda 100644
+--- a/src/TargetEntityTypes.php
++++ b/src/TargetEntityTypes.php
+@@ -16,14 +16,14 @@ class TargetEntityTypes {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a new EntityTabsLoader.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -33,7 +33,7 @@ class TargetEntityTypes {
+   /**
+    * Gets entity types which are suitable as entity tab targets.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeInterface[]
++   * @return EntityTypeInterface[]
+    *   An array of entity types, keyed by their ID.
+    */
+   public function getTargetEntityTypes() {
+@@ -48,10 +48,10 @@ class TargetEntityTypes {
+    * This only relies on the given entity type objects, so is safe to be called
+    * during the entity type rebuild process.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface[] $entity_types
++   * @param EntityTypeInterface[] $entity_types
+    *   An array of entity types, keyed by their ID.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeInterface[]
++   * @return EntityTypeInterface[]
+    *   An array of entity types, keyed by their ID.
+    */
+   public function filterTargetEntityTypes($entity_types) {
+diff --git a/tests/src/Functional/AdminUITest.php b/tests/src/Functional/AdminUITest.php
+index 0149bf1..76ea44c 100644
+--- a/tests/src/Functional/AdminUITest.php
++++ b/tests/src/Functional/AdminUITest.php
+@@ -26,7 +26,7 @@ class AdminUITest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Create an Article node type.
+@@ -56,7 +56,7 @@ class AdminUITest extends BrowserTestBase {
+ 
+     // Check the collection page has the expected elements.
+     // Check the node type collection tab is shown.
+-    $this->assertLinkByHref('admin/structure/types');
++    $this->assertSession()->linkByHrefExists('admin/structure/types');
+ 
+     // Check the built-in tabs on nodes are shown.
+     $this->assertSession()->pageTextContains(t('View'));
+@@ -64,7 +64,7 @@ class AdminUITest extends BrowserTestBase {
+     $this->assertSession()->pageTextContains(t('Delete'));
+ 
+     $this->assertSession()->pageTextContains(t('Add entity tab'));
+-    $this->assertLinkByHref('admin/structure/entity_ui/entity_tab/add/node');
++    $this->assertSession()->linkByHrefExists('admin/structure/entity_ui/entity_tab/add/node');
+ 
+     // Create a new entity tab on nodes.
+     $this->clickLink(t('Add entity tab'));
+@@ -81,11 +81,11 @@ class AdminUITest extends BrowserTestBase {
+       'content_plugin' => 'entity_view',
+       'content_config[view_mode]' => 'default',
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save'));
++    $this->submitForm($edit, t('Save'));
+ 
+     // Check the new tab is now shown in the collection listing.
+     $this->assertSession()->pageTextContains($edit['label']);
+-    $this->assertLinkByHref("admin/structure/entity_ui/entity_tab/node.{$edit['id']}/edit");
++    $this->assertSession()->linkByHrefExists("admin/structure/entity_ui/entity_tab/node.{$edit['id']}/edit");
+ 
+ 
+     // todo:
+@@ -109,14 +109,14 @@ class AdminUITest extends BrowserTestBase {
+ 
+     // Check the collection page has the expected elements.
+     // Check the user accounts setings tab is shown.
+-    $this->assertLinkByHref('admin/config/people/accounts');
++    $this->assertSession()->linkByHrefExists('admin/config/people/accounts');
+ 
+     // Check the built-in tabs on users are shown.
+     $this->assertSession()->pageTextContains(t('View'));
+     $this->assertSession()->pageTextContains(t('Edit'));
+ 
+     $this->assertSession()->pageTextContains(t('Add entity tab'));
+-    $this->assertLinkByHref('admin/structure/entity_ui/entity_tab/add/user');
++    $this->assertSession()->linkByHrefExists('admin/structure/entity_ui/entity_tab/add/user');
+ 
+     // Create a new entity tab on users.
+     $this->clickLink(t('Add entity tab'));
+@@ -132,11 +132,11 @@ class AdminUITest extends BrowserTestBase {
+       'content_plugin' => 'entity_view',
+       'content_config[view_mode]' => 'default',
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save'));
++    $this->submitForm($edit, t('Save'));
+ 
+     // Check the new tab is now shown in the collection listing.
+     $this->assertSession()->pageTextContains($edit['label']);
+-    $this->assertLinkByHref("admin/structure/entity_ui/entity_tab/user.{$edit['id']}/edit");
++    $this->assertSession()->linkByHrefExists("admin/structure/entity_ui/entity_tab/user.{$edit['id']}/edit");
+ 
+ 
+     // todo:
+diff --git a/tests/src/Functional/OwnerAssignTabTest.php b/tests/src/Functional/OwnerAssignTabTest.php
+index 272e6a7..42dae12 100644
+--- a/tests/src/Functional/OwnerAssignTabTest.php
++++ b/tests/src/Functional/OwnerAssignTabTest.php
+@@ -26,7 +26,7 @@ class OwnerAssignTabTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->nodeStorage = $this->container->get('entity_type.manager')
+@@ -94,7 +94,7 @@ class OwnerAssignTabTest extends BrowserTestBase {
+     $edit = [
+       'owner_uid' => $new_owner->getUsername() . ' (' . $new_owner->id() . ')',
+     ];
+-    $this->drupalPostForm(NULL, $edit, 'Change owner');
++    $this->submitForm($edit, 'Change owner');
+ 
+     // Reload the node.
+     $node = $this->nodeStorage->load($node->id());
+diff --git a/tests/src/Kernel/ActionDerivativesTest.php b/tests/src/Kernel/ActionDerivativesTest.php
+index ee49b75..d315929 100644
+--- a/tests/src/Kernel/ActionDerivativesTest.php
++++ b/tests/src/Kernel/ActionDerivativesTest.php
+@@ -27,7 +27,7 @@ class ActionDerivativesTest extends KernelTestBase {
+     'entity_ui',
+   ];
+ 
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installConfig(['node']);
+   }
+diff --git a/tests/src/Kernel/AdminUIHandlerTest.php b/tests/src/Kernel/AdminUIHandlerTest.php
+index 672addd..951b661 100644
+--- a/tests/src/Kernel/AdminUIHandlerTest.php
++++ b/tests/src/Kernel/AdminUIHandlerTest.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\Tests\field_ui\Kernel;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Drupal\entity_ui\EntityHandler\BundleEntityCollection;
++use Drupal\entity_ui\EntityHandler\FieldUIWithoutBundleEntityProxy;
++use Symfony\Component\Routing\Route;
++use Symfony\Component\Routing\RouteCollection;
++use Drupal\entity_ui\EntityHandler\BasicFieldUI;
+ use Drupal\KernelTests\KernelTestBase;
+ 
+ /**
+@@ -11,6 +17,7 @@ use Drupal\KernelTests\KernelTestBase;
+  */
+ class AdminUIHandlerTest extends KernelTestBase {
+ 
++  use ProphecyTrait;
+   /**
+    * Modules to enable.
+    *
+@@ -28,7 +35,7 @@ class AdminUIHandlerTest extends KernelTestBase {
+     'entity_ui',
+   ];
+ 
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installEntitySchema('node');
+     $this->installEntitySchema('user');
+@@ -44,9 +51,9 @@ class AdminUIHandlerTest extends KernelTestBase {
+ 
+     $expected_handlers = [
+       // Entity type ID => expected handler class.
+-      'node' => \Drupal\entity_ui\EntityHandler\BundleEntityCollection::class,
+-      'user' => \Drupal\entity_ui\EntityHandler\FieldUIWithoutBundleEntityProxy::class,
+-      'taxonomy_term' => \Drupal\entity_ui\EntityHandler\BundleEntityCollection::class,
++      'node' => BundleEntityCollection::class,
++      'user' => FieldUIWithoutBundleEntityProxy::class,
++      'taxonomy_term' => BundleEntityCollection::class,
+     ];
+ 
+     foreach ($expected_handlers as $entity_type_id => $handler_class) {
+@@ -60,10 +67,10 @@ class AdminUIHandlerTest extends KernelTestBase {
+     $user_entity_type = $entity_type_manager->getDefinition('user');
+     $user_handler = $entity_type_manager->getHandler('user', 'entity_ui_admin');
+ 
+-    $route_prophecy = $this->prophesize(\Symfony\Component\Routing\Route ::CLASS);
++    $route_prophecy = $this->prophesize(Route ::CLASS);
+     $route_prophecy->getPath()->willReturn('/admin/config/people/accounts');
+ 
+-    $route_collection_prophecy = $this->prophesize(\Symfony\Component\Routing\RouteCollection::CLASS);
++    $route_collection_prophecy = $this->prophesize(RouteCollection::CLASS);
+     $route_collection_prophecy->get($user_entity_type->get('field_ui_base_route'))
+       ->willReturn($route_prophecy->reveal());
+ 
+@@ -77,7 +84,7 @@ class AdminUIHandlerTest extends KernelTestBase {
+     $property->setAccessible(TRUE);
+     $real_user_handler = $property->getValue($user_handler);
+ 
+-    $this->assertEquals(\Drupal\entity_ui\EntityHandler\BasicFieldUI::class, get_class($real_user_handler));
++    $this->assertEquals(BasicFieldUI::class, get_class($real_user_handler));
+   }
+ 
+ }

@@ -1,0 +1,1196 @@
+diff --git a/menu_item_extras.install b/menu_item_extras.install
+index a2e360a..b013d69 100644
+--- a/menu_item_extras.install
++++ b/menu_item_extras.install
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\menu_item_extras\Service\MenuLinkContentService;
++use Drupal\Core\Database\Query\SelectInterface;
+ /**
+  * @file
+  * Contains install/uninstall functionality of module.
+@@ -13,7 +15,7 @@ function menu_item_extras_install() {
+   $menus = \Drupal::entityTypeManager()
+     ->getStorage('menu')
+     ->loadMultiple();
+-  /** @var \Drupal\menu_item_extras\Service\MenuLinkContentService $mlc_helper */
++  /** @var MenuLinkContentService $mlc_helper */
+   $mlc_helper = \Drupal::service('menu_item_extras.menu_link_content_helper');
+   $mlc_helper->doEntityUpdate();
+   $mlc_helper->updateMenuLinkContentBundle();
+@@ -33,7 +35,7 @@ function menu_item_extras_uninstall() {
+   $menus = \Drupal::entityTypeManager()
+     ->getStorage('menu')
+     ->loadMultiple();
+-  /** @var \Drupal\menu_item_extras\Service\MenuLinkContentService $mlc_helper */
++  /** @var MenuLinkContentService $mlc_helper */
+   $mlc_helper = \Drupal::service('menu_item_extras.menu_link_content_helper');
+   $mlc_helper->doEntityUpdate();
+   $mlc_helper->doBundleFieldUpdate();
+@@ -55,7 +57,7 @@ function menu_item_extras_uninstall() {
+  * Collect data to update.
+  */
+ function menu_item_extras_update_8021(&$sandbox) {
+-  /** @var \Drupal\Core\Database\Query\SelectInterface $query */
++  /** @var SelectInterface $query */
+   $query = \Drupal::database()
+     ->select('menu_link_content_data', 'md')
+     ->fields('md', [
+@@ -105,7 +107,7 @@ function menu_item_extras_update_8023(&$sandbox) {
+  * Update entity definitions after disabling automated entity updates.
+  */
+ function menu_item_extras_update_8024(&$sandbox) {
+-  /** @var \Drupal\menu_item_extras\Service\MenuLinkContentService $mlc_helper */
++  /** @var MenuLinkContentService $mlc_helper */
+   $mlc_helper = \Drupal::service('menu_item_extras.menu_link_content_helper');
+   $entity_type = \Drupal::entityTypeManager()->getDefinition('menu_link_content');
+   \Drupal::service('entity.definition_update_manager')->updateFieldableEntityType($entity_type, \Drupal::service('entity_field.manager')->getFieldStorageDefinitions('menu_link_content'), $sandbox);
+diff --git a/menu_item_extras.module b/menu_item_extras.module
+index 0eece7b..fbc902d 100644
+--- a/menu_item_extras.module
++++ b/menu_item_extras.module
+@@ -1,5 +1,15 @@
+ <?php
+ 
++use Drupal\Core\Entity\ContentEntityTypeInterface;
++use Drupal\Core\Config\Entity\ConfigEntityTypeInterface;
++use Drupal\menu_link_content\MenuLinkContentInterface;
++use Drupal\menu_item_extras\Service\MenuLinkContentServiceInterface;
++use Drupal\Core\Config\Entity\ConfigEntityStorageInterface;
++use Drupal\block\BlockInterface;
++use Drupal\menu_link_content\Form\MenuLinkContentForm;
++use Drupal\menu_link_content\Entity\MenuLinkContent;
++use Drupal\Core\Extension\ModuleHandlerInterface;
++use Drupal\menu_item_extras\Service\MenuLinkContentService;
+ /**
+  * @file
+  * Manage fields for the menu items.
+@@ -36,7 +46,7 @@ function menu_item_extras_help($route_name, RouteMatchInterface $route_match) {
+           '#value' => t('Provides additional custom fields which can be used on Menu Link.'),
+         ],
+       ];
+-      return render($output);
++      return \Drupal::service('renderer')->render($output);
+   }
+ }
+ 
+@@ -47,7 +57,7 @@ function menu_item_extras_entity_type_build(array &$entity_types) {
+   if (\Drupal::service('config.factory')->get('menu_item_extras.utility')->get('entity_type_build_status')) {
+     $content_entity = 'menu_link_content';
+     // Set entity type to be bundled.
+-    /** @var \Drupal\Core\Entity\ContentEntityTypeInterface $mlc */
++    /** @var ContentEntityTypeInterface $mlc */
+     $mlc = $entity_types[$content_entity];
+     $mlc->setClass(MenuItemExtrasMenuLinkContent::class);
+     // Set handler for views.
+@@ -55,7 +65,7 @@ function menu_item_extras_entity_type_build(array &$entity_types) {
+     $mlc->set('bundle_entity_type', 'menu');
+     $mlc->set('field_ui_base_route', 'entity.menu.edit_form');
+     // Set entity to be a bundle entity type for previous entity.
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityTypeInterface $menu */
++    /** @var ConfigEntityTypeInterface $menu */
+     $menu = $entity_types['menu'];
+     $menu->set('bundle_of', $content_entity);
+     $entity_types['menu']
+@@ -95,9 +105,9 @@ function menu_item_extras_entity_base_field_info(EntityTypeInterface $entity_typ
+  * Implements hook_ENTITY_TYPE_presave().
+  */
+ function menu_item_extras_menu_link_content_presave(EntityInterface $entity) {
+-  /** @var \Drupal\menu_link_content\MenuLinkContentInterface $entity */
++  /** @var MenuLinkContentInterface $entity */
+   if (!empty($entity->original) && ($entity->original->getMenuName() !== $entity->getMenuName())) {
+-    /** @var \Drupal\menu_item_extras\Service\MenuLinkContentServiceInterface $menu_links_helper */
++    /** @var MenuLinkContentServiceInterface $menu_links_helper */
+     $menu_links_helper = \Drupal::service('menu_item_extras.menu_link_content_helper');
+     $menu_links_helper->cleanupFields($entity);
+     $entity->set('bundle', $entity->getMenuName());
+@@ -143,10 +153,10 @@ function menu_item_extras_preprocess_block(&$variables) {
+     // Pass region name to the suggestions_menu_alter for
+     // the region suggestion.
+     if (!empty($variables['elements']['#id'])) {
+-      /** @var \Drupal\Core\Config\Entity\ConfigEntityStorageInterface $block_storage */
++      /** @var ConfigEntityStorageInterface $block_storage */
+       $block_storage = \Drupal::entityTypeManager()
+         ->getStorage('block');
+-      /** @var \Drupal\block\BlockInterface $block */
++      /** @var BlockInterface $block */
+       $block = $block_storage->load($variables['elements']['#id']);
+       if (!empty($block)) {
+         $variables['content']['#attributes']['data-region'] = $block->getRegion();
+@@ -160,7 +170,7 @@ function menu_item_extras_preprocess_block(&$variables) {
+  */
+ function menu_item_extras_theme_suggestions_menu_link_content(array $variables) {
+   $suggestions = [];
+-  /** @var \Drupal\menu_item_extras\Utility\Utility $utility */
++  /** @var Utility $utility */
+   $utility = \Drupal::service('menu_item_extras.utility');
+   /* @var \Drupal\menu_link_content\Entity\MenuLinkContent $entity */
+   $entity = $variables['elements']['#menu_link_content'];
+@@ -189,7 +199,7 @@ function menu_item_extras_theme_suggestions_menu_link_content(array $variables)
+ function menu_item_extras_theme_suggestions_menu_levels(array $variables) {
+   $suggestions = [];
+   $suggestion_prefix = 'menu_levels';
+-  /** @var \Drupal\menu_item_extras\Utility\Utility $utility */
++  /** @var Utility $utility */
+   $utility = \Drupal::service('menu_item_extras.utility');
+ 
+   $menu_name = $utility::sanitizeMachineName($variables['element']['#menu_name']);
+@@ -213,7 +223,7 @@ function menu_item_extras_theme_suggestions_menu_levels(array $variables) {
+ function menu_item_extras_theme_suggestions_menu_alter(array &$suggestions, array $variables) {
+   if (isset($variables['menu_name'])) {
+     $menu_name = $variables['menu_name'];
+-    /** @var \Drupal\menu_item_extras\Utility\Utility $utility */
++    /** @var Utility $utility */
+     $utility = \Drupal::service('menu_item_extras.utility');
+     $menu_name = $utility::sanitizeMachineName($menu_name);
+     if (Utility::checkBundleHasExtraFieldsThanEntity('menu_link_content', $variables['menu_name'])) {
+@@ -247,9 +257,9 @@ function menu_item_extras_preprocess_menu(&$variables) {
+  * Implements hook_form_BASE_FORM_ID_alter().
+  */
+ function menu_item_extras_form_menu_link_content_form_alter(array &$form, FormStateInterface $form_state) {
+-  /** @var \Drupal\menu_link_content\Form\MenuLinkContentForm $form_object */
++  /** @var MenuLinkContentForm $form_object */
+   $form_object = $form_state->getBuildInfo()['callback_object'];
+-  /** @var \Drupal\menu_link_content\Entity\MenuLinkContent $entity */
++  /** @var MenuLinkContent $entity */
+   $entity = $form_object->getEntity();
+   $bundle = $entity->bundle();
+   foreach ($form['menu_parent']['#options'] as $option_id => $option) {
+@@ -285,7 +295,7 @@ function menu_item_extras_form_menu_edit_form_alter(array &$form, FormStateInter
+  * Implements hook_form_BASE_FORM_ID_alter() for node_form.
+  */
+ function menu_item_extras_form_node_form_alter(array &$form, FormStateInterface $form_state, $form_id) {
+-  /** @var \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler */
++  /** @var ModuleHandlerInterface $moduleHandler */
+   $moduleHandler = \Drupal::service('module_handler');
+   if ($moduleHandler->moduleExists('menu_ui') && !empty($form['actions'])) {
+     foreach (array_keys($form['actions']) as $action) {
+@@ -303,7 +313,7 @@ function menu_item_extras_form_node_form_alter(array &$form, FormStateInterface
+  * Implements hook_menu_insert().
+  */
+ function menu_item_extras_menu_insert(EntityInterface $entity) {
+-  /** @var \Drupal\menu_item_extras\Service\MenuLinkContentService $mlc_helper */
++  /** @var MenuLinkContentService $mlc_helper */
+   $mlc_helper = \Drupal::service('menu_item_extras.menu_link_content_helper');
+   $mlc_helper->installViewModeField();
+   $mlc_helper->updateMenuItemsBundle($entity->id());
+@@ -352,7 +362,7 @@ function menu_item_extras_entity_view_alter(array &$build, EntityInterface $enti
+  */
+ function menu_item_extras_theme_suggestions_field_alter(array &$suggestions, array $variables) {
+   if ($variables['element']['#entity_type'] === 'menu_link_content') {
+-    /** @var \Drupal\menu_item_extras\Utility\Utility $utility */
++    /** @var Utility $utility */
+     $utility = \Drupal::service('menu_item_extras.utility');
+     foreach ($suggestions as $key => $suggestion) {
+       $suggestions[$key] = $utility::sanitizeMachineName($suggestion);
+diff --git a/menu_item_extras.post_update.php b/menu_item_extras.post_update.php
+index 8bb3e30..8f4ff77 100644
+--- a/menu_item_extras.post_update.php
++++ b/menu_item_extras.post_update.php
+@@ -1,10 +1,11 @@
+ <?php
+ 
++use Drupal\menu_item_extras\Service\UpdateHelper;
++use Drupal\menu_link_content\MenuLinkContentInterface;
+ /**
+  * @file
+  * Contains install/uninstall functionality of module.
+  */
+-
+ /**
+  * Finalize 1.x to 2.x update path.
+  */
+@@ -19,7 +20,7 @@ function menu_item_extras_post_update_1x_to_2x(&$sandbox) {
+     $link_storage = \Drupal::entityTypeManager()
+       ->getStorage('menu_link_content');
+ 
+-    /** @var \Drupal\menu_item_extras\Service\UpdateHelper $updater */
++    /** @var UpdateHelper $updater */
+     $updater = \Drupal::service('menu_item_extras.update');
+ 
+     $field_storage = $updater->checkBodyFieldStorage(
+@@ -27,7 +28,7 @@ function menu_item_extras_post_update_1x_to_2x(&$sandbox) {
+     );
+ 
+     foreach ($result as $id => $item) {
+-      /** @var \Drupal\menu_link_content\MenuLinkContentInterface $entity */
++      /** @var MenuLinkContentInterface $entity */
+       $entity = $link_storage->load($id);
+ 
+       $updater->checkBodyField(
+diff --git a/modules/mie_demo_base/mie_demo_base.install b/modules/mie_demo_base/mie_demo_base.install
+index 5cae817..6c566b5 100644
+--- a/modules/mie_demo_base/mie_demo_base.install
++++ b/modules/mie_demo_base/mie_demo_base.install
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\block\BlockInterface;
++use Drupal\Core\Messenger\MessengerInterface;
+ /**
+  * @file
+  * Installation hooks for mie_demo_base module.
+@@ -119,7 +121,7 @@ function mie_demo_base_install() {
+   $regions = array_keys(system_region_list($default_theme_name));
+   $region = 'primary_menu';
+   $pluginId = 'system_menu_block:mie-demo-base-menu';
+-  /** @var \Drupal\block\BlockInterface $block */
++  /** @var BlockInterface $block */
+   $block = \Drupal::entityTypeManager()->getStorage('block')
+     ->create([
+       'id' => 'menuitemextrasdemomenuq',
+@@ -148,7 +150,7 @@ function mie_demo_base_install() {
+         'block' => $block->id(),
+       ]
+     );
+-    /** @var \Drupal\Core\Messenger\MessengerInterface $messenger */
++    /** @var MessengerInterface $messenger */
+     $messenger = \Drupal::service('messenger');
+     $messenger->addStatus(t(
+       'There is no <b>%region</b> region in the current theme. Please go to the %link to correctly set block placement configuration.',
+diff --git a/modules/mie_demo_base/mie_demo_base.module b/modules/mie_demo_base/mie_demo_base.module
+index ef30bb3..18be704 100644
+--- a/modules/mie_demo_base/mie_demo_base.module
++++ b/modules/mie_demo_base/mie_demo_base.module
+@@ -44,7 +44,7 @@ function mie_demo_base_preprocess_menu(&$variables) {
+  * Implements hook_preprocess().
+  */
+ function mie_demo_base_preprocess(&$variables, $hook, &$info) {
+-  $module_path = drupal_get_path('module', 'mie_demo_base');
++  $module_path = \Drupal::service('extension.list.module')->getPath('mie_demo_base');
+ 
+   if ($hook == 'menu') {
+     if (substr($info['theme path'], 0, 7) != 'themes/') {
+diff --git a/modules/mie_demo_base/src/Utility/MieDemoBaseUtility.php b/modules/mie_demo_base/src/Utility/MieDemoBaseUtility.php
+index ce76828..1d1defe 100644
+--- a/modules/mie_demo_base/src/Utility/MieDemoBaseUtility.php
++++ b/modules/mie_demo_base/src/Utility/MieDemoBaseUtility.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mie_demo_base\Utility;
+ 
++use Drupal\file\FileInterface;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\file\Entity\File;
+ use Drupal\Core\StreamWrapper\PublicStream;
+@@ -21,13 +22,13 @@ class MieDemoBaseUtility {
+    * @param string $module_path
+    *   Module path that contains files directory.
+    *
+-   * @return \Drupal\file\Entity\File
++   * @return File
+    *   Drupal File entity.
+    */
+   public static function createFile($file_name, $module_path = 'mie_demo_base') {
+-    $source = drupal_get_path('module', 'mie_demo_base') . '/files/' . $file_name;
++    $source = \Drupal::service('extension.list.module')->getPath('mie_demo_base') . '/files/' . $file_name;
+     $destination = PublicStream::basePath();
+-    /** @var \Drupal\Core\File\FileSystemInterface $file_system */
++    /** @var FileSystemInterface $file_system */
+     $file_system = \Drupal::service('file_system');
+     try {
+       $file_system->copy($source, $destination, FileSystemInterface::EXISTS_RENAME);
+@@ -35,7 +36,7 @@ class MieDemoBaseUtility {
+     catch (\Exception $e) {
+     }
+     $demo_image_uri = 'public://' . $file_name;
+-    /** @var \Drupal\file\FileInterface $file */
++    /** @var FileInterface $file */
+     $demo_image = File::create(['uri' => $demo_image_uri, 'status' => FILE_STATUS_PERMANENT]);
+     $demo_image->save();
+     return $demo_image;
+@@ -48,10 +49,10 @@ class MieDemoBaseUtility {
+    *   New term name.
+    * @param string $description
+    *   (optional) New term description.
+-   * @param \Drupal\file\Entity\File $file
++   * @param File $file
+    *   (optional) File for the term field `field_mie_image`.
+    *
+-   * @return \Drupal\taxonomy\Entity\Term
++   * @return Term
+    *   Drupal Term entity.
+    */
+   public static function createMieDemoContentTerm($term_name, $description = NULL, File $file = NULL) {
+@@ -97,12 +98,12 @@ class MieDemoBaseUtility {
+    *   (optional) Show as expanded menu link.
+    * @param string $field_body_value
+    *   (optional) Value for menu link body field.
+-   * @param \Drupal\taxonomy\Entity\Term[] $taxonomy_terms
++   * @param Term[] $taxonomy_terms
+    *   (optional) Taxonomy terms for attaching to menu link.
+    * @param string $image_file_id
+    *   (optional) File ID for image field.
+    *
+-   * @return \Drupal\menu_link_content\Entity\MenuLinkContent
++   * @return MenuLinkContent
+    *   Drupal Menu Link Content entity.
+    */
+   public static function createMieDemoBaseMenuMenuLinkContent($title, $uri, $weight = 0, $description = '', $parent_uuid = '', $view_mode = '', $show_expanded = FALSE, $field_body_value = '', array $taxonomy_terms = NULL, $image_file_id = NULL) {
+diff --git a/src/Commands/MenuItemExtrasCommands.php b/src/Commands/MenuItemExtrasCommands.php
+index 4cd107b..06abc2c 100644
+--- a/src/Commands/MenuItemExtrasCommands.php
++++ b/src/Commands/MenuItemExtrasCommands.php
+@@ -13,7 +13,7 @@ class MenuItemExtrasCommands extends DrushCommands {
+   /**
+    * Drupal\menu_item_extras\Service\MenuLinkContentServiceInterface definition.
+    *
+-   * @var \Drupal\menu_item_extras\Service\MenuLinkContentServiceInterface
++   * @var MenuLinkContentServiceInterface
+    */
+   protected $menuLinkContentService;
+ 
+diff --git a/src/Controller/MenuController.php b/src/Controller/MenuController.php
+index 6d289b7..4eba782 100644
+--- a/src/Controller/MenuController.php
++++ b/src/Controller/MenuController.php
+@@ -15,14 +15,14 @@ class MenuController extends ControllerBase {
+   /**
+    * The menu link content service helper.
+    *
+-   * @var \Drupal\menu_item_extras\Service\MenuLinkContentServiceInterface
++   * @var MenuLinkContentServiceInterface
+    */
+   protected $menuLinkContentHelper;
+ 
+   /**
+    * Constructs a new \Drupal\menu_item_extras\Controller\MenuController object.
+    *
+-   * @param \Drupal\menu_item_extras\Service\MenuLinkContentServiceInterface $menuLinkContentHelper
++   * @param MenuLinkContentServiceInterface $menuLinkContentHelper
+    *   The menu link content service helper.
+    */
+   public function __construct(MenuLinkContentServiceInterface $menuLinkContentHelper) {
+@@ -41,7 +41,7 @@ class MenuController extends ControllerBase {
+   /**
+    * Provides the menu link creation form.
+    *
+-   * @param \Drupal\system\MenuInterface $menu
++   * @param MenuInterface $menu
+    *   An entity representing a custom menu.
+    *
+    * @deprecated in 2.11 and is removed from 3.0.0. https://www.drupal.org/project/drupal/issues/2923429.
+diff --git a/src/Entity/MenuItemExtrasMenuLinkContent.php b/src/Entity/MenuItemExtrasMenuLinkContent.php
+index 97f0880..8403fc0 100644
+--- a/src/Entity/MenuItemExtrasMenuLinkContent.php
++++ b/src/Entity/MenuItemExtrasMenuLinkContent.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\menu_item_extras\Entity;
+ 
++use Drupal\Core\Entity\ContentEntityStorageInterface;
++use Drupal\Core\Menu\MenuLinkManagerInterface;
++use Drupal\Core\Menu\MenuLinkInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Url;
+@@ -45,7 +48,7 @@ class MenuItemExtrasMenuLinkContent extends MenuLinkContent implements MenuItemE
+       // in MenuLinkTreeHandler::getMenuLinkItemContent().
+       if (strpos($parent_id, self::MENU_LINK_CONTENT_PREFIX) === 0) {
+         $parent_uuid = substr($parent_id, strlen(self::MENU_LINK_CONTENT_PREFIX));
+-        /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $storage */
++        /** @var ContentEntityStorageInterface $storage */
+         $storage = $this->entityTypeManager()
+           ->getStorage($this->getEntityTypeId());
+         $loaded_entities = $storage->loadByProperties(['uuid' => $parent_uuid]);
+@@ -56,12 +59,12 @@ class MenuItemExtrasMenuLinkContent extends MenuLinkContent implements MenuItemE
+         }
+       }
+       else {
+-        /** @var \Drupal\Core\Menu\MenuLinkManagerInterface $menu_link_manager */
++        /** @var MenuLinkManagerInterface $menu_link_manager */
+         $menu_link_manager = \Drupal::service('plugin.manager.menu.link');
+ 
+         if ($menu_link_manager->hasDefinition($parent_id)) {
+ 
+-          /** @var \Drupal\Core\Menu\MenuLinkInterface $parent */
++          /** @var MenuLinkInterface $parent */
+           $parent = $menu_link_manager->createInstance($parent_id);
+ 
+           if ($parent) {
+diff --git a/src/EventSubscriber/ConfigSubscriber.php b/src/EventSubscriber/ConfigSubscriber.php
+index 181dfe8..4eceacb 100644
+--- a/src/EventSubscriber/ConfigSubscriber.php
++++ b/src/EventSubscriber/ConfigSubscriber.php
+@@ -17,14 +17,14 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * The Config Installer.
+    *
+-   * @var \Drupal\Core\Config\ConfigInstallerInterface
++   * @var ConfigInstallerInterface
+    */
+   protected $configInstaller;
+ 
+   /**
+    * Constructs a ConfigSubscriber object.
+    *
+-   * @param \Drupal\Core\Config\ConfigInstallerInterface $configInstaller
++   * @param ConfigInstallerInterface $configInstaller
+    *   The Config Installer.
+    */
+   public function __construct(ConfigInstallerInterface $configInstaller) {
+@@ -43,7 +43,7 @@ class ConfigSubscriber implements EventSubscriberInterface {
+    * Adds a module dependency for all config files that are associated with a
+    * view_mode field on the menu_link_content entity during the config export.
+    *
+-   * @param \Drupal\Core\Config\StorageTransformEvent $event
++   * @param StorageTransformEvent $event
+    *   The configuration event.
+    */
+   public function onConfigExport(StorageTransformEvent $event) {
+diff --git a/src/Form/ConfirmClearMenuForm.php b/src/Form/ConfirmClearMenuForm.php
+index a0fbaeb..3d98e10 100644
+--- a/src/Form/ConfirmClearMenuForm.php
++++ b/src/Form/ConfirmClearMenuForm.php
+@@ -18,14 +18,14 @@ class ConfirmClearMenuForm extends EntityConfirmFormBase {
+   /**
+    * The menu link content service helper.
+    *
+-   * @var \Drupal\menu_item_extras\Service\MenuLinkContentServiceInterface
++   * @var MenuLinkContentServiceInterface
+    */
+   protected $menuLinkContentHelper;
+ 
+   /**
+    * Constructs a new \Drupal\menu_item_extras\Form\ConfirmClearMenuForm object.
+    *
+-   * @param \Drupal\menu_item_extras\Service\MenuLinkContentServiceInterface $menuLinkContentHelper
++   * @param MenuLinkContentServiceInterface $menuLinkContentHelper
+    *   The menu link content service helper.
+    */
+   public function __construct(MenuLinkContentServiceInterface $menuLinkContentHelper) {
+diff --git a/src/MenuItemExtrasUninstallValidator.php b/src/MenuItemExtrasUninstallValidator.php
+index f3eea80..9086565 100644
+--- a/src/MenuItemExtrasUninstallValidator.php
++++ b/src/MenuItemExtrasUninstallValidator.php
+@@ -18,16 +18,16 @@ class MenuItemExtrasUninstallValidator implements ModuleUninstallValidatorInterf
+   /**
+    * The current database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new MenuItemExtrasUninstallValidator.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The current database connection.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation service.
+    */
+   public function __construct(Connection $connection, TranslationInterface $string_translation) {
+diff --git a/src/MenuItemExtrasViewModesSettingsForm.php b/src/MenuItemExtrasViewModesSettingsForm.php
+index 12f5bee..bde3f6b 100644
+--- a/src/MenuItemExtrasViewModesSettingsForm.php
++++ b/src/MenuItemExtrasViewModesSettingsForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\menu_item_extras;
+ 
++use Drupal\system\MenuInterface;
++use Drupal\Core\Menu\MenuLinkInterface;
+ use Drupal\Component\Utility\NestedArray;
+ use Drupal\Core\Cache\CacheableMetadata;
+ use Drupal\Core\Entity\EntityForm;
+@@ -25,35 +27,35 @@ class MenuItemExtrasViewModesSettingsForm extends EntityForm {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The menu tree service.
+    *
+-   * @var \Drupal\Core\Menu\MenuLinkTreeInterface
++   * @var MenuLinkTreeInterface
+    */
+   protected $menuTree;
+ 
+   /**
+    * The link generator.
+    *
+-   * @var \Drupal\Core\Utility\LinkGeneratorInterface
++   * @var LinkGeneratorInterface
+    */
+   protected $linkGenerator;
+ 
+   /**
+    * The custom menu link tree service.
+    *
+-   * @var \Drupal\menu_item_extras\Service\MenuLinkTreeHandlerInterface
++   * @var MenuLinkTreeHandlerInterface
+    */
+   protected $menuLinkTreeHandler;
+ 
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   private $entityDisplayRepository;
+ 
+@@ -67,15 +69,15 @@ class MenuItemExtrasViewModesSettingsForm extends EntityForm {
+   /**
+    * Constructs a MenuForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Menu\MenuLinkTreeInterface $menu_tree
++   * @param MenuLinkTreeInterface $menu_tree
+    *   The menu tree service.
+-   * @param \Drupal\Core\Utility\LinkGeneratorInterface $link_generator
++   * @param LinkGeneratorInterface $link_generator
+    *   The link generator.
+-   * @param \Drupal\menu_item_extras\Service\MenuLinkTreeHandlerInterface $menu_link_tree_handler
++   * @param MenuLinkTreeHandlerInterface $menu_link_tree_handler
+    *   The custom menu link tree service.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entityDisplayRepository
++   * @param EntityDisplayRepositoryInterface $entityDisplayRepository
+    *   The entity display repository.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, MenuLinkTreeInterface $menu_tree, LinkGeneratorInterface $link_generator, MenuLinkTreeHandlerInterface $menu_link_tree_handler, EntityDisplayRepositoryInterface $entityDisplayRepository) {
+@@ -120,7 +122,7 @@ class MenuItemExtrasViewModesSettingsForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\system\MenuInterface $menu */
++    /** @var MenuInterface $menu */
+     $menu = $this->entity;
+     $status = $menu->save();
+     if ($status == SAVED_UPDATED) {
+@@ -218,7 +220,7 @@ class MenuItemExtrasViewModesSettingsForm extends EntityForm {
+   /**
+    * Recursive helper function for buildOverviewForm().
+    *
+-   * @param \Drupal\Core\Menu\MenuLinkTreeElement[] $tree
++   * @param MenuLinkTreeElement[] $tree
+    *   The tree retrieved by \Drupal\Core\Menu\MenuLinkTreeInterface::load().
+    * @param int $delta
+    *   The default number of menu items used in the menu weight selector is 50.
+@@ -237,7 +239,7 @@ class MenuItemExtrasViewModesSettingsForm extends EntityForm {
+         continue;
+       }
+ 
+-      /** @var \Drupal\Core\Menu\MenuLinkInterface $link */
++      /** @var MenuLinkInterface $link */
+       $link = $element->link;
+       $metadata = $link->getMetaData();
+       if ($link && !empty($metadata['entity_id'])) {
+diff --git a/src/Plugin/Field/FieldWidget/MenuItemExtrasViewModeSelectorSelect.php b/src/Plugin/Field/FieldWidget/MenuItemExtrasViewModeSelectorSelect.php
+index b2b096e..285ddbd 100644
+--- a/src/Plugin/Field/FieldWidget/MenuItemExtrasViewModeSelectorSelect.php
++++ b/src/Plugin/Field/FieldWidget/MenuItemExtrasViewModeSelectorSelect.php
+@@ -33,7 +33,7 @@ class MenuItemExtrasViewModeSelectorSelect extends WidgetBase implements Contain
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   private $entityDisplayRepository;
+ 
+@@ -44,15 +44,15 @@ class MenuItemExtrasViewModeSelectorSelect extends WidgetBase implements Contain
+    *   The plugin_id for the formatter.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The definition of the field to which the formatter is associated.
+    * @param array $settings
+    *   The formatter settings.
+    * @param array $third_party_settings
+    *   Any third party settings.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entityDisplayRepository
++   * @param EntityDisplayRepositoryInterface $entityDisplayRepository
+    *   The entity display repository.
+    */
+   public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, array $third_party_settings, EntityTypeManagerInterface $entityTypeManager, EntityDisplayRepositoryInterface $entityDisplayRepository) {
+@@ -73,7 +73,7 @@ class MenuItemExtrasViewModeSelectorSelect extends WidgetBase implements Contain
+   /**
+    * Extracts from form state menu link view modes.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $items
++   * @param FieldItemListInterface $items
+    *   Array of default values for this field.
+    * @param int $delta
+    *   The order of this item in the array of sub-elements (0, 1, 2, etc.).
+@@ -82,7 +82,7 @@ class MenuItemExtrasViewModeSelectorSelect extends WidgetBase implements Contain
+    * @param array $form
+    *   The form structure where widgets are being attached to. This might be a
+    *   full form structure, or a sub-element of a larger form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+@@ -105,7 +105,7 @@ class MenuItemExtrasViewModeSelectorSelect extends WidgetBase implements Contain
+   /**
+    * Checks that menu has extra fields.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $items
++   * @param FieldItemListInterface $items
+    *   Array of default values for this field.
+    * @param int $delta
+    *   The order of this item in the array of sub-elements (0, 1, 2, etc.).
+@@ -114,7 +114,7 @@ class MenuItemExtrasViewModeSelectorSelect extends WidgetBase implements Contain
+    * @param array $form
+    *   The form structure where widgets are being attached to. This might be a
+    *   full form structure, or a sub-element of a larger form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return bool
+diff --git a/src/Plugin/views/argument_default/MenuLinkContentId.php b/src/Plugin/views/argument_default/MenuLinkContentId.php
+index cb2b179..99df2bb 100644
+--- a/src/Plugin/views/argument_default/MenuLinkContentId.php
++++ b/src/Plugin/views/argument_default/MenuLinkContentId.php
+@@ -2,6 +2,13 @@
+ 
+ namespace Drupal\menu_item_extras\Plugin\views\argument_default;
+ 
++use Drupal\system\Entity\Menu;
++use Drupal\Core\Menu\MenuTreeParameters;
++use Drupal\Core\Menu\MenuLinkTreeElement;
++use Drupal\Core\Menu\MenuLinkInterface;
++use Drupal\menu_link_content\Plugin\Menu\MenuLinkContent;
++use Drupal\Core\Url;
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Cache\CacheableDependencyInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -25,28 +32,28 @@ class MenuLinkContentId extends ArgumentDefaultPluginBase implements CacheableDe
+   /**
+    * The route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Menu tree.
+    *
+-   * @var \Drupal\Core\Menu\MenuLinkTreeInterface
++   * @var MenuLinkTreeInterface
+    */
+   protected $menuTree;
+ 
+   /**
+    * Current request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $currentRequest;
+ 
+@@ -59,13 +66,13 @@ class MenuLinkContentId extends ArgumentDefaultPluginBase implements CacheableDe
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Menu\MenuLinkTreeInterface $menu_tree
++   * @param MenuLinkTreeInterface $menu_tree
+    *   Menu tree.
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   Current request.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, RouteMatchInterface $route_match, EntityTypeManagerInterface $entity_type_manager, MenuLinkTreeInterface $menu_tree, Request $request) {
+@@ -106,7 +113,7 @@ class MenuLinkContentId extends ArgumentDefaultPluginBase implements CacheableDe
+    */
+   public function buildOptionsForm(&$form, FormStateInterface $form_state) {
+     $options = [];
+-    /** @var \Drupal\system\Entity\Menu[] $menus */
++    /** @var Menu[] $menus */
+     $menus = $this->getMenus();
+     foreach ($menus as $menu) {
+       $options[$menu->id()] = $menu->label();
+@@ -131,15 +138,15 @@ class MenuLinkContentId extends ArgumentDefaultPluginBase implements CacheableDe
+   public function getArgument() {
+     if ($this->options['menu']) {
+       $current_path = $this->currentRequest->getPathInfo();
+-      /** @var \Drupal\Core\Menu\MenuTreeParameters $parameters */
++      /** @var MenuTreeParameters $parameters */
+       $parameters = $this->menuTree->getCurrentRouteMenuTreeParameters($this->options['menu']);
+       $parameters->onlyEnabledLinks();
+-      /** @var \Drupal\Core\Menu\MenuLinkTreeElement[] $menu_level */
++      /** @var MenuLinkTreeElement[] $menu_level */
+       $menu_level = $this->menuTree->load($this->options['menu'], $parameters);
+-      /** @var \Drupal\Core\Menu\MenuLinkTreeElement $active_item */
++      /** @var MenuLinkTreeElement $active_item */
+       $active_item = $this->getActiveMenuItem($menu_level, $current_path);
+       if ($active_item) {
+-        /** @var \Drupal\Core\Menu\MenuLinkInterface $link */
++        /** @var MenuLinkInterface $link */
+         $link = $active_item->link;
+         $metadata = $link->getMetaData();
+         return $metadata['entity_id'];
+@@ -155,17 +162,17 @@ class MenuLinkContentId extends ArgumentDefaultPluginBase implements CacheableDe
+    * @param string $current_path
+    *   Current path.
+    *
+-   * @return \Drupal\Core\Menu\MenuLinkTreeElement|null
++   * @return MenuLinkTreeElement|null
+    *   Active menu item.
+    */
+   public function getActiveMenuItem(array $menu_level, $current_path) {
+     $active_item = NULL;
+-    /** @var \Drupal\Core\Menu\MenuLinkTreeElement[] $menu_level */
++    /** @var MenuLinkTreeElement[] $menu_level */
+     foreach ($menu_level as $menu_item) {
+       if ($menu_item->inActiveTrail) {
+-        /** @var \Drupal\menu_link_content\Plugin\Menu\MenuLinkContent $link */
++        /** @var MenuLinkContent $link */
+         $link = $menu_item->link;
+-        /** @var \Drupal\Core\Url $url_object */
++        /** @var Url $url_object */
+         $url_object = $link->getUrlObject();
+         $item_path = $url_object->toString();
+         if ($item_path === $current_path) {
+@@ -205,7 +212,7 @@ class MenuLinkContentId extends ArgumentDefaultPluginBase implements CacheableDe
+   /**
+    * Get menus.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface[]
++   * @return EntityInterface[]
+    *   List of menu entities.
+    */
+   public function getMenus() {
+diff --git a/src/ProxyClass/MenuItemExtrasUninstallValidator.php b/src/ProxyClass/MenuItemExtrasUninstallValidator.php
+index c961039..f1e14bf 100644
+--- a/src/ProxyClass/MenuItemExtrasUninstallValidator.php
++++ b/src/ProxyClass/MenuItemExtrasUninstallValidator.php
+@@ -38,14 +38,14 @@ namespace Drupal\menu_item_extras\ProxyClass {
+         /**
+          * The service container.
+          *
+-         * @var \Symfony\Component\DependencyInjection\ContainerInterface
++         * @var ContainerInterface
+          */
+         protected $container;
+ 
+         /**
+          * Constructs a ProxyClass Drupal proxy object.
+          *
+-         * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++         * @param ContainerInterface $container
+          *   The container.
+          * @param string $drupal_proxy_original_service_id
+          *   The service ID of the original service.
+diff --git a/src/Service/MenuLinkContentService.php b/src/Service/MenuLinkContentService.php
+index c2e6027..d1816d3 100644
+--- a/src/Service/MenuLinkContentService.php
++++ b/src/Service/MenuLinkContentService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\menu_item_extras\Service;
+ 
++use Drupal\Core\Entity\EntityFormInterface;
+ use Drupal\Core\DependencyInjection\DependencySerializationTrait;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityDefinitionUpdateManagerInterface;
+@@ -27,59 +28,59 @@ class MenuLinkContentService implements MenuLinkContentServiceInterface {
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+    * Entity definition update manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityDefinitionUpdateManagerInterface
++   * @var EntityDefinitionUpdateManagerInterface
+    */
+   private $entityDefinitionUpdateManager;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   private $entityFieldManager;
+ 
+   /**
+    * The field storage definition listener.
+    *
+-   * @var \Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface
++   * @var EntityLastInstalledSchemaRepositoryInterface
+    */
+   private $fieldStorageDefinitionListener;
+ 
+   /**
+    * The entity last installed schema repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface
++   * @var EntityLastInstalledSchemaRepositoryInterface
+    */
+   private $entityLastInstalledSchemaRepository;
+ 
+   /**
+    * The current database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * MenuLinkContentHelper constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Entity\EntityDefinitionUpdateManagerInterface $entityDefinitionUpdateManager
++   * @param EntityDefinitionUpdateManagerInterface $entityDefinitionUpdateManager
+    *   Entity definition update manager.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entityFieldManager
++   * @param EntityFieldManagerInterface $entityFieldManager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Field\FieldStorageDefinitionListenerInterface $fieldStorageDefinitionListener
++   * @param FieldStorageDefinitionListenerInterface $fieldStorageDefinitionListener
+    *   The field storage definition listener.
+-   * @param \Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface $entityLastInstalledSchemaRepository
++   * @param EntityLastInstalledSchemaRepositoryInterface $entityLastInstalledSchemaRepository
+    *   The entity last installed schema repository.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The current database connection.
+    */
+   public function __construct(EntityTypeManagerInterface $entityTypeManager, EntityDefinitionUpdateManagerInterface $entityDefinitionUpdateManager, EntityFieldManagerInterface $entityFieldManager, FieldStorageDefinitionListenerInterface $fieldStorageDefinitionListener, EntityLastInstalledSchemaRepositoryInterface $entityLastInstalledSchemaRepository, Connection $connection) {
+@@ -103,7 +104,7 @@ class MenuLinkContentService implements MenuLinkContentServiceInterface {
+    * {@inheritdoc}
+    */
+   public function updateMenuItemsBundle($menu_id, $extras_enabled = TRUE) {
+-    /** @var \Drupal\menu_link_content\MenuLinkContentInterface[] $menu_links */
++    /** @var MenuLinkContentInterface[] $menu_links */
+     $menu_links = $this->entityTypeManager
+       ->getStorage('menu_link_content')
+       ->loadByProperties(['menu_name' => $menu_id]);
+@@ -234,16 +235,16 @@ class MenuLinkContentService implements MenuLinkContentServiceInterface {
+    *
+    * @param array $form
+    *   Form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state object.
+    *
+    * @see menu_ui_form_node_form_submit()
+    * @see menu_ui_form_node_form_alter()
+    */
+   public function nodeSubmit(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Entity\EntityFormInterface $form_object */
++    /** @var EntityFormInterface $form_object */
+     $form_object = $form_state->getFormObject();
+-    /** @var \Drupal\Core\Entity\EntityInterface $node */
++    /** @var EntityInterface $node */
+     $node = $form_object->getEntity();
+     if (!$form_state->isValueEmpty('menu')) {
+       $values = $form_state->getValue('menu');
+@@ -266,12 +267,12 @@ class MenuLinkContentService implements MenuLinkContentServiceInterface {
+   /**
+    * Helper function to create or update a menu link for a node.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $node
++   * @param EntityInterface $node
+    *   Node entity.
+    * @param array $values
+    *   Values for the menu link.
+    *
+-   * @return \Drupal\menu_link_content\MenuLinkContentInterface
++   * @return MenuLinkContentInterface
+    *   Menu item.
+    *
+    * @see _menu_ui_node_save()
+@@ -279,7 +280,7 @@ class MenuLinkContentService implements MenuLinkContentServiceInterface {
+   public function nodeSave(EntityInterface $node, array $values) {
+     $menu_link_content_storage = $this->entityTypeManager
+       ->getStorage('menu_link_content');
+-    /** @var \Drupal\menu_link_content\MenuLinkContentInterface $entity */
++    /** @var MenuLinkContentInterface $entity */
+     if (!empty($values['entity_id'])) {
+       $entity = $menu_link_content_storage->load($values['entity_id']);
+       if ($entity->isTranslatable()) {
+diff --git a/src/Service/MenuLinkContentServiceInterface.php b/src/Service/MenuLinkContentServiceInterface.php
+index 0e83efd..ca3021c 100644
+--- a/src/Service/MenuLinkContentServiceInterface.php
++++ b/src/Service/MenuLinkContentServiceInterface.php
+@@ -28,7 +28,7 @@ interface MenuLinkContentServiceInterface {
+   /**
+    * Update menu link item.
+    *
+-   * @param \Drupal\menu_link_content\MenuLinkContentInterface $item
++   * @param MenuLinkContentInterface $item
+    *   Menu item that required to be updated.
+    * @param bool $extras_enabled
+    *   Flag of enabled functionality.
+@@ -40,7 +40,7 @@ interface MenuLinkContentServiceInterface {
+   /**
+    * Cleanups all field that added by entity bundle.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   Entity for manipulating.
+    */
+   public function cleanupFields(ContentEntityInterface $entity);
+diff --git a/src/Service/MenuLinkTreeHandler.php b/src/Service/MenuLinkTreeHandler.php
+index 4a1265a..81c2eba 100644
+--- a/src/Service/MenuLinkTreeHandler.php
++++ b/src/Service/MenuLinkTreeHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\menu_item_extras\Service;
+ 
++use Drupal\menu_link_content\Entity\MenuLinkContent;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Entity\EntityRepositoryInterface;
+ use Drupal\Core\Menu\MenuLinkInterface;
+@@ -16,23 +17,23 @@ class MenuLinkTreeHandler implements MenuLinkTreeHandlerInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+   /**
+    * Constructs a new MenuLinkTreeHandler.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityRepositoryInterface $entity_repository) {
+@@ -47,7 +48,7 @@ class MenuLinkTreeHandler implements MenuLinkTreeHandlerInterface {
+     $menu_item = NULL;
+     $metadata = $link->getMetaData();
+     if (!empty($metadata['entity_id'])) {
+-      /** @var \Drupal\menu_link_content\Entity\MenuLinkContent $menu_item */
++      /** @var MenuLinkContent $menu_item */
+       $menu_item = $this->entityTypeManager
+         ->getStorage('menu_link_content')
+         ->load($metadata['entity_id']);
+@@ -120,7 +121,7 @@ class MenuLinkTreeHandler implements MenuLinkTreeHandlerInterface {
+    * {@inheritdoc}
+    */
+   public function isMenuLinkDisplayedChildren(MenuLinkInterface $link) {
+-    /** @var \Drupal\menu_link_content\Entity\MenuLinkContent $menu_item */
++    /** @var MenuLinkContent $menu_item */
+     $entity = $this->getMenuLinkItemEntity($link);
+     if ($entity) {
+       $view_mode = $this->getMenuLinkContentViewMode($entity);
+diff --git a/src/Service/MenuLinkTreeHandlerInterface.php b/src/Service/MenuLinkTreeHandlerInterface.php
+index b185caa..8575bc2 100644
+--- a/src/Service/MenuLinkTreeHandlerInterface.php
++++ b/src/Service/MenuLinkTreeHandlerInterface.php
+@@ -15,10 +15,10 @@ interface MenuLinkTreeHandlerInterface {
+   /**
+    * Get menu_link_content entity.
+    *
+-   * @param \Drupal\Core\Menu\MenuLinkInterface $link
++   * @param MenuLinkInterface $link
+    *   Link object.
+    *
+-   * @return \Drupal\menu_link_content\MenuLinkContentInterface|null
++   * @return MenuLinkContentInterface|null
+    *   Menu Link Content entity.
+    */
+   public function getMenuLinkItemEntity(MenuLinkInterface $link);
+@@ -26,7 +26,7 @@ interface MenuLinkTreeHandlerInterface {
+   /**
+    * Get menu_link_content view mode.
+    *
+-   * @param \Drupal\menu_link_content\MenuLinkContentInterface $entity
++   * @param MenuLinkContentInterface $entity
+    *   Link object.
+    *
+    * @return string
+@@ -37,7 +37,7 @@ interface MenuLinkTreeHandlerInterface {
+   /**
+    * Get Menu Link Content entity content.
+    *
+-   * @param \Drupal\menu_link_content\MenuLinkContentInterface $link
++   * @param MenuLinkContentInterface $link
+    *   Original link entity.
+    *
+    * @return array
+@@ -48,7 +48,7 @@ interface MenuLinkTreeHandlerInterface {
+   /**
+    * Get Menu Link Item view mdoe.
+    *
+-   * @param \Drupal\Core\Menu\MenuLinkInterface $link
++   * @param MenuLinkInterface $link
+    *   Original link entity.
+    *
+    * @return string
+@@ -59,7 +59,7 @@ interface MenuLinkTreeHandlerInterface {
+   /**
+    * Checks if Menu Link Children is enabled to display.
+    *
+-   * @param \Drupal\Core\Menu\MenuLinkInterface $link
++   * @param MenuLinkInterface $link
+    *   Original link entity.
+    *
+    * @return bool
+diff --git a/src/Service/UpdateHelper.php b/src/Service/UpdateHelper.php
+index 966183a..c36c263 100644
+--- a/src/Service/UpdateHelper.php
++++ b/src/Service/UpdateHelper.php
+@@ -25,7 +25,7 @@ class UpdateHelper {
+    * @param string $type
+    *   Field type id.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|static
++   * @return EntityInterface|static
+    *   Entity of field storage
+    */
+   public function checkBodyFieldStorage($field_name, $entity_type, $type) {
+@@ -46,9 +46,9 @@ class UpdateHelper {
+   /**
+    * Creates or load field.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $field_storage
++   * @param EntityInterface $field_storage
+    *   Field storage instance.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity instance.
+    * @param string $field_name
+    *   Field name.
+@@ -57,7 +57,7 @@ class UpdateHelper {
+    * @param mixed[] $settings
+    *   Field settings.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|static
++   * @return EntityInterface|static
+    *   Field instance.
+    */
+   public function checkBodyField(EntityInterface $field_storage, EntityInterface $entity, $field_name, $label, array $settings) {
+@@ -81,14 +81,14 @@ class UpdateHelper {
+    *
+    * @param string $display_mode
+    *   Name of display mode.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity instance.
+    * @param string $field_name
+    *   Field name.
+    * @param array $settings
+    *   Formatter settings.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null|static
++   * @return EntityInterface|null|static
+    *   View display instance.
+    */
+   public function checkViewDisplay($display_mode, EntityInterface $entity, $field_name, array $settings) {
+@@ -123,14 +123,14 @@ class UpdateHelper {
+    *
+    * @param string $display_mode
+    *   Name of display mode.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity instance.
+    * @param string $field_name
+    *   Field name.
+    * @param array $settings
+    *   Widget settings.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null|static
++   * @return EntityInterface|null|static
+    *   Form display instance.
+    */
+   public function checkFormDisplay($display_mode, EntityInterface $entity, $field_name, array $settings) {
+diff --git a/tests/src/Functional/MenuItemExtrasRenderTest.php b/tests/src/Functional/MenuItemExtrasRenderTest.php
+index 7c29c3c..1be3e7a 100644
+--- a/tests/src/Functional/MenuItemExtrasRenderTest.php
++++ b/tests/src/Functional/MenuItemExtrasRenderTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\menu_item_extras\Functional;
+ 
++use Drupal\system\Plugin\Block\SystemMenuBlock;
++use Drupal\system\MenuInterface;
++use Drupal\menu_link_content\MenuLinkContentInterface;
+ use Drupal\Component\Utility\NestedArray;
+ use Drupal\Core\Entity\Entity\EntityFormDisplay;
+ use Drupal\Core\Entity\Entity\EntityViewDisplay;
+@@ -22,21 +25,21 @@ class MenuItemExtrasRenderTest extends BrowserTestBase {
+   /**
+    * The block under test.
+    *
+-   * @var \Drupal\system\Plugin\Block\SystemMenuBlock
++   * @var SystemMenuBlock
+    */
+   protected $block;
+ 
+   /**
+    * The menu for testing.
+    *
+-   * @var \Drupal\system\MenuInterface
++   * @var MenuInterface
+    */
+   protected $menu;
+ 
+   /**
+    * Menu links info array.
+    *
+-   * @var \Drupal\menu_link_content\MenuLinkContentInterface[]
++   * @var MenuLinkContentInterface[]
+    */
+   protected $links = [];
+ 
+@@ -159,10 +162,10 @@ class MenuItemExtrasRenderTest extends BrowserTestBase {
+     // Generate menu items.
+     for ($i = 1; $i <= $this->linksNumber; $i++) {
+       if ($i > 1) {
+-        /** @var \Drupal\menu_link_content\MenuLinkContentInterface $previous_link */
++        /** @var MenuLinkContentInterface $previous_link */
+         $previous_link = $this->links[$i - 1]['entity'];
+       }
+-      /** @var \Drupal\menu_link_content\MenuLinkContentInterface $link */
++      /** @var MenuLinkContentInterface $link */
+       $link = MenuLinkContent::create(NestedArray::mergeDeep($defaults, [
+         'title' => $defaults['title'] . "[{$i}]",
+         $field_name => $defaults[$field_name] . "[{$i}]",

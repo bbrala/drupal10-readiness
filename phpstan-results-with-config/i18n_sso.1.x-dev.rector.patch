@@ -1,0 +1,171 @@
+diff --git a/i18n_sso.module b/i18n_sso.module
+index 7883103..8334897 100644
+--- a/i18n_sso.module
++++ b/i18n_sso.module
+@@ -6,6 +6,8 @@
+  */
+ 
+ declare(strict_types = 1);
++use Symfony\Component\HttpFoundation\Request;
++use Psr\Http\Message\ResponseInterface;
+ 
+ use Drupal\Core\Session\AccountProxyInterface;
+ use Drupal\Core\Url;
+@@ -17,9 +19,9 @@ use Drupal\Core\Url;
+  * already logged in on the main website (default language website url).
+  */
+ function i18n_sso_preprocess_page(array &$variables) : void {
+-  /** @var \Symfony\Component\HttpFoundation\Request|null $current_request */
++  /** @var Request|null $current_request */
+   $current_request = \Drupal::requestStack()->getCurrentRequest();
+-  /** @var \Psr\Http\Message\ResponseInterface|null $exception */
++  /** @var ResponseInterface|null $exception */
+   $exception = $current_request ? $current_request->attributes->get('exception') : NULL;
+   $current_path = \Drupal::service('path.current')->getPath();
+   if ($exception && $exception->getStatusCode() == '403' && $current_path !== '/user/logout') {
+diff --git a/src/Controller/TokenController.php b/src/Controller/TokenController.php
+index fc63a85..540ac6c 100644
+--- a/src/Controller/TokenController.php
++++ b/src/Controller/TokenController.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\i18n_sso\Controller;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\i18n_sso\Service\Token;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -21,23 +22,23 @@ class TokenController extends ControllerBase {
+   /**
+    * The token service.
+    *
+-   * @var \Drupal\i18n_sso\Service\Token
++   * @var Token
+    */
+   protected $token;
+ 
+   /**
+    * The current request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * TokenController constructor.
+    *
+-   * @param \Drupal\i18n_sso\Service\Token $token
++   * @param Token $token
+    *   Token service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   The request stack to get the current request object.
+    */
+   public function __construct(Token $token, RequestStack $requestStack) {
+@@ -58,7 +59,7 @@ class TokenController extends ControllerBase {
+   /**
+    * Returns json_encoded object containing token.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   A JSON response.
+    */
+   public function getToken() {
+@@ -97,7 +98,7 @@ class TokenController extends ControllerBase {
+   /**
+    * Logs user in if token is valid for user IP and deletes it.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   A JSON response.
+    */
+   public function useToken() {
+@@ -116,7 +117,7 @@ class TokenController extends ControllerBase {
+       $request_token
+     );
+     if (!empty($uid)) {
+-      /** @var \Drupal\user\UserInterface $user */
++      /** @var UserInterface $user */
+       $user = $this->entityTypeManager()->getStorage('user')->load($uid);
+       user_login_finalize($user);
+       $data = [];
+diff --git a/src/EventSubscriber/SsoAllowOrigin.php b/src/EventSubscriber/SsoAllowOrigin.php
+index dc4abea..f2e789e 100644
+--- a/src/EventSubscriber/SsoAllowOrigin.php
++++ b/src/EventSubscriber/SsoAllowOrigin.php
+@@ -17,14 +17,14 @@ class SsoAllowOrigin implements EventSubscriberInterface {
+   /**
+    * Config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Constructs a new SsoAllowOrigin object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory) {
+@@ -34,7 +34,7 @@ class SsoAllowOrigin implements EventSubscriberInterface {
+   /**
+    * Adds header "Allow-origin" to allow XHR requests across website domains.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\ResponseEvent $event
++   * @param ResponseEvent $event
+    *   The event.
+    */
+   public function onRespond(ResponseEvent $event) : void {
+diff --git a/src/Service/Token.php b/src/Service/Token.php
+index b1c84e8..26092d3 100644
+--- a/src/Service/Token.php
++++ b/src/Service/Token.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\i18n_sso\Service;
+ 
++use Drupal\Core\Database\StatementInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Database\Connection;
+ 
+@@ -25,23 +26,23 @@ class Token {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The datetime service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $datetime;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection object.
+-   * @param \Drupal\Component\Datetime\TimeInterface $datetime
++   * @param TimeInterface $datetime
+    *   The datetime service.
+    */
+   public function __construct(Connection $connection, TimeInterface $datetime) {
+@@ -66,7 +67,7 @@ class Token {
+       ->condition('user_ip', $user_ip, 'LIKE')
+       ->condition('uid', strval($uid), '=')
+       ->condition('expire', strval($this->datetime->getRequestTime()), '>');
+-    /** @var \Drupal\Core\Database\StatementInterface $result */
++    /** @var StatementInterface $result */
+     $result = $token->range(0, 1)->execute();
+     /** @var object $fetchedObject */
+     $fetchedObject = $result->fetchObject();

@@ -1,0 +1,1028 @@
+diff --git a/includes/smart_ip.country_list.inc b/includes/smart_ip.country_list.inc
+index df05717..f69fa3e 100644
+--- a/includes/smart_ip.country_list.inc
++++ b/includes/smart_ip.country_list.inc
+@@ -1,10 +1,10 @@
+ <?php
+ 
++use Drupal\Core\Locale\CountryManager;
+ /**
+  * @file
+  * Provides a list of countries based on ISO standards.
+  */
+-
+ /**
+  * Get an array of all country code => country name pairs.
+  *
+@@ -14,11 +14,11 @@
+  *   An array of all country code => country name pairs.
+  */
+ function country_get_predefined_list() {
+-  $countries = \Drupal\Core\Locale\CountryManager::getStandardList();
++  $countries = CountryManager::getStandardList();
+ 
+   // Allow other modules to modify country list via
+   // hook_smart_ip_country_predefined_list_alter()
+   \Drupal::moduleHandler()->alter('smart_ip_country_predefined_list', $countries);
+ 
+   return $countries;
+-}
+\ No newline at end of file
++}
+diff --git a/modules/device_geolocation/device_geolocation.module b/modules/device_geolocation/device_geolocation.module
+index 89e7775..223a079 100644
+--- a/modules/device_geolocation/device_geolocation.module
++++ b/modules/device_geolocation/device_geolocation.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\smart_ip\SmartIpLocation;
+ /**
+  * @file
+  * Provides visitor's geographical location using client device location source
+@@ -90,14 +91,14 @@ function template_preprocess_device_geolocation_visitor_info(&$variables) {
+  * Implements hook_page_attachments().
+  */
+ function device_geolocation_page_attachments(array &$page) {
+-  if (!\Drupal\smart_ip\SmartIp::checkAllowedPage()) {
++  if (!SmartIp::checkAllowedPage()) {
+     // This page is not on the list to access user's geolocation
+     return;
+   }
+   $config = \Drupal::config(SmartIpEventSubscriber::configName());
+   $useAjaxCheck = $config->get('use_ajax_check');
+   if ($useAjaxCheck || DeviceGeolocation::isNeedUpdate()) {
+-    /** @var \Drupal\smart_ip\SmartIpLocation $location */
++    /** @var SmartIpLocation $location */
+     $location = \Drupal::service('smart_ip.smart_ip_location');
+     // Send current user's geolocation to javascript.
+     $page['#attached']['drupalSettings']['device_geolocation'] = $location->getData(FALSE);
+diff --git a/modules/device_geolocation/src/Controller/DeviceGeolocationController.php b/modules/device_geolocation/src/Controller/DeviceGeolocationController.php
+index 582bba7..9820911 100644
+--- a/modules/device_geolocation/src/Controller/DeviceGeolocationController.php
++++ b/modules/device_geolocation/src/Controller/DeviceGeolocationController.php
+@@ -7,6 +7,8 @@
+ 
+ namespace Drupal\device_geolocation\Controller;
+ 
++use Drupal\smart_ip\GetLocationEvent;
++use Drupal\smart_ip\SmartIpLocation;
+ use Drupal\device_geolocation\DeviceGeolocation;
+ use Drupal\smart_ip\SmartIp;
+ use Drupal\smart_ip\SmartIpEvents;
+@@ -42,7 +44,7 @@ class DeviceGeolocationController extends ControllerBase {
+           }
+         }
+         if (!empty($data)) {
+-          /** @var \Drupal\smart_ip\GetLocationEvent $event */
++          /** @var GetLocationEvent $event */
+           $event     = \Drupal::service('smart_ip.get_location_event');
+           $location  = $event->getLocation();
+           $ipAddress = $location->get('ipAddress');
+@@ -70,7 +72,7 @@ class DeviceGeolocationController extends ControllerBase {
+   public function check(Request $request) {
+     if (SmartIp::checkAllowedPage() && DeviceGeolocation::isNeedUpdate()) {
+       $json = ['askGeolocate' => TRUE];
+-      /** @var \Drupal\smart_ip\SmartIpLocation $location */
++      /** @var SmartIpLocation $location */
+       $location = \Drupal::service('smart_ip.smart_ip_location');
+       // Send current user's geolocation to javascript.
+       $json['device_geolocation'] = $location->getData(FALSE);
+diff --git a/modules/device_geolocation/src/EventSubscriber/SmartIpEventSubscriber.php b/modules/device_geolocation/src/EventSubscriber/SmartIpEventSubscriber.php
+index b9a533a..576c0e3 100644
+--- a/modules/device_geolocation/src/EventSubscriber/SmartIpEventSubscriber.php
++++ b/modules/device_geolocation/src/EventSubscriber/SmartIpEventSubscriber.php
+@@ -7,6 +7,7 @@
+ 
+ namespace Drupal\device_geolocation\EventSubscriber;
+ 
++use Drupal\Core\Form\FormStateInterface;
+ use Drupal\smart_ip\GetLocationEvent;
+ use Drupal\smart_ip\AdminSettingsEvent;
+ use Drupal\smart_ip\DatabaseFileEvent;
+@@ -102,7 +103,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    * {@inheritdoc}
+    */
+   public function validateFormSettings(AdminSettingsEvent $event) {
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState = $event->getFormState();
+     $frequencyCheck = $formState->getValue('device_geolocation_frequency_check');
+     if (($frequencyCheck != '' && !is_numeric($frequencyCheck)) || $frequencyCheck < 0) {
+@@ -115,7 +116,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    */
+   public function submitFormSettings(AdminSettingsEvent $event) {
+     $config = \Drupal::configFactory()->getEditable(self::configName());
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState = $event->getFormState();
+     $frequencyCheck = $formState->getValue('device_geolocation_frequency_check');
+     if ($frequencyCheck == '') {
+diff --git a/modules/device_geolocation/src/Plugin/Block/VisitorGeolocation.php b/modules/device_geolocation/src/Plugin/Block/VisitorGeolocation.php
+index 49efdfc..d39076a 100644
+--- a/modules/device_geolocation/src/Plugin/Block/VisitorGeolocation.php
++++ b/modules/device_geolocation/src/Plugin/Block/VisitorGeolocation.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\device_geolocation\Plugin\Block;
+ 
++use Drupal\smart_ip\SmartIpLocation;
+ use Drupal\Core\Block\BlockBase;
+ 
+ 
+@@ -19,7 +20,7 @@ class VisitorGeolocation extends BlockBase {
+    * {@inheritdoc}
+    */
+   public function build() {
+-    /** @var \Drupal\smart_ip\SmartIpLocation $location */
++    /** @var SmartIpLocation $location */
+     $location = \Drupal::service('smart_ip.smart_ip_location');
+     $data = $location->getData(FALSE);
+     return [
+diff --git a/modules/smart_ip_abstract_web_service/src/EventSubscriber/SmartIpEventSubscriber.php b/modules/smart_ip_abstract_web_service/src/EventSubscriber/SmartIpEventSubscriber.php
+index 8df63a6..d3bfe0c 100644
+--- a/modules/smart_ip_abstract_web_service/src/EventSubscriber/SmartIpEventSubscriber.php
++++ b/modules/smart_ip_abstract_web_service/src/EventSubscriber/SmartIpEventSubscriber.php
+@@ -7,6 +7,7 @@
+ 
+ namespace Drupal\smart_ip_abstract_web_service\EventSubscriber;
+ 
++use Drupal\Core\Form\FormStateInterface;
+ use Drupal\smart_ip_abstract_web_service\WebServiceUtility;
+ use Drupal\smart_ip\GetLocationEvent;
+ use Drupal\smart_ip\AdminSettingsEvent;
+@@ -127,7 +128,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    * {@inheritdoc}
+    */
+   public function validateFormSettings(AdminSettingsEvent $event) {
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState  = $event->getFormState();
+     if ($formState->getValue('smart_ip_data_source') == self::sourceId()) {
+       if ($formState->isValueEmpty('abstract_api_key')) {
+@@ -140,7 +141,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    * {@inheritdoc}
+    */
+   public function submitFormSettings(AdminSettingsEvent $event) {
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState = $event->getFormState();
+     if ($formState->getValue('smart_ip_data_source') == self::sourceId()) {
+       $config = \Drupal::configFactory()->getEditable(self::configName());
+diff --git a/modules/smart_ip_ip2location_bin_db/smart_ip_ip2location_bin_db.install b/modules/smart_ip_ip2location_bin_db/smart_ip_ip2location_bin_db.install
+index 22c4f16..66f1f6d 100644
+--- a/modules/smart_ip_ip2location_bin_db/smart_ip_ip2location_bin_db.install
++++ b/modules/smart_ip_ip2location_bin_db/smart_ip_ip2location_bin_db.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\smart_ip_ip2location_bin_db\EventSubscriber\SmartIpEventSubscriber;
+ use Drupal\Core\Link;
+ use Drupal\Core\Url;
+ 
+@@ -43,7 +44,7 @@ function smart_ip_ip2location_bin_db_uninstall() {
+  * path. Change the default value of db_auto_update to FALSE.
+  */
+ function smart_ip_ip2location_bin_db_update_8301() {
+-  $configName = \Drupal\smart_ip_ip2location_bin_db\EventSubscriber\SmartIpEventSubscriber::configName();
++  $configName = SmartIpEventSubscriber::configName();
+   $config     = \Drupal::configFactory()->getEditable($configName);
+   $filesystem = \Drupal::service('file_system');
+   $path       = $filesystem->dirname($config->get('ip2location_bin_db_ipv4_custom_path'));
+@@ -52,4 +53,4 @@ function smart_ip_ip2location_bin_db_update_8301() {
+     ->clear('ip2location_bin_db_ipv4_custom_path')
+     ->clear('ip2location_bin_db_ipv6_custom_path')
+     ->save();
+-}
+\ No newline at end of file
++}
+diff --git a/modules/smart_ip_ip2location_bin_db/src/EventSubscriber/SmartIpEventSubscriber.php b/modules/smart_ip_ip2location_bin_db/src/EventSubscriber/SmartIpEventSubscriber.php
+index ba58760..a702296 100644
+--- a/modules/smart_ip_ip2location_bin_db/src/EventSubscriber/SmartIpEventSubscriber.php
++++ b/modules/smart_ip_ip2location_bin_db/src/EventSubscriber/SmartIpEventSubscriber.php
+@@ -7,6 +7,9 @@
+ 
+ namespace Drupal\smart_ip_ip2location_bin_db\EventSubscriber;
+ 
++use IP2Location\Database;
++use Drupal\Core\File\FileSystem;
++use Drupal\Core\Form\FormStateInterface;
+ use Drupal\smart_ip_ip2location_bin_db\DatabaseFileUtility;
+ use Drupal\smart_ip_ip2location_bin_db\Ip2locationBinDb;
+ use Drupal\smart_ip\DatabaseFileUtilityBase;
+@@ -64,17 +67,17 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+         return;
+       }
+       if ($config->get('caching_method') == Ip2locationBinDb::NO_CACHE) {
+-        $cachingMethod = \IP2Location\Database::FILE_IO;
++        $cachingMethod = Database::FILE_IO;
+       }
+       elseif ($config->get('caching_method') == Ip2locationBinDb::MEMORY_CACHE) {
+-        $cachingMethod = \IP2Location\Database::MEMORY_CACHE;
++        $cachingMethod = Database::MEMORY_CACHE;
+       }
+       elseif ($config->get('caching_method') == Ip2locationBinDb::SHARED_MEMORY) {
+-        $cachingMethod = \IP2Location\Database::SHARED_MEMORY;
++        $cachingMethod = Database::SHARED_MEMORY;
+       }
+       if (!empty($dbFile) && !empty($cachingMethod)) {
+-        $reader = new \IP2Location\Database($dbFile, $cachingMethod);
+-        $record = $reader->lookup($ipAddress, \IP2Location\Database::ALL);
++        $reader = new Database($dbFile, $cachingMethod);
++        $record = $reader->lookup($ipAddress, Database::ALL);
+         foreach ($record as &$item) {
+           if (strpos($item, 'Please upgrade') !== FALSE || strpos($item, 'Invalid IP address') !== FALSE || $item == '-') {
+             // Make the value "This parameter is unavailable in selected .BIN
+@@ -117,7 +120,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+     $config     = \Drupal::config(self::configName());
+     $autoUpdate = $config->get('db_auto_update');
+     $form       = $event->getForm();
+-    /** @var \Drupal\Core\File\FileSystem $filesystem */
++    /** @var FileSystem $filesystem */
+     $filesystem        = \Drupal::service('file_system');
+     $privateFolder     = $filesystem->realpath(DatabaseFileUtilityBase::DRUPAL_FOLDER);
+     $errorSourceId     = \Drupal::state()->get('smart_ip.request_db_error_source_id') ?: '';
+@@ -309,7 +312,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    * {@inheritdoc}
+    */
+   public function validateFormSettings(AdminSettingsEvent $event) {
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState  = $event->getFormState();
+     $version    = $formState->getValue('ip2location_bin_db_version');
+     $autoUpdate = $formState->getValue('ip2location_bin_db_auto_update');
+@@ -327,7 +330,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+         $formState->setErrorByName('ip2location_bin_db_auto_update', t('This feature is not yet available for Lite version.'));
+       }
+       if ($autoUpdate) {
+-        /** @var \Drupal\Core\File\FileSystem $filesystem */
++        /** @var FileSystem $filesystem */
+         $filesystem = \Drupal::service('file_system');
+         $privateFolder = $filesystem->realpath(DatabaseFileUtilityBase::DRUPAL_FOLDER);
+         if (empty(PrivateStream::basePath())) {
+@@ -347,7 +350,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+           );
+         }
+         else {
+-          /** @var \Drupal\Core\StreamWrapper\PrivateStream $privateStream */
++          /** @var PrivateStream $privateStream */
+           $privateStream = \Drupal::service('stream_wrapper.private');
+           $file          = DatabaseFileUtility::getFilename($version, $edition, Ip2locationBinDb::IPV4_VERSION);
+           $privateStream->setUri(DatabaseFileUtilityBase::DRUPAL_FOLDER);
+@@ -386,9 +389,9 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+         }
+       }
+       else {
+-        /** @var \Drupal\Core\StreamWrapper\PrivateStream $privateStream */
++        /** @var PrivateStream $privateStream */
+         $privateStream = \Drupal::service('stream_wrapper.private');
+-        /** @var \Drupal\Core\File\FileSystem $filesystem */
++        /** @var FileSystem $filesystem */
+         $filesystem    = \Drupal::service('file_system');
+         $folder        = $formState->getValue('ip2location_bin_db_custom_path');
+         $privateFolder = DatabaseFileUtilityBase::DRUPAL_FOLDER;
+@@ -467,7 +470,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    * {@inheritdoc}
+    */
+   public function submitFormSettings(AdminSettingsEvent $event) {
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState = $event->getFormState();
+     if ($formState->getValue('smart_ip_data_source') == self::sourceId()) {
+       $config = \Drupal::configFactory()->getEditable(self::configName());
+@@ -548,8 +551,8 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+         else {
+           $ip = '2001:4860:4860::8888';
+         }
+-        $reader = new \IP2Location\Database($file, \IP2Location\Database::FILE_IO);
+-        $record = $reader->lookup($ip, \IP2Location\Database::COUNTRY);
++        $reader = new Database($file, Database::FILE_IO);
++        $record = $reader->lookup($ip, Database::COUNTRY);
+         if (strtotime($reader->getDate()) <= 0 || empty($record['countryCode'])) {
+           $error['code'] = Ip2locationBinDb::DB_READ_ERROR;
+         }
+diff --git a/modules/smart_ip_ipinfodb_web_service/src/EventSubscriber/SmartIpEventSubscriber.php b/modules/smart_ip_ipinfodb_web_service/src/EventSubscriber/SmartIpEventSubscriber.php
+index bc3cbdf..60f72af 100644
+--- a/modules/smart_ip_ipinfodb_web_service/src/EventSubscriber/SmartIpEventSubscriber.php
++++ b/modules/smart_ip_ipinfodb_web_service/src/EventSubscriber/SmartIpEventSubscriber.php
+@@ -7,6 +7,7 @@
+ 
+ namespace Drupal\smart_ip_ipinfodb_web_service\EventSubscriber;
+ 
++use Drupal\Core\Form\FormStateInterface;
+ use Drupal\smart_ip_ipinfodb_web_service\WebServiceUtility;
+ use Drupal\smart_ip\GetLocationEvent;
+ use Drupal\smart_ip\AdminSettingsEvent;
+@@ -166,7 +167,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    * {@inheritdoc}
+    */
+   public function validateFormSettings(AdminSettingsEvent $event) {
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState  = $event->getFormState();
+     if ($formState->getValue('smart_ip_data_source') == self::sourceId()) {
+       if ($formState->isValueEmpty('ipinfodb_api_key')) {
+@@ -179,7 +180,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    * {@inheritdoc}
+    */
+   public function submitFormSettings(AdminSettingsEvent $event) {
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState = $event->getFormState();
+     if ($formState->getValue('smart_ip_data_source') == self::sourceId()) {
+       $config = \Drupal::configFactory()->getEditable(self::configName());
+diff --git a/modules/smart_ip_maxmind_geoip2_bin_db/src/EventSubscriber/SmartIpEventSubscriber.php b/modules/smart_ip_maxmind_geoip2_bin_db/src/EventSubscriber/SmartIpEventSubscriber.php
+index f22dcfe..62b8167 100644
+--- a/modules/smart_ip_maxmind_geoip2_bin_db/src/EventSubscriber/SmartIpEventSubscriber.php
++++ b/modules/smart_ip_maxmind_geoip2_bin_db/src/EventSubscriber/SmartIpEventSubscriber.php
+@@ -7,6 +7,9 @@
+ 
+ namespace Drupal\smart_ip_maxmind_geoip2_bin_db\EventSubscriber;
+ 
++use MaxMind\Db\Reader;
++use Drupal\Core\File\FileSystem;
++use Drupal\Core\Form\FormStateInterface;
+ use Drupal\smart_ip_maxmind_geoip2_bin_db\DatabaseFileUtility;
+ use Drupal\smart_ip_maxmind_geoip2_bin_db\MaxmindGeoip2BinDb;
+ use Drupal\smart_ip\DatabaseFileUtilityBase;
+@@ -63,7 +66,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+         return;
+       }
+       if (class_exists('\MaxMind\Db\Reader')) {
+-        $reader = new \MaxMind\Db\Reader($dbFile);
++        $reader = new Reader($dbFile);
+         $raw    = $reader->get($ipAddress);
+       }
+       else {
+@@ -119,7 +122,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+     $config     = \Drupal::config(self::configName());
+     $autoUpdate = $config->get('db_auto_update');
+     $form       = $event->getForm();
+-    /** @var \Drupal\Core\File\FileSystem $filesystem */
++    /** @var FileSystem $filesystem */
+     $filesystem    = \Drupal::service('file_system');
+     $privateFolder = $filesystem->realpath(DatabaseFileUtilityBase::DRUPAL_FOLDER);
+     $errorSourceId = \Drupal::state()->get('smart_ip.request_db_error_source_id') ?: '';
+@@ -285,7 +288,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    * {@inheritdoc}
+    */
+   public function validateFormSettings(AdminSettingsEvent $event) {
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState = $event->getFormState();
+     if ($formState->getValue('smart_ip_data_source') == self::sourceId()) {
+       $autoUpdate = $formState->getValue('maxmind_geoip2_bin_db_auto_update');
+@@ -306,7 +309,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+           );
+         }
+         else {
+-          /** @var \Drupal\Core\File\FileSystem $filesystem */
++          /** @var FileSystem $filesystem */
+           $filesystem = \Drupal::service('file_system');
+           $privateFolder = $filesystem->realpath(DatabaseFileUtilityBase::DRUPAL_FOLDER);
+           $file = DatabaseFileUtility::getFilename($formState->getValue('maxmind_geoip2_bin_db_version'), $formState->getValue('maxmind_geoip2_bin_db_edition'));
+@@ -355,7 +358,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    * {@inheritdoc}
+    */
+   public function submitFormSettings(AdminSettingsEvent $event) {
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState = $event->getFormState();
+     if ($formState->getValue('smart_ip_data_source') == self::sourceId()) {
+       $config = \Drupal::configFactory()->getEditable(self::configName());
+diff --git a/modules/smart_ip_maxmind_geoip2_web_service/src/EventSubscriber/SmartIpEventSubscriber.php b/modules/smart_ip_maxmind_geoip2_web_service/src/EventSubscriber/SmartIpEventSubscriber.php
+index 6a6283a..4d6f812 100644
+--- a/modules/smart_ip_maxmind_geoip2_web_service/src/EventSubscriber/SmartIpEventSubscriber.php
++++ b/modules/smart_ip_maxmind_geoip2_web_service/src/EventSubscriber/SmartIpEventSubscriber.php
+@@ -7,6 +7,7 @@
+ 
+ namespace Drupal\smart_ip_maxmind_geoip2_web_service\EventSubscriber;
+ 
++use Drupal\Core\Form\FormStateInterface;
+ use Drupal\smart_ip_maxmind_geoip2_web_service\WebServiceUtility;
+ use Drupal\smart_ip_maxmind_geoip2_web_service\MaxmindGeoip2WebService;
+ use Drupal\smart_ip\GetLocationEvent;
+@@ -148,7 +149,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    * {@inheritdoc}
+    */
+   public function validateFormSettings(AdminSettingsEvent $event) {
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState  = $event->getFormState();
+     if ($formState->getValue('smart_ip_data_source') == self::sourceId()) {
+       if ($formState->isValueEmpty('maxmind_geoip2_web_service_uid')) {
+@@ -164,7 +165,7 @@ class SmartIpEventSubscriber extends SmartIpEventSubscriberBase {
+    * {@inheritdoc}
+    */
+   public function submitFormSettings(AdminSettingsEvent $event) {
+-    /** @var \Drupal\Core\Form\FormStateInterface $formState */
++    /** @var FormStateInterface $formState */
+     $formState = $event->getFormState();
+     if ($formState->getValue('smart_ip_data_source') == self::sourceId()) {
+       $config = \Drupal::configFactory()->getEditable(self::configName());
+diff --git a/smart_ip.install b/smart_ip.install
+index e9ea7af..a3baeb0 100644
+--- a/smart_ip.install
++++ b/smart_ip.install
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\user\UserData;
++use Drupal\user\Entity\Role;
+ /**
+  * @file
+  * Install, update and uninstall functions for the image module.
+@@ -9,7 +11,7 @@
+  * Implements hook_uninstall().
+  */
+ function smart_ip_uninstall() {
+-  /** @var \Drupal\user\UserData $userData */
++  /** @var UserData $userData */
+   $userData = \Drupal::service('user.data');
+   // Delete all the Smart IP location in users' user_data
+   $userData->delete('smart_ip');
+@@ -28,10 +30,10 @@ function smart_ip_update_8301() {
+   $config = \Drupal::configFactory()->getEditable('smart_ip.settings');
+   if ($config->get('debug_mode')) {
+     $debugIp      = $config->get('debug_mode_ip');
+-    $roles        = \Drupal\user\Entity\Role::loadMultiple();
++    $roles        = Role::loadMultiple();
+     $rolesDebug   = [];
+     $rolesDebugIp = [];
+-    /** @var \Drupal\user\Entity\Role $role */
++    /** @var Role $role */
+     foreach ($roles as $roleId => $role) {
+       if ($role->hasPermission('administer smart_ip')) {
+         $rolesDebug[$roleId]   = $roleId;
+diff --git a/smart_ip.module b/smart_ip.module
+index bbef5ac..b45ab5b 100644
+--- a/smart_ip.module
++++ b/smart_ip.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\user\UserData;
++use Drupal\smart_ip\DatabaseFileEvent;
++use Drupal\smart_ip\SmartIpLocation;
+ /**
+  * @file
+  * Determines country, geo location (longitude/latitude), region, city and
+@@ -69,7 +72,7 @@ function smart_ip_entity_insert(EntityInterface $entity) {
+         $euVisitorsDontSave = \Drupal::config('smart_ip.settings')
+           ->get('eu_visitor_dont_save') && $data['location']['isGdprCountry'];
+         if (!$euVisitorsDontSave) {
+-          /** @var \Drupal\user\UserData $userData */
++          /** @var UserData $userData */
+           $userData = \Drupal::service('user.data');
+           $userData->set('smart_ip', $entity->id(), 'geoip_location_original', $data);
+         }
+@@ -82,7 +85,7 @@ function smart_ip_entity_insert(EntityInterface $entity) {
+  * Implements hook_cron().
+  */
+ function smart_ip_cron() {
+-  /** @var \Drupal\smart_ip\DatabaseFileEvent $event */
++  /** @var DatabaseFileEvent $event */
+   $event = \Drupal::service('smart_ip.database_file_event');
+   // Allow Smart IP source module to act on cron run.
+   \Drupal::service('event_dispatcher')->dispatch(SmartIpEvents::CRON_RUN, $event);
+@@ -92,11 +95,11 @@ function smart_ip_cron() {
+  * Implements hook_page_attachments().
+  */
+ function smart_ip_page_attachments(array &$page) {
+-  if (!\Drupal\smart_ip\SmartIp::checkAllowedPage()) {
++  if (!SmartIp::checkAllowedPage()) {
+     // This page is not on the list to access user's geolocation.
+     return;
+   }
+-  /** @var \Drupal\smart_ip\SmartIpLocation $location */
++  /** @var SmartIpLocation $location */
+   $location = \Drupal::service('smart_ip.smart_ip_location');
+   $data['location'] = $location->getData(FALSE);
+   $value = Json::encode($data);
+diff --git a/src/AdminSettingsEvent.php b/src/AdminSettingsEvent.php
+index e25663b..b121858 100644
+--- a/src/AdminSettingsEvent.php
++++ b/src/AdminSettingsEvent.php
+@@ -7,7 +7,7 @@
+ 
+ namespace Drupal\smart_ip;
+ 
+-use Symfony\Component\EventDispatcher\Event;
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+ /**
+@@ -34,7 +34,7 @@ class AdminSettingsEvent extends Event {
+   /**
+    * Contains Smart IP admin settings $form.
+    *
+-   * @var \Drupal\Core\Form\FormStateInterface
++   * @var FormStateInterface
+    */
+   protected $formState;
+ 
+@@ -61,7 +61,7 @@ class AdminSettingsEvent extends Event {
+   /**
+    * Form State.
+    *
+-   * @return \Drupal\Core\Form\FormStateInterface
++   * @return FormStateInterface
+    *   The current state of the form.
+    */
+   public function getFormState() {
+@@ -71,7 +71,7 @@ class AdminSettingsEvent extends Event {
+   /**
+    * Set the state of form.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $formState
++   * @param FormStateInterface $formState
+    *   The current state of the form.
+    */
+   public function setFormState(FormStateInterface $formState) {
+diff --git a/src/DatabaseFileEvent.php b/src/DatabaseFileEvent.php
+index 3ba4a8d..ea613b2 100644
+--- a/src/DatabaseFileEvent.php
++++ b/src/DatabaseFileEvent.php
+@@ -7,7 +7,7 @@
+ 
+ namespace Drupal\smart_ip;
+ 
+-use Symfony\Component\EventDispatcher\Event;
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+ /**
+@@ -34,7 +34,7 @@ class DatabaseFileEvent extends Event {
+   /**
+    * Contains Smart IP admin settings $form.
+    *
+-   * @var \Drupal\Core\Form\FormStateInterface
++   * @var FormStateInterface
+    */
+   protected $formState;
+ 
+@@ -61,7 +61,7 @@ class DatabaseFileEvent extends Event {
+   /**
+    * Get form state.
+    *
+-   * @return \Drupal\Core\Form\FormStateInterface
++   * @return FormStateInterface
+    *   The current state of the form.
+    */
+   public function getFormState() {
+@@ -71,7 +71,7 @@ class DatabaseFileEvent extends Event {
+   /**
+    * Set form state.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $formState
++   * @param FormStateInterface $formState
+    *   The current state of the form.
+    */
+   public function setFormState(FormStateInterface $formState) {
+diff --git a/src/DatabaseFileUtilityBase.php b/src/DatabaseFileUtilityBase.php
+index 4835ee8..44e915a 100644
+--- a/src/DatabaseFileUtilityBase.php
++++ b/src/DatabaseFileUtilityBase.php
+@@ -7,6 +7,12 @@
+ 
+ namespace Drupal\smart_ip;
+ 
++use Drupal\Core\File\FileSystem;
++use Drupal\Core\StreamWrapper\StreamWrapperManager;
++use Drupal\Core\StreamWrapper\StreamWrapperInterface;
++use Drupal\Core\Http\ClientFactory;
++use Psr\Http\Message\ResponseInterface;
++use Psr\Http\Message\StreamInterface;
+ use Drupal\Core\Link;
+ use Drupal\Core\Url;
+ use Drupal\Core\Archiver\Zip;
+@@ -58,7 +64,7 @@ abstract class DatabaseFileUtilityBase implements DatabaseFileUtilityInterface {
+    */
+   public static function getPath($autoUpdate, $customPath) {
+     if ($autoUpdate == TRUE || ($autoUpdate == FALSE && empty($customPath))) {
+-      /** @var \Drupal\Core\File\FileSystem $filesystem */
++      /** @var FileSystem $filesystem */
+       $filesystem = \Drupal::service('file_system');
+       return $filesystem->realpath(self::DRUPAL_FOLDER);
+     }
+@@ -104,15 +110,15 @@ abstract class DatabaseFileUtilityBase implements DatabaseFileUtilityInterface {
+   protected static function requestDatabaseFile($url, $file, $sourceId) {
+     $destination = self::DRUPAL_FOLDER;
+     $source      = self::DRUPAL_TEMP_FOLDER;
+-    /** @var \Drupal\Core\File\FileSystem $filesystem */
++    /** @var FileSystem $filesystem */
+     $filesystem          = \Drupal::service('file_system');
+     $sourceRealPath      = $filesystem->realpath($source);
+     $destinationRealPath = $filesystem->realpath($destination);
+-    /** @var \Drupal\Core\StreamWrapper\StreamWrapperManager $streamWrapper */
++    /** @var StreamWrapperManager $streamWrapper */
+     $streamWrapper = \Drupal::service('stream_wrapper_manager');
+-    /** @var \Drupal\Core\StreamWrapper\StreamWrapperInterface $destinationStream */
++    /** @var StreamWrapperInterface $destinationStream */
+     $destinationStream = $streamWrapper->getViaUri($destination);
+-    /** @var \Drupal\Core\StreamWrapper\StreamWrapperInterface $sourceStream */
++    /** @var StreamWrapperInterface $sourceStream */
+     $sourceStream = $streamWrapper->getViaUri($source);
+     if (!file_exists($destination)) {
+       // The Smart IP folder does not exist then create it.
+@@ -127,12 +133,12 @@ abstract class DatabaseFileUtilityBase implements DatabaseFileUtilityInterface {
+       // Prepare temporary download directory.
+       $sourceStream->mkdir($source, NULL, STREAM_MKDIR_RECURSIVE);
+       // Download the Smart IP's data source module's database file.
+-      /** @var \Drupal\Core\Http\ClientFactory $client */
++      /** @var ClientFactory $client */
+       $client = \Drupal::service('http_client_factory');
+-      /** @var \Psr\Http\Message\ResponseInterface $uriData */
++      /** @var ResponseInterface $uriData */
+       $uriData = $client->fromOptions(['timeout' => self::DOWNLOAD_TIMEOUT])
+         ->get($url);
+-      /** @var \Psr\Http\Message\StreamInterface $data */
++      /** @var StreamInterface $data */
+       $data = $uriData->getBody();
+       $parsedUrl        = parse_url($url);
+       $archivePath      = "$source/" . $filesystem->basename($parsedUrl['path']);
+diff --git a/src/EventSubscriber/GeolocateUserSubscriber.php b/src/EventSubscriber/GeolocateUserSubscriber.php
+index 3b001eb..739e2af 100644
+--- a/src/EventSubscriber/GeolocateUserSubscriber.php
++++ b/src/EventSubscriber/GeolocateUserSubscriber.php
+@@ -7,10 +7,10 @@
+ 
+ namespace Drupal\smart_ip\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\smart_ip\SmartIp;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ 
+ /**
+  * Allows Smart IP to act on HTTP request event.
+@@ -22,10 +22,10 @@ class GeolocateUserSubscriber implements EventSubscriberInterface {
+   /**
+    * Initiate user geolocation.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The response event, which contains the current request.
+    */
+-  public function geolocateUser(GetResponseEvent $event) {
++  public function geolocateUser(RequestEvent $event) {
+     // Check to see if the page is one of those allowed for geolocation.
+     if (!SmartIp::checkAllowedPage()) {
+       // This page is not on the list to acquire/update user's geolocation.
+diff --git a/src/Form/SmartIpAdminSettingsForm.php b/src/Form/SmartIpAdminSettingsForm.php
+index af45aac..004d0a1 100644
+--- a/src/Form/SmartIpAdminSettingsForm.php
++++ b/src/Form/SmartIpAdminSettingsForm.php
+@@ -7,6 +7,8 @@
+ 
+ namespace Drupal\smart_ip\Form;
+ 
++use Drupal\smart_ip\AdminSettingsEvent;
++use Drupal\smart_ip\DatabaseFileEvent;
+ use Drupal\smart_ip\SmartIp;
+ use Drupal\smart_ip\SmartIpEvents;
+ use Drupal\user\Entity\Role;
+@@ -36,7 +38,7 @@ class SmartIpAdminSettingsForm extends ConfigFormBase {
+    */
+   protected function getEditableConfigNames() {
+     $configNames = ['smart_ip.settings'];
+-    /** @var \Drupal\smart_ip\AdminSettingsEvent $event */
++    /** @var AdminSettingsEvent $event */
+     $event = \Drupal::service('smart_ip.admin_settings_event');
+     // Allow Smart IP source module to add their config names.
+     $event->setEditableConfigNames($configNames);
+@@ -200,7 +202,7 @@ class SmartIpAdminSettingsForm extends ConfigFormBase {
+     ];
+     $roles = Role::loadMultiple();
+     $userRoles = [];
+-    /** @var \Drupal\user\Entity\Role $role */
++    /** @var Role $role */
+     foreach ($roles as $roleId => $role) {
+       $userRoles[$roleId] = $role->get('label');
+     }
+@@ -301,7 +303,7 @@ class SmartIpAdminSettingsForm extends ConfigFormBase {
+     ];
+     $rolesDebug   = $config->get('roles_in_debug_mode');
+     $rolesDebugIp = $config->get('roles_in_debug_mode_ip');
+-    /** @var \Drupal\user\Entity\Role $role */
++    /** @var Role $role */
+     foreach ($roles as $roleId => $role) {
+       $form['smart_ip_debug_tool']["smart_ip_debug_$roleId"] = [
+         '#type'  => 'checkbox',
+@@ -323,7 +325,7 @@ class SmartIpAdminSettingsForm extends ConfigFormBase {
+       ];
+     }
+ 
+-    /** @var \Drupal\smart_ip\AdminSettingsEvent $event */
++    /** @var AdminSettingsEvent $event */
+     $event = \Drupal::service('smart_ip.admin_settings_event');
+     // Allow Smart IP source module to add their form elements.
+     $event->setForm($form);
+@@ -352,7 +354,7 @@ class SmartIpAdminSettingsForm extends ConfigFormBase {
+    * listeners.
+    */
+   public static function manualUpdate() {
+-    /** @var \Drupal\smart_ip\DatabaseFileEvent $event */
++    /** @var DatabaseFileEvent $event */
+     $event = \Drupal::service('smart_ip.database_file_event');
+     // Allow Smart IP source module to act on manual database update.
+     \Drupal::service('event_dispatcher')->dispatch(SmartIpEvents::MANUAL_UPDATE, $event);
+@@ -363,7 +365,7 @@ class SmartIpAdminSettingsForm extends ConfigFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    * @see \Drupal\smart_ip\Form\SmartIpAdminSettingsForm::manualLookupAjax
+    */
+@@ -412,9 +414,9 @@ class SmartIpAdminSettingsForm extends ConfigFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   An AJAX response representing the form and its AJAX commands.
+    * @see \Drupal\smart_ip\Form\SmartIpAdminSettingsForm::manualLookup
+    */
+@@ -431,7 +433,7 @@ class SmartIpAdminSettingsForm extends ConfigFormBase {
+    */
+   public function validateForm(array &$form, FormStateInterface $form_state) {
+     $roles = Role::loadMultiple();
+-    /** @var \Drupal\user\Entity\Role $role */
++    /** @var Role $role */
+     foreach ($roles as $roleId => $role) {
+       if ($form_state->getValue("smart_ip_debug_$roleId") == TRUE && $form_state->isValueEmpty("smart_ip_test_ip_address_$roleId")) {
+         $form_state->setErrorByName("smart_ip_test_ip_address_$roleId", $this->t('Please enter the IP address to use for @role testing.', [
+@@ -442,7 +444,7 @@ class SmartIpAdminSettingsForm extends ConfigFormBase {
+     if (!empty($form['smart_ip_data_source_selection']['smart_ip_data_source']['#options']) && empty($form_state->getValue('smart_ip_data_source'))) {
+       $form_state->setErrorByName('smart_ip_data_source', $this->t('Please select a Smart IP data source.'));
+     }
+-    /** @var \Drupal\smart_ip\AdminSettingsEvent $event */
++    /** @var AdminSettingsEvent $event */
+     $event = \Drupal::service('smart_ip.admin_settings_event');
+     // Allow Smart IP source module to add validation on their form elements.
+     $event->setForm($form);
+@@ -459,7 +461,7 @@ class SmartIpAdminSettingsForm extends ConfigFormBase {
+     $rolesDebug   = [];
+     $rolesDebugIp = [];
+     $roles        = Role::loadMultiple();
+-    /** @var \Drupal\user\Entity\Role $role */
++    /** @var Role $role */
+     foreach ($roles as $roleId => $role) {
+       $rolesDebug[$roleId]   = $form_state->getValue("smart_ip_debug_$roleId") ? $roleId : FALSE;
+       $rolesDebugIp[$roleId] = $form_state->getValue("smart_ip_test_ip_address_$roleId");
+@@ -475,7 +477,7 @@ class SmartIpAdminSettingsForm extends ConfigFormBase {
+       ->set('allowed_pages', $form_state->getValue('smart_ip_allowed_pages'))
+       ->set('excluded_ips', $form_state->getValue('smart_ip_excluded_ips'))
+       ->save();
+-    /** @var \Drupal\smart_ip\AdminSettingsEvent $event */
++    /** @var AdminSettingsEvent $event */
+     $event = \Drupal::service('smart_ip.admin_settings_event');
+     // Allow Smart IP source module to add submission on their form elements.
+     $event->setForm($form);
+diff --git a/src/GetLocationEvent.php b/src/GetLocationEvent.php
+index 5a7a5b5..6bec480 100644
+--- a/src/GetLocationEvent.php
++++ b/src/GetLocationEvent.php
+@@ -6,7 +6,7 @@
+ 
+ namespace Drupal\smart_ip;
+ 
+-use Symfony\Component\EventDispatcher\Event;
++use Symfony\Contracts\EventDispatcher\Event;
+ 
+ /**
+  * Provides Smart IP query location override event for event listeners.
+@@ -18,7 +18,7 @@ class GetLocationEvent extends Event {
+   /**
+    * Contains user's location.
+    *
+-   * @var \Drupal\smart_ip\SmartIpLocationInterface
++   * @var SmartIpLocationInterface
+    */
+   protected $location;
+ 
+@@ -32,7 +32,7 @@ class GetLocationEvent extends Event {
+   /**
+    * Constructs a Smart IP event.
+    *
+-   * @param \Drupal\smart_ip\SmartIpLocationInterface $location
++   * @param SmartIpLocationInterface $location
+    *   Smart IP's data location.
+    */
+   public function __construct(SmartIpLocationInterface $location) {
+@@ -43,7 +43,7 @@ class GetLocationEvent extends Event {
+   /**
+    * Get Smart IP's data location.
+    *
+-   * @return \Drupal\smart_ip\SmartIpLocationInterface
++   * @return SmartIpLocationInterface
+    *   Smart IP's data location.
+    */
+   public function getLocation() {
+@@ -53,7 +53,7 @@ class GetLocationEvent extends Event {
+   /**
+    * Set Smart IP's data location.
+    *
+-   * @param \Drupal\smart_ip\SmartIpLocationInterface $location
++   * @param SmartIpLocationInterface $location
+    *   Smart IP's data location.
+    */
+   public function setLocation(SmartIpLocationInterface $location) {
+diff --git a/src/Plugin/Condition/UserCountry.php b/src/Plugin/Condition/UserCountry.php
+index e300fe3..e6a9012 100644
+--- a/src/Plugin/Condition/UserCountry.php
++++ b/src/Plugin/Condition/UserCountry.php
+@@ -8,6 +8,7 @@
+ 
+ namespace Drupal\smart_ip\Plugin\Condition;
+ 
++use Drupal\smart_ip\SmartIpLocation;
+ use Drupal\Core\Condition\ConditionPluginBase;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -92,7 +93,7 @@ class UserCountry extends ConditionPluginBase {
+     if (empty($countries)) {
+       return TRUE;
+     }
+-    /** @var \Drupal\smart_ip\SmartIpLocation $location */
++    /** @var SmartIpLocation $location */
+     $location    = \Drupal::service('smart_ip.smart_ip_location');
+     $userCountry = $location->get('countryCode');
+     if (empty($userCountry)) {
+diff --git a/src/SmartIp.php b/src/SmartIp.php
+index 12bafe0..95be6c4 100644
+--- a/src/SmartIp.php
++++ b/src/SmartIp.php
+@@ -7,6 +7,9 @@
+ 
+ namespace Drupal\smart_ip;
+ 
++use Symfony\Component\HttpFoundation\Session\Session;
++use Drupal\path_alias\AliasManagerInterface;
++use Drupal\Core\Path\PathMatcherInterface;
+ use Drupal\user\Entity\User;
+ use Drupal\Component\Utility\Tags;
+ 
+@@ -46,7 +49,7 @@ class SmartIp {
+     if (isset($results[$ip])) {
+       return $results[$ip];
+     }
+-    /** @var \Drupal\smart_ip\GetLocationEvent $event */
++    /** @var GetLocationEvent $event */
+     $event    = \Drupal::service('smart_ip.get_location_event');
+     $location = $event->getLocation();
+     $location->set('source', SmartIpLocationInterface::SMART_IP)
+@@ -149,7 +152,7 @@ class SmartIp {
+       session_cache_set($key, $value);
+     }
+     else {
+-      /** @var \Symfony\Component\HttpFoundation\Session\Session $session */
++      /** @var Session $session */
+       $session = \Drupal::service('session');
+       $session->set($key, $value);
+     }
+@@ -170,7 +173,7 @@ class SmartIp {
+       $smartIpSession = session_cache_get($key);
+     }
+     else {
+-      /** @var \Symfony\Component\HttpFoundation\Session\Session $session */
++      /** @var Session $session */
+       $session = \Drupal::service('session');
+       // Make sure session is started before calling any functions.
+       if($session->isStarted()) {
+@@ -253,7 +256,7 @@ class SmartIp {
+         }
+         $smartIpSession = self::getSession('smart_ip');
+         if (!isset($smartIpSession['location']['ipAddress']) || $smartIpSession['location']['ipAddress'] != $ip) {
+-          /** @var \Drupal\smart_ip\SmartIpLocation $location */
++          /** @var SmartIpLocation $location */
+           $location = \Drupal::service('smart_ip.smart_ip_location');
+           $location->delete();
+           $result = self::query($ip);
+@@ -400,12 +403,12 @@ class SmartIp {
+       else {
+         $url = \Drupal::service('path.current')->getPath();
+       }
+-      /** @var \Drupal\path_alias\AliasManagerInterface $aliasManager */
++      /** @var AliasManagerInterface $aliasManager */
+       $aliasManager = \Drupal::service('path_alias.manager');
+       $pathAlias = $aliasManager->getAliasByPath($url);
+       // Convert the Drupal path to lowercase.
+       $path = mb_strtolower($pathAlias);
+-      /** @var \Drupal\Core\Path\PathMatcherInterface $pathMatcher */
++      /** @var PathMatcherInterface $pathMatcher */
+       $pathMatcher = \Drupal::service('path.matcher');
+       // Compare the lowercase internal and lowercase path alias (if any).
+       $pageMatch = $pathMatcher->matchPath($path, $pages);
+diff --git a/src/SmartIpDataSourceInterface.php b/src/SmartIpDataSourceInterface.php
+index 2c78e22..ffed027 100644
+--- a/src/SmartIpDataSourceInterface.php
++++ b/src/SmartIpDataSourceInterface.php
+@@ -34,7 +34,7 @@ interface SmartIpDataSourceInterface {
+    * Act on \Drupal\smart_ip\SmartIp::query() when executed and if selected as
+    * Smart IP data source, query the IP address against its database.
+    *
+-   * @param \Drupal\smart_ip\GetLocationEvent $event
++   * @param GetLocationEvent $event
+    *   Smart IP query location override event for event listeners.
+    */
+   public function processQuery(GetLocationEvent $event);
+@@ -42,7 +42,7 @@ interface SmartIpDataSourceInterface {
+   /**
+    * Add Smart IP source module's config name.
+    *
+-   * @param \Drupal\smart_ip\AdminSettingsEvent $event
++   * @param AdminSettingsEvent $event
+    *   Smart IP admin settings override event for event listeners.
+    */
+   public function includeEditableConfigNames(AdminSettingsEvent $event);
+@@ -51,7 +51,7 @@ interface SmartIpDataSourceInterface {
+    * Add the form elements of this Smart IP data source to main admin settings
+    * page of Smart IP.
+    *
+-   * @param \Drupal\smart_ip\AdminSettingsEvent $event
++   * @param AdminSettingsEvent $event
+    *   Smart IP admin settings override event for event listeners.
+    */
+   public function formSettings(AdminSettingsEvent $event);
+@@ -59,7 +59,7 @@ interface SmartIpDataSourceInterface {
+   /**
+    * Act on validation of main Smart IP admin settings form.
+    *
+-   * @param \Drupal\smart_ip\AdminSettingsEvent $event
++   * @param AdminSettingsEvent $event
+    *   Smart IP admin settings override event for event listeners.
+    */
+   public function validateFormSettings(AdminSettingsEvent $event);
+@@ -67,7 +67,7 @@ interface SmartIpDataSourceInterface {
+   /**
+    * Act on submission of main Smart IP admin settings form.
+    *
+-   * @param \Drupal\smart_ip\AdminSettingsEvent $event
++   * @param AdminSettingsEvent $event
+    *   Smart IP admin settings override event for event listeners.
+    */
+   public function submitFormSettings(AdminSettingsEvent $event);
+@@ -75,7 +75,7 @@ interface SmartIpDataSourceInterface {
+   /**
+    * Act on manual database update.
+    *
+-   * @param \Drupal\smart_ip\DatabaseFileEvent $event
++   * @param DatabaseFileEvent $event
+    *   Smart IP database file related events for event listeners.
+    */
+   public function manualUpdate(DatabaseFileEvent $event);
+@@ -83,7 +83,7 @@ interface SmartIpDataSourceInterface {
+   /**
+    * Act on Drupal cron run.
+    *
+-   * @param \Drupal\smart_ip\DatabaseFileEvent $event
++   * @param DatabaseFileEvent $event
+    *   Smart IP database file related events for event listeners.
+    */
+   public function cronRun(DatabaseFileEvent $event);
+diff --git a/src/SmartIpLocation.php b/src/SmartIpLocation.php
+index 491cd25..e54c6ae 100644
+--- a/src/SmartIpLocation.php
++++ b/src/SmartIpLocation.php
+@@ -7,6 +7,7 @@
+ 
+ namespace Drupal\smart_ip;
+ 
++use Drupal\user\UserData;
+ /**
+  * Implements wrapper and utility methods for Smart IP's data location.
+  *
+@@ -181,7 +182,7 @@ class SmartIpLocation implements SmartIpLocationInterface {
+       $data = SmartIp::getSession('smart_ip');
+       $user = \Drupal::currentUser();
+       if (empty($data['location']) && $user->id() != 0) {
+-        /** @var \Drupal\user\UserData $userData */
++        /** @var UserData $userData */
+         $userData = \Drupal::service('user.data');
+         // Get current user's stored location from user_data
+         $data = $userData->get('smart_ip', $user->id(), 'geoip_location');
+@@ -235,7 +236,7 @@ class SmartIpLocation implements SmartIpLocationInterface {
+       // Save the Smart IP location in current user's session.
+       SmartIp::setSession('smart_ip', $data);
+       if ($uid != 0) {
+-        /** @var \Drupal\user\UserData $userData */
++        /** @var UserData $userData */
+         $userData = \Drupal::service('user.data');
+         // Save the Smart IP location to current user's user_data
+         $userData->set('smart_ip', $uid, 'geoip_location', $data);
+@@ -254,7 +255,7 @@ class SmartIpLocation implements SmartIpLocationInterface {
+     // Save the Smart IP location in current user's session.
+     SmartIp::setSession('smart_ip', NULL);
+     if ($uid != 0) {
+-      /** @var \Drupal\user\UserData $userData */
++      /** @var UserData $userData */
+       $userData = \Drupal::service('user.data');
+       // Delete the Smart IP location in current user's user_data.
+       $userData->delete('smart_ip', $uid, 'geoip_location');

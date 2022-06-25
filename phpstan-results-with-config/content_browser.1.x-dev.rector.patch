@@ -1,0 +1,191 @@
+diff --git a/content_browser.info.yml b/content_browser.info.yml
+index 602d373..4f72f29 100644
+--- a/content_browser.info.yml
++++ b/content_browser.info.yml
+@@ -1,8 +1,7 @@
+ name: Content Browser
+ description: 'Provides a default Entity Browser for default Content Entity types, using Masonry.'
+ type: module
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ dependencies:
+   - entity_browser:entity_browser
+   - entity_embed:entity_embed
+diff --git a/content_browser.install b/content_browser.install
+index 817a4ca..a3d6184 100644
+--- a/content_browser.install
++++ b/content_browser.install
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\file\FileInterface;
++use Drupal\Core\Entity\Entity\EntityViewDisplay;
++use Drupal\Core\Config\ConfigFactoryInterface;
+ /**
+  * @file
+  * Defines install routines for Content Browser.
+@@ -17,8 +20,8 @@ function content_browser_install() {
+   // Add an icon for Content Browser if we aren't installing from configuration.
+   if (!\Drupal::isConfigSyncing()) {
+     $data = file_get_contents(dirname(__FILE__) . '/content_browser_icon.png');
+-    /** @var \Drupal\file\FileInterface $file */
+-    $file = file_save_data($data, 'public://content_browser_icon.png', FileSystemInterface::EXISTS_REPLACE);
++    /** @var FileInterface $file */
++    $file = \Drupal::service('file.repository')->writeData($data, 'public://content_browser_icon.png', FileSystemInterface::EXISTS_REPLACE);
+     if ($file) {
+       // Set file uuid same as default config.
+       $uuid = Yaml::decode(file_get_contents(dirname(__FILE__) . '/config/install/embed.button.content_browser.yml'))['icon_uuid'];
+@@ -51,7 +54,7 @@ function content_browser_install() {
+ 
+   // Load the selected teaser displays.
+   $storage = \Drupal::entityTypeManager()->getStorage('entity_view_display');
+-  /** @var \Drupal\Core\Entity\Entity\EntityViewDisplay[] $displays */
++  /** @var EntityViewDisplay[] $displays */
+   $displays = $storage->loadMultiple($results);
+ 
+   // Clone each display and save it.
+@@ -70,7 +73,7 @@ function content_browser_install() {
+ function content_browser_uninstall() {
+   \Drupal::configFactory()->getEditable('embed.button.content_browser')->delete();
+   \Drupal::configFactory()->getEditable('core.entity_view_mode.node.content_browser')->delete();
+-  /** @var \Drupal\node\Entity\NodeType[] $types */
++  /** @var NodeType[] $types */
+   $types = NodeType::loadMultiple();
+   foreach ($types as $type) {
+     if ($config = \Drupal::configFactory()->getEditable('core.entity_view_display.node.' . $type->id() . '.content_browser')) {
+@@ -111,7 +114,7 @@ https://github.com/desandro/masonry/releases and place it in /libraries'
+  * Updates entity browser configuration to remove outdated values.
+  */
+ function content_browser_update_8001() {
+-  /** @var \Drupal\Core\Config\ConfigFactoryInterface $config_factory */
++  /** @var ConfigFactoryInterface $config_factory */
+   $config_factory = \Drupal::service('config.factory');
+   $list = $config_factory->listAll('entity_browser.browser');
+ 
+@@ -133,7 +136,7 @@ function content_browser_update_8001() {
+  * Updates the content browser view to contextually filter by allowed bundles.
+  */
+ function content_browser_update_8002() {
+-  /** @var \Drupal\views\Entity\View $view */
++  /** @var View $view */
+   if (($view = View::load('content_browser')) && class_exists('Drupal\entity_browser\Plugin\views\argument_default\EntityBrowserWidgetContext')) {
+     $display = &$view->getDisplay('default');
+     $display['display_options']['arguments']['type'] = [
+diff --git a/content_browser.module b/content_browser.module
+index 8a6ebc1..157e8cf 100644
+--- a/content_browser.module
++++ b/content_browser.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\node\Plugin\views\argument\Type;
+ /**
+  * @file
+  * Contains logic for content_browser.
+@@ -50,10 +51,10 @@ function content_browser_form_alter(&$form, FormStateInterface &$form_state) {
+     }
+     // Remove types that are contextually disallowed by the View.
+     elseif (isset($form['#id']) && $form['#id'] == 'views-exposed-form-content-browser-entity-browser') {
+-      /** @var \Drupal\views\ViewExecutable $view */
++      /** @var ViewExecutable $view */
+       $view = $form_state->get('view');
+       if ($view instanceof ViewExecutable && isset($view->argument['type'])) {
+-        /** @var \Drupal\node\Plugin\views\argument\Type $type */
++        /** @var Type $type */
+         $type = $view->argument['type'];
+         $value = $type->getValue();
+         if (!is_null($value) && !$type->isException($value)) {
+diff --git a/src/Plugin/Block/ContentEmbedBlock.php b/src/Plugin/Block/ContentEmbedBlock.php
+index 8b51ab5..2a05956 100644
+--- a/src/Plugin/Block/ContentEmbedBlock.php
++++ b/src/Plugin/Block/ContentEmbedBlock.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\content_browser\Plugin\Block;
+ 
++use Drupal\Core\Entity\EntityDisplayRepository;
+ use Drupal\Component\Utility\NestedArray;
+ use Drupal\Core\Block\BlockBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -74,7 +75,7 @@ class ContentEmbedBlock extends BlockBase {
+ 
+     $form['selection'] = $this->browserForm($nids);
+ 
+-    /** @var \Drupal\Core\Entity\EntityDisplayRepository $entity_display_repository */
++    /** @var EntityDisplayRepository $entity_display_repository */
+     $entity_display_repository = \Drupal::service('entity_display.repository');
+     $view_mode_options = $entity_display_repository->getViewModeOptions('node');
+ 
+@@ -141,7 +142,7 @@ class ContentEmbedBlock extends BlockBase {
+     $bundle_info = \Drupal::service('entity_type.bundle.info')->getBundleInfo('node');
+ 
+     foreach ($nids as $nid) {
+-      /** @var \Drupal\node\Entity\Node $node */
++      /** @var Node $node */
+       $node = Node::load($nid);
+ 
+       $selection['table'][$nid] = [
+@@ -209,7 +210,7 @@ class ContentEmbedBlock extends BlockBase {
+     $view_builder = \Drupal::entityTypeManager()->getViewBuilder('node');
+ 
+     foreach ($this->getDefaultNids() as $nid) {
+-      /** @var \Drupal\node\Entity\Node $node */
++      /** @var Node $node */
+       $node = Node::load($nid);
+       if ($node && $node->access('view')) {
+         if (isset(static::$recursiveRenderDepth[$nid])) {
+diff --git a/src/Plugin/views/field/ContentBrowserPreview.php b/src/Plugin/views/field/ContentBrowserPreview.php
+index f2b9ef0..bda9247 100644
+--- a/src/Plugin/views/field/ContentBrowserPreview.php
++++ b/src/Plugin/views/field/ContentBrowserPreview.php
+@@ -21,14 +21,14 @@ class ContentBrowserPreview extends FieldPluginBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+@@ -41,9 +41,9 @@ class ContentBrowserPreview extends FieldPluginBase {
+    *   The plugin id.
+    * @param mixed $plugin_definition
+    *   The plugin definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
++   * @param EntityDisplayRepositoryInterface $entity_display_repository
+    *   The entity display repository.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, EntityDisplayRepositoryInterface $entity_display_repository) {
+diff --git a/tests/src/Functional/InstallTest.php b/tests/src/Functional/InstallTest.php
+index a30611c..d70d985 100644
+--- a/tests/src/Functional/InstallTest.php
++++ b/tests/src/Functional/InstallTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\content_browser\Functional;
+ 
++use Drupal\Core\Extension\ModuleInstaller;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -39,7 +40,7 @@ class InstallTest extends BrowserTestBase {
+     $this->copyConfig($active, $sync);
+ 
+     // Uninstall Content browser.
+-    /** @var \Drupal\Core\Extension\ModuleInstaller $module_installer */
++    /** @var ModuleInstaller $module_installer */
+     $module_installer = $this->container->get('module_installer');
+     $module_installer->uninstall(['content_browser']);
+ 

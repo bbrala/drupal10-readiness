@@ -1,0 +1,595 @@
+diff --git a/revision_tree.info.yml b/revision_tree.info.yml
+index 8bfc145..c62547c 100644
+--- a/revision_tree.info.yml
++++ b/revision_tree.info.yml
+@@ -1,7 +1,7 @@
+ name: 'Revision Tree'
+ type: module
+ description: 'Provides a way to organize entity revisions in a tree by specifying a parent and, optionally, a merge parent revision.'
+-core_version_requirement: ^8.8 || ^9
++core_version_requirement: ^9.1 || ^10
+ package: Core (Experimental)
+ dependencies:
+   - drupal:workspaces
+diff --git a/revision_tree.module b/revision_tree.module
+index f5ac9ca..64f4896 100644
+--- a/revision_tree.module
++++ b/revision_tree.module
+@@ -1,5 +1,10 @@
+ <?php
+ 
++use Drupal\Core\Entity\ContentEntityType;
++use Drupal\Core\Entity\RevisionableStorageInterface;
++use Drupal\revision_tree\EntityRevisionTreeHandlerInterface;
++use Drupal\Core\Entity\RevisionableInterface;
++use Drupal\workspaces\WorkspaceInterface;
+ /**
+  * @file
+  * Provides the revision tree API.
+@@ -41,7 +46,7 @@ function revision_tree_entity_type_build(array &$entity_types) {
+  */
+ function revision_tree_entity_base_field_info(EntityTypeInterface $entity_type) {
+   // Add the 'revision_parent' and 'revision_merge_parent' fields.
+-  /** @var \Drupal\Core\Entity\ContentEntityType $entity_type */
++  /** @var ContentEntityType $entity_type */
+   if ($entity_type->isRevisionable()) {
+       $field_name = $entity_type->getRevisionMetadataKeys(FALSE)['revision_parent'];
+       $base_field_definitions[$field_name] = BaseFieldDefinition::create('revision_reference')
+@@ -77,9 +82,9 @@ function revision_tree_entity_presave(EntityInterface $entity) {
+       return;
+     }
+ 
+-    /** @var \Drupal\Core\Entity\RevisionableStorageInterface $storage */
++    /** @var RevisionableStorageInterface $storage */
+     $storage = $entity_type_manager->getStorage($entity->getEntityTypeId());
+-    /** @var \Drupal\revision_tree\EntityRevisionTreeHandlerInterface $revision_tree */
++    /** @var EntityRevisionTreeHandlerInterface $revision_tree */
+     $revision_tree = $entity_type_manager->getHandler($entity->getEntityTypeId(), 'revision_tree');
+     $revision_tree->setParentRevisionId($entity, $storage->getLatestRevisionId($entity->id()));
+ 
+@@ -96,10 +101,10 @@ function revision_tree_entity_presave(EntityInterface $entity) {
+  * Implements hook_entity_revision_create().
+  */
+ function revision_tree_entity_revision_create(EntityInterface $new_revision, EntityInterface $entity, $keep_untranslatable_fields) {
+-  /** @var \Drupal\Core\Entity\RevisionableInterface $entity */
++  /** @var RevisionableInterface $entity */
+   $entity_type_manager = \Drupal::entityTypeManager();
+   if (!$entity->isNew() && $entity_type_manager->hasHandler($entity->getEntityTypeId(), 'revision_tree')) {
+-    /** @var \Drupal\revision_tree\EntityRevisionTreeHandlerInterface $revision_tree */
++    /** @var EntityRevisionTreeHandlerInterface $revision_tree */
+     $revision_tree = $entity_type_manager->getHandler($entity->getEntityTypeId(), 'revision_tree');
+ 
+     // Ensure that the parent of a newly-created revision is the original entity
+@@ -115,7 +120,7 @@ function revision_tree_entity_revision_create(EntityInterface $new_revision, Ent
+ function revision_tree_entity_operation(EntityInterface $entity) {
+   $operations = [];
+ 
+-  /** @var \Drupal\workspaces\WorkspaceInterface $entity */
++  /** @var WorkspaceInterface $entity */
+   if ($entity->getEntityTypeId() === 'workspace') {
+     $operations['associations'] = [
+       'title' => t('Rebuild associations'),
+diff --git a/src/EntityRevisionTreeHandlerInterface.php b/src/EntityRevisionTreeHandlerInterface.php
+index 9f4bf17..dc84c79 100644
+--- a/src/EntityRevisionTreeHandlerInterface.php
++++ b/src/EntityRevisionTreeHandlerInterface.php
+@@ -12,7 +12,7 @@ interface EntityRevisionTreeHandlerInterface {
+   /**
+    * Gets the parent revisions ID.
+    *
+-   * @param \Drupal\Core\Entity\RevisionableInterface $entity
++   * @param RevisionableInterface $entity
+    *   A revisionable entity object.
+    *
+    * @return int|string
+@@ -23,7 +23,7 @@ interface EntityRevisionTreeHandlerInterface {
+   /**
+    * Gets the merge parent revisions ID.
+    *
+-   * @param \Drupal\Core\Entity\RevisionableInterface $entity
++   * @param RevisionableInterface $entity
+    *   A revisionable entity object.
+    *
+    * @return int|string
+@@ -34,7 +34,7 @@ interface EntityRevisionTreeHandlerInterface {
+   /**
+    * Sets the parent revision ID.
+    *
+-   * @param \Drupal\Core\Entity\RevisionableInterface $entity
++   * @param RevisionableInterface $entity
+    *   A revisionable entity object.
+    * @param int|string $revision_id
+    *   The ID of the parent revision.
+@@ -46,7 +46,7 @@ interface EntityRevisionTreeHandlerInterface {
+   /**
+    * Sets the merge parent revision ID.
+    *
+-   * @param \Drupal\Core\Entity\RevisionableInterface $entity
++   * @param RevisionableInterface $entity
+    *   A revisionable entity object.
+    * @param int|string $revision_id
+    *   The ID of the merge parent revision.
+diff --git a/src/Form/WorkspaceAssociationsRebuildForm.php b/src/Form/WorkspaceAssociationsRebuildForm.php
+index 71d922a..d381cd0 100644
+--- a/src/Form/WorkspaceAssociationsRebuildForm.php
++++ b/src/Form/WorkspaceAssociationsRebuildForm.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\revision_tree\Form;
+ 
++use Drupal\workspaces\WorkspaceInterface;
++use Drupal\workspaces\WorkspaceRepository;
++use Symfony\Component\HttpFoundation\RedirectResponse;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Entity\ContentEntityForm;
+ use Drupal\Core\Entity\EntityRepositoryInterface;
+@@ -23,14 +28,14 @@ class WorkspaceAssociationsRebuildForm extends ContentEntityForm implements Work
+   /**
+    * The workspace entity.
+    *
+-   * @var \Drupal\workspaces\WorkspaceInterface
++   * @var WorkspaceInterface
+    */
+   protected $entity;
+ 
+   /**
+    * The workspace replication manager.
+    *
+-   * @var \Drupal\workspaces\WorkspaceManagerInterface
++   * @var WorkspaceManagerInterface
+    */
+   protected $workspaceManager;
+ 
+@@ -44,24 +49,24 @@ class WorkspaceAssociationsRebuildForm extends ContentEntityForm implements Work
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Constructs a ContentEntityForm object.
+    *
+-   * @param \Drupal\workspaces\WorkspaceAssociationInterface $workspace_association
++   * @param WorkspaceAssociationInterface $workspace_association
+    *   The association service.
+-   * @param \Drupal\workspaces\WorkspaceManagerInterface $workspace_manager
++   * @param WorkspaceManagerInterface $workspace_manager
+    *   The workspace manager.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger service.
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository service.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+    */
+   public function __construct(
+@@ -146,7 +151,7 @@ class WorkspaceAssociationsRebuildForm extends ContentEntityForm implements Work
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $workspace_ids = [];
+     if ($form_state->getValue('include_descendants')) {
+-      /** @var \Drupal\workspaces\WorkspaceRepository $workspace_repository */
++      /** @var WorkspaceRepository $workspace_repository */
+       $workspace_repository = \Drupal::service('workspaces.repository');
+ 
+       $tree = $workspace_repository->loadTree();
+@@ -169,7 +174,7 @@ class WorkspaceAssociationsRebuildForm extends ContentEntityForm implements Work
+     }
+ 
+     batch_set($batch);
+-    /** @var \Symfony\Component\HttpFoundation\RedirectResponse $redirect */
++    /** @var RedirectResponse $redirect */
+     $redirect = batch_process('/admin/config/workflow/workspaces');
+     $form_state->setRedirectUrl(Url::fromUri($redirect->getTargetUrl()));
+   }
+@@ -186,8 +191,8 @@ class WorkspaceAssociationsRebuildForm extends ContentEntityForm implements Work
+    * @param $context
+    *   The batch context.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function batchProcess($entity_type_id, $workspace_id, &$context) {
+     $this->workspaceAssociation->rebuildAssociations($entity_type_id, $workspace_id);
+diff --git a/src/Plugin/Field/FieldType/RevisionReferenceItem.php b/src/Plugin/Field/FieldType/RevisionReferenceItem.php
+index f396315..6b4c916 100644
+--- a/src/Plugin/Field/FieldType/RevisionReferenceItem.php
++++ b/src/Plugin/Field/FieldType/RevisionReferenceItem.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\revision_tree\Plugin\Field\FieldType;
+ 
++use Drupal\Core\Field\BaseFieldDefinition;
+ use Drupal\Core\Field\FieldItemBase;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\Core\StringTranslation\TranslatableMarkup;
+@@ -35,7 +36,7 @@ class RevisionReferenceItem extends FieldItemBase {
+   public static function propertyDefinitions(FieldStorageDefinitionInterface $field_definition) {
+     $target_type = \Drupal::entityTypeManager()->getDefinition($field_definition->getTargetEntityTypeId());
+ 
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition $revision_field_definition */
++    /** @var BaseFieldDefinition $revision_field_definition */
+     $revision_field_definition = \Drupal::service('entity_field.manager')->getBaseFieldDefinitions($target_type->id())[$target_type->getKey('revision')];
+     $revision_main_property = $revision_field_definition->getPropertyDefinition($revision_field_definition->getMainPropertyName());
+ 
+@@ -59,7 +60,7 @@ class RevisionReferenceItem extends FieldItemBase {
+   public static function schema(FieldStorageDefinitionInterface $field_definition) {
+     $target_type = \Drupal::entityTypeManager()->getDefinition($field_definition->getTargetEntityTypeId());
+ 
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition $revision_field_definition */
++    /** @var BaseFieldDefinition $revision_field_definition */
+     $revision_field_definition = \Drupal::service('entity_field.manager')->getBaseFieldDefinitions($target_type->id())[$target_type->getKey('revision')];
+     $revision_column_schema = $revision_field_definition->getSchema()['columns'][$revision_field_definition->getMainPropertyName()];
+ 
+diff --git a/src/Plugin/Validation/Constraint/ValidRevisionParentConstraintValidator.php b/src/Plugin/Validation/Constraint/ValidRevisionParentConstraintValidator.php
+index 90fd53b..6ea13d5 100644
+--- a/src/Plugin/Validation/Constraint/ValidRevisionParentConstraintValidator.php
++++ b/src/Plugin/Validation/Constraint/ValidRevisionParentConstraintValidator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\revision_tree\Plugin\Validation\Constraint;
+ 
++use Drupal\Core\Entity\RevisionableStorageInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Entity\RevisionableInterface;
+@@ -17,14 +18,14 @@ class ValidRevisionParentConstraintValidator extends ConstraintValidator impleme
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a ValidRevisionTreeReferenceConstraintValidator object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -46,7 +47,7 @@ class ValidRevisionParentConstraintValidator extends ConstraintValidator impleme
+   public function validate($entity, Constraint $constraint) {
+     assert($entity instanceof RevisionableInterface);
+ 
+-    /** @var \Drupal\Core\Entity\RevisionableStorageInterface $storage */
++    /** @var RevisionableStorageInterface $storage */
+     $storage = $this->entityTypeManager->getStorage($entity->getEntityTypeId());
+     $revision_tree = $this->entityTypeManager->getHandler($entity->getEntityTypeId(), 'revision_tree');
+     $revision_parent_field_name = $entity->getEntityType()->getRevisionMetadataKeys(FALSE)['revision_parent'];
+diff --git a/src/RevisionTreeWorkspaceAssociation.php b/src/RevisionTreeWorkspaceAssociation.php
+index acd6e5e..5a47150 100644
+--- a/src/RevisionTreeWorkspaceAssociation.php
++++ b/src/RevisionTreeWorkspaceAssociation.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\revision_tree;
+ 
++use Drupal\workspaces\WorkspaceRepository;
++use Drupal\Core\Entity\ContentEntityStorageInterface;
++use Drupal\Core\Database\Query\SelectInterface;
+ use Drupal\Core\Entity\ContentEntityTypeInterface;
+ use Drupal\Core\Entity\RevisionableInterface;
+ use Drupal\workspaces\WorkspaceAssociation;
+@@ -13,7 +16,7 @@ class RevisionTreeWorkspaceAssociation extends WorkspaceAssociation implements R
+    * {@inheritdoc}
+    */
+   public function trackEntity(RevisionableInterface $entity, WorkspaceInterface $workspace) {
+-    /** @var \Drupal\workspaces\WorkspaceRepository $workspace_repository */
++    /** @var WorkspaceRepository $workspace_repository */
+     $workspace_repository = \Drupal::service('workspaces.repository');
+ 
+     // Determine all workspaces that might be affected by this change.
+@@ -22,7 +25,7 @@ class RevisionTreeWorkspaceAssociation extends WorkspaceAssociation implements R
+     $parent_revision = $entity->revision_parent->target_revision_id;
+     $merge_parent_revision = NULL;
+     if ($merge_parent = $entity->revision_merge_parent->target_revision_id) {
+-      /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $storage */
++      /** @var ContentEntityStorageInterface $storage */
+       $storage = $this->entityTypeManager->getStorage(
+         $entity->getEntityTypeId()
+       );
+@@ -83,7 +86,7 @@ class RevisionTreeWorkspaceAssociation extends WorkspaceAssociation implements R
+   /**
+    * Build a query that lists all revisions overridden in a given workspace.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityTypeInterface $entity_type
++   * @param ContentEntityTypeInterface $entity_type
+    *   The entity type.
+    * @param string $source_workspace
+    *   The source workspace to calculate the diff for.
+@@ -92,7 +95,7 @@ class RevisionTreeWorkspaceAssociation extends WorkspaceAssociation implements R
+    * @param array|null $entity_ids
+    *   (optional) A list of entity id's to restrict this operation to.
+    *
+-   * @return \Drupal\Core\Database\Query\SelectInterface
++   * @return SelectInterface
+    *   A select query that can be used to insert new index rows.
+    */
+   protected function buildOverridesQuery(ContentEntityTypeInterface $entity_type, $source_workspace, $parent_workspace = NULL, $entity_ids = NULL) {
+@@ -152,12 +155,12 @@ class RevisionTreeWorkspaceAssociation extends WorkspaceAssociation implements R
+    * {@inheritdoc}
+    */
+   public function rebuildAssociations($entity_type_id, $workspace_id, $entity_ids = NULL) {
+-    /** @var \Drupal\workspaces\WorkspaceInterface $workspace */
++    /** @var WorkspaceInterface $workspace */
+     $workspace = $this->entityTypeManager->getStorage('workspace')->load($workspace_id);
+-    /** @var \Drupal\workspaces\WorkspaceInterface $parent_workspace */
++    /** @var WorkspaceInterface $parent_workspace */
+     $parent_workspace = $workspace->parent->entity;
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityTypeInterface $entity_type */
++    /** @var ContentEntityTypeInterface $entity_type */
+     $entity_type = $this->entityTypeManager->getDefinition($entity_type_id);
+ 
+     $this->deleteAssociations($workspace_id, $entity_type_id, $entity_ids);
+diff --git a/src/SqlRevisionTreeHandler.php b/src/SqlRevisionTreeHandler.php
+index af2813a..3b29a9d 100644
+--- a/src/SqlRevisionTreeHandler.php
++++ b/src/SqlRevisionTreeHandler.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\revision_tree;
+ 
++use Drupal\Core\Entity\ContentEntityTypeInterface;
++use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\Component\Graph\Graph;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityHandlerInterface;
+@@ -20,21 +22,21 @@ class SqlRevisionTreeHandler implements EntityRevisionTreeHandlerInterface, Enti
+   /**
+    * Information about the entity type.
+    *
+-   * @var \Drupal\Core\Entity\ContentEntityTypeInterface
++   * @var ContentEntityTypeInterface
+    */
+   protected $entityType;
+ 
+   /**
+    * The entity storage.
+    *
+-   * @var \Drupal\Core\Entity\Sql\SqlEntityStorageInterface
++   * @var SqlEntityStorageInterface
+    */
+   protected $storage;
+ 
+   /**
+    * The field storage definitions for this entity type.
+    *
+-   * @var \Drupal\Core\Field\FieldStorageDefinitionInterface[]
++   * @var FieldStorageDefinitionInterface[]
+    */
+   protected $fieldStorageDefinitions;
+ 
+@@ -69,20 +71,20 @@ class SqlRevisionTreeHandler implements EntityRevisionTreeHandlerInterface, Enti
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * Constructs a new SqlRevisionTreeHandler.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   An entity type definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manger.
+-   * @param \Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface $entity_last_installed_schema_repository
++   * @param EntityLastInstalledSchemaRepositoryInterface $entity_last_installed_schema_repository
+    *   The last installed schema repository.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database connection.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityTypeManagerInterface $entity_type_manager, EntityLastInstalledSchemaRepositoryInterface $entity_last_installed_schema_repository, Connection $database) {
+diff --git a/tests/src/Functional/WorkspacesAssociationsRebuildTest.php b/tests/src/Functional/WorkspacesAssociationsRebuildTest.php
+index c14d17e..7f6c1aa 100644
+--- a/tests/src/Functional/WorkspacesAssociationsRebuildTest.php
++++ b/tests/src/Functional/WorkspacesAssociationsRebuildTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\workspaces\Functional;
+ 
++use Drupal\workspaces\WorkspaceAssociationInterface;
++use Drupal\workspaces\WorkspaceManagerInterface;
++use Drupal\Core\Entity\ContentEntityStorageInterface;
+ use Drupal\node\Entity\Node;
+ use Drupal\Tests\BrowserTestBase;
+ use Drupal\Tests\system\Functional\Cache\AssertPageCacheContextsAndTagsTrait;
+@@ -23,13 +26,13 @@ class WorkspacesAssociationsRebuildTest extends BrowserTestBase {
+    */
+   public static $modules = ['block', 'workspaces', 'node', 'revision_tree'];
+ 
+-  /** @var \Drupal\workspaces\WorkspaceAssociationInterface */
++  /** @var WorkspaceAssociationInterface */
+   protected $workspaceAssociation;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $permissions = [
+@@ -44,9 +47,9 @@ class WorkspacesAssociationsRebuildTest extends BrowserTestBase {
+       'parent' => 'stage',
+     ])->save();
+ 
+-    /** @var \Drupal\workspaces\WorkspaceManagerInterface $workspace_manager */
++    /** @var WorkspaceManagerInterface $workspace_manager */
+     $workspace_manager = $this->container->get('workspaces.manager');
+-    /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $nodeStorage */
++    /** @var ContentEntityStorageInterface $nodeStorage */
+     $nodeStorage = $this->container->get('entity_type.manager')->getStorage('node');
+ 
+     $node = $nodeStorage->create([
+@@ -110,8 +113,11 @@ class WorkspacesAssociationsRebuildTest extends BrowserTestBase {
+ 
+     $page = $this->getSession()->getPage();
+     $page->uncheckField('include_descendants');
+-    $this->drupalPostForm(NULL, [], t('Rebuild Stage'));
+-    $this->assertText('Rebuild complete.');
++    $this->submitForm([], t('Rebuild Stage'));
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Rebuild complete.');
+ 
+     // Only the associations of the stage workspace should have been rebuilt.
+     $this->assertEquals(
+@@ -143,8 +149,11 @@ class WorkspacesAssociationsRebuildTest extends BrowserTestBase {
+     $this->assertEmpty($this->workspaceAssociation->getTrackedEntities('stage'));
+     $this->assertEmpty($this->workspaceAssociation->getTrackedEntities('dev'));
+ 
+-    $this->drupalPostForm(NULL, ['include_descendants' => 1], t('Rebuild Stage'));
+-    $this->assertText('Rebuild complete.');
++    $this->submitForm(['include_descendants' => 1], t('Rebuild Stage'));
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Rebuild complete.');
+ 
+     // Also child workspace associations should have been rebuilt in this case.
+     $this->assertEquals(
+diff --git a/tests/src/Kernel/SqlRevisionTreeHandlerTest.php b/tests/src/Kernel/SqlRevisionTreeHandlerTest.php
+index 99a9f25..f29aa33 100644
+--- a/tests/src/Kernel/SqlRevisionTreeHandlerTest.php
++++ b/tests/src/Kernel/SqlRevisionTreeHandlerTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\revision_tree\Kernel;
+ 
++use Drupal\Core\Entity\Sql\SqlContentEntityStorage;
++use Drupal\revision_tree\EntityRevisionTreeHandlerInterface;
+ use Drupal\Core\Entity\RevisionableInterface;
+ use Drupal\KernelTests\Core\Entity\EntityKernelTestBase;
+ 
+@@ -25,14 +27,14 @@ class SqlRevisionTreeHandlerTest extends EntityKernelTestBase {
+   /**
+    * The storage of the test entity type.
+    *
+-   * @var \Drupal\Core\Entity\Sql\SqlContentEntityStorage
++   * @var SqlContentEntityStorage
+    */
+   protected $storage;
+ 
+   /**
+    * The revision tree handler of the test entity type.
+    *
+-   * @var \Drupal\revision_tree\EntityRevisionTreeHandlerInterface
++   * @var EntityRevisionTreeHandlerInterface
+    */
+   protected $revisionTree;
+ 
+@@ -68,7 +70,7 @@ class SqlRevisionTreeHandlerTest extends EntityKernelTestBase {
+     $this->assertArrayNotHasKey('revision_parent', $base_field_definitions);
+ 
+     // Check that the first revision of an entity does not have a parent.
+-    /** @var \Drupal\Core\Entity\RevisionableInterface $revision_1 */
++    /** @var RevisionableInterface $revision_1 */
+     $revision_1 = $this->storage->create();
+     $revision_1->save();
+     $this->assertEmpty($this->revisionTree->getParentRevisionId($revision_1));
+@@ -115,7 +117,7 @@ class SqlRevisionTreeHandlerTest extends EntityKernelTestBase {
+     \Drupal::currentUser()->setAccount($this->createUser());
+ 
+     // Create an initial revision.
+-    /** @var \Drupal\Core\Entity\RevisionableInterface $revision_1 */
++    /** @var RevisionableInterface $revision_1 */
+     $revision_1 = $this->storage->create();
+     $violations = $revision_1->validate();
+     $this->assertEmpty($violations);
+@@ -257,7 +259,7 @@ class SqlRevisionTreeHandlerTest extends EntityKernelTestBase {
+   /**
+    * Creates a revision for the test entity type.
+    *
+-   * @param \Drupal\Core\Entity\RevisionableInterface $entity
++   * @param RevisionableInterface $entity
+    *   A revision entity object.
+    * @param int $revision_id
+    *   The ID of the revision that will be created.
+diff --git a/tests/src/Kernel/WorkspaceInheritanceTest.php b/tests/src/Kernel/WorkspaceInheritanceTest.php
+index 526766b..d232c3a 100644
+--- a/tests/src/Kernel/WorkspaceInheritanceTest.php
++++ b/tests/src/Kernel/WorkspaceInheritanceTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\revision_tree\Kernel;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\revision_tree\RevisionTreeWorkspaceAssociationInterface;
++use Drupal\node\NodeInterface;
++use Drupal\Core\Entity\ContentEntityStorageInterface;
+ use Drupal\entity_test\Entity\EntityTestMulRevPub;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\Tests\field\Traits\EntityReferenceTestTrait;
+@@ -29,14 +33,14 @@ class WorkspaceInheritanceTest extends KernelTestBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The workspace association service.
+    *
+-   * @var \Drupal\revision_tree\RevisionTreeWorkspaceAssociationInterface
++   * @var RevisionTreeWorkspaceAssociationInterface
+    */
+   protected $workspaceAssociation;
+ 
+@@ -50,7 +54,7 @@ class WorkspaceInheritanceTest extends KernelTestBase {
+   /**
+    * An array of nodes created before installing the Workspaces module.
+    *
+-   * @var \Drupal\node\NodeInterface[]
++   * @var NodeInterface[]
+    */
+   protected $nodes = [];
+ 
+@@ -102,7 +106,7 @@ class WorkspaceInheritanceTest extends KernelTestBase {
+   }
+ 
+   protected function executeEntityOperations($operations) {
+-    /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $nodeStorage */
++    /** @var ContentEntityStorageInterface $nodeStorage */
+     $nodeStorage = $this->entityTypeManager->getStorage('node');
+     foreach ($operations as $index => $operation) {
+       list($workspace, $label, $merge_parent) = $operation;
+@@ -123,11 +127,12 @@ class WorkspaceInheritanceTest extends KernelTestBase {
+    *
+    * Regression test for a specific bug. Invoking rebuilds across multiple
+    * entity types at once resulted in a database integrity constraint exception.
++   * @doesNotPerformAssertions
+    */
+   public function testMultiTypeRebuild() {
+-    /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $nodeStorage */
++    /** @var ContentEntityStorageInterface $nodeStorage */
+     $nodeStorage = $this->entityTypeManager->getStorage('node');
+-    /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $entityTestStorage */
++    /** @var ContentEntityStorageInterface $entityTestStorage */
+     $entityTestStorage = $this->entityTypeManager->getStorage('node');
+ 
+     $test_entity = EntityTestMulRevPub::create([

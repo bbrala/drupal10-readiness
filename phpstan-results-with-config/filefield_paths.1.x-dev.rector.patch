@@ -1,0 +1,610 @@
+diff --git a/filefield_paths.inc b/filefield_paths.inc
+index f75563a..00b65f0 100644
+--- a/filefield_paths.inc
++++ b/filefield_paths.inc
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\field\Entity\FieldConfig;
++use Drupal\field\Entity\FieldStorageConfig;
++use Drupal\file\Entity\File;
+ /**
+  * @file
+  * File (Field) Paths module integration.
+@@ -47,9 +50,9 @@ function filefield_paths_filefield_paths_field_settings($form) {
+  * Implements hook_filefield_paths_process_file().
+  */
+ function filefield_paths_filefield_paths_process_file(ContentEntityInterface $entity, FileFieldItemList $field, array $settings = []) {
+-  /** @var \Drupal\field\Entity\FieldConfig $field_config */
++  /** @var FieldConfig $field_config */
+   $field_config = $field->getFieldDefinition();
+-  /** @var \Drupal\field\Entity\FieldStorageConfig $field_storage */
++  /** @var FieldStorageConfig $field_storage */
+   $field_storage = $field_config->getFieldStorageDefinition();
+ 
+   $file_system = \Drupal::service('file_system');
+@@ -59,22 +62,22 @@ function filefield_paths_filefield_paths_process_file(ContentEntityInterface $en
+   $wrappers = $stream_wrapper_manager->getWrappers(StreamWrapperInterface::WRITE);
+ 
+   $destination_scheme_name = $field_storage->getSetting('uri_scheme');
+-  /** @var \Drupal\Core\StreamWrapper\StreamWrapperInterface $temporary_scheme */
++  /** @var StreamWrapperInterface $temporary_scheme */
+   $temporary_scheme = $stream_wrapper_manager->getViaUri(\Drupal::config('filefield_paths.settings')
+     ->get('temp_location'));
+   $temporary_scheme_name = key($stream_wrapper_manager->getWrappers($temporary_scheme->getType()));
+   $schemas = [$temporary_scheme_name, $destination_scheme_name];
+ 
+-  /** @var \Drupal\file\Entity\File $file */
++  /** @var File $file */
+   foreach ($field->referencedEntities() as $file) {
+-    /** @var \Drupal\Core\StreamWrapper\StreamWrapperInterface $source_scheme */
++    /** @var StreamWrapperInterface $source_scheme */
+     $source_scheme = $stream_wrapper_manager->getViaUri($file->getFileUri());
+     $source_scheme_name = key($stream_wrapper_manager->getWrappers($source_scheme->getType()));
+     if (in_array($source_scheme_name, $schemas) && !empty($wrappers[$destination_scheme_name])) {
+       // Process file if this is a new entity, 'Active updating' is set or
+       // file wasn't previously attached to the entity.
+       if (!$entity->isNew() && isset($entity->original) && empty($settings['active_updating']) && !$entity->original->{$field->getName()}->isEmpty()) {
+-        /** @var \Drupal\file\Entity\File $original_file */
++        /** @var File $original_file */
+         foreach ($entity->original->{$field->getName()}->referencedEntities() as $original_file) {
+           if ($original_file->id() == $file->id()) {
+             continue(2);
+@@ -113,7 +116,7 @@ function filefield_paths_filefield_paths_process_file(ContentEntityInterface $en
+         $dirname = $file_system->dirname($destination);
+         if (
+           \Drupal::service('file_system')->prepareDirectory($dirname, FileSystem::CREATE_DIRECTORY)
+-          && $new_file = file_move($file, $destination)
++          && $new_file = \Drupal::service('file.repository')->move($file, $destination)
+         ) {
+           // Create redirect from old location.
+           if (
+diff --git a/filefield_paths.module b/filefield_paths.module
+index dd207c5..447c648 100644
+--- a/filefield_paths.module
++++ b/filefield_paths.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\Core\Entity\ContentEntityStorageBase;
+ /**
+  * @file
+  * Contains core functions for the File (Field) Paths module.
+@@ -22,7 +24,7 @@ require_once __DIR__ . '/filefield_paths.inc';
+ /**
+  * Implements hook_entity_base_field_info().
+  */
+-function filefield_paths_entity_base_field_info(\Drupal\Core\Entity\EntityTypeInterface $entity_type) {
++function filefield_paths_entity_base_field_info(EntityTypeInterface $entity_type) {
+   $fields = [];
+   if ($entity_type->id() == 'file') {
+     $fields['origname'] = BaseFieldDefinition::create('string')
+@@ -37,7 +39,7 @@ function filefield_paths_entity_base_field_info(\Drupal\Core\Entity\EntityTypeIn
+  * Implements hook_form_FORM_ID_alter().
+  */
+ function filefield_paths_form_field_config_edit_form_alter(array &$form, FormStateInterface $form_state) {
+-  /** @var Drupal\field\Entity\FieldConfig $field */
++  /** @var FieldConfig $field */
+   $field = $form_state->getFormObject()->getEntity();
+   $class = $field->getClass();
+ 
+@@ -297,7 +299,7 @@ function _filefield_paths_batch_update_process($objects, FieldConfig $field_conf
+     $context['sandbox']['max'] = count($objects);
+     $context['sandbox']['objects'] = $objects;
+   }
+-  /** @var Drupal\Core\Entity\ContentEntityStorageBase $entity_storage */
++  /** @var ContentEntityStorageBase $entity_storage */
+   $entity_storage = \Drupal::entityTypeManager()
+     ->getStorage($field_config->getTargetEntityTypeId());
+ 
+@@ -386,7 +388,7 @@ function filefield_paths_file_presave($file) {
+  *   The source file URL.
+  * @param string $path
+  *   The moved file URL.
+- * @param \Drupal\Core\Language\Language $language
++ * @param Language $language
+  *   The language of the source file.
+  *
+  * @deprecated in filefield_paths:1.0.0 and will be removed before
+diff --git a/filefield_paths.tokens.inc b/filefield_paths.tokens.inc
+index 3e95322..eef46fc 100644
+--- a/filefield_paths.tokens.inc
++++ b/filefield_paths.tokens.inc
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\file\Entity\File;
+ /**
+  * @file
+  * Tokens for the File (Field) Paths module.
+@@ -43,7 +44,7 @@ function filefield_paths_tokens($type, $tokens, array $data, array $options, Bub
+   if ($type == 'file' && !empty($data['file'])) {
+     $file_system = \Drupal::service('file_system');
+ 
+-    /** @var \Drupal\file\Entity\File $file */
++    /** @var File $file */
+     $file = $data['file'];
+ 
+     foreach ($tokens as $name => $original) {
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 58dcc53..e604fd5 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -21,14 +21,14 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Stream wrapper manager.
+    *
+-   * @var \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface
++   * @var StreamWrapperManagerInterface
+    */
+   protected $streamWrapperManager;
+ 
+   /**
+    * Fi;esystem service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+diff --git a/src/Redirect.php b/src/Redirect.php
+index e28203f..0e1ac94 100644
+--- a/src/Redirect.php
++++ b/src/Redirect.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\filefield_paths;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\StreamWrapper\StreamWrapperManager;
+@@ -17,41 +18,41 @@ class Redirect implements RedirectInterface {
+   /**
+    * The redirect storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $redirectStorage;
+ 
+   /**
+    * The stream wrapper manager.
+    *
+-   * @var \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface
++   * @var StreamWrapperManagerInterface
+    */
+   protected $streamWrapperManager;
+ 
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Constructs a new redirect service.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface $stream_wrapper_manager
++   * @param StreamWrapperManagerInterface $stream_wrapper_manager
+    *   The stream wrapper manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, StreamWrapperManagerInterface $stream_wrapper_manager, ConfigFactoryInterface $config_factory, LoggerInterface $logger) {
+diff --git a/src/RedirectInterface.php b/src/RedirectInterface.php
+index 72195f4..06b44a3 100644
+--- a/src/RedirectInterface.php
++++ b/src/RedirectInterface.php
+@@ -16,7 +16,7 @@ interface RedirectInterface {
+    *   The source file URL.
+    * @param string $path
+    *   The moved file URL.
+-   * @param \Drupal\Core\Language\Language $language
++   * @param Language $language
+    *   The language of the source file.
+    */
+   public function createRedirect($source, $path, Language $language);
+diff --git a/tests/src/Functional/FileFieldPathsGeneralTest.php b/tests/src/Functional/FileFieldPathsGeneralTest.php
+index bf83526..07a1dcf 100644
+--- a/tests/src/Functional/FileFieldPathsGeneralTest.php
++++ b/tests/src/Functional/FileFieldPathsGeneralTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\filefield_paths\Functional;
+ 
++use Drupal\file\Entity\File;
++use Drupal\node\NodeStorage;
++use Drupal\file\FileUsage\FileUsageInterface;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\node\Entity\Node;
+ 
+@@ -73,7 +76,7 @@ class FileFieldPathsGeneralTest extends FileFieldPathsTestBase {
+     $this->createFileField($field_name, 'node', $this->contentType, [], [], $third_party_settings);
+ 
+     // Create a node with a test file.
+-    /** @var \Drupal\file\Entity\File $test_file */
++    /** @var File $test_file */
+     $test_file = $this->getTestFile('text');
+     $this->drupalGet("node/add/{$this->contentType}");
+     $edit['title[0][value]'] = $this->randomMachineName();
+@@ -143,7 +146,7 @@ class FileFieldPathsGeneralTest extends FileFieldPathsTestBase {
+     $this->createFileField($field_name, 'node', $this->contentType, [], [], $third_party_settings);
+ 
+     // Create a node with a test file.
+-    /** @var \Drupal\file\Entity\File $test_file */
++    /** @var File $test_file */
+     $test_file = $this->getTestFile('text');
+     $nid = $this->uploadNodeFile($test_file, $field_name, $this->contentType);
+ 
+@@ -164,11 +167,11 @@ class FileFieldPathsGeneralTest extends FileFieldPathsTestBase {
+     $this->createFileField($field_name, 'node', $this->contentType, [], [], $third_party_settings);
+ 
+     // Create a node without an attached file.
+-    /** @var \Drupal\node\Entity\Node $node */
++    /** @var Node $node */
+     $node = $this->drupalCreateNode(['type' => $this->contentType]);
+ 
+     // Create a file object.
+-    /** @var \Drupal\file\Entity\File $test_file */
++    /** @var File $test_file */
+     $test_file = $this->getTestFile('text');
+     $test_file->setPermanent();
+     $test_file->save();
+@@ -199,7 +202,7 @@ class FileFieldPathsGeneralTest extends FileFieldPathsTestBase {
+     $this->createFileField($field_name, 'node', $this->contentType, [], [], $third_party_settings);
+ 
+     // Create a node with a test file.
+-    /** @var \Drupal\file\Entity\File $test_file */
++    /** @var File $test_file */
+     $test_file = $this->getTestFile('text');
+ 
+     $title = "{$this->randomMachineName()}/{$this->randomMachineName()}";
+@@ -241,10 +244,10 @@ class FileFieldPathsGeneralTest extends FileFieldPathsTestBase {
+    * Test a file usage of a basic file upload with File (Field) Paths.
+    */
+   public function testFileUsage() {
+-    /** @var \Drupal\node\NodeStorage $node_storage */
++    /** @var NodeStorage $node_storage */
+     $node_storage = $this->container->get('entity_type.manager')
+       ->getStorage('node');
+-    /** @var \Drupal\file\FileUsage\FileUsageInterface $file_usage */
++    /** @var FileUsageInterface $file_usage */
+     $file_usage = $this->container->get('file.usage');
+ 
+     // Create a File field with 'node/[node:nid]' as the File path.
+@@ -253,7 +256,7 @@ class FileFieldPathsGeneralTest extends FileFieldPathsTestBase {
+     $this->createFileField($field_name, 'node', $this->contentType, [], [], $third_party_settings);
+ 
+     // Create a node with a test file.
+-    /** @var \Drupal\file\Entity\File $test_file */
++    /** @var File $test_file */
+     $test_file = $this->getTestFile('text');
+     $nid = $this->uploadNodeFile($test_file, $field_name, $this->contentType);
+ 
+@@ -297,7 +300,7 @@ class FileFieldPathsGeneralTest extends FileFieldPathsTestBase {
+     $this->createFileField($field_name, 'node', $this->contentType, $field_settings, $instance_settings);
+ 
+     // Get a test file.
+-    /** @var \Drupal\file\Entity\File $file */
++    /** @var File $file */
+     $file = $this->getTestFile('image');
+ 
+     // Prepare the file for the test 'ffp-dummy-readonly://' read-only stream
+diff --git a/tests/src/Functional/FileFieldPathsPathautoTest.php b/tests/src/Functional/FileFieldPathsPathautoTest.php
+index ed98170..bd547f2 100644
+--- a/tests/src/Functional/FileFieldPathsPathautoTest.php
++++ b/tests/src/Functional/FileFieldPathsPathautoTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\filefield_paths\Functional;
+ 
++use Drupal\file\Entity\File;
++use Drupal\node\NodeInterface;
+ use Drupal\Component\Utility\Unicode;
+ 
+ /**
+@@ -59,7 +61,7 @@ class FileFieldPathsPathautoTest extends FileFieldPathsTestBase {
+     $this->createFileField($field_name, 'node', $this->contentType, [], [], $third_party_settings);
+ 
+     // Create a node with a test file.
+-    /** @var \Drupal\file\Entity\File $test_file */
++    /** @var File $test_file */
+     $test_file = $this->getTestFile('text');
+     $node_title = $this->randomString() . ' ' . $this->randomString();
+     $edit['title[0][value]'] = $node_title;
+@@ -70,7 +72,7 @@ class FileFieldPathsPathautoTest extends FileFieldPathsTestBase {
+     $this->submitForm($edit, 'Save');
+ 
+     // Ensure that file path/name have been processed correctly by Pathauto.
+-    /** @var \Drupal\node\NodeInterface[] $nodes */
++    /** @var NodeInterface[] $nodes */
+     $nodes = \Drupal::service('entity_type.manager')->getStorage('node')
+       ->loadByProperties(['title' => $node_title]);
+     $node = reset($nodes);
+diff --git a/tests/src/Functional/FileFieldPathsRedirectTest.php b/tests/src/Functional/FileFieldPathsRedirectTest.php
+index cc0535d..156dc50 100644
+--- a/tests/src/Functional/FileFieldPathsRedirectTest.php
++++ b/tests/src/Functional/FileFieldPathsRedirectTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\filefield_paths\Functional;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\file\Entity\File;
+ use Drupal\Core\StreamWrapper\PublicStream;
+ 
+ /**
+@@ -27,7 +29,7 @@ class FileFieldPathsRedirectTest extends FileFieldPathsTestBase {
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -71,7 +73,7 @@ class FileFieldPathsRedirectTest extends FileFieldPathsTestBase {
+     $this->createFileField($field_name, 'node', $this->contentType, [], [], $third_party_settings);
+ 
+     // Create a node with a test file.
+-    /** @var \Drupal\file\Entity\File $test_file */
++    /** @var File $test_file */
+     $test_file = $this->getTestFile('text');
+     $nid = $this->uploadNodeFile($test_file, $field_name, $this->contentType);
+ 
+diff --git a/tests/src/Functional/FileFieldPathsTestBase.php b/tests/src/Functional/FileFieldPathsTestBase.php
+index 5828e37..41865d9 100755
+--- a/tests/src/Functional/FileFieldPathsTestBase.php
++++ b/tests/src/Functional/FileFieldPathsTestBase.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\Tests\filefield_paths\Functional;
+ 
++use Behat\Mink\Exception\ResponseTextException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Tests\file\Functional\FileFieldTestBase;
+ use Drupal\Tests\TestFileCreationTrait;
+ 
+@@ -68,10 +74,10 @@ abstract class FileFieldPathsTestBase extends FileFieldTestBase {
+    * @param array $widget_settings
+    *   A list of widget settings that will be added to the widget defaults.
+    *
+-   * @throws \Behat\Mink\Exception\ResponseTextException
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws ResponseTextException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function createFileField($name, $entity_type, $bundle, $storage_settings = [], $field_settings = [], $third_party_settings = [], $widget_settings = []) {
+     $entity_type_manager = \Drupal::entityTypeManager();
+@@ -98,7 +104,7 @@ abstract class FileFieldPathsTestBase extends FileFieldTestBase {
+       ->create($field)
+       ->save();
+ 
+-    /** @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface $edr */
++    /** @var EntityDisplayRepositoryInterface $edr */
+     $edr = \Drupal::service('entity_display.repository');
+     $edr->getFormDisplay($entity_type, $bundle, 'default')
+       ->setComponent($name, [
+@@ -138,12 +144,12 @@ abstract class FileFieldPathsTestBase extends FileFieldTestBase {
+    * @param array $widget_settings
+    *   A list of widget settings that will be added to the widget defaults.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   A image field configuration entity.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function createImageField($name, $type_name, array $storage_settings = [], array $field_settings = [], array $third_party_settings = [], array $widget_settings = []) {
+     $entity_type_manager = \Drupal::entityTypeManager();
+@@ -169,7 +175,7 @@ abstract class FileFieldPathsTestBase extends FileFieldTestBase {
+       ]);
+     $field_config->save();
+ 
+-    /** @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface $edr */
++    /** @var EntityDisplayRepositoryInterface $edr */
+     $edr = \Drupal::service('entity_display.repository');
+     $edr->getFormDisplay('node', $type_name, 'default')
+       ->setComponent($name, [
+diff --git a/tests/src/Functional/FileFieldPathsTokensTest.php b/tests/src/Functional/FileFieldPathsTokensTest.php
+index 85a4e26..ea165e1 100644
+--- a/tests/src/Functional/FileFieldPathsTokensTest.php
++++ b/tests/src/Functional/FileFieldPathsTokensTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\filefield_paths\Functional;
+ 
++use Drupal\file\Entity\File;
++use Drupal\Core\File\FileSystemInterface;
+ /**
+  * Test token functionality.
+  *
+@@ -30,7 +32,7 @@ class FileFieldPathsTokensTest extends FileFieldPathsTestBase {
+    */
+   public function testTokensBasic() {
+     // Prepare a test text file.
+-    /** @var \Drupal\file\Entity\File $text_file */
++    /** @var File $text_file */
+     $text_file = $this->getTestFile('text');
+     $text_file->save();
+ 
+@@ -46,12 +48,12 @@ class FileFieldPathsTokensTest extends FileFieldPathsTestBase {
+    */
+   public function testTokensMoved() {
+     // Prepare a test text file.
+-    /** @var \Drupal\file\Entity\File $text_file */
++    /** @var File $text_file */
+     $text_file = $this->getTestFile('text');
+     $text_file->save();
+ 
+     // Move the text file.
+-    $moved_file = file_move($text_file, 'public://moved.diff');
++    $moved_file = \Drupal::service('file.repository')->move($text_file, 'public://moved.diff');
+ 
+     // Ensure tokens are processed correctly.
+     $data = ['file' => $moved_file];
+@@ -65,14 +67,14 @@ class FileFieldPathsTokensTest extends FileFieldPathsTestBase {
+    */
+   public function testTokensMultiExtension() {
+     // Prepare a test text file.
+-    /** @var \Drupal\file\Entity\File $text_file */
++    /** @var File $text_file */
+     $text_file = $this->getTestFile('text');
+-    /** @var \Drupal\Core\File\FileSystemInterface $file_system */
++    /** @var FileSystemInterface $file_system */
+     $file_system = \Drupal::service('file_system');
+     $file_system->copy($text_file->getFileUri(), 'public://text.multiext.txt');
+     $files = $file_system->scanDirectory('public://', '/text\.multiext\.txt/');
+     $multiext_file = current($files);
+-    /** @var \Drupal\file\Entity\File $multiext_file */
++    /** @var File $multiext_file */
+     $multiext_file = \Drupal::entityTypeManager()
+       ->getStorage('file')
+       ->create((array) $multiext_file);
+@@ -92,14 +94,14 @@ class FileFieldPathsTokensTest extends FileFieldPathsTestBase {
+    */
+   public function testTokensUtf() {
+     // Prepare a test text file.
+-    /** @var \Drupal\file\Entity\File $text_file */
++    /** @var File $text_file */
+     $text_file = $this->getTestFile('text');
+-    /** @var \Drupal\Core\File\FileSystemInterface $file_system */
++    /** @var FileSystemInterface $file_system */
+     $file_system = \Drupal::service('file_system');
+     $file_system->copy($text_file->getFileUri(), 'public://тест.txt');
+     $files = $file_system->scanDirectory('public://', '/тест\.txt/');
+     $utf_file = current($files);
+-    /** @var \Drupal\file\Entity\File $utf_file */
++    /** @var File $utf_file */
+     $utf_file = \Drupal::entityTypeManager()
+       ->getStorage('file')
+       ->create((array) $utf_file);
+diff --git a/tests/src/Functional/FileFieldPathsTransliterationTest.php b/tests/src/Functional/FileFieldPathsTransliterationTest.php
+index e4b0aac..4871ea1 100644
+--- a/tests/src/Functional/FileFieldPathsTransliterationTest.php
++++ b/tests/src/Functional/FileFieldPathsTransliterationTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\filefield_paths\Functional;
+ 
++use Drupal\file\Entity\File;
+ use Drupal\Component\Utility\Unicode;
+ 
+ /**
+@@ -24,7 +25,9 @@ class FileFieldPathsTransliterationTest extends FileFieldPathsTestBase {
+     $this->drupalGet("admin/structure/types/manage/{$this->contentType}/fields/node.{$this->contentType}.{$field_name}");
+     foreach (['path', 'name'] as $field) {
+       // Transliteration checkbox is present in File settings.
+-      $this->assertField("third_party_settings[filefield_paths][file_{$field}][options][transliterate]");
++      // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++      // Change assertion to buttonExists() if checking for a button.
++      $this->assertSession()->fieldExists("third_party_settings[filefield_paths][file_{$field}][options][transliterate]");
+ 
+       $element = $this->xpath('//input[@name=:name]/@disabled', [':name' => "third_party_settings[filefield_paths][file_{$field}][options][transliterate]"]);
+       $this->assertEmpty($element, 'Transliteration checkbox is not disabled in File ' . Unicode::ucfirst($field) . ' settings.');
+@@ -46,7 +49,7 @@ class FileFieldPathsTransliterationTest extends FileFieldPathsTestBase {
+     $this->createFileField($field_name, 'node', $this->contentType, [], [], $third_party_settings);
+ 
+     // Create a node with a test file.
+-    /** @var \Drupal\file\Entity\File $test_file */
++    /** @var File $test_file */
+     $test_file = $this->getTestFile('text');
+     $edit['title[0][value]'] = 'тест';
+ 
+@@ -63,7 +66,7 @@ class FileFieldPathsTransliterationTest extends FileFieldPathsTestBase {
+     // Ensure that file path/name have been processed correctly by
+     // Transliteration.
+     $node = \Drupal::entitytypeManager()->getStorage('node')->load($nid);
+-    $this->assertEqual($node->{$field_name}[0]->entity->getFileUri(), "public://node/test/test.txt", 'File path/name has been processed correctly by Transliteration');
++    $this->assertEquals($node->{$field_name}[0]->entity->getFileUri(), "public://node/test/test.txt", 'File path/name has been processed correctly by Transliteration');
+   }
+ 
+ }
+diff --git a/tests/src/Functional/FileFieldPathsUpdateTest.php b/tests/src/Functional/FileFieldPathsUpdateTest.php
+index 0a0a15b..917f921 100644
+--- a/tests/src/Functional/FileFieldPathsUpdateTest.php
++++ b/tests/src/Functional/FileFieldPathsUpdateTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\filefield_paths\Functional;
+ 
++use Drupal\Core\Entity\Entity\EntityViewDisplay;
++use Drupal\file\Entity\File;
+ /**
+  * Test update functionality.
+  *
+@@ -39,7 +41,7 @@ class FileFieldPathsUpdateTest extends FileFieldPathsTestBase {
+     $this->createImageField($field_name, $this->contentType, []);
+ 
+     // Modify display settings.
+-    /** @var \Drupal\Core\Entity\Entity\EntityViewDisplay $display */
++    /** @var EntityViewDisplay $display */
+     $display = \Drupal::entityTypeManager()
+       ->getStorage('entity_view_display')
+       ->load("node.{$this->contentType}.default");
+@@ -51,13 +53,13 @@ class FileFieldPathsUpdateTest extends FileFieldPathsTestBase {
+     ])->save();
+ 
+     $this->drupalGet("admin/structure/types/manage/{$this->contentType}/display");
+-    /** @var \Drupal\Core\Entity\Entity\EntityViewDisplay $original_display */
++    /** @var EntityViewDisplay $original_display */
+     $original_display = \Drupal::entityTypeManager()
+       ->getStorage('entity_view_display')
+       ->load("node.{$this->contentType}.default");
+ 
+     // Create a node with a test file.
+-    /** @var \Drupal\file\Entity\File $test_file */
++    /** @var File $test_file */
+     $test_file = $this->getTestFile('image');
+     $nid = $this->uploadNodeFile($test_file, $field_name, $this->contentType);
+     $this->submitForm(["{$field_name}[0][alt]" => $this->randomString()], 'Save');
+@@ -66,7 +68,7 @@ class FileFieldPathsUpdateTest extends FileFieldPathsTestBase {
+     $this->drupalGet("node/{$nid}");
+     $date = date('Y-m');
+     // The File is in the default path.
+-    $this->assertRaw("{$this->publicFilesDirectory}/styles/thumbnail/public/{$date}/{$test_file->getFilename()}");
++    $this->assertSession()->responseContains("{$this->publicFilesDirectory}/styles/thumbnail/public/{$date}/{$test_file->getFilename()}");
+ 
+     // Trigger retroactive updates.
+     $this->drupalGet("admin/structure/types/manage/{$this->contentType}/fields/node.{$this->contentType}.{$field_name}");
+@@ -85,7 +87,7 @@ class FileFieldPathsUpdateTest extends FileFieldPathsTestBase {
+     // Ensure that the file path has been retroactively updated.
+     $this->drupalGet("node/{$nid}");
+     // The File path has been retroactively updated.
+-    $this->assertRaw("{$this->publicFilesDirectory}/styles/thumbnail/public/node/{$nid}/{$test_file->getFilename()}");
++    $this->assertSession()->responseContains("{$this->publicFilesDirectory}/styles/thumbnail/public/node/{$nid}/{$test_file->getFilename()}");
+   }
+ 
+ }

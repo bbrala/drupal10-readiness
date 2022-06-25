@@ -1,0 +1,1396 @@
+diff --git a/message_subscribe.api.php b/message_subscribe.api.php
+index fcf3010..12041c0 100644
+--- a/message_subscribe.api.php
++++ b/message_subscribe.api.php
+@@ -17,7 +17,7 @@ use Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface;
+ /**
+  * Allow modules to add user IDs that need to be notified.
+  *
+- * @param \Drupal\message\MessageInterface $message
++ * @param MessageInterface $message
+  *   The message object.
+  * @param array $subscribe_options
+  *   Subscription options as defined by
+@@ -27,7 +27,7 @@ use Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface;
+  *   value. According to this context this function will retrieve the
+  *   related subscribers.
+  *
+- * @return \Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface[]
++ * @return DeliveryCandidateInterface[]
+  *   An array, keyed by recipeint user ID, of delivery candidate objects.
+  */
+ function hook_message_subscribe_get_subscribers(MessageInterface $message, array $subscribe_options = [], array $context = []) {
+@@ -40,7 +40,7 @@ function hook_message_subscribe_get_subscribers(MessageInterface $message, array
+ /**
+  * Alter the subscribers list.
+  *
+- * @param \Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface[] &$uids
++ * @param DeliveryCandidateInterface[] $uids
+  *   The array of delivery candidates as defined by
+  *   `hook_message_subscribe_get_subscribers()`.
+  * @param array $values
+@@ -57,10 +57,10 @@ function hook_message_subscribe_get_subscribers_alter(array &$uids, array $value
+ /**
+  * Alter the message entity immediately before it is sent.
+  *
+- * @param \Drupal\message\MessageInterface $message
++ * @param MessageInterface $message
+  *   The message entity to be sent. This already has the recipient set as the
+  *   message owner.
+- * @param \Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface $delivery_candidate
++ * @param DeliveryCandidateInterface $delivery_candidate
+  *   A delivery candidate object.
+  */
+ function hook_message_subscribe_message_alter(MessageInterface $message, DeliveryCandidateInterface $delivery_candidate) {
+diff --git a/message_subscribe_email/message_subscribe_email.install b/message_subscribe_email/message_subscribe_email.install
+index ed7243a..d284204 100644
+--- a/message_subscribe_email/message_subscribe_email.install
++++ b/message_subscribe_email/message_subscribe_email.install
+@@ -1,10 +1,10 @@
+ <?php
+ 
++use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
+ /**
+  * @file
+  * Install hooks for the message_subscribe_email module.
+  */
+-
+ /**
+  * Implements hook_install().
+  *
+@@ -12,13 +12,13 @@
+  */
+ function message_subscribe_email_install() {
+   // Add the `message_subscribe_email` field to the user form.
+-  /** @var \Drupal\Core\Entity\Display\EntityViewDisplayInterface $display */
++  /** @var EntityViewDisplayInterface $display */
+   if (method_exists(\Drupal::service('entity_display.repository'), 'getFormDisplay')) {
+     $display = \Drupal::service('entity_display.repository')->getFormDisplay('user', 'user');
+   }
+   else {
+     // Pre-Drupal 8.8.
+-    $display = entity_get_form_display('user', 'user', 'default');
++    $display = \Drupal::service('entity_display.repository')->getFormDisplay('user', 'user', 'default');
+   }
+   if (!$display->getComponent('message_subscribe_email')) {
+     $settings = [
+diff --git a/message_subscribe_email/message_subscribe_email.module b/message_subscribe_email/message_subscribe_email.module
+index 78df915..fde12b1 100644
+--- a/message_subscribe_email/message_subscribe_email.module
++++ b/message_subscribe_email/message_subscribe_email.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\flag\FlaggingInterface;
++use Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface;
+ /**
+  * @file
+  * Code for the  message subscribe email feature.
+@@ -42,7 +44,7 @@ function message_subscribe_email_flag_action_access($action, FlagInterface $flag
+     }
+ 
+     // Get the other flags on that same content.
+-    /** @var \Drupal\flag\FlaggingInterface[] $user_flaggings */
++    /** @var FlaggingInterface[] $user_flaggings */
+     $user_flaggings = $flag_service->getAllEntityFlaggings($flaggable, $account, $sid);
+     $user_flags = [];
+     foreach ($user_flaggings as $flagging) {
+@@ -69,7 +71,7 @@ function message_subscribe_email_message_subscribe_get_subscribers_alter(array &
+     return;
+   }
+ 
+-  /** @var \Drupal\flag\FlagInterface[] $flags */
++  /** @var FlagInterface[] $flags */
+   if (!$flags = \Drupal::service('message_subscribe_email.manager')->getFlags()) {
+     // No subscribe email related flags.
+     return;
+@@ -112,7 +114,7 @@ function message_subscribe_email_message_subscribe_get_subscribers_alter(array &
+ 
+   $debug && \Drupal::logger('message_subscribe_email')->debug('Found email subscribers @subscribers', ['@subscribers' => implode(', ', $all_email_subscribers)]);
+ 
+-  /** @var \Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface $delivery_candidate */
++  /** @var DeliveryCandidateInterface $delivery_candidate */
+   foreach ($uids as $uid => $delivery_candidate) {
+     // If email flags aren't already set, get them from database.
+     if (!array_intersect($delivery_candidate->getFlags(), $flag_ids)) {
+diff --git a/message_subscribe_email/src/EventSubscriber/FlagEvents.php b/message_subscribe_email/src/EventSubscriber/FlagEvents.php
+index 2904c0d..98caa21 100644
+--- a/message_subscribe_email/src/EventSubscriber/FlagEvents.php
++++ b/message_subscribe_email/src/EventSubscriber/FlagEvents.php
+@@ -19,23 +19,23 @@ class FlagEvents implements EventSubscriberInterface {
+   /**
+    * Config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The flag service.
+    *
+-   * @var \Drupal\flag\FlagServiceInterface
++   * @var FlagServiceInterface
+    */
+   protected $flagService;
+ 
+   /**
+    * Construct the flag event subscriber.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\flag\FlagServiceInterface $flag_service
++   * @param FlagServiceInterface $flag_service
+    *   The flag service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, FlagServiceInterface $flag_service) {
+@@ -55,7 +55,7 @@ class FlagEvents implements EventSubscriberInterface {
+   /**
+    * React to entity flagging.
+    *
+-   * @param \Drupal\flag\Event\FlaggingEvent $event
++   * @param FlaggingEvent $event
+    *   The flagging event.
+    */
+   public function onFlag(FlaggingEvent $event) {
+@@ -65,7 +65,7 @@ class FlagEvents implements EventSubscriberInterface {
+   /**
+    * React to entity unflagging.
+    *
+-   * @param \Drupal\flag\Event\UnflaggingEvent $event
++   * @param UnflaggingEvent $event
+    *   The flagging event.
+    */
+   public function onUnflag(UnflaggingEvent $event) {
+@@ -78,12 +78,12 @@ class FlagEvents implements EventSubscriberInterface {
+   /**
+    * Flag or unflag the corresponding `email_*` flag for `subscribe_*` flags.
+    *
+-   * @param \Drupal\flag\FlaggingInterface $flagging
++   * @param FlaggingInterface $flagging
+    *   The flagging object.
+    * @param string $action
+    *   The action. Either 'flag' or 'unflag'.
+    *
+-   * @throws \Drupal\message_subscribe\Exception\MessageSubscribeException
++   * @throws MessageSubscribeException
+    *   If there isn't a corresponding `email_` flag for the given `subscribe_`
+    *   flag.
+    */
+diff --git a/message_subscribe_email/src/Manager.php b/message_subscribe_email/src/Manager.php
+index 06955e8..8bff391 100644
+--- a/message_subscribe_email/src/Manager.php
++++ b/message_subscribe_email/src/Manager.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\message_subscribe_email;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\flag\FlagInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\flag\FlagServiceInterface;
+ 
+@@ -13,23 +15,23 @@ class Manager {
+   /**
+    * Message subscribe settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The flag service.
+    *
+-   * @var \Drupal\flag\FlagServiceInterface
++   * @var FlagServiceInterface
+    */
+   protected $flagService;
+ 
+   /**
+    * Construct the message subscribe email manager.
+    *
+-   * @param \Drupal\flag\FlagServiceInterface $flag_service
++   * @param FlagServiceInterface $flag_service
+    *   The flag service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+    */
+   public function __construct(FlagServiceInterface $flag_service, ConfigFactoryInterface $config_factory) {
+@@ -46,7 +48,7 @@ class Manager {
+    *
+    * Retrieve available email flags.
+    *
+-   * @return \Drupal\flag\FlagInterface[]
++   * @return FlagInterface[]
+    *   An array of flags, keyed by the flag ID.
+    */
+   public function getFlags() {
+diff --git a/message_subscribe_email/tests/src/Functional/ViewsTest.php b/message_subscribe_email/tests/src/Functional/ViewsTest.php
+index 1b0a74b..b68b1cb 100644
+--- a/message_subscribe_email/tests/src/Functional/ViewsTest.php
++++ b/message_subscribe_email/tests/src/Functional/ViewsTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\message_subscribe_email\Functional;
+ 
++use Drupal\flag\FlagServiceInterface;
++use Drupal\message_subscribe\SubscribersInterface;
+ use Drupal\Tests\node\Traits\ContentTypeCreationTrait;
+ use Drupal\Tests\node\Traits\NodeCreationTrait;
+ use Drupal\Tests\BrowserTestBase;
+@@ -24,21 +26,21 @@ class ViewsTest extends BrowserTestBase {
+   /**
+    * The flag service.
+    *
+-   * @var \Drupal\flag\FlagServiceInterface
++   * @var FlagServiceInterface
+    */
+   protected $flagService;
+ 
+   /**
+    * The message subscription service.
+    *
+-   * @var \Drupal\message_subscribe\SubscribersInterface
++   * @var SubscribersInterface
+    */
+   protected $messageSubscribers;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->flagService = $this->container->get('flag');
+diff --git a/message_subscribe_email/tests/src/FunctionalJavascript/MessageSubscribeEmailTest.php b/message_subscribe_email/tests/src/FunctionalJavascript/MessageSubscribeEmailTest.php
+index 8bed8f9..26b556e 100644
+--- a/message_subscribe_email/tests/src/FunctionalJavascript/MessageSubscribeEmailTest.php
++++ b/message_subscribe_email/tests/src/FunctionalJavascript/MessageSubscribeEmailTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\message_subscribe_email\FunctionalJavascript;
+ 
++use Drupal\flag\FlagServiceInterface;
++use Drupal\node\NodeInterface;
++use Drupal\user\UserInterface;
+ use Drupal\FunctionalJavascriptTests\WebDriverTestBase;
+ 
+ /**
+@@ -19,28 +22,28 @@ class MessageSubscribeEmailTest extends WebDriverTestBase {
+   /**
+    * Flag service.
+    *
+-   * @var \Drupal\flag\FlagServiceInterface
++   * @var FlagServiceInterface
+    */
+   protected $flagService;
+ 
+   /**
+    * Nodes to test with.
+    *
+-   * @var \Drupal\node\NodeInterface[]
++   * @var NodeInterface[]
+    */
+   protected $nodes;
+ 
+   /**
+    * Users to test with.
+    *
+-   * @var \Drupal\user\UserInterface[]
++   * @var UserInterface[]
+    */
+   protected $users;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Add some nodes.
+diff --git a/message_subscribe_email/tests/src/Kernel/Form/AdminSettingsTest.php b/message_subscribe_email/tests/src/Kernel/Form/AdminSettingsTest.php
+index c0c3f3d..0bc2bed 100644
+--- a/message_subscribe_email/tests/src/Kernel/Form/AdminSettingsTest.php
++++ b/message_subscribe_email/tests/src/Kernel/Form/AdminSettingsTest.php
+@@ -19,7 +19,7 @@ class AdminSettingsTest extends MessageSubscribeAdminSettingsTest {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->values['message_subscribe_email_flag_prefix'] = [
+diff --git a/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailNotificationsTest.php b/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailNotificationsTest.php
+index 93f003b..c3c6bdb 100644
+--- a/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailNotificationsTest.php
++++ b/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailNotificationsTest.php
+@@ -15,7 +15,7 @@ class MessageSubscribeEmailNotificationsTest extends MessageSubscribeEmailTestBa
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $flag = $this->flagService->getFlagById('subscribe_node');
+diff --git a/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailSubscribersTest.php b/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailSubscribersTest.php
+index cf22330..7790733 100644
+--- a/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailSubscribersTest.php
++++ b/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailSubscribersTest.php
+@@ -18,7 +18,7 @@ class MessageSubscribeEmailSubscribersTest extends MessageSubscribeEmailTestBase
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Opt out of default email notifications and subscribe to node 1.
+diff --git a/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailTestBase.php b/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailTestBase.php
+index ac88e23..e47c9f0 100644
+--- a/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailTestBase.php
++++ b/message_subscribe_email/tests/src/Kernel/MessageSubscribeEmailTestBase.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\message_subscribe_email\Kernel;
+ 
++use Drupal\flag\FlagServiceInterface;
++use Drupal\message\MessageTemplateInterface;
++use Drupal\node\NodeInterface;
++use Drupal\user\UserInterface;
+ use Drupal\message\Entity\MessageTemplate;
+ use Drupal\Tests\message_subscribe\Kernel\MessageSubscribeTestBase;
+ 
+@@ -18,35 +22,35 @@ abstract class MessageSubscribeEmailTestBase extends MessageSubscribeTestBase {
+   /**
+    * Flag service.
+    *
+-   * @var \Drupal\flag\FlagServiceInterface
++   * @var FlagServiceInterface
+    */
+   protected $flagService;
+ 
+   /**
+    * Message template.
+    *
+-   * @var \Drupal\message\MessageTemplateInterface
++   * @var MessageTemplateInterface
+    */
+   protected $messageTemplate;
+ 
+   /**
+    * Nodes to test with.
+    *
+-   * @var \Drupal\node\NodeInterface[]
++   * @var NodeInterface[]
+    */
+   protected $nodes;
+ 
+   /**
+    * Users to test with.
+    *
+-   * @var \Drupal\user\UserInterface[]
++   * @var UserInterface[]
+    */
+   protected $users;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->installConfig(['message_subscribe_email']);
+diff --git a/message_subscribe_email/tests/src/Unit/ManagerTest.php b/message_subscribe_email/tests/src/Unit/ManagerTest.php
+index 5725359..a8a0482 100644
+--- a/message_subscribe_email/tests/src/Unit/ManagerTest.php
++++ b/message_subscribe_email/tests/src/Unit/ManagerTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\message_subscribe_email\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\flag\FlagInterface;
+@@ -18,6 +19,7 @@ use Drupal\Tests\UnitTestCase;
+  */
+ class ManagerTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Tests the flag retrieval.
+    *
+diff --git a/message_subscribe_example/message_subscribe_example.module b/message_subscribe_example/message_subscribe_example.module
+index 791dfd4..3e4410b 100644
+--- a/message_subscribe_example/message_subscribe_example.module
++++ b/message_subscribe_example/message_subscribe_example.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface;
+ /**
+  * @file
+  * Holds hook implementation for the Message Subscribe Example module.
+@@ -18,7 +19,7 @@ use Drupal\message_subscribe\Subscribers\DeliveryCandidate;
+  *
+  * Alter the subscribers list.
+  *
+- * @param \Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface[] &$uids
++ * @param DeliveryCandidateInterface[] $uids
+  *   The array of delivery candidates as defined by
+  *   `hook_message_subscribe_get_subscribers()`.
+  * @param array $values
+@@ -222,7 +223,7 @@ function message_subscribe_example_user_insert(User $account) {
+ /**
+  * Set message entity published field when it changes in the related entity.
+  *
+- * @param \Drupal\Core\Entity\ContentEntityBase $entity
++ * @param ContentEntityBase $entity
+  *   The entity object.
+  */
+ function message_subscribe_example_update_message_status(ContentEntityBase $entity) {
+diff --git a/message_subscribe_ui/message_subscribe_ui.module b/message_subscribe_ui/message_subscribe_ui.module
+index daf83cf..51d664b 100644
+--- a/message_subscribe_ui/message_subscribe_ui.module
++++ b/message_subscribe_ui/message_subscribe_ui.module
+@@ -14,7 +14,7 @@ use Drupal\views\Views;
+  */
+ function message_subscribe_ui_form_flag_form_alter(array &$form, FormStateInterface $form_state, $form_id) {
+   $prefix = \Drupal::config('message_subscribe.settings')->get('flag_prefix');
+-  /** @var \Drupal\flag\FlagInterface $flag */
++  /** @var FlagInterface $flag */
+   $flag = $form_state->getFormObject()->getEntity();
+   if (strpos($flag->id(), $prefix) === 0) {
+     // This is a message subscribe flag, so add the view selection option.
+diff --git a/message_subscribe_ui/src/Controller/SubscriptionController.php b/message_subscribe_ui/src/Controller/SubscriptionController.php
+index d6a8a38..55c9515 100644
+--- a/message_subscribe_ui/src/Controller/SubscriptionController.php
++++ b/message_subscribe_ui/src/Controller/SubscriptionController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\message_subscribe_ui\Controller;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Access\AccessResultInterface;
++use Drupal\views\ViewExecutable;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -23,41 +26,41 @@ class SubscriptionController extends ControllerBase {
+   /**
+    * The message subscribe settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The flag service.
+    *
+-   * @var \Drupal\flag\FlagServiceInterface
++   * @var FlagServiceInterface
+    */
+   protected $flagService;
+ 
+   /**
+    * The message subscribers service.
+    *
+-   * @var \Drupal\message_subscribe\SubscribersInterface
++   * @var SubscribersInterface
+    */
+   protected $subscribers;
+ 
+   /**
+    * Construct the subscriptions controller.
+    *
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   The current user.
+-   * @param \Drupal\flag\FlagServiceInterface $flag_service
++   * @param FlagServiceInterface $flag_service
+    *   The flag service manager.
+-   * @param \Drupal\message_subscribe\SubscribersInterface $subscribers
++   * @param SubscribersInterface $subscribers
+    *   The message subscribers service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+    */
+   public function __construct(AccountProxyInterface $current_user, FlagServiceInterface $flag_service, SubscribersInterface $subscribers, ConfigFactoryInterface $config_factory) {
+@@ -82,12 +85,12 @@ class SubscriptionController extends ControllerBase {
+   /**
+    * Access controller for subscription management tabs.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $user
++   * @param AccountInterface $user
+    *   The user account session.
+-   * @param \Drupal\flag\FlagInterface $flag
++   * @param FlagInterface $flag
+    *   (optional) The flag for which to display the view.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   Returns TRUE if access is granted.
+    */
+   public function tabAccess(AccountInterface $user, FlagInterface $flag = NULL) {
+@@ -121,7 +124,7 @@ class SubscriptionController extends ControllerBase {
+   /**
+    * Provides the page title for a given tab.
+    *
+-   * @param \Drupal\flag\FlagInterface $flag
++   * @param FlagInterface $flag
+    *   The flag for which to display subscriptions.
+    *
+    * @return string
+@@ -134,9 +137,9 @@ class SubscriptionController extends ControllerBase {
+   /**
+    * Render the subscription management tab.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user account.
+-   * @param \Drupal\flag\FlagInterface $flag
++   * @param FlagInterface $flag
+    *   The flag to display subscriptions for.
+    *
+    * @return array
+@@ -160,15 +163,15 @@ class SubscriptionController extends ControllerBase {
+   /**
+    * Helper function to get a view associated with a flag.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The user to pass in as the views argument.
+-   * @param \Drupal\flag\FlagInterface $flag
++   * @param FlagInterface $flag
+    *   The flag for which to find a matching view.
+    *
+-   * @return \Drupal\views\ViewExecutable
++   * @return ViewExecutable
+    *   The corresponding view executable.
+    *
+-   * @throws \Drupal\message_subscribe\Exception\MessageSubscribeException
++   * @throws MessageSubscribeException
+    *   - If a view corresponding to the `subscribe_ENTITY_TYPE_ID` does not
+    *     exist.
+    *   - If the view's relationship flag isn't properly enabled or configured.
+diff --git a/message_subscribe_ui/src/Plugin/Block/Subscriptions.php b/message_subscribe_ui/src/Plugin/Block/Subscriptions.php
+index 9eccc18..85f46d8 100644
+--- a/message_subscribe_ui/src/Plugin/Block/Subscriptions.php
++++ b/message_subscribe_ui/src/Plugin/Block/Subscriptions.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\message_subscribe_ui\Plugin\Block;
+ 
++use Drupal\flag\FlagInterface;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Core\Block\BlockBase;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Form\FormBuilderInterface;
+@@ -30,35 +32,35 @@ class Subscriptions extends BlockBase implements FormInterface, ContainerFactory
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The flag service.
+    *
+-   * @var \Drupal\flag\FlagServiceInterface
++   * @var FlagServiceInterface
+    */
+   protected $flagService;
+ 
+   /**
+    * The form builder service.
+    *
+-   * @var \Drupal\Core\Form\FormBuilderInterface
++   * @var FormBuilderInterface
+    */
+   protected $formBuilder;
+ 
+   /**
+    * The current route match service.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The subscribers service.
+    *
+-   * @var \Drupal\message_subscribe\SubscribersInterface
++   * @var SubscribersInterface
+    */
+   protected $subscribers;
+ 
+@@ -71,15 +73,15 @@ class Subscriptions extends BlockBase implements FormInterface, ContainerFactory
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Form\FormBuilderInterface $form_builder
++   * @param FormBuilderInterface $form_builder
+    *   The form builder service.
+-   * @param \Drupal\message_subscribe\SubscribersInterface $subscribers
++   * @param SubscribersInterface $subscribers
+    *   The subscribers service.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match service.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   The current user.
+-   * @param \Drupal\flag\FlagServiceInterface $flag_service
++   * @param FlagServiceInterface $flag_service
+    *   The flag service.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, FormBuilderInterface $form_builder, SubscribersInterface $subscribers, RouteMatchInterface $route_match, AccountProxyInterface $current_user, FlagServiceInterface $flag_service) {
+@@ -110,7 +112,7 @@ class Subscriptions extends BlockBase implements FormInterface, ContainerFactory
+   /**
+    * Helper method to retrieve the current page entity.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null
++   * @return EntityInterface|null
+    *   The entity for the current route.
+    */
+   protected function getCurrentEntity() {
+@@ -168,7 +170,7 @@ class Subscriptions extends BlockBase implements FormInterface, ContainerFactory
+       if ($referenced_entity->access('view')) {
+         $flags = $this->subscribers->getFlags($referenced_entity->getEntityTypeId(), $referenced_entity->bundle(), $this->currentUser);
+         if (!empty($flags)) {
+-          /** @var \Drupal\flag\FlagInterface $flag */
++          /** @var FlagInterface $flag */
+           // @todo Support multiple subscription flags per-entity if there is
+           // such a use-case.
+           $flag = reset($flags);
+@@ -194,10 +196,10 @@ class Subscriptions extends BlockBase implements FormInterface, ContainerFactory
+   /**
+    * Get a subscription checkbox label for a given entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The referenced entity.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The label for the subscription checkbox.
+    */
+   protected function getLabel(EntityInterface $entity) {
+@@ -208,7 +210,7 @@ class Subscriptions extends BlockBase implements FormInterface, ContainerFactory
+   /**
+    * Determine if this entity has accessible entities to subscribe to.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to check for subscribable entities.
+    *
+    * @return bool
+@@ -241,7 +243,7 @@ class Subscriptions extends BlockBase implements FormInterface, ContainerFactory
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     foreach ($form_state->getValue('subscriptions') as $entity_type => $entities) {
+       foreach ($entities as $entity_id => $subscribe) {
+-        /** @var \Drupal\flag\FlagInterface[] $flags */
++        /** @var FlagInterface[] $flags */
+         $flags = $form['subscriptions'][$entity_type][$entity_id]['#flags'];
+         $entity = $form['subscriptions'][$entity_type][$entity_id]['#entity'];
+         foreach ($flags as $flag) {
+diff --git a/message_subscribe_ui/src/Plugin/Derivative/MessageSubscribeUiLocalTask.php b/message_subscribe_ui/src/Plugin/Derivative/MessageSubscribeUiLocalTask.php
+index 6be1975..1048ffa 100644
+--- a/message_subscribe_ui/src/Plugin/Derivative/MessageSubscribeUiLocalTask.php
++++ b/message_subscribe_ui/src/Plugin/Derivative/MessageSubscribeUiLocalTask.php
+@@ -15,14 +15,14 @@ class MessageSubscribeUiLocalTask extends DeriverBase implements ContainerDerive
+   /**
+    * The message subscription service.
+    *
+-   * @var \Drupal\message_subscribe\SubscribersInterface
++   * @var SubscribersInterface
+    */
+   protected $subscribers;
+ 
+   /**
+    * Constructs the local task deriver.
+    *
+-   * @param \Drupal\message_subscribe\SubscribersInterface $subscribers
++   * @param SubscribersInterface $subscribers
+    *   The message subscription service.
+    */
+   public function __construct(SubscribersInterface $subscribers) {
+diff --git a/message_subscribe_ui/tests/src/Functional/SubscriptionsBlockTest.php b/message_subscribe_ui/tests/src/Functional/SubscriptionsBlockTest.php
+index 0deb0f0..9661b92 100644
+--- a/message_subscribe_ui/tests/src/Functional/SubscriptionsBlockTest.php
++++ b/message_subscribe_ui/tests/src/Functional/SubscriptionsBlockTest.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\Tests\message_subscribe_ui\Functional;
+ 
++use Drupal\user\UserInterface;
++use Drupal\flag\FlagServiceInterface;
++use Drupal\node\NodeInterface;
++use Drupal\taxonomy\TermInterface;
++use Drupal\user\RoleInterface;
+ use Drupal\entity_test\FieldStorageDefinition;
+ use Drupal\Tests\field\Traits\EntityReferenceTestTrait;
+ use Drupal\Tests\BrowserTestBase;
+@@ -20,35 +25,35 @@ class SubscriptionsBlockTest extends BrowserTestBase {
+   /**
+    * Admin user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+   /**
+    * The flag service.
+    *
+-   * @var \Drupal\flag\FlagServiceInterface
++   * @var FlagServiceInterface
+    */
+   protected $flagService;
+ 
+   /**
+    * A node.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   protected $node;
+ 
+   /**
+    * Taxonomy terms.
+    *
+-   * @var \Drupal\taxonomy\TermInterface[]
++   * @var TermInterface[]
+    */
+   protected $terms = [];
+ 
+   /**
+    * Normal authenticated user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $webUser;
+ 
+@@ -66,7 +71,7 @@ class SubscriptionsBlockTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->adminUser = $this->createUser([], NULL, TRUE);
+@@ -139,7 +144,7 @@ class SubscriptionsBlockTest extends BrowserTestBase {
+       'subscriptions[taxonomy_term][' . $this->terms[1]->id() . ']' => TRUE,
+       'subscriptions[taxonomy_term][' . $this->terms[7]->id() . ']' => TRUE,
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save'));
++    $this->submitForm($edit, t('Save'));
+     $flag = $this->flagService->getFlagById('subscribe_term');
+     foreach ([1, 3, 7, 9] as $i) {
+       $term = $this->terms[$i];
+@@ -158,7 +163,7 @@ class SubscriptionsBlockTest extends BrowserTestBase {
+     }
+ 
+     // Grant permission for user subscriptions.
+-    /** @var \Drupal\user\RoleInterface $role */
++    /** @var RoleInterface $role */
+     $role = $this->container->get('entity_type.manager')->getStorage('user_role')->load($this->webUser->getRoles(TRUE)[0]);
+     $role->grantPermission('flag subscribe_user');
+     $role->grantPermission('unflag subscribe_user');
+@@ -173,7 +178,7 @@ class SubscriptionsBlockTest extends BrowserTestBase {
+     $edit = [
+       'subscriptions[user][' . $this->adminUser->id() . ']' => TRUE,
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save'));
++    $this->submitForm($edit, t('Save'));
+     $flag = $this->flagService->getFlagById('subscribe_user');
+     $this->assertNotEmpty($this->flagService->getEntityFlaggings($flag, $this->adminUser, $this->webUser));
+     // Subscriptions should be checked.
+diff --git a/src/Form/MessageSubscribeAdminSettings.php b/src/Form/MessageSubscribeAdminSettings.php
+index 843626b..5d2aecc 100644
+--- a/src/Form/MessageSubscribeAdminSettings.php
++++ b/src/Form/MessageSubscribeAdminSettings.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\message_subscribe\Form;
+ 
++use Drupal\Core\Plugin\DefaultPluginManager;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -44,7 +45,7 @@ class MessageSubscribeAdminSettings extends ConfigFormBase {
+    */
+   public function buildForm(array $form, FormStateInterface $form_state) {
+ 
+-    /** @var \Drupal\Core\Plugin\DefaultPluginManager $message_notifiers */
++    /** @var DefaultPluginManager $message_notifiers */
+     $message_notifiers = \Drupal::service('plugin.message_notify.notifier.manager');
+     $options = array_map(function ($definition) {
+       return $definition['title'];
+diff --git a/src/Plugin/QueueWorker/MessageSubscribe.php b/src/Plugin/QueueWorker/MessageSubscribe.php
+index fd83c1d..60b1e48 100644
+--- a/src/Plugin/QueueWorker/MessageSubscribe.php
++++ b/src/Plugin/QueueWorker/MessageSubscribe.php
+@@ -21,7 +21,7 @@ class MessageSubscribe extends QueueWorkerBase implements ContainerFactoryPlugin
+   /**
+    * The message subscription service.
+    *
+-   * @var \Drupal\message_subscribe\SubscribersInterface
++   * @var SubscribersInterface
+    */
+   protected $subscribers;
+ 
+diff --git a/src/Subscribers.php b/src/Subscribers.php
+index 573b14e..db35759 100644
+--- a/src/Subscribers.php
++++ b/src/Subscribers.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\message_subscribe;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Queue\QueueInterface;
++use Drupal\node\NodeInterface;
++use Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface;
+ use Drupal\comment\CommentInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -26,35 +30,35 @@ class Subscribers implements SubscribersInterface {
+   /**
+    * The message subscribe settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The flag manager service.
+    *
+-   * @var \Drupal\flag\FlagServiceInterface
++   * @var FlagServiceInterface
+    */
+   protected $flagService;
+ 
+   /**
+    * The message notification service.
+    *
+-   * @var \Drupal\message_notify\MessageNotifier
++   * @var MessageNotifier
+    */
+   protected $messageNotifier;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -70,14 +74,14 @@ class Subscribers implements SubscribersInterface {
+   /**
+    * The message subscribe queue.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+   /**
+    * Logger channel.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+@@ -91,17 +95,17 @@ class Subscribers implements SubscribersInterface {
+   /**
+    * Construct the service.
+    *
+-   * @param \Drupal\flag\FlagServiceInterface $flag_service
++   * @param FlagServiceInterface $flag_service
+    *   The flag manager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\message_notify\MessageNotifier $message_notifier
++   * @param MessageNotifier $message_notifier
+    *   The message notification service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue
++   * @param QueueFactory $queue
+    *   The queue service.
+    */
+   public function __construct(FlagServiceInterface $flag_service, ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, MessageNotifier $message_notifier, ModuleHandlerInterface $module_handler, QueueFactory $queue) {
+@@ -127,7 +131,7 @@ class Subscribers implements SubscribersInterface {
+   /**
+    * Sets the logger channel.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The message_subscribe logger channel.
+    *
+    * @todo Inject this service in the 2.x version
+@@ -349,7 +353,7 @@ class Subscribers implements SubscribersInterface {
+   /**
+    * Helper method to determine if the given entity belongs to the given user.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to check ownership of.
+    * @param int $uid
+    *   The user ID to check for ownership.
+@@ -426,7 +430,7 @@ class Subscribers implements SubscribersInterface {
+       return $context;
+     }
+ 
+-    /** @var \Drupal\node\NodeInterface[] $nodes */
++    /** @var NodeInterface[] $nodes */
+     $nodes = $this->entityTypeManager->getStorage('node')->loadMultiple($context['node']);
+ 
+     if ($this->moduleHandler->moduleExists('og')) {
+@@ -439,7 +443,7 @@ class Subscribers implements SubscribersInterface {
+         }
+       }
+       // Re-load nodes as the OG context may have added additional ones.
+-      /** @var \Drupal\node\NodeInterface[] $nodes */
++      /** @var NodeInterface[] $nodes */
+       $nodes = $this->entityTypeManager->getStorage('node')->loadMultiple($context['node']);
+     }
+ 
+@@ -468,7 +472,7 @@ class Subscribers implements SubscribersInterface {
+   /**
+    * Get the default notifiers for a given set of users.
+    *
+-   * @param \Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface[] &$uids
++   * @param DeliveryCandidateInterface[] $uids
+    *   An array detailing notification info for users.
+    */
+   protected function addDefaultNotifiers(array &$uids) {
+diff --git a/src/SubscribersInterface.php b/src/SubscribersInterface.php
+index 2971e2b..4c1624a 100644
+--- a/src/SubscribersInterface.php
++++ b/src/SubscribersInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\message_subscribe;
+ 
++use Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface;
++use Drupal\flag\FlagInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\message\MessageInterface;
+@@ -14,9 +16,9 @@ interface SubscribersInterface {
+   /**
+    * Process a message and send to subscribed users.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity object to process subscriptions and send notifications for.
+-   * @param \Drupal\message\MessageInterface $message
++   * @param MessageInterface $message
+    *   The message object.
+    * @param array $notify_options
+    *   (optional) An array of options to be passed to the message notifier
+@@ -78,9 +80,9 @@ interface SubscribersInterface {
+   /**
+    * Retrieve a list of subscribers for a given entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to retrieve subscribers for.
+-   * @param \Drupal\message\MessageInterface $message
++   * @param MessageInterface $message
+    *   The message entity.
+    * @param array $options
+    *   (optional) An array of options with the same elements as the
+@@ -89,7 +91,7 @@ interface SubscribersInterface {
+    *   (optional) The context array, passed by reference. This has the same
+    *   elements as the `$context` paramater for `self::sendMessage()`.
+    *
+-   * @return \Drupal\message_subscribe\Subscribers\DeliveryCandidateInterface[]
++   * @return DeliveryCandidateInterface[]
+    *   Array of delivery candidate objects keyed with the user IDs to send
+    *   notifications to.
+    */
+@@ -102,7 +104,7 @@ interface SubscribersInterface {
+    * For example, given a node we extract the node author and related
+    * taxonomy terms.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity object.
+    * @param bool $skip_detailed_context
+    *   (optional) Skip detailed context detection and just use entity ID/type.
+@@ -125,11 +127,11 @@ interface SubscribersInterface {
+    *   (optional) The entity type for which to load the flags.
+    * @param string $bundle
+    *   (optional) The bundle for which to load the flags.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   (optional) The user account to filter available flags. If not set, all
+    *   flags for the given entity and bundle will be returned.
+    *
+-   * @return \Drupal\flag\FlagInterface[]
++   * @return FlagInterface[]
+    *   An array of the structure [fid] = flag_object.
+    *
+    * @see \Drupal\flag\FlagServiceInterface::getAllFlags()
+diff --git a/tests/src/Functional/UninstallTest.php b/tests/src/Functional/UninstallTest.php
+index 59772e1..8625b18 100644
+--- a/tests/src/Functional/UninstallTest.php
++++ b/tests/src/Functional/UninstallTest.php
+@@ -27,10 +27,11 @@ class UninstallTest extends BrowserTestBase {
+     // Verify settings page.
+     $this->drupalGet(Url::fromRoute('message_subscribe.admin_settings'));
+     $this->assertSession()->statusCodeEquals(200);
++    $this->drupalGet('admin/modules/uninstall');
+ 
+     // Uninstall module.
+-    $this->drupalPostForm('admin/modules/uninstall', ['uninstall[message_subscribe]' => TRUE], t('Uninstall'));
+-    $this->drupalPostForm(NULL, [], t('Uninstall'));
++    $this->submitForm(['uninstall[message_subscribe]' => TRUE], t('Uninstall'));
++    $this->submitForm([], t('Uninstall'));
+ 
+     // Validate Message Subscribe was uninstalled.
+     $this->assertSession()->pageTextContains(t('The selected modules have been uninstalled.'));
+diff --git a/tests/src/Kernel/ContextTest.php b/tests/src/Kernel/ContextTest.php
+index 7f99b0c..e25b695 100644
+--- a/tests/src/Kernel/ContextTest.php
++++ b/tests/src/Kernel/ContextTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\message_subscribe\Kernel;
+ 
++use Drupal\node\NodeInterface;
++use Drupal\message_subscribe\SubscribersInterface;
++use Drupal\taxonomy\TermInterface;
++use Drupal\user\UserInterface;
+ use Drupal\comment\CommentInterface;
+ use Drupal\comment\Entity\Comment;
+ use Drupal\comment\Tests\CommentTestTrait;
+@@ -36,49 +40,49 @@ class ContextTest extends MessageSubscribeTestBase {
+   /**
+    * Test comment.
+    *
+-   * @var \Drupal\comment\CommentInterface
++   * @var CommentInterface
+    */
+   protected $comment;
+ 
+   /**
+    * Test group.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   protected $group;
+ 
+   /**
+    * Group content node.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   protected $node;
+ 
+   /**
+    * The message subscribers service.
+    *
+-   * @var \Drupal\message_subscribe\SubscribersInterface
++   * @var SubscribersInterface
+    */
+   protected $subscribers;
+ 
+   /**
+    * Test terms.
+    *
+-   * @var \Drupal\taxonomy\TermInterface[]
++   * @var TermInterface[]
+    */
+   protected $terms;
+ 
+   /**
+    * Test users.
+    *
+-   * @var \Drupal\user\UserInterface[]
++   * @var UserInterface[]
+    */
+   protected $users;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->installSchema('comment', ['comment_entity_statistics']);
+diff --git a/tests/src/Kernel/Form/MessageSubscribeAdminSettingsTest.php b/tests/src/Kernel/Form/MessageSubscribeAdminSettingsTest.php
+index 7c048cd..a43479b 100644
+--- a/tests/src/Kernel/Form/MessageSubscribeAdminSettingsTest.php
++++ b/tests/src/Kernel/Form/MessageSubscribeAdminSettingsTest.php
+@@ -26,7 +26,7 @@ class MessageSubscribeAdminSettingsTest extends ConfigFormTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->form = MessageSubscribeAdminSettings::create($this->container);
+diff --git a/tests/src/Kernel/MessageSubscribeTestBase.php b/tests/src/Kernel/MessageSubscribeTestBase.php
+index b7e0c60..aa68ccf 100644
+--- a/tests/src/Kernel/MessageSubscribeTestBase.php
++++ b/tests/src/Kernel/MessageSubscribeTestBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\message_subscribe\Kernel;
+ 
++use Drupal\message_subscribe\SubscribersInterface;
++use Drupal\message\MessageTemplateInterface;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\Tests\node\Traits\ContentTypeCreationTrait;
+ use Drupal\Tests\node\Traits\NodeCreationTrait;
+@@ -37,21 +39,21 @@ abstract class MessageSubscribeTestBase extends KernelTestBase {
+   /**
+    * The message subscribers service.
+    *
+-   * @var \Drupal\message_subscribe\SubscribersInterface
++   * @var SubscribersInterface
+    */
+   protected $messageSubscribers;
+ 
+   /**
+    * Message template.
+    *
+-   * @var \Drupal\message\MessageTemplateInterface
++   * @var MessageTemplateInterface
+    */
+   protected $template;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->installSchema('system', ['sequences']);
+diff --git a/tests/src/Kernel/QueueTest.php b/tests/src/Kernel/QueueTest.php
+index 13542d4..f5a63de 100644
+--- a/tests/src/Kernel/QueueTest.php
++++ b/tests/src/Kernel/QueueTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\message_subscribe\Kernel;
+ 
++use Drupal\node\NodeInterface;
+ use Drupal\message\Entity\Message;
+ use Drupal\message\Entity\MessageTemplate;
+ use Drupal\message_subscribe\Exception\MessageSubscribeException;
+@@ -17,14 +18,14 @@ class QueueTest extends MessageSubscribeTestBase {
+   /**
+    * Node for testing.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   protected $node;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->config('message_subscribe.settings')
+diff --git a/tests/src/Kernel/SubscribersTest.php b/tests/src/Kernel/SubscribersTest.php
+index ba41c8b..90c6782 100644
+--- a/tests/src/Kernel/SubscribersTest.php
++++ b/tests/src/Kernel/SubscribersTest.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\Tests\message_subscribe\Kernel;
+ 
++use Drupal\flag\FlagServiceInterface;
++use Drupal\message_subscribe\SubscribersInterface;
++use Drupal\node\NodeInterface;
++use Drupal\user\UserInterface;
++use Drupal\Core\Entity\Query\QueryInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\Core\Test\AssertMailTrait;
+ use Drupal\field\Entity\FieldConfig;
+@@ -23,28 +28,28 @@ class SubscribersTest extends MessageSubscribeTestBase {
+   /**
+    * Flag service.
+    *
+-   * @var \Drupal\flag\FlagServiceInterface
++   * @var FlagServiceInterface
+    */
+   protected $flagService;
+ 
+   /**
+    * The message subscription service.
+    *
+-   * @var \Drupal\message_subscribe\SubscribersInterface
++   * @var SubscribersInterface
+    */
+   protected $messageSubscribers;
+ 
+   /**
+    * Nodes to test with.
+    *
+-   * @var \Drupal\node\NodeInterface[]
++   * @var NodeInterface[]
+    */
+   protected $nodes;
+ 
+   /**
+    * Users to test with.
+    *
+-   * @var \Drupal\user\UserInterface[]
++   * @var UserInterface[]
+    */
+   protected $users;
+ 
+@@ -56,7 +61,7 @@ class SubscribersTest extends MessageSubscribeTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->installSchema('node', ['node_access']);
+@@ -337,7 +342,7 @@ class SubscribersTest extends MessageSubscribeTestBase {
+     $mails = $this->getMails();
+     $no_message_count = $message_count = 0;
+     foreach ($this->users as $account) {
+-      /** @var \Drupal\Core\Entity\Query\QueryInterface $query */
++      /** @var QueryInterface $query */
+       $query = $this->container->get('entity_type.manager')->getStorage('message')->getQuery();
+       $query->condition('uid', $account->id());
+       $result = $query->execute();
+diff --git a/tests/src/Unit/SubscribersTest.php b/tests/src/Unit/SubscribersTest.php
+index 957acfc..2b2eccf 100644
+--- a/tests/src/Unit/SubscribersTest.php
++++ b/tests/src/Unit/SubscribersTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\message_subscribe\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Drupal\message_subscribe\SubscribersInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -29,52 +31,53 @@ use Prophecy\Argument;
+  */
+ class SubscribersTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Mock flag service.
+    *
+-   * @var \Drupal\flag\FlagServiceInterface
++   * @var FlagServiceInterface
+    */
+   protected $flagService;
+ 
+   /**
+    * Mock config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Mock entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Mock message notifier.
+    *
+-   * @var \Drupal\message_notify\MessageNotifier
++   * @var MessageNotifier
+    */
+   protected $messageNotifier;
+ 
+   /**
+    * Mock module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Mock queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queue;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     require __DIR__ . '/../fixture_foo.module.php';
+@@ -96,7 +99,7 @@ class SubscribersTest extends UnitTestCase {
+   /**
+    * Helper to generate a new subscriber service with mock services.
+    *
+-   * @return \Drupal\message_subscribe\SubscribersInterface
++   * @return SubscribersInterface
+    *   The subscribers service object.
+    */
+   protected function getSubscriberService() {

@@ -1,0 +1,672 @@
+diff --git a/email_confirmer.api.php b/email_confirmer.api.php
+index feaeb31..f93bfcd 100644
+--- a/email_confirmer.api.php
++++ b/email_confirmer.api.php
+@@ -15,7 +15,7 @@ use Drupal\email_confirmer\EmailConfirmationInterface;
+  *
+  * @param string $op
+  *   Either "confirm" or "cancel".
+- * @param \Drupal\email_confirmer\EmailConfirmationInterface $confirmation
++ * @param EmailConfirmationInterface $confirmation
+  *   The confirmation process.
+  */
+ function hook_email_confirmer($op, EmailConfirmationInterface $confirmation) {
+diff --git a/email_confirmer.tokens.inc b/email_confirmer.tokens.inc
+index 931dd41..02300f7 100644
+--- a/email_confirmer.tokens.inc
++++ b/email_confirmer.tokens.inc
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\email_confirmer\EmailConfirmationInterface;
+ /**
+  * @file
+  * Token related hook implementations.
+@@ -46,7 +47,7 @@ function email_confirmer_tokens($type, $tokens, $data, $options, BubbleableMetad
+ 
+   $replacements = [];
+ 
+-  /** @var \Drupal\email_confirmer\EmailConfirmationInterface $confirmation */
++  /** @var EmailConfirmationInterface $confirmation */
+   $confirmation = $data['email_confirmer_confirmation'];
+ 
+   foreach ($tokens as $name => $original) {
+diff --git a/email_confirmer_user/email_confirmer_user.module b/email_confirmer_user/email_confirmer_user.module
+index 4bd4b63..48cd837 100644
+--- a/email_confirmer_user/email_confirmer_user.module
++++ b/email_confirmer_user/email_confirmer_user.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\user\UserInterface;
++use Drupal\Core\Session\AccountInterface;
++use Drupal\Core\Entity\EntityTypeInterface;
+ /**
+  * @file
+  * Users related email confirmation module.
+@@ -15,7 +18,7 @@ use Drupal\Component\Utility\Unicode;
+  * Implements hook_ENTITY_TYPE_presave().
+  */
+ function email_confirmer_user_user_presave(EntityInterface $entity) {
+-  /** @var \Drupal\user\UserInterface $entity */
++  /** @var UserInterface $entity */
+   // Do nothing if no user email update, currently in a confirmer operation or
+   // email change confirmation is disabled.
+   if (!isset($entity->original)
+@@ -37,7 +40,7 @@ function email_confirmer_user_user_presave(EntityInterface $entity) {
+   if ($config['consider_existent']
+     && !empty($confirmations = \Drupal::service('email_confirmer')->getConfirmations($new_email, 'confirmed', 0, $config['limit_user_realm'] ? 'email_confirmer_user' : ''))) {
+     // Limit to user's own confirmations.
+-    /** @var \Drupal\email_confirmer\EmailConfirmationInterface $confirmation */
++    /** @var EmailConfirmationInterface $confirmation */
+     foreach ($confirmations as $confirmation) {
+       if ($confirmation->uid->target_id == $entity->id()) {
+         return;
+@@ -75,7 +78,7 @@ function email_confirmer_user_user_presave(EntityInterface $entity) {
+  * Implements hook_email_confirmer().
+  */
+ function email_confirmer_user_email_confirmer($op, EmailConfirmationInterface $confirmation) {
+-  /** @var \Drupal\user\UserInterface $user */
++  /** @var UserInterface $user */
+   if ($confirmation->getRealm() == 'email_confirmer_user'
+     && ($config = \Drupal::config('email_confirmer_user.settings')->get('user_email_change'))
+     && $config['enabled']
+@@ -117,7 +120,7 @@ function email_confirmer_user_email_confirmer($op, EmailConfirmationInterface $c
+  */
+ function email_confirmer_user_form_user_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+   $config = \Drupal::config('email_confirmer_user.settings')->get('user_email_change');
+-  /** @var \Drupal\user\UserInterface $user */
++  /** @var UserInterface $user */
+   $user = $form_state->getFormObject()->getEntity();
+ 
+   // Nothing to do with new accounts.
+@@ -126,7 +129,7 @@ function email_confirmer_user_form_user_form_alter(&$form, FormStateInterface $f
+   }
+ 
+   // Tell the user about email changes pending confirmation.
+-  /** @var \Drupal\email_confirmer\EmailConfirmationInterface $confirmation */
++  /** @var EmailConfirmationInterface $confirmation */
+   if ($config['enabled']
+     && ($new_email = \Drupal::service('user.data')->get('email_confirmer_user', $user->id(), 'email_change_new_address'))
+     && !empty($confirmations = \Drupal::service('email_confirmer')->getConfirmations($new_email, 'pending', 0, 'email_confirmer_user'))) {
+@@ -155,7 +158,7 @@ function email_confirmer_user_user_login($account) {
+ 
+   // Register a confirmed email confirmation for new created accounts on their
+   // first access or when a user logins through a one time login link.
+-  /** @var \Drupal\Core\Session\AccountInterface $account */
++  /** @var AccountInterface $account */
+   if (((!$account->getLastAccessedTime() && $config['sync_core_confirmation'])
+       || (\Drupal::routeMatch()->getRouteName() == 'user.reset.login' && $config['sync_core_onetimeloginlinks']))
+     && !\Drupal::service('email_confirmer')->getConfirmation($account->getEmail(), 'confirmed')) {
+@@ -188,6 +191,6 @@ function email_confirmer_user_mail($key, &$message, $params) {
+  * Implements hook_entity_type_alter().
+  */
+ function email_confirmer_user_entity_type_alter(array &$entity_types) {
+-  /** @var \Drupal\Core\Entity\EntityTypeInterface[] $entity_types */
++  /** @var EntityTypeInterface[] $entity_types */
+   $entity_types['user']->setFormClass('cancel_email_change', '\Drupal\email_confirmer_user\Form\UserEmailChangeCancelForm');
+ }
+diff --git a/email_confirmer_user/src/Access/UserEmailPendingChangeAccess.php b/email_confirmer_user/src/Access/UserEmailPendingChangeAccess.php
+index fd01ab2..6b24906 100644
+--- a/email_confirmer_user/src/Access/UserEmailPendingChangeAccess.php
++++ b/email_confirmer_user/src/Access/UserEmailPendingChangeAccess.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\email_confirmer_user\Access;
+ 
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Routing\Access\AccessInterface;
+@@ -17,23 +18,23 @@ class UserEmailPendingChangeAccess implements AccessInterface {
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The user data service.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * Constructs a UserEmailChangeAccess instance.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\user\UserDataInterface $user_data
++   * @param UserDataInterface $user_data
+    *   The user data service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, UserDataInterface $user_data) {
+@@ -44,12 +45,12 @@ class UserEmailPendingChangeAccess implements AccessInterface {
+   /**
+    * Checks access to the given user's pending email change.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user whose email address is pending confirmation of change.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The currently logged in account.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function access(UserInterface $user, AccountInterface $account) {
+diff --git a/email_confirmer_user/src/Form/EmailConfirmerUserSettingsForm.php b/email_confirmer_user/src/Form/EmailConfirmerUserSettingsForm.php
+index eab0080..8118f2f 100644
+--- a/email_confirmer_user/src/Form/EmailConfirmerUserSettingsForm.php
++++ b/email_confirmer_user/src/Form/EmailConfirmerUserSettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\email_confirmer_user\Form;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -32,7 +33,7 @@ class EmailConfirmerUserSettingsForm extends ConfigFormBase {
+   public function buildForm(array $form, FormStateInterface $form_state) {
+     $form = parent::buildForm($form, $form_state);
+ 
+-    /** @var \Drupal\Core\Config\ImmutableConfig $config */
++    /** @var ImmutableConfig $config */
+     $config = $this->config('email_confirmer_user.settings');
+ 
+     // User email address confirmation on change options.
+@@ -120,7 +121,7 @@ class EmailConfirmerUserSettingsForm extends ConfigFormBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Config\ImmutableConfig $config */
++    /** @var ImmutableConfig $config */
+     $config = $this->config('email_confirmer_user.settings');
+ 
+     $config->set('user_email_change', [
+diff --git a/email_confirmer_user/src/Form/UserEmailChangeCancelForm.php b/email_confirmer_user/src/Form/UserEmailChangeCancelForm.php
+index 35222e0..c389b73 100644
+--- a/email_confirmer_user/src/Form/UserEmailChangeCancelForm.php
++++ b/email_confirmer_user/src/Form/UserEmailChangeCancelForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\email_confirmer_user\Form;
+ 
++use Drupal\email_confirmer\EmailConfirmationInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Entity\ContentEntityConfirmFormBase;
+ use Drupal\user\UserDataInterface;
+@@ -19,29 +20,29 @@ class UserEmailChangeCancelForm extends ContentEntityConfirmFormBase {
+   /**
+    * The user data service.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * The email confirmer.
+    *
+-   * @var \Drupal\email_confirmer\EmailConfirmerManagerInterface
++   * @var EmailConfirmerManagerInterface
+    */
+   protected $emailConfirmer;
+ 
+   /**
+    * Constructs a UserEmailChangeCancelForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\user\UserDataInterface $user_data
++   * @param UserDataInterface $user_data
+    *   The user data service.
+-   * @param \Drupal\email_confirmer\EmailConfirmerManagerInterface $email_confirmer
++   * @param EmailConfirmerManagerInterface $email_confirmer
+    *   The email confirmer.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityTypeBundleInfoInterface $entity_type_bundle_info, TimeInterface $time, UserDataInterface $user_data, EmailConfirmerManagerInterface $email_confirmer) {
+@@ -114,7 +115,7 @@ class UserEmailChangeCancelForm extends ContentEntityConfirmFormBase {
+     $cancel_url = NULL;
+ 
+     // Cancel any pending address confirmation for the requested new email.
+-    /** @var \Drupal\email_confirmer\EmailConfirmationInterface $confirmation */
++    /** @var EmailConfirmationInterface $confirmation */
+     foreach ($this->emailConfirmer->getConfirmations($new_email, 'pending', 0, 'email_confirmer_user') as $confirmation) {
+       $confirmation->cancel();
+       $confirmation->save();
+diff --git a/src/Controller/EmailConfirmerController.php b/src/Controller/EmailConfirmerController.php
+index 7d0aa39..fd0a7e3 100644
+--- a/src/Controller/EmailConfirmerController.php
++++ b/src/Controller/EmailConfirmerController.php
+@@ -13,7 +13,7 @@ class EmailConfirmerController extends ControllerBase {
+   /**
+    * Resend confirmation email.
+    *
+-   * @param \Drupal\email_confirmer\EmailConfirmationInterface $confirmation
++   * @param EmailConfirmationInterface $confirmation
+    *   The confirmation entity.
+    */
+   public function resendConfirmation(EmailConfirmationInterface $confirmation) {
+diff --git a/src/EmailConfirmationAccessControlHandler.php b/src/EmailConfirmationAccessControlHandler.php
+index 4ec5854..308506c 100644
+--- a/src/EmailConfirmationAccessControlHandler.php
++++ b/src/EmailConfirmationAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\email_confirmer;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -22,25 +23,25 @@ class EmailConfirmationAccessControlHandler extends EntityAccessControlHandler i
+   /**
+    * The email confirmer config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $confirmerConfig;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * Creates a new EmailConfirmationAccessControlHandler.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+    */
+   public function __construct(EntityTypeInterface $entity_type, ConfigFactoryInterface $config_factory, RequestStack $request_stack) {
+@@ -61,7 +62,7 @@ class EmailConfirmationAccessControlHandler extends EntityAccessControlHandler i
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\email_confirmer\EmailConfirmationInterface $entity */
++    /** @var EmailConfirmationInterface $entity */
+     if ($account->hasPermission('administer email confirmations')) {
+       return AccessResult::allowed()->cachePerPermissions();
+     }
+diff --git a/src/EmailConfirmationInterface.php b/src/EmailConfirmationInterface.php
+index a988ce9..4d96ebd 100644
+--- a/src/EmailConfirmationInterface.php
++++ b/src/EmailConfirmationInterface.php
+@@ -138,7 +138,7 @@ interface EmailConfirmationInterface extends ContentEntityInterface {
+    * @return bool
+    *   TRUE if request was successfully sent, FALSE on sending error.
+    *
+-   * @throws \Drupal\email_confirmer\InvalidConfirmationStateException
++   * @throws InvalidConfirmationStateException
+    *   If confirmation is cancelled, expired or already confirmed.
+    */
+   public function sendRequest();
+@@ -153,7 +153,7 @@ interface EmailConfirmationInterface extends ContentEntityInterface {
+    *   TRUE if confirmation was successfully processed, FALSE on mistmach
+    *   hash.
+    *
+-   * @throws \Drupal\email_confirmer\InvalidConfirmationStateException
++   * @throws InvalidConfirmationStateException
+    *   If confirmation is cancelled, expired or already confirmed.
+    */
+   public function confirm($hash);
+@@ -161,7 +161,7 @@ interface EmailConfirmationInterface extends ContentEntityInterface {
+   /**
+    * Cancel the email confirmation.
+    *
+-   * @throws \Drupal\email_confirmer\InvalidConfirmationStateException
++   * @throws InvalidConfirmationStateException
+    *   If confirmation is expired, confirmed or already cancelled.
+    */
+   public function cancel();
+@@ -311,7 +311,7 @@ interface EmailConfirmationInterface extends ContentEntityInterface {
+   /**
+    * Set a URL to go on confirmation response.
+    *
+-   * @param \Drupal\Core\Url $url
++   * @param Url $url
+    *   The URL to go.
+    * @param string $operation
+    *   One of 'confirm', 'cancel' or 'error'. Empty to set for all operations.
+@@ -327,7 +327,7 @@ interface EmailConfirmationInterface extends ContentEntityInterface {
+    * @param string $operation
+    *   One of 'confirm', 'cancel' or 'error'.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   The URL. NULL if not set.
+    */
+   public function getResponseUrl($operation);
+diff --git a/src/EmailConfirmerManager.php b/src/EmailConfirmerManager.php
+index 73414ef..e916dd1 100644
+--- a/src/EmailConfirmerManager.php
++++ b/src/EmailConfirmerManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\email_confirmer;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+@@ -14,32 +15,32 @@ class EmailConfirmerManager implements EmailConfirmerManagerInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The email_confirmer config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * Construct an EmailConfirmerManager.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, ConfigFactoryInterface $config_factory, TimeInterface $time) {
+diff --git a/src/EmailConfirmerManagerInterface.php b/src/EmailConfirmerManagerInterface.php
+index 93edd45..a905a65 100644
+--- a/src/EmailConfirmerManagerInterface.php
++++ b/src/EmailConfirmerManagerInterface.php
+@@ -21,7 +21,7 @@ interface EmailConfirmerManagerInterface {
+    * @param string $realm
+    *   A realm to which this confirmation belongs. Tipically, a module name.
+    *
+-   * @return \Drupal\email_confirmer\EmailConfirmationInterface
++   * @return EmailConfirmationInterface
+    *   The email confirmation entity.
+    */
+   public function confirm($email, array $data = [], $realm = '');
+@@ -38,7 +38,7 @@ interface EmailConfirmerManagerInterface {
+    * @param string $realm
+    *   A realm to filter by.
+    *
+-   * @return \Drupal\email_confirmer\EmailConfirmationInterface[]
++   * @return EmailConfirmationInterface[]
+    *   Array of confirmations found, most recent first. Empty array if none
+    *   found.
+    */
+@@ -54,7 +54,7 @@ interface EmailConfirmerManagerInterface {
+    * @param string $realm
+    *   A realm to filter by.
+    *
+-   * @return \Drupal\email_confirmer\EmailConfirmationInterface
++   * @return EmailConfirmationInterface
+    *   The email confirmation entity. NULL if not found.
+    */
+   public function getConfirmation($email, $status = FALSE, $realm = '');
+@@ -65,7 +65,7 @@ interface EmailConfirmerManagerInterface {
+    * @param string $email
+    *   The email address to confirm.
+    *
+-   * @return \Drupal\email_confirmer\EmailConfirmationInterface
++   * @return EmailConfirmationInterface
+    *   The new email confirmation entity.
+    */
+   public function createConfirmation($email);
+diff --git a/src/Entity/EmailConfirmation.php b/src/Entity/EmailConfirmation.php
+index 879c8d6..96407db 100644
+--- a/src/Entity/EmailConfirmation.php
++++ b/src/Entity/EmailConfirmation.php
+@@ -53,7 +53,7 @@ class EmailConfirmation extends ContentEntityBase implements EmailConfirmationIn
+    * {@inheritdoc}
+    */
+   public static function baseFieldDefinitions(EntityTypeInterface $entity_type) {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition[] $fields */
++    /** @var BaseFieldDefinition[] $fields */
+     $fields = parent::baseFieldDefinitions($entity_type);
+ 
+     $fields['cid'] = BaseFieldDefinition::create('integer')
+diff --git a/src/Form/EmailConfirmerResponseForm.php b/src/Form/EmailConfirmerResponseForm.php
+index ca7363d..0c5c318 100644
+--- a/src/Form/EmailConfirmerResponseForm.php
++++ b/src/Form/EmailConfirmerResponseForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\email_confirmer\Form;
+ 
++use Drupal\email_confirmer\EmailConfirmationInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Url;
+ use Drupal\Core\Entity\EntityConfirmFormBase;
+@@ -25,7 +26,7 @@ class EmailConfirmerResponseForm extends EntityConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function getConfirmText() {
+-    /** @var \Drupal\email_confirmer\EmailConfirmationInterface $confirmation */
++    /** @var EmailConfirmationInterface $confirmation */
+     $confirmation = $this->getEntity();
+     return $confirmation->isPending() ? $this->t('Send') : $this->t('OK');
+   }
+@@ -87,7 +88,7 @@ class EmailConfirmerResponseForm extends EntityConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function getQuestion() {
+-    /** @var \Drupal\email_confirmer\EmailConfirmationInterface $confirmation */
++    /** @var EmailConfirmationInterface $confirmation */
+     $confirmation = $this->getEntity();
+     $question = '';
+ 
+@@ -147,14 +148,14 @@ class EmailConfirmerResponseForm extends EntityConfirmFormBase {
+   /**
+    * Cancels the email confirmation.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+-   * @throws \Drupal\email_confirmer\InvalidConfirmationStateException
++   * @throws InvalidConfirmationStateException
+    *   If confirmation is expired, confirmed or already cancelled.
+    */
+   protected function cancelConfirmation(FormStateInterface $form_state) {
+-    /** @var \Drupal\email_confirmer\EmailConfirmationInterface $confirmation */
++    /** @var EmailConfirmationInterface $confirmation */
+     $confirmation = $this->getEntity();
+     $confirmation->cancel();
+     $this->messenger()->addStatus($this->t('Email confirmation cancelled.'));
+@@ -165,14 +166,14 @@ class EmailConfirmerResponseForm extends EntityConfirmFormBase {
+   /**
+    * Confirms the email confirmation.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+-   * @throws \Drupal\email_confirmer\InvalidConfirmationStateException
++   * @throws InvalidConfirmationStateException
+    *   If confirmation is cancelled, expired or already confirmed.
+    */
+   protected function confirmConfirmation(FormStateInterface $form_state) {
+-    /** @var \Drupal\email_confirmer\EmailConfirmationInterface $confirmation */
++    /** @var EmailConfirmationInterface $confirmation */
+     $confirmation = $this->getEntity();
+     if (!$confirmation->confirm($this->getRouteMatch()->getParameter('hash'))) {
+       $this->confirmationError($form_state);
+@@ -187,7 +188,7 @@ class EmailConfirmerResponseForm extends EntityConfirmFormBase {
+   /**
+    * Common behaviour when there ware errors in confirmation.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    */
+   protected function confirmationError(FormStateInterface $form_state) {
+@@ -205,11 +206,11 @@ class EmailConfirmerResponseForm extends EntityConfirmFormBase {
+    *   - error
+    *   Defines the page that will be redirected to.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   The url to redirect to.
+    */
+   protected function getRedirectUrl($operation) {
+-    /** @var \Drupal\email_confirmer\EmailConfirmationInterface $confirmation */
++    /** @var EmailConfirmationInterface $confirmation */
+     $confirmation = $this->getEntity();
+     // Go to confirmation response URL, response path from settings or front.
+     if (!$url = $confirmation->getResponseUrl($operation)) {
+@@ -224,10 +225,10 @@ class EmailConfirmerResponseForm extends EntityConfirmFormBase {
+   /**
+    * Skip the response form and positively confirm the confirmation.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   Redirection response according to the confirmation result.
+    */
+   protected function skipConfirmationForm(FormStateInterface $form_state) {
+diff --git a/src/Form/EmailConfirmerSettingsForm.php b/src/Form/EmailConfirmerSettingsForm.php
+index e70b71d..a2c4cd8 100644
+--- a/src/Form/EmailConfirmerSettingsForm.php
++++ b/src/Form/EmailConfirmerSettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\email_confirmer\Form;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Path\PathValidatorInterface;
+@@ -31,23 +32,23 @@ class EmailConfirmerSettingsForm extends ConfigFormBase {
+   /**
+    * The path validator service.
+    *
+-   * @var \Drupal\Core\Path\PathValidatorInterface
++   * @var PathValidatorInterface
+    */
+   protected $pathValidator;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Class constructor.
+    *
+-   * @param \Drupal\Core\Path\PathValidatorInterface $path_validator
++   * @param PathValidatorInterface $path_validator
+    *   The path validator.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(PathValidatorInterface $path_validator, ModuleHandlerInterface $module_handler) {
+@@ -87,7 +88,7 @@ class EmailConfirmerSettingsForm extends ConfigFormBase {
+   public function buildForm(array $form, FormStateInterface $form_state) {
+     $form = parent::buildForm($form, $form_state);
+ 
+-    /** @var \Drupal\Core\Config\ImmutableConfig $config */
++    /** @var ImmutableConfig $config */
+     $config = $this->config('email_confirmer.settings');
+ 
+     // Confirmation process expiration.
+diff --git a/src/ParamConverter/UuidConverter.php b/src/ParamConverter/UuidConverter.php
+index 4606d3b..31897e1 100644
+--- a/src/ParamConverter/UuidConverter.php
++++ b/src/ParamConverter/UuidConverter.php
+@@ -15,7 +15,7 @@ class UuidConverter implements ParamConverterInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+diff --git a/src/Plugin/QueueWorker/DelayedRequestDispatcher.php b/src/Plugin/QueueWorker/DelayedRequestDispatcher.php
+index 482788d..72c24b8 100644
+--- a/src/Plugin/QueueWorker/DelayedRequestDispatcher.php
++++ b/src/Plugin/QueueWorker/DelayedRequestDispatcher.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\email_confirmer\Plugin\QueueWorker;
+ 
++use Drupal\email_confirmer\EmailConfirmationInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+ use Drupal\Core\Queue\RequeueException;
+@@ -29,14 +30,14 @@ class DelayedRequestDispatcher extends QueueWorkerBase implements ContainerFacto
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Creates a new DelayedRequestDispatcher object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -63,7 +64,7 @@ class DelayedRequestDispatcher extends QueueWorkerBase implements ContainerFacto
+     }
+ 
+     // Delivery pendings requests.
+-    /** @var \Drupal\email_confirmer\EmailConfirmationInterface $confirmation */
++    /** @var EmailConfirmationInterface $confirmation */
+     $confirmation = $this->entityTypeManager->getStorage('email_confirmer_confirmation')->load($data);
+     if (!$confirmation) {
+       return;

@@ -1,0 +1,517 @@
+diff --git a/google_webfonts_helper.module b/google_webfonts_helper.module
+index 7052028..f4cfe59 100644
+--- a/google_webfonts_helper.module
++++ b/google_webfonts_helper.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\google_webfonts_helper\FileSystemManagerInterface;
+ /**
+  * @file
+  * Primary module hooks for Google Webfonts Helper module.
+@@ -26,7 +27,7 @@ function google_webfonts_helper_theme($existing, $type, $theme, $path) {
+ function google_webfonts_helper_library_info_build() {
+   $google_webfont_storage = Drupal::entityTypeManager()->getStorage('google_webfont');
+   $google_webfonts = $google_webfont_storage->loadMultiple();
+-  /** @var \Drupal\google_webfonts_helper\FileSystemManagerInterface $file_system_manager */
++  /** @var FileSystemManagerInterface $file_system_manager */
+   $file_system_manager = Drupal::service('google_webfonts_helper.file_system_manager');
+ 
+   $libraries = [];
+diff --git a/src/Entity/GoogleWebfont.php b/src/Entity/GoogleWebfont.php
+index a45d168..02643a4 100644
+--- a/src/Entity/GoogleWebfont.php
++++ b/src/Entity/GoogleWebfont.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\google_webfonts_helper\Entity;
+ 
++use Drupal\google_webfonts_helper\FontManagerInterface;
+ use Drupal;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -130,7 +131,7 @@ class GoogleWebfont extends ConfigEntityBase implements GoogleWebfontInterface {
+    * {@inheritdoc}
+    */
+   public function validateFiles(bool $force = FALSE) {
+-    /** @var \Drupal\google_webfonts_helper\FontManagerInterface $font_manager */
++    /** @var FontManagerInterface $font_manager */
+     $font_manager = Drupal::service('google_webfonts_helper.font_manager');
+     $font_manager->prepare($this->id(), $force);
+   }
+diff --git a/src/FileSystemManager.php b/src/FileSystemManager.php
+index 978185d..45b60b9 100644
+--- a/src/FileSystemManager.php
++++ b/src/FileSystemManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\google_webfonts_helper;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\File\FileSystemInterface;
+ use Exception;
+@@ -15,23 +16,23 @@ class FileSystemManager implements FileSystemManagerInterface {
+   /**
+    * The module settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $settings;
+ 
+   /**
+    * The file system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * Constructs a new FileSystemManager object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   The file system.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, FileSystemInterface $file_system) {
+@@ -80,7 +81,7 @@ class FileSystemManager implements FileSystemManagerInterface {
+     $font_variants = [];
+     foreach ($finder as $item) {
+       $file_info = $this->parseFontFilename($item->getFilename());
+-      $font_variants[$file_info['variant']][$file_info['extension']] = file_url_transform_relative(file_create_url($item->getPathname()));
++      $font_variants[$file_info['variant']][$file_info['extension']] = \Drupal::service('file_url_generator')->generateString($item->getPathname());
+     }
+     return $font_variants;
+   }
+diff --git a/src/FileSystemManagerInterface.php b/src/FileSystemManagerInterface.php
+index 7d31eb7..953ec02 100644
+--- a/src/FileSystemManagerInterface.php
++++ b/src/FileSystemManagerInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\google_webfonts_helper;
+ 
++use Drupal\Core\File\FileSystemInterface;
+ /**
+  * Provides service for working with file system.
+  */
+@@ -75,7 +76,7 @@ interface FileSystemManagerInterface {
+   /**
+    * Gets file system.
+    *
+-   * @return \Drupal\Core\File\FileSystemInterface
++   * @return FileSystemInterface
+    *   The file system.
+    */
+   public function getFileSystem();
+diff --git a/src/FontDownloader.php b/src/FontDownloader.php
+index e4b6baf..e7aeb5c 100644
+--- a/src/FontDownloader.php
++++ b/src/FontDownloader.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\google_webfonts_helper;
+ 
++use GuzzleHttp\Psr7\Response;
++use Drupal\Core\Archiver\ArchiverInterface;
+ use Drupal\Core\Archiver\ArchiverManager;
+ use Drupal\Core\File\FileSystemInterface;
+ 
+@@ -13,32 +15,32 @@ class FontDownloader implements FontDownloaderInterface {
+   /**
+    * The REST API.
+    *
+-   * @var \Drupal\google_webfonts_helper\RestApiInterface
++   * @var RestApiInterface
+    */
+   protected $restApi;
+ 
+   /**
+    * The file system manager.
+    *
+-   * @var \Drupal\google_webfonts_helper\FileSystemManagerInterface
++   * @var FileSystemManagerInterface
+    */
+   protected $fileSystemManager;
+ 
+   /**
+    * The archiver manager.
+    *
+-   * @var \Drupal\Core\Archiver\ArchiverManager
++   * @var ArchiverManager
+    */
+   protected $archiverManager;
+ 
+   /**
+    * Constructs a new FontDownloader object.
+    *
+-   * @param \Drupal\google_webfonts_helper\RestApiInterface $rest_api
++   * @param RestApiInterface $rest_api
+    *   The REST API.
+-   * @param \Drupal\google_webfonts_helper\FileSystemManagerInterface $file_system_manager
++   * @param FileSystemManagerInterface $file_system_manager
+    *   The file system manager.
+-   * @param \Drupal\Core\Archiver\ArchiverManager $archiver_manager
++   * @param ArchiverManager $archiver_manager
+    *   The archiver manager.
+    */
+   public function __construct(RestApiInterface $rest_api, FileSystemManagerInterface $file_system_manager, ArchiverManager $archiver_manager) {
+@@ -54,7 +56,7 @@ class FontDownloader implements FontDownloaderInterface {
+     $directory = $this->fileSystemManager->getDownloadDirectory();
+     $this->fileSystemManager->getFileSystem()->prepareDirectory($directory, FileSystemInterface::CREATE_DIRECTORY);
+     $download_path = "{$directory}/{$font_id}.zip";
+-    /** @var \GuzzleHttp\Psr7\Response $response */
++    /** @var Response $response */
+     $response = $this->restApi->downloadFont($font_id, [
+       'subsets' => implode(',', $subsets),
+       'variants' => implode(',', $variants),
+@@ -67,7 +69,7 @@ class FontDownloader implements FontDownloaderInterface {
+    * {@inheritdoc}
+    */
+   public function extract(string $archive_filepath, string $destination) {
+-    /** @var \Drupal\Core\Archiver\ArchiverInterface $archiver */
++    /** @var ArchiverInterface $archiver */
+     $archiver = $this->archiverManager->getInstance(['filepath' => $archive_filepath]);
+     $archiver->extract($destination);
+     $files = $archiver->listContents();
+diff --git a/src/FontManager.php b/src/FontManager.php
+index bad3418..0defea9 100644
+--- a/src/FontManager.php
++++ b/src/FontManager.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\google_webfonts_helper;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\google_webfonts_helper\Entity\GoogleWebfontInterface;
+ 
+@@ -13,45 +16,45 @@ class FontManager implements FontManagerInterface {
+   /**
+    * The font storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $fontStorage;
+ 
+   /**
+    * The font downloader.
+    *
+-   * @var \Drupal\google_webfonts_helper\FontDownloaderInterface
++   * @var FontDownloaderInterface
+    */
+   protected $fontDownloader;
+ 
+   /**
+    * The style generator.
+    *
+-   * @var \Drupal\google_webfonts_helper\StyleGeneratorInterface
++   * @var StyleGeneratorInterface
+    */
+   protected $styleGenerator;
+ 
+   /**
+    * The file system manager.
+    *
+-   * @var \Drupal\google_webfonts_helper\FileSystemManagerInterface
++   * @var FileSystemManagerInterface
+    */
+   protected $fileSystemManager;
+ 
+   /**
+    * Constructs a new FontManager object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\google_webfonts_helper\FontDownloaderInterface $font_downloader
++   * @param FontDownloaderInterface $font_downloader
+    *   The font downloader.
+-   * @param \Drupal\google_webfonts_helper\StyleGeneratorInterface $style_generator
++   * @param StyleGeneratorInterface $style_generator
+    *   The style generator.
+-   * @param \Drupal\google_webfonts_helper\FileSystemManagerInterface $file_system_manager
++   * @param FileSystemManagerInterface $file_system_manager
+    *   The file system manager.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, FontDownloaderInterface $font_downloader, StyleGeneratorInterface $style_generator, FileSystemManagerInterface $file_system_manager) {
+     $this->fontStorage = $entity_type_manager->getStorage('google_webfont');
+diff --git a/src/FontManagerInterface.php b/src/FontManagerInterface.php
+index c72e0b7..b808747 100644
+--- a/src/FontManagerInterface.php
++++ b/src/FontManagerInterface.php
+@@ -27,7 +27,7 @@ interface FontManagerInterface {
+   /**
+    * Downloads fonts.
+    *
+-   * @param \Drupal\google_webfonts_helper\Entity\GoogleWebfontInterface $google_webfont
++   * @param GoogleWebfontInterface $google_webfont
+    *   The google webfont.
+    *
+    * @return bool
+@@ -41,7 +41,7 @@ interface FontManagerInterface {
+   /**
+    * Generates font styles.
+    *
+-   * @param \Drupal\google_webfonts_helper\Entity\GoogleWebfontInterface $google_webfont
++   * @param GoogleWebfontInterface $google_webfont
+    *   The foofle webfont.
+    *
+    * @return bool
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 15acb35..d124f4d 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -17,16 +17,16 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * The file system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * Constructs a new SettingsForm object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   The file system.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, FileSystemInterface $file_system) {
+diff --git a/src/Handler/Form/GoogleWebfontForm.php b/src/Handler/Form/GoogleWebfontForm.php
+index 34ed781..e2240fd 100644
+--- a/src/Handler/Form/GoogleWebfontForm.php
++++ b/src/Handler/Form/GoogleWebfontForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\google_webfonts_helper\Handler\Form;
+ 
++use GuzzleHttp\Exception\GuzzleException;
+ use Drupal;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Entity\EntityForm;
+@@ -19,14 +20,14 @@ class GoogleWebfontForm extends EntityForm {
+   /**
+    * The fonts REST API.
+    *
+-   * @var \Drupal\google_webfonts_helper\RestApiInterface
++   * @var RestApiInterface
+    */
+   protected $restApi;
+ 
+   /**
+    * Constructs a new GoogleWebfontForm object.
+    *
+-   * @param \Drupal\google_webfonts_helper\RestApiInterface $rest_api
++   * @param RestApiInterface $rest_api
+    *   The fonts REST API.
+    */
+   public function __construct(RestApiInterface $rest_api) {
+@@ -135,13 +136,13 @@ class GoogleWebfontForm extends EntityForm {
+   /**
+    * Gets font options.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+    *   The font options.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   protected function getFontOptions(FormStateInterface $form_state) {
+     $font_options = $form_state->get('font_options');
+@@ -162,7 +163,7 @@ class GoogleWebfontForm extends EntityForm {
+   /**
+    * Gets font_id.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return string
+@@ -177,7 +178,7 @@ class GoogleWebfontForm extends EntityForm {
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -208,7 +209,7 @@ class GoogleWebfontForm extends EntityForm {
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -243,7 +244,7 @@ class GoogleWebfontForm extends EntityForm {
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+diff --git a/src/RestApi.php b/src/RestApi.php
+index 42e09f2..bc188cf 100644
+--- a/src/RestApi.php
++++ b/src/RestApi.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\google_webfonts_helper;
+ 
++use Psr\Http\Message\ResponseInterface;
++use GuzzleHttp\Exception\GuzzleException;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use GuzzleHttp\ClientInterface;
+@@ -19,21 +21,21 @@ class RestApi implements RestApiInterface {
+   /**
+    * The HTTP client.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * The cache.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cache;
+ 
+   /**
+    * Constructs a new RestApi object.
+    *
+-   * @param \GuzzleHttp\ClientInterface $http_client
++   * @param ClientInterface $http_client
+    *   The HTTP client.
+    */
+   public function __construct(ClientInterface $http_client, CacheBackendInterface $cache_backend) {
+@@ -65,8 +67,8 @@ class RestApi implements RestApiInterface {
+    * @param array $options
+    *   The request options.
+    *
+-   * @return \Psr\Http\Message\ResponseInterface
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @return ResponseInterface
++   * @throws GuzzleException
+    */
+   protected function doRequest(string $endpoint, array $options = []) {
+     return $this->httpClient->request('GET', self::BASE_URL . $endpoint, $options);
+diff --git a/src/RestApiInterface.php b/src/RestApiInterface.php
+index 80a8ef1..8a6708c 100644
+--- a/src/RestApiInterface.php
++++ b/src/RestApiInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\google_webfonts_helper;
+ 
++use GuzzleHttp\Exception\GuzzleException;
++use Psr\Http\Message\ResponseInterface;
+ /**
+  * Provides wrapper for Googl Webfonts Helper website REST API.
+  *
+@@ -15,7 +17,7 @@ interface RestApiInterface {
+    * @return array
+    *   The list of available fonts.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function fetchFonts();
+ 
+@@ -42,7 +44,7 @@ interface RestApiInterface {
+    * @param string $download_path
+    *   The download path.
+    *
+-   * @return \Psr\Http\Message\ResponseInterface
++   * @return ResponseInterface
+    *   The response.
+    */
+   public function downloadFont(string $font_id, array $query, string $download_path);
+diff --git a/src/StyleGenerator.php b/src/StyleGenerator.php
+index 246a078..9d1657c 100644
+--- a/src/StyleGenerator.php
++++ b/src/StyleGenerator.php
+@@ -14,14 +14,14 @@ class StyleGenerator implements StyleGeneratorInterface {
+   /**
+    * The file system manager.
+    *
+-   * @var \Drupal\google_webfonts_helper\FileSystemManagerInterface
++   * @var FileSystemManagerInterface
+    */
+   protected $fileSystemManager;
+ 
+   /**
+    * The REST API.
+    *
+-   * @var \Drupal\google_webfonts_helper\RestApiInterface
++   * @var RestApiInterface
+    */
+   protected $restApi;
+ 
+@@ -35,20 +35,20 @@ class StyleGenerator implements StyleGeneratorInterface {
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * Constructs a new StyleGenerator object.
+    *
+-   * @param \Drupal\google_webfonts_helper\FileSystemManagerInterface $file_system_manager
++   * @param FileSystemManagerInterface $file_system_manager
+    *   The file system manager.
+-   * @param \Drupal\google_webfonts_helper\RestApiInterface $rest_api
++   * @param RestApiInterface $rest_api
+    *   The REST API.
+    * @param \Twig_Environment $twig_environment
+    *   The Twig environment.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+    */
+   public function __construct(FileSystemManagerInterface $file_system_manager, RestApiInterface $rest_api, Twig_Environment $twig_environment, RendererInterface $renderer) {
+diff --git a/src/StyleGeneratorInterface.php b/src/StyleGeneratorInterface.php
+index 66d4345..e522e17 100644
+--- a/src/StyleGeneratorInterface.php
++++ b/src/StyleGeneratorInterface.php
+@@ -12,7 +12,7 @@ interface StyleGeneratorInterface {
+   /**
+    * Generates style file.
+    *
+-   * @param \Drupal\google_webfonts_helper\Entity\GoogleWebfontInterface $google_webfont
++   * @param GoogleWebfontInterface $google_webfont
+    *   The google webfont.
+    * @param string $mode
+    *   The style mode.

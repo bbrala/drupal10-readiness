@@ -1,0 +1,351 @@
+diff --git a/spambot.info.yml b/spambot.info.yml
+index 759718b..99f2853 100644
+--- a/spambot.info.yml
++++ b/spambot.info.yml
+@@ -2,6 +2,5 @@ name: Spambot
+ description: 'Anti-spam module that uses data from www.stopforumspam.com to protect the user registration form against known spammers and spambots.'
+ type: module
+ package: 'Spam control'
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ configure: spambot.settings_form
+diff --git a/spambot.module b/spambot.module
+index 1dbf66a..79bc23a 100644
+--- a/spambot.module
++++ b/spambot.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\user\UserInterface;
+ /**
+  * @file
+  * Main module file.
+@@ -65,7 +66,7 @@ function spambot_cron() {
+     if ($uids) {
+       // Action to be done after the existing user is known as spam User.
+       $action = $config->get('spambot_spam_account_action');
+-      /** @var \Drupal\user\UserInterface[] $accounts */
++      /** @var UserInterface[] $accounts */
+       $accounts = User::loadMultiple($uids);
+       foreach ($accounts as $account) {
+         $account_status = $account->status->getValue()[0]['value'];
+diff --git a/src/Controller/SpambotUserSpamPageController.php b/src/Controller/SpambotUserSpamPageController.php
+index 31b67b1..8b08a3d 100755
+--- a/src/Controller/SpambotUserSpamPageController.php
++++ b/src/Controller/SpambotUserSpamPageController.php
+@@ -13,7 +13,7 @@ class SpambotUserSpamPageController extends ControllerBase {
+   /**
+    * Returns a render-able array for a spam page.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user who can be reported.
+    *
+    * @return array
+diff --git a/src/Form/SpambotSettingsForm.php b/src/Form/SpambotSettingsForm.php
+index 75a1039..e55483d 100644
+--- a/src/Form/SpambotSettingsForm.php
++++ b/src/Form/SpambotSettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\spambot\Form;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -24,34 +25,34 @@ class SpambotSettingsForm extends ConfigFormBase {
+   /**
+    * This will hold Database connection object.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * Constructs a \Drupal\system\ConfigFormBase object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   Constructs a Connection object.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Provides an interface for an entity type and its metadata.
+-   * @param Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   Provides an interface for state.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, Connection $connection, EntityTypeManagerInterface $entityTypeManager, StateInterface $state) {
+@@ -264,12 +265,12 @@ class SpambotSettingsForm extends ConfigFormBase {
+         ->execute()
+         ->fetchField();
+ 
+-      /** @var \Drupal\user\UserInterface $account */
++      /** @var UserInterface $account */
+       $account = $this->entityTypeManager->getStorage('user')->load($last_uid);
+       $suffix = '<br />';
+       $renderableLink = Link::fromTextAndUrl($account->label(), $account->toUrl())->toRenderable();
+       $suffix .= $this->t('The last checked user account is: %account (uid %uid)', [
+-        '%account' => render($renderableLink),
++        '%account' => \Drupal::service('renderer')->render($renderableLink),
+         '%uid' => $account->id(),
+       ]);
+     }
+diff --git a/src/Form/SpambotUserspamForm.php b/src/Form/SpambotUserspamForm.php
+index fa2bc6c..b3542fb 100755
+--- a/src/Form/SpambotUserspamForm.php
++++ b/src/Form/SpambotUserspamForm.php
+@@ -2,6 +2,13 @@
+ 
+ namespace Drupal\spambot\Form;
+ 
++use Drupal\Core\Extension\ModuleHandler;
++use Drupal\Core\Messenger\Messenger;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\comment\Entity\Comment;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Component\Utility\Unicode;
+ use Drupal\Core\Batch\BatchBuilder;
+@@ -29,57 +36,57 @@ class SpambotUserspamForm extends ConfigFormBase {
+   /**
+    * This will hold Database connection object.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Service that manages modules in a Drupal installation.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\Messenger
++   * @var Messenger
+    */
+   protected $messenger;
+ 
+   /**
+    * Batch Builder.
+    *
+-   * @var \Drupal\Core\Batch\BatchBuilder
++   * @var BatchBuilder
+    */
+   protected $batchBuilder;
+ 
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Constructs a \Drupal\system\ConfigFormBase object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   Constructs a Connection object.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Provides an interface for an entity type and its metadata.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler
++   * @param ModuleHandlerInterface $moduleHandler
+    *   Interface for classes that manage a set of enabled modules.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Stores runtime messages sent out to individual users on the page.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, Connection $connection, EntityTypeManagerInterface $entityTypeManager, ModuleHandlerInterface $moduleHandler, MessengerInterface $messenger) {
+@@ -220,7 +227,7 @@ class SpambotUserspamForm extends ConfigFormBase {
+       }
+ 
+       foreach ($cids as $cid) {
+-        /** @var \Drupal\comment\Entity\Comment $comment */
++        /** @var Comment $comment */
+         $comment = $this->entityTypeManager->getStorage('comment')->load($cid);
+         if ($comment) {
+           $subject = $comment->getSubject();
+@@ -291,13 +298,13 @@ class SpambotUserspamForm extends ConfigFormBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $values = $form_state->getValues();
+-    /** @var \Drupal\user\UserInterface $account */
++    /** @var UserInterface $account */
+     $account = $this->entityTypeManager->getStorage('user')->load($values['uid']);
+     $config = \Drupal::config('spambot.settings');
+ 
+@@ -312,9 +319,9 @@ class SpambotUserspamForm extends ConfigFormBase {
+   /**
+    * Function provide functional for "Check" button.
+    *
+-   * @param \Drupal\user\UserInterface|null $account
++   * @param UserInterface|null $account
+    *   Account who will checked.
+-   * @param \Drupal\Core\Config\ImmutableConfig|null $config
++   * @param ImmutableConfig|null $config
+    *   Config for get white list ip.
+    */
+   public function checkSubmit($account, $config) {
+@@ -441,17 +448,17 @@ class SpambotUserspamForm extends ConfigFormBase {
+   /**
+    * Function provide functional for button "take action".
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   FormState.
+-   * @param \Drupal\user\UserInterface|null $account
++   * @param UserInterface|null $account
+    *   Account who will take action.
+-   * @param \Drupal\Core\Config\ImmutableConfig|null $config
++   * @param ImmutableConfig|null $config
+    *   Config for get api key.
+    * @param array|null $values
+    *   FormState values.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException|\Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException|EntityStorageException
+    */
+   public function actionSubmit(FormStateInterface $form_state, $account, $config, $values) {
+     $comments_enabled = $this->moduleHandler->moduleExists('comment');
+@@ -491,7 +498,7 @@ class SpambotUserspamForm extends ConfigFormBase {
+     // Report posts to www.stopforumspam.com.
+     if (!empty($values['report']['nids'])) {
+       foreach (array_filter($values['report']['nids']) as $nid => $unused) {
+-        /** @var \Drupal\node\Entity\Node $node */
++        /** @var Node $node */
+         $node = $this->entityTypeManager->getStorage('node')->load($nid);
+         if ($node && !empty($node->id())) {
+           $body = $node->get('body')->getValue();
+@@ -508,7 +515,7 @@ class SpambotUserspamForm extends ConfigFormBase {
+ 
+     if ($comments_enabled && !empty($values['report']['cids'])) {
+       foreach (array_filter($values['report']['cids']) as $cid => $unused) {
+-        /** @var \Drupal\comment\Entity\Comment $comment */
++        /** @var Comment $comment */
+         $comment = $this->entityTypeManager->getStorage('comment')->load($cid);
+         if ($comment && !empty($comment->id())) {
+           $body = $comment->get('comment_body')->getValue();
+@@ -609,7 +616,7 @@ class SpambotUserspamForm extends ConfigFormBase {
+       ->setProgressMessage($this->t('Completed @current of @total.'))
+       ->setErrorMessage($this->t('An error has occurred.'));
+ 
+-    $this->batchBuilder->setFile(drupal_get_path('module', 'spambot') . '/src/Form/SpambotUserspamForm.php');
++    $this->batchBuilder->setFile(\Drupal::service('extension.list.module')->getPath('spambot') . '/src/Form/SpambotUserspamForm.php');
+   }
+ 
+   /**
+@@ -622,9 +629,9 @@ class SpambotUserspamForm extends ConfigFormBase {
+    * @param array $context
+    *   Batch data.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function deleteEntitiesBatch($items, $type, array &$context) {
+     // Elements per operation.
+@@ -676,9 +683,9 @@ class SpambotUserspamForm extends ConfigFormBase {
+    * @param string $type
+    *   Entity type.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function deleteEntity($id, $type) {
+     $storage = $this->entityTypeManager->getStorage($type);
+@@ -714,9 +721,9 @@ class SpambotUserspamForm extends ConfigFormBase {
+    * @param array $context
+    *   Batch data.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function entitiesUnpublish($items, $type, array &$context) {
+     // Elements per operation.
+diff --git a/tests/src/Kernel/SpambotUserspamTest.php b/tests/src/Kernel/SpambotUserspamTest.php
+index e803af8..4f21a8a 100755
+--- a/tests/src/Kernel/SpambotUserspamTest.php
++++ b/tests/src/Kernel/SpambotUserspamTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\spambot\Kernel;
+ 
++use Drupal\Core\Entity\EntityBase;
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\Core\DependencyInjection\ServiceModifierInterface;
+ use Drupal\KernelTests\KernelTestBase;
+@@ -17,7 +19,7 @@ class SpambotUserspamTest extends KernelTestBase implements ServiceModifierInter
+   /**
+    * User for tests.
+    *
+-   * @var \Drupal\Core\Entity\EntityBase|\Drupal\Core\Entity\EntityInterface
++   * @var EntityBase|EntityInterface
+    */
+   protected $user;
+ 

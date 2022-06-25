@@ -1,0 +1,1902 @@
+diff --git a/libraries.api.php b/libraries.api.php
+index 7e127ae..ec4a3e8 100644
+--- a/libraries.api.php
++++ b/libraries.api.php
+@@ -605,5 +605,5 @@ function hook_libraries_info_alter(&$libraries) {
+ function hook_libraries_info_file_paths() {
+   // Taken from the Libraries test module, which needs to specify the path to
+   // the test library.
+-  return [drupal_get_path('module', 'libraries_test') . '/example'];
++  return [\Drupal::service('extension.list.module')->getPath('libraries_test') . '/example'];
+ }
+diff --git a/libraries.install b/libraries.install
+index 666f84e..859f255 100644
+--- a/libraries.install
++++ b/libraries.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\File\FileSystemInterface;
+ /**
+  * @file
+  * Containsinstall, uninstall and update functions for Libraries API.
+@@ -12,7 +13,7 @@ use Drupal\libraries\ExternalLibrary\Definition\FileDefinitionDiscovery;
+  */
+ function libraries_install() {
+   if (!is_dir('public://library-definitions')) {
+-    /** @var \Drupal\Core\File\FileSystemInterface $file_system */
++    /** @var FileSystemInterface $file_system */
+     $file_system = \Drupal::service('file_system');
+     $file_system->mkdir('public://library-definitions');
+   }
+diff --git a/libraries.module b/libraries.module
+index a4b0d89..96e745c 100644
+--- a/libraries.module
++++ b/libraries.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\libraries\ExternalLibrary\LibraryManagerInterface;
+ /**
+  * @file
+  * External library handling for Drupal modules.
+@@ -19,7 +20,7 @@ use Drupal\Core\Extension\Dependency;
+  * Register external asset libraries with Drupal core's library APIs.
+  */
+ function libraries_library_info_build() {
+-  /** @var \Drupal\libraries\ExternalLibrary\LibraryManagerInterface $library_manager */
++  /** @var LibraryManagerInterface $library_manager */
+   $library_manager = \Drupal::service('libraries.manager');
+   $attachable_libraries = [];
+   $libraries_with_errors = [];
+@@ -117,7 +118,7 @@ function libraries_get_libraries() {
+   // profile, installation profiles may want to place libraries into a
+   // 'libraries' directory.
+   if ($profile = \Drupal::installProfile()) {
+-    $profile_path = drupal_get_path('profile', $profile);
++    $profile_path = \Drupal::service('extension.list.profile')->getPath($profile);
+     $searchdir[] = "$profile_path/libraries";
+   };
+ 
+@@ -168,7 +169,7 @@ function libraries_get_libraries() {
+  * https://www.drupal.org/node/2170763
+  */
+ function libraries_scan_info_files() {
+-  $profile = drupal_get_path('profile', \Drupal::installProfile());
++  $profile = \Drupal::service('extension.list.profile')->getPath(\Drupal::installProfile());
+   $config = DrupalKernel::findSitePath(\Drupal::request());
+ 
+   // Build a list of directories.
+@@ -808,7 +809,7 @@ function libraries_load_files($library) {
+       libraries_load_files([
+         'files' => $files,
+         'path' => '',
+-        'library path' => drupal_get_path('module', $module),
++        'library path' => \Drupal::service('extension.list.module')->getPath($module),
+       ]);
+     }
+   }
+diff --git a/src/Config/LibrariesConfigSubscriber.php b/src/Config/LibrariesConfigSubscriber.php
+index 6578f42..bc80ceb 100644
+--- a/src/Config/LibrariesConfigSubscriber.php
++++ b/src/Config/LibrariesConfigSubscriber.php
+@@ -15,14 +15,14 @@ class LibrariesConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * The service container.
+    *
+-   * @var \Symfony\Component\DependencyInjection\ContainerInterface
++   * @var ContainerInterface
+    */
+   protected $container;
+ 
+   /**
+    * Constructs a Libraries API configuration subscriber.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The service container.
+    */
+   public function __construct(ContainerInterface $container) {
+@@ -32,7 +32,7 @@ class LibrariesConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * Unsets the definition discovery service when its configuration changes.
+    *
+-   * @param \Drupal\Core\Config\ConfigCrudEvent $event
++   * @param ConfigCrudEvent $event
+    *   The configuration event.
+    */
+   public function onConfigSave(ConfigCrudEvent $event) {
+diff --git a/src/ExternalLibrary/Asset/AssetLibrary.php b/src/ExternalLibrary/Asset/AssetLibrary.php
+index 50a3186..b3d8ad6 100644
+--- a/src/ExternalLibrary/Asset/AssetLibrary.php
++++ b/src/ExternalLibrary/Asset/AssetLibrary.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Asset;
+ 
++use Drupal\libraries\ExternalLibrary\Exception\InvalidLibraryDependencyException;
++use Drupal\libraries\ExternalLibrary\Exception\LibraryDefinitionNotFoundException;
++use Drupal\libraries\ExternalLibrary\Exception\LibraryTypeNotFoundException;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\libraries\ExternalLibrary\Local\LocatorInterface;
+ use Drupal\Component\Plugin\Factory\FactoryInterface;
+ use Drupal\libraries\ExternalLibrary\Exception\LibraryNotInstalledException;
+ use Drupal\libraries\ExternalLibrary\LibraryBase;
+@@ -55,7 +60,7 @@ class AssetLibrary extends LibraryBase implements
+    *   The library ID.
+    * @param array $definition
+    *   The library definition array.
+-   * @param \Drupal\libraries\ExternalLibrary\Type\LibraryTypeInterface $library_type
++   * @param LibraryTypeInterface $library_type
+    *   The library type of the library.
+    */
+   public function __construct($id, array $definition, LibraryTypeInterface $library_type) {
+@@ -82,17 +87,17 @@ class AssetLibrary extends LibraryBase implements
+   /**
+    * Returns a core library array structure for this library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\LibraryManagerInterface $library_manager
++   * @param LibraryManagerInterface $library_manager
+    *   The library manager that can be used to fetch dependencies.
+    *
+    * @return array
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Asset\getAttachableAssetLibraries::getAttachableAssetLibraries()
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\InvalidLibraryDependencyException
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryDefinitionNotFoundException
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryTypeNotFoundException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws InvalidLibraryDependencyException
++   * @throws LibraryDefinitionNotFoundException
++   * @throws LibraryTypeNotFoundException
++   * @throws PluginException
+    *
+    * @todo Document the return value.
+    */
+@@ -111,9 +116,9 @@ class AssetLibrary extends LibraryBase implements
+   /**
+    * Gets the locator of this library using the locator factory.
+    *
+-   * @param \Drupal\Component\Plugin\Factory\FactoryInterface $locator_factory
++   * @param FactoryInterface $locator_factory
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\Local\LocatorInterface
++   * @return LocatorInterface
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface::getLocator()
+    */
+diff --git a/src/ExternalLibrary/Asset/AssetLibraryInterface.php b/src/ExternalLibrary/Asset/AssetLibraryInterface.php
+index eac6290..78cfd57 100644
+--- a/src/ExternalLibrary/Asset/AssetLibraryInterface.php
++++ b/src/ExternalLibrary/Asset/AssetLibraryInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Asset;
+ 
++use Drupal\libraries\ExternalLibrary\Exception\InvalidLibraryDependencyException;
+ use Drupal\libraries\ExternalLibrary\Dependency\DependentLibraryInterface;
+ use Drupal\libraries\ExternalLibrary\LibraryInterface;
+ use Drupal\libraries\ExternalLibrary\LibraryManagerInterface;
+@@ -48,14 +49,14 @@ interface AssetLibraryInterface extends
+   /**
+    * Returns a core asset library array structure for this library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\LibraryManagerInterface $library_manager
++   * @param LibraryManagerInterface $library_manager
+    *   The library manager that can be used to fetch dependencies.
+    *
+    * @return array
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Asset\SingleAssetLibraryTrait
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\InvalidLibraryDependencyException
++   * @throws InvalidLibraryDependencyException
+    *
+    * @todo Document the return value.
+    * @todo Reconsider passing the library manager.
+diff --git a/src/ExternalLibrary/Asset/AttachableAssetLibraryRegistrationInterface.php b/src/ExternalLibrary/Asset/AttachableAssetLibraryRegistrationInterface.php
+index 8a8a6e5..78082f5 100644
+--- a/src/ExternalLibrary/Asset/AttachableAssetLibraryRegistrationInterface.php
++++ b/src/ExternalLibrary/Asset/AttachableAssetLibraryRegistrationInterface.php
+@@ -13,9 +13,9 @@ interface AttachableAssetLibraryRegistrationInterface {
+   /**
+    * Reacts to the instantiation of a library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\LibraryInterface $external_library
++   * @param LibraryInterface $external_library
+    *   The library that is being instantiated.
+-   * @param \Drupal\libraries\ExternalLibrary\LibraryManagerInterface $library_manager
++   * @param LibraryManagerInterface $library_manager
+    */
+   public function getAttachableAssetLibraries(LibraryInterface $external_library, LibraryManagerInterface $library_manager);
+ 
+diff --git a/src/ExternalLibrary/Asset/LocalRemoteAssetTrait.php b/src/ExternalLibrary/Asset/LocalRemoteAssetTrait.php
+index e673cab..4a47b53 100644
+--- a/src/ExternalLibrary/Asset/LocalRemoteAssetTrait.php
++++ b/src/ExternalLibrary/Asset/LocalRemoteAssetTrait.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Asset;
+ 
++use Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface;
++use Drupal\libraries\ExternalLibrary\Remote\RemoteLibraryInterface;
+ /**
+  * A trait for asset libraries that serve local and remote files.
+  *
+@@ -25,7 +27,7 @@ trait LocalRemoteAssetTrait {
+    * @see \Drupal\libraries\ExternalLibrary\Asset\SingleAssetLibraryTrait::canBeAttached()
+    */
+   protected function canBeAttached() {
+-    /** @var \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface|\Drupal\libraries\ExternalLibrary\Remote\RemoteLibraryInterface $this */
++    /** @var LocalLibraryInterface|RemoteLibraryInterface $this */
+     return ($this->isInstalled() || $this->hasRemoteUrl());
+   }
+ 
+@@ -39,7 +41,7 @@ trait LocalRemoteAssetTrait {
+    *   The path prefix.
+    */
+   protected function getPathPrefix() {
+-    /** @var \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface|\Drupal\libraries\ExternalLibrary\Remote\RemoteLibraryInterface $this */
++    /** @var LocalLibraryInterface|RemoteLibraryInterface $this */
+     if ($this->isInstalled()) {
+       // LocalLibraryInterface::getLocalPath() returns the path relative to the
+       // app root. In order for the core core asset system to register the path
+diff --git a/src/ExternalLibrary/Asset/MultipleAssetLibrary.php b/src/ExternalLibrary/Asset/MultipleAssetLibrary.php
+index f2c3d3c..3f97bc1 100644
+--- a/src/ExternalLibrary/Asset/MultipleAssetLibrary.php
++++ b/src/ExternalLibrary/Asset/MultipleAssetLibrary.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Asset;
+ 
++use Drupal\libraries\ExternalLibrary\Exception\InvalidLibraryDependencyException;
++use Drupal\libraries\ExternalLibrary\Exception\LibraryDefinitionNotFoundException;
++use Drupal\libraries\ExternalLibrary\Exception\LibraryTypeNotFoundException;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\libraries\ExternalLibrary\Local\LocatorInterface;
+ use Drupal\Component\Plugin\Factory\FactoryInterface;
+ use Drupal\libraries\ExternalLibrary\Dependency\DependentLibraryInterface;
+ use Drupal\libraries\ExternalLibrary\Exception\LibraryNotInstalledException;
+@@ -43,7 +48,7 @@ class MultipleAssetLibrary extends LibraryBase implements
+    *   The library ID.
+    * @param array $definition
+    *   The library definition array.
+-   * @param \Drupal\libraries\ExternalLibrary\Type\LibraryTypeInterface $library_type
++   * @param LibraryTypeInterface $library_type
+    *   The library type of the library.
+    */
+   public function __construct($id, array $definition, LibraryTypeInterface $library_type) {
+@@ -73,17 +78,17 @@ class MultipleAssetLibrary extends LibraryBase implements
+   /**
+    * Returns a core library array structure for this library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\LibraryManagerInterface $library_manager
++   * @param LibraryManagerInterface $library_manager
+    *   The library manager that can be used to fetch dependencies.
+    *
+    * @return array
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Asset\getAttachableAssetLibraries::getAttachableAssetLibraries()
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\InvalidLibraryDependencyException
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryDefinitionNotFoundException
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryTypeNotFoundException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws InvalidLibraryDependencyException
++   * @throws LibraryDefinitionNotFoundException
++   * @throws LibraryTypeNotFoundException
++   * @throws PluginException
+    *
+    * @todo Document the return value.
+    */
+@@ -106,9 +111,9 @@ class MultipleAssetLibrary extends LibraryBase implements
+   /**
+    * Gets the locator of this library using the locator factory.
+    *
+-   * @param \Drupal\Component\Plugin\Factory\FactoryInterface $locator_factory
++   * @param FactoryInterface $locator_factory
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\Local\LocatorInterface
++   * @return LocatorInterface
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface::getLocator()
+    */
+diff --git a/src/ExternalLibrary/Asset/MultipleAssetLibraryInterface.php b/src/ExternalLibrary/Asset/MultipleAssetLibraryInterface.php
+index 5dc43ff..e7e558c 100644
+--- a/src/ExternalLibrary/Asset/MultipleAssetLibraryInterface.php
++++ b/src/ExternalLibrary/Asset/MultipleAssetLibraryInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Asset;
+ 
++use Drupal\libraries\ExternalLibrary\Exception\InvalidLibraryDependencyException;
+ use Drupal\libraries\ExternalLibrary\LibraryInterface;
+ use Drupal\libraries\ExternalLibrary\LibraryManagerInterface;
+ 
+@@ -47,14 +48,14 @@ interface MultipleAssetLibraryInterface extends LibraryInterface {
+   /**
+    * Returns a core asset library array structure for this library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\LibraryManagerInterface $library_manager
++   * @param LibraryManagerInterface $library_manager
+    *   The library manager that can be used to fetch dependencies.
+    *
+    * @return array
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Asset\SingleAssetLibraryTrait
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\InvalidLibraryDependencyException
++   * @throws InvalidLibraryDependencyException
+    *
+    * @todo Document the return value.
+    * @todo Reconsider passing the library manager.
+diff --git a/src/ExternalLibrary/Definition/ChainDefinitionDiscovery.php b/src/ExternalLibrary/Definition/ChainDefinitionDiscovery.php
+index f588018..2ceeac5 100644
+--- a/src/ExternalLibrary/Definition/ChainDefinitionDiscovery.php
++++ b/src/ExternalLibrary/Definition/ChainDefinitionDiscovery.php
+@@ -19,7 +19,7 @@ class ChainDefinitionDiscovery implements DefinitionDiscoveryInterface {
+   /**
+    * The list of definition discoveries that will be checked.
+    *
+-   * @var \Drupal\libraries\ExternalLibrary\Definition\DefinitionDiscoveryInterface[]
++   * @var DefinitionDiscoveryInterface[]
+    */
+   protected $discoveries = [];
+ 
+@@ -40,7 +40,7 @@ class ChainDefinitionDiscovery implements DefinitionDiscoveryInterface {
+    * {@inheritdoc}
+    */
+   public function getDefinition($id) {
+-    /** @var \Drupal\libraries\ExternalLibrary\Definition\WritableDefinitionDiscoveryInterface[] $discoveries_to_write */
++    /** @var WritableDefinitionDiscoveryInterface[] $discoveries_to_write */
+     $discoveries_to_write = [];
+     foreach ($this->discoveries as $discovery) {
+       if ($discovery->hasDefinition($id)) {
+@@ -66,7 +66,7 @@ class ChainDefinitionDiscovery implements DefinitionDiscoveryInterface {
+   /**
+    * Adds a definition discovery to the list to check.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\Definition\DefinitionDiscoveryInterface $discovery
++   * @param DefinitionDiscoveryInterface $discovery
+    *   The definition discovery to add.
+    *
+    * @return $this
+diff --git a/src/ExternalLibrary/Definition/DefinitionDiscoveryFactory.php b/src/ExternalLibrary/Definition/DefinitionDiscoveryFactory.php
+index 970385e..fcac559 100644
+--- a/src/ExternalLibrary/Definition/DefinitionDiscoveryFactory.php
++++ b/src/ExternalLibrary/Definition/DefinitionDiscoveryFactory.php
+@@ -14,41 +14,41 @@ class DefinitionDiscoveryFactory {
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The serializer for local definition files.
+    *
+-   * @var \Drupal\Component\Serialization\SerializationInterface
++   * @var SerializationInterface
+    */
+   protected $localSerializer;
+ 
+   /**
+    * The HTTP client used to fetch remote definitions.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * The serializer for remote definitions.
+    *
+-   * @var \Drupal\Component\Serialization\SerializationInterface
++   * @var SerializationInterface
+    */
+   protected $remoteSerializer;
+ 
+   /**
+    * Constructs a definition discovery factory.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+-   * @param \Drupal\Component\Serialization\SerializationInterface $local_serializer
++   * @param SerializationInterface $local_serializer
+    *   The serializer for local definition files.
+-   * @param \GuzzleHttp\ClientInterface $http_client
++   * @param ClientInterface $http_client
+    *   The HTTP client used to fetch remote definitions.
+-   * @param \Drupal\Component\Serialization\SerializationInterface $remote_serializer
++   * @param SerializationInterface $remote_serializer
+    *   The serializer for remote definitions.
+    */
+   public function __construct(
+@@ -66,7 +66,7 @@ class DefinitionDiscoveryFactory {
+   /**
+    * Gets a library definition discovery.
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\Definition\DefinitionDiscoveryInterface
++   * @return DefinitionDiscoveryInterface
+    *   The library definition discovery.
+    */
+   public function get() {
+diff --git a/src/ExternalLibrary/Definition/DefinitionDiscoveryInterface.php b/src/ExternalLibrary/Definition/DefinitionDiscoveryInterface.php
+index 61fc589..5345064 100644
+--- a/src/ExternalLibrary/Definition/DefinitionDiscoveryInterface.php
++++ b/src/ExternalLibrary/Definition/DefinitionDiscoveryInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Definition;
+ 
++use Drupal\libraries\ExternalLibrary\Exception\LibraryDefinitionNotFoundException;
+ /**
+  * Provides an interface for library definition discoveries.
+  *
+@@ -35,7 +36,7 @@ interface DefinitionDiscoveryInterface {
+    * @return array
+    *   The library definition.
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryDefinitionNotFoundException
++   * @throws LibraryDefinitionNotFoundException
+    *
+    * @todo Consider returning a classed object instead of an array or at least
+    *   document and validate the array structure.
+diff --git a/src/ExternalLibrary/Definition/FileDefinitionDiscoveryBase.php b/src/ExternalLibrary/Definition/FileDefinitionDiscoveryBase.php
+index 0151f27..bb6f326 100644
+--- a/src/ExternalLibrary/Definition/FileDefinitionDiscoveryBase.php
++++ b/src/ExternalLibrary/Definition/FileDefinitionDiscoveryBase.php
+@@ -18,7 +18,7 @@ abstract class FileDefinitionDiscoveryBase implements DefinitionDiscoveryInterfa
+   /**
+    * The serializer for the library definition files.
+    *
+-   * @var \Drupal\Component\Serialization\SerializationInterface
++   * @var SerializationInterface
+    */
+   protected $serializer;
+ 
+@@ -32,7 +32,7 @@ abstract class FileDefinitionDiscoveryBase implements DefinitionDiscoveryInterfa
+   /**
+    * Constructs a stream-based library definition discovery.
+    *
+-   * @param \Drupal\Component\Serialization\SerializationInterface $serializer
++   * @param SerializationInterface $serializer
+    *   The serializer for the library definition files.
+    * @param string $base_uri
+    *   The base URI for the library files.
+@@ -61,7 +61,7 @@ abstract class FileDefinitionDiscoveryBase implements DefinitionDiscoveryInterfa
+    * @return string
+    *   The serialized library definition.
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryDefinitionNotFoundException
++   * @throws LibraryDefinitionNotFoundException
+    */
+   abstract protected function getSerializedDefinition($id);
+ 
+diff --git a/src/ExternalLibrary/Definition/GuzzleDefinitionDiscovery.php b/src/ExternalLibrary/Definition/GuzzleDefinitionDiscovery.php
+index 59745b7..9a951d5 100644
+--- a/src/ExternalLibrary/Definition/GuzzleDefinitionDiscovery.php
++++ b/src/ExternalLibrary/Definition/GuzzleDefinitionDiscovery.php
+@@ -20,16 +20,16 @@ class GuzzleDefinitionDiscovery extends FileDefinitionDiscoveryBase implements D
+   /**
+    * The HTTP client.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * Constructs a Guzzle-based definition discvoery.
+    *
+-   * @param \GuzzleHttp\ClientInterface $http_client
++   * @param ClientInterface $http_client
+    *   The HTTP client.
+-   * @param \Drupal\Component\Serialization\SerializationInterface $serializer
++   * @param SerializationInterface $serializer
+    *   The serializer for the library definition files.
+    * @param string $base_url
+    *   The base URL for the library files.
+diff --git a/src/ExternalLibrary/Exception/InvalidLibraryDependencyException.php b/src/ExternalLibrary/Exception/InvalidLibraryDependencyException.php
+index e307846..0ee0b4b 100644
+--- a/src/ExternalLibrary/Exception/InvalidLibraryDependencyException.php
++++ b/src/ExternalLibrary/Exception/InvalidLibraryDependencyException.php
+@@ -20,9 +20,9 @@ class InvalidLibraryDependencyException extends \UnexpectedValueException implem
+   /**
+    * Constructs a library exception.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\LibraryInterface $library
++   * @param LibraryInterface $library
+    *   The library with the invalid dependency.
+-   * @param \Drupal\libraries\ExternalLibrary\LibraryInterface $dependency
++   * @param LibraryInterface $dependency
+    *   The dependency.
+    * @param string $message
+    *   (optional) The exception message.
+diff --git a/src/ExternalLibrary/Exception/LibraryNotInstalledException.php b/src/ExternalLibrary/Exception/LibraryNotInstalledException.php
+index ed48a62..f6bbc0e 100644
+--- a/src/ExternalLibrary/Exception/LibraryNotInstalledException.php
++++ b/src/ExternalLibrary/Exception/LibraryNotInstalledException.php
+@@ -16,7 +16,7 @@ class LibraryNotInstalledException extends \RuntimeException implements LibraryA
+   /**
+    * Constructs a library exception.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface $library
++   * @param LocalLibraryInterface $library
+    *   The library that is not installed.
+    * @param string $message
+    *   (optional) The exception message.
+diff --git a/src/ExternalLibrary/Exception/UnknownLibraryVersionException.php b/src/ExternalLibrary/Exception/UnknownLibraryVersionException.php
+index 4afe059..d690ed1 100644
+--- a/src/ExternalLibrary/Exception/UnknownLibraryVersionException.php
++++ b/src/ExternalLibrary/Exception/UnknownLibraryVersionException.php
+@@ -16,7 +16,7 @@ class UnknownLibraryVersionException extends \RuntimeException implements Librar
+   /**
+    * Constructs a library exception.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\Version\VersionedLibraryInterface $library
++   * @param VersionedLibraryInterface $library
+    *   The library.
+    * @param string $message
+    *   (optional) The exception message.
+diff --git a/src/ExternalLibrary/LibraryBase.php b/src/ExternalLibrary/LibraryBase.php
+index 8571552..e97fd09 100644
+--- a/src/ExternalLibrary/LibraryBase.php
++++ b/src/ExternalLibrary/LibraryBase.php
+@@ -27,7 +27,7 @@ abstract class LibraryBase implements
+   /**
+    * The library type of this library.
+    *
+-   * @var \Drupal\libraries\ExternalLibrary\Type\LibraryTypeInterface
++   * @var LibraryTypeInterface
+    */
+   protected $type;
+ 
+@@ -38,7 +38,7 @@ abstract class LibraryBase implements
+    *   The library ID.
+    * @param array $definition
+    *   The library definition array.
+-   * @param \Drupal\libraries\ExternalLibrary\Type\LibraryTypeInterface $type
++   * @param LibraryTypeInterface $type
+    *   The library type of this library.
+    */
+   public function __construct($id, array $definition, LibraryTypeInterface $type) {
+diff --git a/src/ExternalLibrary/LibraryInterface.php b/src/ExternalLibrary/LibraryInterface.php
+index ebf43a9..58fbe0a 100644
+--- a/src/ExternalLibrary/LibraryInterface.php
++++ b/src/ExternalLibrary/LibraryInterface.php
+@@ -18,7 +18,7 @@ interface LibraryInterface {
+    *   The library ID.
+    * @param array $definition
+    *   The library definition array.
+-   * @param \Drupal\libraries\ExternalLibrary\Type\LibraryTypeInterface $type
++   * @param LibraryTypeInterface $type
+    *   The library type of this library.
+    *
+    * @return static
+@@ -36,7 +36,7 @@ interface LibraryInterface {
+   /**
+    * Returns the library type of the library.
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\Type\LibraryTypeInterface
++   * @return LibraryTypeInterface
+    *   The library of the library.
+    */
+   public function getType();
+diff --git a/src/ExternalLibrary/LibraryManager.php b/src/ExternalLibrary/LibraryManager.php
+index 6b92d9d..0a9f65a 100644
+--- a/src/ExternalLibrary/LibraryManager.php
++++ b/src/ExternalLibrary/LibraryManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary;
+ 
++use Drupal\libraries\ExternalLibrary\Type\LibraryTypeInterface;
+ use Drupal\Component\Plugin\Factory\FactoryInterface;
+ use Drupal\libraries\ExternalLibrary\Exception\LibraryTypeNotFoundException;
+ use Drupal\libraries\ExternalLibrary\Type\LibraryCreationListenerInterface;
+@@ -20,23 +21,23 @@ class LibraryManager implements LibraryManagerInterface {
+   /**
+    * The library definition discovery.
+    *
+-   * @var \Drupal\libraries\ExternalLibrary\Definition\DefinitionDiscoveryInterface
++   * @var DefinitionDiscoveryInterface
+    */
+   protected $definitionDiscovery;
+ 
+   /**
+    * The library type factory.
+    *
+-   * @var \Drupal\Component\Plugin\Factory\FactoryInterface
++   * @var FactoryInterface
+    */
+   protected $libraryTypeFactory;
+ 
+   /**
+    * Constructs an external library manager.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\Definition\DefinitionDiscoveryInterface $definition_disovery
++   * @param DefinitionDiscoveryInterface $definition_disovery
+    *   The library registry.
+-   * @param \Drupal\Component\Plugin\Factory\FactoryInterface $library_type_factory
++   * @param FactoryInterface $library_type_factory
+    *   The library type factory.
+    */
+   public function __construct(
+@@ -109,7 +110,7 @@ class LibraryManager implements LibraryManagerInterface {
+    * @param string $id
+    * @param array $definition
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\Type\LibraryTypeInterface
++   * @return LibraryTypeInterface
+    */
+   protected function getLibraryType($id, $definition) {
+     // @todo Validate that the type is a string.
+diff --git a/src/ExternalLibrary/LibraryManagerInterface.php b/src/ExternalLibrary/LibraryManagerInterface.php
+index 0c4383f..e6721ee 100644
+--- a/src/ExternalLibrary/LibraryManagerInterface.php
++++ b/src/ExternalLibrary/LibraryManagerInterface.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary;
+ 
++use Drupal\libraries\ExternalLibrary\Exception\LibraryDefinitionNotFoundException;
++use Drupal\libraries\ExternalLibrary\Exception\LibraryTypeNotFoundException;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\libraries\ExternalLibrary\Exception\LibraryNotInstalledException;
+ /**
+  * Provides an interface for external library managers.
+  */
+@@ -13,12 +17,12 @@ interface LibraryManagerInterface {
+    * @param string $id
+    *   The library ID.
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\LibraryInterface
++   * @return LibraryInterface
+    *   The library object.
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryDefinitionNotFoundException
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryTypeNotFoundException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws LibraryDefinitionNotFoundException
++   * @throws LibraryTypeNotFoundException
++   * @throws PluginException
+    */
+   public function getLibrary($id);
+ 
+@@ -43,8 +47,8 @@ interface LibraryManagerInterface {
+    * @param string $id
+    *   The ID of the library.
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryDefinitionNotFoundException
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryNotInstalledException
++   * @throws LibraryDefinitionNotFoundException
++   * @throws LibraryNotInstalledException
+    */
+   public function load($id);
+ 
+diff --git a/src/ExternalLibrary/Local/LocalLibraryInterface.php b/src/ExternalLibrary/Local/LocalLibraryInterface.php
+index f8c1fbe..807ca60 100644
+--- a/src/ExternalLibrary/Local/LocalLibraryInterface.php
++++ b/src/ExternalLibrary/Local/LocalLibraryInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Local;
+ 
++use Drupal\libraries\ExternalLibrary\Exception\LibraryNotInstalledException;
+ use Drupal\Component\Plugin\Factory\FactoryInterface;
+ use Drupal\libraries\ExternalLibrary\LibraryInterface;
+ 
+@@ -48,7 +49,7 @@ interface LocalLibraryInterface extends LibraryInterface {
+    * @return string
+    *   The absolute path to the library on the filesystem.
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryNotInstalledException
++   * @throws LibraryNotInstalledException
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface::setLocalPath()
+    */
+@@ -71,9 +72,9 @@ interface LocalLibraryInterface extends LibraryInterface {
+    * is not specific to any library or even any library type, this logic is
+    * offloaded to separate locator objects.
+    *
+-   * @param \Drupal\Component\Plugin\Factory\FactoryInterface $locator_factory
++   * @param FactoryInterface $locator_factory
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\Local\LocatorInterface
++   * @return LocatorInterface
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Local\LocatorInterface
+    */
+diff --git a/src/ExternalLibrary/Local/LocalLibraryTrait.php b/src/ExternalLibrary/Local/LocalLibraryTrait.php
+index 3cb7529..22e78a6 100644
+--- a/src/ExternalLibrary/Local/LocalLibraryTrait.php
++++ b/src/ExternalLibrary/Local/LocalLibraryTrait.php
+@@ -67,13 +67,13 @@ trait LocalLibraryTrait {
+    * @return string
+    *   The path to the library relative to the app root.
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\LibraryNotInstalledException
++   * @throws LibraryNotInstalledException
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface::getLocalPath()
+    */
+   public function getLocalPath() {
+     if (!$this->isInstalled()) {
+-      /** @var \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface $this */
++      /** @var LocalLibraryInterface $this */
+       throw new LibraryNotInstalledException($this);
+     }
+ 
+diff --git a/src/ExternalLibrary/Local/LocatorInterface.php b/src/ExternalLibrary/Local/LocatorInterface.php
+index a1be894..2ab0ed6 100644
+--- a/src/ExternalLibrary/Local/LocatorInterface.php
++++ b/src/ExternalLibrary/Local/LocatorInterface.php
+@@ -14,7 +14,7 @@ interface LocatorInterface {
+   /**
+    * Locates a library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface $library
++   * @param LocalLibraryInterface $library
+    *   The library to locate.
+    */
+   public function locate(LocalLibraryInterface $library);
+diff --git a/src/ExternalLibrary/Local/LocatorManager.php b/src/ExternalLibrary/Local/LocatorManager.php
+index 2f377ff..3c367fc 100644
+--- a/src/ExternalLibrary/Local/LocatorManager.php
++++ b/src/ExternalLibrary/Local/LocatorManager.php
+@@ -20,9 +20,9 @@ class LocatorManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/ExternalLibrary/PhpFile/PhpFileLibrary.php b/src/ExternalLibrary/PhpFile/PhpFileLibrary.php
+index bf3c683..8206430 100644
+--- a/src/ExternalLibrary/PhpFile/PhpFileLibrary.php
++++ b/src/ExternalLibrary/PhpFile/PhpFileLibrary.php
+@@ -29,7 +29,7 @@ class PhpFileLibrary extends LibraryBase implements PhpFileLibraryInterface {
+    *   The library ID.
+    * @param array $definition
+    *   The library definition array.
+-   * @param \Drupal\libraries\ExternalLibrary\Type\LibraryTypeInterface $type
++   * @param LibraryTypeInterface $type
+    *   The library type of this library.
+    */
+   public function __construct($id, array $definition, LibraryTypeInterface $type) {
+diff --git a/src/ExternalLibrary/Type/LibraryCreationListenerInterface.php b/src/ExternalLibrary/Type/LibraryCreationListenerInterface.php
+index e86115f..f9e286b 100644
+--- a/src/ExternalLibrary/Type/LibraryCreationListenerInterface.php
++++ b/src/ExternalLibrary/Type/LibraryCreationListenerInterface.php
+@@ -12,7 +12,7 @@ interface LibraryCreationListenerInterface {
+   /**
+    * Reacts to the instantiation of a library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\LibraryInterface $library
++   * @param LibraryInterface $library
+    *   The library that is being instantiated.
+    */
+   public function onLibraryCreate(LibraryInterface $library);
+diff --git a/src/ExternalLibrary/Type/LibraryLoadingListenerInterface.php b/src/ExternalLibrary/Type/LibraryLoadingListenerInterface.php
+index 962e9db..ee0d40a 100644
+--- a/src/ExternalLibrary/Type/LibraryLoadingListenerInterface.php
++++ b/src/ExternalLibrary/Type/LibraryLoadingListenerInterface.php
+@@ -12,7 +12,7 @@ interface LibraryLoadingListenerInterface {
+   /**
+    * Reacts to the instantiation of a library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\LibraryInterface $library
++   * @param LibraryInterface $library
+    *   The library that is being instantiated.
+    */
+   public function onLibraryLoad(LibraryInterface $library);
+diff --git a/src/ExternalLibrary/Type/LibraryTypeBase.php b/src/ExternalLibrary/Type/LibraryTypeBase.php
+index 6cd9f59..702cd9c 100644
+--- a/src/ExternalLibrary/Type/LibraryTypeBase.php
++++ b/src/ExternalLibrary/Type/LibraryTypeBase.php
+@@ -24,14 +24,14 @@ abstract class LibraryTypeBase implements
+   /**
+    * The locator factory.
+    *
+-   * @var \Drupal\Component\Plugin\Factory\FactoryInterface
++   * @var FactoryInterface
+    */
+   protected $locatorFactory;
+ 
+   /**
+    * The version detector factory.
+    *
+-   * @var \Drupal\Component\Plugin\Factory\FactoryInterface
++   * @var FactoryInterface
+    */
+   protected $detectorFactory;
+ 
+@@ -40,9 +40,9 @@ abstract class LibraryTypeBase implements
+    *
+    * @param string $plugin_id
+    *   The plugin ID taken from the class annotation.
+-   * @param \Drupal\Component\Plugin\Factory\FactoryInterface $locator_factory
++   * @param FactoryInterface $locator_factory
+    *   The locator factory.
+-   * @param \Drupal\Component\Plugin\Factory\FactoryInterface $detector_factory
++   * @param FactoryInterface $detector_factory
+    *   The version detector factory.
+    */
+   public function __construct($plugin_id, FactoryInterface $locator_factory, FactoryInterface $detector_factory) {
+diff --git a/src/ExternalLibrary/Type/LibraryTypeFactory.php b/src/ExternalLibrary/Type/LibraryTypeFactory.php
+index 6689f51..d6261e6 100644
+--- a/src/ExternalLibrary/Type/LibraryTypeFactory.php
++++ b/src/ExternalLibrary/Type/LibraryTypeFactory.php
+@@ -18,9 +18,9 @@ class LibraryTypeFactory extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/ExternalLibrary/Type/LibraryTypeInterface.php b/src/ExternalLibrary/Type/LibraryTypeInterface.php
+index d6537fb..177543a 100644
+--- a/src/ExternalLibrary/Type/LibraryTypeInterface.php
++++ b/src/ExternalLibrary/Type/LibraryTypeInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Type;
+ 
++use Drupal\libraries\ExternalLibrary\LibraryInterface;
+ /**
+  * Provides an interface for library types.
+  */
+@@ -18,7 +19,7 @@ interface LibraryTypeInterface {
+   /**
+    * Returns the class used for libraries of this type.
+    *
+-   * @return string|\Drupal\libraries\ExternalLibrary\LibraryInterface
++   * @return string|LibraryInterface
+    *   The library class for this library type.
+    *
+    * @todo Consider adding a getLibraryInterface() method, as well.
+diff --git a/src/ExternalLibrary/Utility/DependencyAccessorTrait.php b/src/ExternalLibrary/Utility/DependencyAccessorTrait.php
+index 3ec56fe..f6ab4f6 100644
+--- a/src/ExternalLibrary/Utility/DependencyAccessorTrait.php
++++ b/src/ExternalLibrary/Utility/DependencyAccessorTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Utility;
+ 
++use Drupal\libraries\ExternalLibrary\LibraryInterface;
+ /**
+  * Provides a trait for classes giving access to a library dependency.
+  */
+@@ -10,14 +11,14 @@ trait DependencyAccessorTrait {
+   /**
+    * The dependency.
+    *
+-   * @var \Drupal\libraries\ExternalLibrary\LibraryInterface
++   * @var LibraryInterface
+    */
+   protected $dependency;
+ 
+   /**
+    * Returns the dependency.
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\LibraryInterface
++   * @return LibraryInterface
+    *   The library.
+    */
+   public function getLibrary() {
+diff --git a/src/ExternalLibrary/Utility/LibraryAccessorInterface.php b/src/ExternalLibrary/Utility/LibraryAccessorInterface.php
+index 72b0093..d4ede1a 100644
+--- a/src/ExternalLibrary/Utility/LibraryAccessorInterface.php
++++ b/src/ExternalLibrary/Utility/LibraryAccessorInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Utility;
+ 
++use Drupal\libraries\ExternalLibrary\LibraryInterface;
+ /**
+  * Provides an interface for classes giving access to a library.
+  */
+@@ -10,7 +11,7 @@ interface LibraryAccessorInterface {
+   /**
+    * Returns the library.
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\LibraryInterface
++   * @return LibraryInterface
+    *   The library.
+    */
+   public function getLibrary();
+diff --git a/src/ExternalLibrary/Utility/LibraryAccessorTrait.php b/src/ExternalLibrary/Utility/LibraryAccessorTrait.php
+index f8ad920..2ce4817 100644
+--- a/src/ExternalLibrary/Utility/LibraryAccessorTrait.php
++++ b/src/ExternalLibrary/Utility/LibraryAccessorTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Utility;
+ 
++use Drupal\libraries\ExternalLibrary\LibraryInterface;
+ /**
+  * Provides a trait for classes giving access to a library.
+  */
+@@ -10,14 +11,14 @@ trait LibraryAccessorTrait {
+   /**
+    * The library.
+    *
+-   * @var \Drupal\libraries\ExternalLibrary\LibraryInterface
++   * @var LibraryInterface
+    */
+   protected $library;
+ 
+   /**
+    * Returns the library.
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\LibraryInterface
++   * @return LibraryInterface
+    *   The library.
+    */
+   public function getLibrary() {
+diff --git a/src/ExternalLibrary/Version/VersionDetectorInterface.php b/src/ExternalLibrary/Version/VersionDetectorInterface.php
+index 8b6d2a5..d2a32a7 100644
+--- a/src/ExternalLibrary/Version/VersionDetectorInterface.php
++++ b/src/ExternalLibrary/Version/VersionDetectorInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Version;
+ 
++use Drupal\libraries\ExternalLibrary\Exception\UnknownLibraryVersionException;
+ /**
+  * Provides an interface for version detectors.
+  *
+@@ -12,10 +13,10 @@ interface VersionDetectorInterface {
+   /**
+    * Detects the version of a library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\Version\VersionedLibraryInterface $library
++   * @param VersionedLibraryInterface $library
+    *   The library whose version to detect.
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\UnknownLibraryVersionException
++   * @throws UnknownLibraryVersionException
+    *
+    * @todo Provide a mechanism for version detectors to provide a reason for
+    *   failing.
+diff --git a/src/ExternalLibrary/Version/VersionDetectorManager.php b/src/ExternalLibrary/Version/VersionDetectorManager.php
+index 6272c5a..916fec4 100644
+--- a/src/ExternalLibrary/Version/VersionDetectorManager.php
++++ b/src/ExternalLibrary/Version/VersionDetectorManager.php
+@@ -20,9 +20,9 @@ class VersionDetectorManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/ExternalLibrary/Version/VersionedLibraryInterface.php b/src/ExternalLibrary/Version/VersionedLibraryInterface.php
+index abeb758..7acda07 100644
+--- a/src/ExternalLibrary/Version/VersionedLibraryInterface.php
++++ b/src/ExternalLibrary/Version/VersionedLibraryInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\ExternalLibrary\Version;
+ 
++use Drupal\libraries\ExternalLibrary\Exception\UnknownLibraryVersionException;
+ use Drupal\Component\Plugin\Factory\FactoryInterface;
+ use Drupal\libraries\ExternalLibrary\LibraryInterface;
+ 
+@@ -29,7 +30,7 @@ interface VersionedLibraryInterface extends LibraryInterface {
+    * @return string
+    *   The version string, for example 1.0, 2.1.4, or 3.0.0-alpha5.
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\UnknownLibraryVersionException
++   * @throws UnknownLibraryVersionException
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Version\VersionedLibraryInterface::setVersion()
+    */
+@@ -54,9 +55,9 @@ interface VersionedLibraryInterface extends LibraryInterface {
+    * to any library or even any library type, this logic is offloaded to
+    * separate detector objects.
+    *
+-   * @param \Drupal\Component\Plugin\Factory\FactoryInterface $detector_factory
++   * @param FactoryInterface $detector_factory
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\Version\VersionDetectorInterface
++   * @return VersionDetectorInterface
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Version\VersionDetectorInterface
+    */
+diff --git a/src/ExternalLibrary/Version/VersionedLibraryTrait.php b/src/ExternalLibrary/Version/VersionedLibraryTrait.php
+index 2404a10..bed36a4 100644
+--- a/src/ExternalLibrary/Version/VersionedLibraryTrait.php
++++ b/src/ExternalLibrary/Version/VersionedLibraryTrait.php
+@@ -39,7 +39,7 @@ trait VersionedLibraryTrait {
+    * @return string
+    *   The version string, for example 1.0, 2.1.4, or 3.0.0-alpha5.
+    *
+-   * @throws \Drupal\libraries\ExternalLibrary\Exception\UnknownLibraryVersionException
++   * @throws UnknownLibraryVersionException
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Version\VersionedLibraryInterface::getVersion()
+    */
+@@ -72,9 +72,9 @@ trait VersionedLibraryTrait {
+    * to any library or even any library type, this logic is offloaded to
+    * separate detector objects.
+    *
+-   * @param \Drupal\Component\Plugin\Factory\FactoryInterface $detector_factory
++   * @param FactoryInterface $detector_factory
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\Version\VersionDetectorInterface
++   * @return VersionDetectorInterface
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Version\VersionDetectorInterface
+    */
+diff --git a/src/Plugin/libraries/Locator/ChainLocator.php b/src/Plugin/libraries/Locator/ChainLocator.php
+index 4e0acff..2fb4a05 100644
+--- a/src/Plugin/libraries/Locator/ChainLocator.php
++++ b/src/Plugin/libraries/Locator/ChainLocator.php
+@@ -17,14 +17,14 @@ class ChainLocator implements LocatorInterface {
+   /**
+    * The locators to check.
+    *
+-   * @var \Drupal\libraries\ExternalLibrary\Local\LocatorInterface[]
++   * @var LocatorInterface[]
+    */
+   protected $locators = [];
+ 
+   /**
+    * Add a locator to the chain.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\Local\LocatorInterface $locator
++   * @param LocatorInterface $locator
+    *   A locator to add to the chain.
+    */
+   public function addLocator(LocatorInterface $locator) {
+@@ -35,7 +35,7 @@ class ChainLocator implements LocatorInterface {
+   /**
+    * Locates a library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface $library
++   * @param LocalLibraryInterface $library
+    *   The library to locate.
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Local\LocatorInterface::locate()
+diff --git a/src/Plugin/libraries/Locator/GlobalLocator.php b/src/Plugin/libraries/Locator/GlobalLocator.php
+index 3501338..1fc994c 100644
+--- a/src/Plugin/libraries/Locator/GlobalLocator.php
++++ b/src/Plugin/libraries/Locator/GlobalLocator.php
+@@ -21,23 +21,23 @@ class GlobalLocator implements LocatorInterface, ContainerFactoryPluginInterface
+   /**
+    * The Drupal config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The locator factory.
+    *
+-   * @var \Drupal\Component\Plugin\Factory\FactoryInterface
++   * @var FactoryInterface
+    */
+   protected $locatorFactory;
+ 
+   /**
+    * Constructs a global locator.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The Drupal config factory service.
+-   * @param \Drupal\Component\Plugin\Factory\FactoryInterface $locator_factory
++   * @param FactoryInterface $locator_factory
+    *   The locator factory.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, FactoryInterface $locator_factory) {
+@@ -58,7 +58,7 @@ class GlobalLocator implements LocatorInterface, ContainerFactoryPluginInterface
+   /**
+    * Locates a library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface $library
++   * @param LocalLibraryInterface $library
+    *   The library to locate.
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Local\LocatorInterface::locate()
+diff --git a/src/Plugin/libraries/Locator/UriLocator.php b/src/Plugin/libraries/Locator/UriLocator.php
+index 2732505..039c593 100644
+--- a/src/Plugin/libraries/Locator/UriLocator.php
++++ b/src/Plugin/libraries/Locator/UriLocator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\Plugin\libraries\Locator;
+ 
++use Drupal\Core\StreamWrapper\LocalStream;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\StreamWrapper\StreamWrapperManagerInterface;
+ use Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface;
+@@ -28,7 +29,7 @@ class UriLocator implements LocatorInterface, ContainerFactoryPluginInterface {
+   /**
+    * The stream wrapper manager.
+    *
+-   * @var \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface
++   * @var StreamWrapperManagerInterface
+    */
+   protected $streamWrapperManager;
+ 
+@@ -42,7 +43,7 @@ class UriLocator implements LocatorInterface, ContainerFactoryPluginInterface {
+   /**
+    * Constructs a URI locator.
+    *
+-   * @param \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface $stream_wrapper_manager
++   * @param StreamWrapperManagerInterface $stream_wrapper_manager
+    *   The stream wrapper manager.
+    * @param string $uri
+    *   The URI to check.
+@@ -65,15 +66,15 @@ class UriLocator implements LocatorInterface, ContainerFactoryPluginInterface {
+   /**
+    * Locates a library.
+    *
+-   * @param \Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface $library
++   * @param LocalLibraryInterface $library
+    *   The library to locate.
+    *
+    * @see \Drupal\libraries\ExternalLibrary\Local\LocatorInterface::locate()
+    */
+   public function locate(LocalLibraryInterface $library) {
+-    /** @var \Drupal\Core\StreamWrapper\LocalStream $stream_wrapper */
++    /** @var LocalStream $stream_wrapper */
+     $stream_wrapper = $this->streamWrapperManager->getViaUri($this->uri);
+-    assert($stream_wrapper instanceof \Drupal\Core\StreamWrapper\LocalStream);
++    assert($stream_wrapper instanceof LocalStream);
+     // Calling LocalStream::getDirectoryPath() explicitly avoids the realpath()
+     // usage in LocalStream::getLocalPath(), which breaks if Libraries API is
+     // symbolically linked into the Drupal installation.
+diff --git a/src/Plugin/libraries/Type/AssetLibraryType.php b/src/Plugin/libraries/Type/AssetLibraryType.php
+index a92f27d..7854e56 100644
+--- a/src/Plugin/libraries/Type/AssetLibraryType.php
++++ b/src/Plugin/libraries/Type/AssetLibraryType.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\Plugin\libraries\Type;
+ 
++use Drupal\libraries\ExternalLibrary\Asset\AssetLibraryInterface;
+ use Drupal\libraries\ExternalLibrary\Asset\AssetLibrary;
+ use Drupal\libraries\ExternalLibrary\Asset\AttachableAssetLibraryRegistrationInterface;
+ use Drupal\libraries\ExternalLibrary\LibraryInterface;
+@@ -24,8 +25,8 @@ class AssetLibraryType extends LibraryTypeBase implements AttachableAssetLibrary
+    * {@inheritdoc}
+    */
+   public function getAttachableAssetLibraries(LibraryInterface $library, LibraryManagerInterface $library_manager) {
+-    assert($library instanceof \Drupal\libraries\ExternalLibrary\Asset\AssetLibraryInterface);
+-    /** @var \Drupal\libraries\ExternalLibrary\Asset\AssetLibraryInterface $library */
++    assert($library instanceof AssetLibraryInterface);
++    /** @var AssetLibraryInterface $library */
+     return [$library->getId() => $library->getAttachableAssetLibrary($library_manager)];
+   }
+ 
+diff --git a/src/Plugin/libraries/Type/MultipleAssetLibraryType.php b/src/Plugin/libraries/Type/MultipleAssetLibraryType.php
+index f73887e..a16c8bb 100644
+--- a/src/Plugin/libraries/Type/MultipleAssetLibraryType.php
++++ b/src/Plugin/libraries/Type/MultipleAssetLibraryType.php
+@@ -25,8 +25,8 @@ class MultipleAssetLibraryType extends LibraryTypeBase implements AttachableAsse
+    * {@inheritdoc}
+    */
+   public function getAttachableAssetLibraries(LibraryInterface $external_library, LibraryManagerInterface $library_manager) {
+-    assert($external_library instanceof \Drupal\libraries\ExternalLibrary\Asset\MultipleAssetLibraryInterface);
+-    /** @var \Drupal\libraries\ExternalLibrary\Asset\MultipleAssetLibraryInterface $external_library */
++    assert($external_library instanceof MultipleAssetLibraryInterface);
++    /** @var MultipleAssetLibraryInterface $external_library */
+     $attachable_libraries = [];
+     foreach ($external_library->getAttachableAssetLibraries($library_manager) as $component_name => $attachable_library) {
+       $attachable_library_id = $this->getAttachableLibraryId($external_library, $component_name);
+@@ -36,7 +36,7 @@ class MultipleAssetLibraryType extends LibraryTypeBase implements AttachableAsse
+   }
+ 
+   /**
+-   * @param \Drupal\libraries\ExternalLibrary\LibraryInterface $external_library
++   * @param LibraryInterface $external_library
+    * @param string $component_name
+    *
+    * @return string
+diff --git a/src/Plugin/libraries/Type/PhpFileLibraryType.php b/src/Plugin/libraries/Type/PhpFileLibraryType.php
+index aa93b00..27108a4 100644
+--- a/src/Plugin/libraries/Type/PhpFileLibraryType.php
++++ b/src/Plugin/libraries/Type/PhpFileLibraryType.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\Plugin\libraries\Type;
+ 
++use Drupal\libraries\ExternalLibrary\PhpFile\PhpFileLibraryInterface;
+ use Drupal\Component\Plugin\Factory\FactoryInterface;
+ use Drupal\libraries\ExternalLibrary\LibraryInterface;
+ use Drupal\libraries\ExternalLibrary\Type\LibraryLoadingListenerInterface;
+@@ -18,7 +19,7 @@ class PhpFileLibraryType extends LibraryTypeBase implements LibraryLoadingListen
+   /**
+    * The PHP file loader.
+    *
+-   * @var \Drupal\libraries\ExternalLibrary\PhpFile\PhpFileLoaderInterface
++   * @var PhpFileLoaderInterface
+    */
+   protected $phpFileLoader;
+ 
+@@ -27,11 +28,11 @@ class PhpFileLibraryType extends LibraryTypeBase implements LibraryLoadingListen
+    *
+    * @param string $plugin_id
+    *   The plugin ID taken from the class annotation.
+-   * @param \Drupal\Component\Plugin\Factory\FactoryInterface $locator_factory
++   * @param FactoryInterface $locator_factory
+    *   The locator factory.
+-   * @param \Drupal\Component\Plugin\Factory\FactoryInterface $detector_factory
++   * @param FactoryInterface $detector_factory
+    *   The version detector factory.
+-   * @param \Drupal\libraries\ExternalLibrary\PhpFile\PhpFileLoaderInterface $php_file_loader
++   * @param PhpFileLoaderInterface $php_file_loader
+    *   The PHP file loader.
+    */
+   public function __construct($plugin_id, FactoryInterface $locator_factory, FactoryInterface $detector_factory, PhpFileLoaderInterface $php_file_loader) {
+@@ -62,7 +63,7 @@ class PhpFileLibraryType extends LibraryTypeBase implements LibraryLoadingListen
+    * {@inheritdoc}
+    */
+   public function onLibraryLoad(LibraryInterface $library) {
+-    /** @var \Drupal\libraries\ExternalLibrary\PhpFile\PhpFileLibraryInterface $library */
++    /** @var PhpFileLibraryInterface $library */
+     // @todo Prevent loading a library multiple times.
+     foreach ($library->getPhpFiles() as $file) {
+       $this->phpFileLoader->load($file);
+diff --git a/src/StreamWrapper/LibraryDefinitionsStream.php b/src/StreamWrapper/LibraryDefinitionsStream.php
+index eff3146..bf6caee 100644
+--- a/src/StreamWrapper/LibraryDefinitionsStream.php
++++ b/src/StreamWrapper/LibraryDefinitionsStream.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries\StreamWrapper;
+ 
++use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\StreamWrapper\LocalStream;
+ use Drupal\Core\Config\ConfigFactory;
+ 
+@@ -36,7 +37,7 @@ class LibraryDefinitionsStream extends LocalStream {
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+diff --git a/tests/modules/libraries_test/libraries_test.module b/tests/modules/libraries_test/libraries_test.module
+index 2f6ee0e..89b0eca 100644
+--- a/tests/modules/libraries_test/libraries_test.module
++++ b/tests/modules/libraries_test/libraries_test.module
+@@ -15,17 +15,17 @@ function libraries_test_libraries_info() {
+   // Test library detection.
+   $libraries['example_missing'] = [
+     'name' => 'Example missing',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/missing',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/missing',
+   ];
+   $libraries['example_undetected_version'] = [
+     'name' => 'Example undetected version',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests',
+     'version callback' => '_libraries_test_return_version',
+     'version arguments' => [FALSE],
+   ];
+   $libraries['example_unsupported_version'] = [
+     'name' => 'Example unsupported version',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests',
+     'version callback' => '_libraries_test_return_version',
+     'version arguments' => ['1'],
+     'versions' => [
+@@ -35,7 +35,7 @@ function libraries_test_libraries_info() {
+ 
+   $libraries['example_supported_version'] = [
+     'name' => 'Example supported version',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests',
+     'version callback' => '_libraries_test_return_version',
+     'version arguments' => ['1'],
+     'versions' => [
+@@ -46,7 +46,7 @@ function libraries_test_libraries_info() {
+   // Test the default version callback.
+   $libraries['example_default_version_callback'] = [
+     'name' => 'Example default version callback',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version arguments' => [
+       'file' => 'README.txt',
+       // Version 1
+@@ -58,7 +58,7 @@ function libraries_test_libraries_info() {
+   // Test a multiple-parameter version callback.
+   $libraries['example_multiple_parameter_version_callback'] = [
+     'name' => 'Example multiple parameter version callback',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     // Version 1
+     'version callback' => '_libraries_test_get_version',
+     'version arguments' => ['README.txt', '/Version (\d+)/', 5],
+@@ -67,7 +67,7 @@ function libraries_test_libraries_info() {
+   // Test a top-level files property.
+   $libraries['example_files'] = [
+     'name' => 'Example files',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version' => '1',
+     'files' => [
+       'js' => ['example_1.js'],
+@@ -81,7 +81,7 @@ function libraries_test_libraries_info() {
+   // these files should be automatically loaded when the library is loaded.
+   $libraries['example_integration_files'] = [
+     'name' => 'Example integration files',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version' => '1',
+     'integration files' => [
+       'libraries_test' => [
+@@ -95,7 +95,7 @@ function libraries_test_libraries_info() {
+   // Test version overloading.
+   $libraries['example_versions'] = [
+     'name' => 'Example versions',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version' => '2',
+     'versions' => [
+       '1' => [
+@@ -118,7 +118,7 @@ function libraries_test_libraries_info() {
+   // Test variant detection.
+   $libraries['example_variant_missing'] = [
+     'name' => 'Example variant missing',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version' => '1',
+     'variants' => [
+       'example_variant' => [
+@@ -135,7 +135,7 @@ function libraries_test_libraries_info() {
+ 
+   $libraries['example_variant'] = [
+     'name' => 'Example variant',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version' => '1',
+     'variants' => [
+       'example_variant' => [
+@@ -153,7 +153,7 @@ function libraries_test_libraries_info() {
+   // Test correct behaviour with multiple versions and multiple variants.
+   $libraries['example_versions_and_variants'] = [
+     'name' => 'Example versions and variants',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version' => '2',
+     'versions' => [
+       '1' => [
+@@ -209,27 +209,27 @@ function libraries_test_libraries_info() {
+   // This library acts as a dependency for the libraries below.
+   $libraries['example_dependency'] = [
+     'name' => 'Example dependency',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version' => '1.1',
+     'files' => ['js' => ['example_1.js']],
+   ];
+   $libraries['example_dependency_missing'] = [
+     'name' => 'Example dependency missing',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version' => '1',
+     'dependencies' => ['example_missing'],
+     'files' => ['js' => ['example_1.js']],
+   ];
+   $libraries['example_dependency_incompatible'] = [
+     'name' => 'Example dependency incompatible',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version' => '1',
+     'dependencies' => ['example_dependency (>1.1)'],
+     'files' => ['js' => ['example_1.js']],
+   ];
+   $libraries['example_dependency_compatible'] = [
+     'name' => 'Example dependency compatible',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version' => '1',
+     'dependencies' => ['example_dependency (>=1.1)'],
+     'files' => ['js' => ['example_1.js']],
+@@ -238,7 +238,7 @@ function libraries_test_libraries_info() {
+   // Test the applying of callbacks.
+   $libraries['example_callback'] = [
+     'name' => 'Example callback',
+-    'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++    'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+     'version' => '1',
+     'versions' => [
+       '1' => [
+@@ -292,7 +292,7 @@ function libraries_test_libraries_info() {
+  * Implements hook_libraries_info_file_paths()
+  */
+ function libraries_test_libraries_info_file_paths() {
+-  return [drupal_get_path('module', 'libraries') . '/tests/example'];
++  return [\Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example'];
+ }
+ 
+ /**
+diff --git a/tests/src/Functional/ExternalLibrary/Definition/DefinitionDiscoveryFactoryTest.php b/tests/src/Functional/ExternalLibrary/Definition/DefinitionDiscoveryFactoryTest.php
+index 0fee23e..85a2004 100644
+--- a/tests/src/Functional/ExternalLibrary/Definition/DefinitionDiscoveryFactoryTest.php
++++ b/tests/src/Functional/ExternalLibrary/Definition/DefinitionDiscoveryFactoryTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\libraries\Functional\ExternalLibrary\Definition;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ConfigFactoryInterface;
++use Drupal\Core\Extension\ModuleHandlerInterface;
++use Drupal\libraries\ExternalLibrary\Definition\DefinitionDiscoveryInterface;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -18,7 +22,7 @@ class DefinitionDiscoveryFactoryTest extends BrowserTestBase {
+   /**
+    * The 'libraries.settings' configuration object.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+@@ -44,15 +48,15 @@ class DefinitionDiscoveryFactoryTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+-    /** @var \Drupal\Core\Config\ConfigFactoryInterface $config_factory */
++    /** @var ConfigFactoryInterface $config_factory */
+     $config_factory = $this->container->get('config.factory');
+     $this->config = $config_factory->getEditable('libraries.settings');
+ 
+     // Set up the remote library definition URL to point to the local website.
+-    /** @var \Drupal\Core\Extension\ModuleHandlerInterface $module_handler */
++    /** @var ModuleHandlerInterface $module_handler */
+     $module_handler = $this->container->get('module_handler');
+     $module_path = $module_handler->getModule('libraries')->getPath();
+     $this->definitionPath = "$module_path/tests/library_definitions";
+@@ -112,12 +116,12 @@ class DefinitionDiscoveryFactoryTest extends BrowserTestBase {
+     $this->config
+       ->set('definition.remote.urls', ["$this->baseUrl/$this->definitionPath"])
+       ->save();
+-    /** @var \Drupal\libraries\ExternalLibrary\Definition\DefinitionDiscoveryInterface $discovery */
++    /** @var DefinitionDiscoveryInterface $discovery */
+     $discovery = $this->container->get($discovery_service_id);
+     $definition_file = "$definitions_directory/$library_id.json";
+-    $this->assertFileNotExists($definition_file);
++    $this->assertFileDoesNotExist($definition_file);
+     $this->assertTrue($discovery->hasDefinition($library_id));
+-    $this->assertFileNotExists($definition_file);
++    $this->assertFileDoesNotExist($definition_file);
+     $this->assertEquals($discovery->getDefinition($library_id), $expected_definition);
+     $this->assertFileExists($definition_file);
+   }
+diff --git a/tests/src/Functional/LibrariesWebTest.php b/tests/src/Functional/LibrariesWebTest.php
+index c109094..710735f 100644
+--- a/tests/src/Functional/LibrariesWebTest.php
++++ b/tests/src/Functional/LibrariesWebTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\libraries\Functional;
+ 
++use Drupal\Core\Utility\UnroutedUrlAssemblerInterface;
++use Drupal\Core\State\StateInterface;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -34,21 +36,21 @@ class LibrariesWebTest extends BrowserTestBase {
+   /**
+    * The URL generator used in this test.
+    *
+-   * @var \Drupal\Core\Utility\UnroutedUrlAssemblerInterface
++   * @var UnroutedUrlAssemblerInterface
+    */
+   protected $urlAssembler;
+ 
+   /**
+    * The state service used in this test.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->urlAssembler = $this->container->get('unrouted_url_assembler');
+@@ -138,7 +140,7 @@ class LibrariesWebTest extends BrowserTestBase {
+   public function testLibrariesScanInfoFiles() {
+     $expected = [
+       'example_info_file' => (object) [
+-        'uri' => drupal_get_path('module', 'libraries') . '/tests/example/example_info_file.libraries.info.yml',
++        'uri' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example/example_info_file.libraries.info.yml',
+         'filename' => 'example_info_file.libraries.info.yml',
+         'name' => 'example_info_file.libraries.info',
+       ],
+@@ -157,7 +159,7 @@ class LibrariesWebTest extends BrowserTestBase {
+     // Test that library information is found correctly.
+     $expected = [
+       'name' => 'Example files',
+-      'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++      'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+       'version' => '1',
+       'files' => [
+         'js' => ['example_1.js' => []],
+@@ -175,7 +177,7 @@ class LibrariesWebTest extends BrowserTestBase {
+     // Test a library specified with an .info file gets detected.
+     $expected = [
+       'name' => 'Example info file',
+-      'info file' => drupal_get_path('module', 'libraries') . '/tests/example/example_info_file.libraries.info.yml',
++      'info file' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example/example_info_file.libraries.info.yml',
+     ];
+     libraries_info_defaults($expected, 'example_info_file');
+     $library = libraries_info('example_info_file');
+@@ -298,7 +300,7 @@ class LibrariesWebTest extends BrowserTestBase {
+   public function testCallbacks() {
+     $expected = [
+       'name' => 'Example callback',
+-      'library path' => drupal_get_path('module', 'libraries') . '/tests/example',
++      'library path' => \Drupal::service('extension.list.module')->getPath('libraries') . '/tests/example',
+       'version' => '1',
+       'versions' => [
+         '1' => [
+@@ -414,9 +416,9 @@ class LibrariesWebTest extends BrowserTestBase {
+ 
+     // Test loading of integration files.
+     $this->drupalGet('libraries_test/integration_files');
+-    $this->assertRaw('libraries_test.js', 'Integration file loading: libraries_test.js found');
+-    $this->assertRaw('libraries_test.css', 'Integration file loading: libraries_test.css found');
+-    $this->assertRaw('libraries_test.inc', 'Integration file loading: libraries_test.inc found');
++    $this->assertSession()->responseContains('libraries_test.js');
++    $this->assertSession()->responseContains('libraries_test.css');
++    $this->assertSession()->responseContains('libraries_test.inc');
+ 
+     // Test version overloading.
+     $this->drupalGet('libraries_test/versions');
+@@ -436,19 +438,19 @@ class LibrariesWebTest extends BrowserTestBase {
+     // When the library information is not cached, all callback groups should be
+     // invoked.
+     $this->drupalGet('libraries_test/cache');
+-    $this->assertRaw('The <em>info</em> callback group was invoked.', 'Info callback invoked for uncached libraries.');
+-    $this->assertRaw('The <em>pre-detect</em> callback group was invoked.', 'Pre-detect callback invoked for uncached libraries.');
+-    $this->assertRaw('The <em>post-detect</em> callback group was invoked.', 'Post-detect callback invoked for uncached libraries.');
+-    $this->assertRaw('The <em>pre-load</em> callback group was invoked.', 'Pre-load callback invoked for uncached libraries.');
+-    $this->assertRaw('The <em>post-load</em> callback group was invoked.', 'Post-load callback invoked for uncached libraries.');
++    $this->assertSession()->responseContains('The <em>info</em> callback group was invoked.');
++    $this->assertSession()->responseContains('The <em>pre-detect</em> callback group was invoked.');
++    $this->assertSession()->responseContains('The <em>post-detect</em> callback group was invoked.');
++    $this->assertSession()->responseContains('The <em>pre-load</em> callback group was invoked.');
++    $this->assertSession()->responseContains('The <em>post-load</em> callback group was invoked.');
+     // When the library information is cached only the 'pre-load' and
+     // 'post-load' callback groups should be invoked.
+     $this->drupalGet('libraries_test/cache');
+-    $this->assertNoRaw('The <em>info</em> callback group was not invoked.', 'Info callback not invoked for cached libraries.');
+-    $this->assertNoRaw('The <em>pre-detect</em> callback group was not invoked.', 'Pre-detect callback not invoked for cached libraries.');
+-    $this->assertNoRaw('The <em>post-detect</em> callback group was not invoked.', 'Post-detect callback not invoked for cached libraries.');
+-    $this->assertRaw('The <em>pre-load</em> callback group was invoked.', 'Pre-load callback invoked for cached libraries.');
+-    $this->assertRaw('The <em>post-load</em> callback group was invoked.', 'Post-load callback invoked for cached libraries.');
++    $this->assertSession()->responseNotContains('The <em>info</em> callback group was not invoked.');
++    $this->assertSession()->responseNotContains('The <em>pre-detect</em> callback group was not invoked.');
++    $this->assertSession()->responseNotContains('The <em>post-detect</em> callback group was not invoked.');
++    $this->assertSession()->responseContains('The <em>pre-load</em> callback group was invoked.');
++    $this->assertSession()->responseContains('The <em>post-load</em> callback group was invoked.');
+     \Drupal::state()->set('libraries_test.cache', FALSE);
+   }
+ 
+@@ -500,7 +502,7 @@ class LibrariesWebTest extends BrowserTestBase {
+ 
+     foreach ($names as $name => $expected) {
+       foreach ($extensions as $extension) {
+-        $filepath = drupal_get_path('module', 'libraries') . "/tests/example/$name.$extension";
++        $filepath = \Drupal::service('extension.list.module')->getPath('libraries') . "/tests/example/$name.$extension";
+         // JavaScript and CSS files appear as full URLs and with an appended
+         // query string.
+         if (in_array($extension, ['js', 'css'])) {
+@@ -517,11 +519,11 @@ class LibrariesWebTest extends BrowserTestBase {
+         $raw = $prefix . $filepath . $suffix;
+         if ($expected) {
+           $html_expected[] = Html::escape($raw);
+-          $this->assertRaw($raw, "$label$name.$extension found.");
++          $this->assertSession()->responseContains($raw);
+         }
+         else {
+           $html_not_expected[] = Html::escape($raw);
+-          $this->assertNoRaw($raw, "$label$name.$extension not found.");
++          $this->assertSession()->responseNotContains($raw);
+         }
+       }
+     }
+diff --git a/tests/src/Kernel/ExternalLibrary/Asset/AssetLibraryTest.php b/tests/src/Kernel/ExternalLibrary/Asset/AssetLibraryTest.php
+index cb2551e..f71d5f4 100644
+--- a/tests/src/Kernel/ExternalLibrary/Asset/AssetLibraryTest.php
++++ b/tests/src/Kernel/ExternalLibrary/Asset/AssetLibraryTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\libraries\Kernel\ExternalLibrary\Asset;
+ 
++use Drupal\libraries\ExternalLibrary\Asset\AttachableAssetLibraryRegistrationInterface;
+ use Drupal\Tests\libraries\Kernel\ExternalLibrary\TestLibraryFilesStream;
+ 
+ /**
+@@ -22,7 +23,7 @@ class AssetLibraryTest extends AssetLibraryTestBase {
+    * Tests that attachable asset library info is correctly gathered.
+    */
+   public function testAttachableAssetInfo() {
+-    /** @var \Drupal\libraries\ExternalLibrary\Asset\AttachableAssetLibraryRegistrationInterface $library_type */
++    /** @var AttachableAssetLibraryRegistrationInterface $library_type */
+     $library_type = $this->getLibraryType();
+     $library = $this->getLibrary();
+     $expected = [
+diff --git a/tests/src/Kernel/ExternalLibrary/Asset/AssetLibraryTestBase.php b/tests/src/Kernel/ExternalLibrary/Asset/AssetLibraryTestBase.php
+index 4f835b7..9f7ef51 100644
+--- a/tests/src/Kernel/ExternalLibrary/Asset/AssetLibraryTestBase.php
++++ b/tests/src/Kernel/ExternalLibrary/Asset/AssetLibraryTestBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\libraries\Kernel\ExternalLibrary\Asset;
+ 
++use Drupal\Core\Asset\LibraryDiscoveryInterface;
+ use Drupal\Tests\libraries\Kernel\LibraryTypeKernelTestBase;
+ 
+ /**
+@@ -21,14 +22,14 @@ abstract class AssetLibraryTestBase extends LibraryTypeKernelTestBase {
+   /**
+    * The Drupal core library discovery.
+    *
+-   * @var \Drupal\Core\Asset\LibraryDiscoveryInterface
++   * @var LibraryDiscoveryInterface
+    */
+   protected $coreLibraryDiscovery;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->coreLibraryDiscovery = $this->container->get('library.discovery');
+   }
+diff --git a/tests/src/Kernel/ExternalLibrary/Asset/MultipleAssetLibraryTest.php b/tests/src/Kernel/ExternalLibrary/Asset/MultipleAssetLibraryTest.php
+index 4a2af5c..fef0f23 100644
+--- a/tests/src/Kernel/ExternalLibrary/Asset/MultipleAssetLibraryTest.php
++++ b/tests/src/Kernel/ExternalLibrary/Asset/MultipleAssetLibraryTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\libraries\Kernel\ExternalLibrary\Asset;
+ 
++use Drupal\libraries\ExternalLibrary\Asset\AttachableAssetLibraryRegistrationInterface;
+ use Drupal\Tests\libraries\Kernel\ExternalLibrary\TestLibraryFilesStream;
+ 
+ /**
+@@ -22,7 +23,7 @@ class MultipleAssetLibraryTest extends AssetLibraryTestBase {
+    * Tests that attachable asset library info is correctly gathered.
+    */
+   public function testAttachableAssetInfo() {
+-    /** @var \Drupal\libraries\ExternalLibrary\Asset\AttachableAssetLibraryRegistrationInterface $library_type */
++    /** @var AttachableAssetLibraryRegistrationInterface $library_type */
+     $library_type = $this->getLibraryType();
+     $library = $this->getLibrary();
+     $expected = [
+diff --git a/tests/src/Kernel/ExternalLibrary/GlobalLocatorTest.php b/tests/src/Kernel/ExternalLibrary/GlobalLocatorTest.php
+index 84eb86e..39a361d 100644
+--- a/tests/src/Kernel/ExternalLibrary/GlobalLocatorTest.php
++++ b/tests/src/Kernel/ExternalLibrary/GlobalLocatorTest.php
+@@ -15,7 +15,7 @@ class GlobalLocatorTest extends LibraryTypeKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     // Assign our test stream (which points to the test php lib) to the asset
+     // scheme. This gives us a scheme to work with in the test that is not
+diff --git a/tests/src/Kernel/ExternalLibrary/PhpFile/PhpFileLibraryTest.php b/tests/src/Kernel/ExternalLibrary/PhpFile/PhpFileLibraryTest.php
+index 10c1d2c..8e83ead 100644
+--- a/tests/src/Kernel/ExternalLibrary/PhpFile/PhpFileLibraryTest.php
++++ b/tests/src/Kernel/ExternalLibrary/PhpFile/PhpFileLibraryTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\libraries\Kernel\ExternalLibrary\PhpFile;
+ 
++use Drupal\libraries\ExternalLibrary\PhpFile\PhpFileLibrary;
+ use Drupal\Tests\libraries\Kernel\ExternalLibrary\TestLibraryFilesStream;
+ use Drupal\Tests\libraries\Kernel\LibraryTypeKernelTestBase;
+ 
+@@ -15,7 +16,7 @@ class PhpFileLibraryTest extends LibraryTypeKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->container->set('stream_wrapper.php_file_libraries', new TestLibraryFilesStream(
+@@ -36,7 +37,7 @@ class PhpFileLibraryTest extends LibraryTypeKernelTestBase {
+    * Tests that the list of PHP files is correctly gathered.
+    */
+   public function testPhpFileInfo() {
+-    /** @var \Drupal\libraries\ExternalLibrary\PhpFile\PhpFileLibrary $library */
++    /** @var PhpFileLibrary $library */
+     $library = $this->getLibrary();
+     $this->assertTrue($library->isInstalled());
+     $library_path = $this->modulePath . '/tests/libraries/test_php_file_library';
+diff --git a/tests/src/Kernel/ExternalLibrary/TestLibraryFilesStream.php b/tests/src/Kernel/ExternalLibrary/TestLibraryFilesStream.php
+index ec20647..488add3 100644
+--- a/tests/src/Kernel/ExternalLibrary/TestLibraryFilesStream.php
++++ b/tests/src/Kernel/ExternalLibrary/TestLibraryFilesStream.php
+@@ -21,7 +21,7 @@ class TestLibraryFilesStream extends LocalStream {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -40,9 +40,9 @@ class TestLibraryFilesStream extends LocalStream {
+    * booted, but this stream wrapper is only registered explicitly from tests
+    * so it is possible here.
+    *
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation handler.
+    * @param string $directory
+    *   The directory within the Libraries API's tests directory that is to be
+diff --git a/tests/src/Kernel/LibraryTypeKernelTestBase.php b/tests/src/Kernel/LibraryTypeKernelTestBase.php
+index 8185794..8d2b48d 100644
+--- a/tests/src/Kernel/LibraryTypeKernelTestBase.php
++++ b/tests/src/Kernel/LibraryTypeKernelTestBase.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\Tests\libraries\Kernel;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Drupal\libraries\ExternalLibrary\LibraryManagerInterface;
++use Drupal\Component\Plugin\Factory\FactoryInterface;
++use Drupal\Core\Extension\ModuleHandlerInterface;
++use Drupal\Core\Config\ConfigFactoryInterface;
++use Drupal\Core\DrupalKernelInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\libraries\ExternalLibrary\Exception\LibraryDefinitionNotFoundException;
+@@ -14,17 +20,18 @@ use Drupal\libraries\ExternalLibrary\Type\LibraryTypeInterface;
+  */
+ abstract class LibraryTypeKernelTestBase extends KernelTestBase {
+ 
++  use ProphecyTrait;
+   /**
+    * The external library manager.
+    *
+-   * @var \Drupal\libraries\ExternalLibrary\LibraryManagerInterface
++   * @var LibraryManagerInterface
+    */
+   protected $libraryManager;
+ 
+   /**
+    * The library type factory.
+    *
+-   * @var \Drupal\Component\Plugin\Factory\FactoryInterface
++   * @var FactoryInterface
+    */
+   protected $libraryTypeFactory;
+ 
+@@ -50,17 +57,17 @@ abstract class LibraryTypeKernelTestBase extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+-    /** @var \Drupal\Core\Extension\ModuleHandlerInterface $module_handler */
++    /** @var ModuleHandlerInterface $module_handler */
+     $module_handler = $this->container->get('module_handler');
+     $this->modulePath = $module_handler->getModule('libraries')->getPath();
+ 
+     $this->installConfig('libraries');
+     // Disable remote definition fetching and set the local definitions path to
+     // the module directory.
+-    /** @var \Drupal\Core\Config\ConfigFactoryInterface $config_factory */
++    /** @var ConfigFactoryInterface $config_factory */
+     $config_factory = $this->container->get('config.factory');
+     $config_factory->getEditable('libraries.settings')
+       ->set('definition.local.path', "{$this->modulePath}/tests/library_definitions")
+@@ -70,7 +77,7 @@ abstract class LibraryTypeKernelTestBase extends KernelTestBase {
+     // LibrariesConfigSubscriber::onConfigSave() invalidates the container so
+     // that it is rebuilt on the next request. We need the container rebuilt
+     // immediately, however.
+-    /** @var \Drupal\Core\DrupalKernelInterface $kernel */
++    /** @var DrupalKernelInterface $kernel */
+     $kernel = $this->container->get('kernel');
+     $this->container = $kernel->rebuildContainer();
+ 
+@@ -116,7 +123,7 @@ abstract class LibraryTypeKernelTestBase extends KernelTestBase {
+   /**
+    * Returns the library type that is being tested.
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\Type\LibraryTypeInterface
++   * @return LibraryTypeInterface
+    *   The test library type.
+    */
+   protected function getLibraryType() {
+@@ -147,7 +154,7 @@ abstract class LibraryTypeKernelTestBase extends KernelTestBase {
+   /**
+    * Returns the test library for this library type.
+    *
+-   * @return \Drupal\libraries\ExternalLibrary\LibraryInterface
++   * @return LibraryInterface
+    *   The test library.
+    */
+   protected function getLibrary() {
+diff --git a/tests/src/Unit/Plugin/libraries/VersionDetector/LinePatternDetectorTest.php b/tests/src/Unit/Plugin/libraries/VersionDetector/LinePatternDetectorTest.php
+index 9f60071..1a6c3fc 100644
+--- a/tests/src/Unit/Plugin/libraries/VersionDetector/LinePatternDetectorTest.php
++++ b/tests/src/Unit/Plugin/libraries/VersionDetector/LinePatternDetectorTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\libraries\Unit\Plugin\libraries\VersionDetector;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Prophecy\Prophecy\ObjectProphecy;
+ use Drupal\libraries\ExternalLibrary\Local\LocalLibraryInterface;
+ use Drupal\libraries\ExternalLibrary\Version\VersionedLibraryInterface;
+ use Drupal\libraries\Plugin\libraries\VersionDetector\LinePatternDetector;
+@@ -18,6 +20,7 @@ use org\bovigo\vfs\vfsStream;
+  */
+ class LinePatternDetectorTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   protected $libraryId = 'test_library';
+ 
+   /**
+@@ -147,7 +150,7 @@ EOF
+   /**
+    * Sets up the library prophecy and returns it.
+    *
+-   * @return \Prophecy\Prophecy\ObjectProphecy
++   * @return ObjectProphecy
+    */
+   protected function setupLibrary() {
+     $library = $this->prophesize(VersionedLibraryInterface::class);
+@@ -163,7 +166,7 @@ EOF
+    * @param array $configuration
+    *   The plugin configuration to set the version detector up with.
+    *
+-   * @return \Drupal\libraries\Plugin\libraries\VersionDetector\LinePatternDetector
++   * @return LinePatternDetector
+    *   The line pattern version detector to test.
+    */
+   protected function setupDetector(array $configuration = []) {

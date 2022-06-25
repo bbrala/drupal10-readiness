@@ -1,0 +1,806 @@
+diff --git a/field_permissions.module b/field_permissions.module
+index 352de92..64c9db3 100644
+--- a/field_permissions.module
++++ b/field_permissions.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\field_permissions\FieldPermissionsServiceInterface;
+ /**
+  * @file
+  * Contains field_permissions.module.
+@@ -51,7 +52,7 @@ function field_permissions_jsonapi_entity_field_filter_access(FieldDefinitionInt
+     return AccessResult::neutral();
+   }
+ 
+-  /** @var \Drupal\field_permissions\FieldPermissionsServiceInterface $service */
++  /** @var FieldPermissionsServiceInterface $service */
+   $service = \Drupal::service('field_permissions.permissions_service');
+   if ($service instanceof FieldPermissionsService) {
+     $access = $service->hasFieldViewAccessForEveryEntity($account, $field_definition);
+@@ -71,7 +72,7 @@ function field_permissions_jsonapi_entity_field_filter_access(FieldDefinitionInt
+  */
+ function field_permissions_form_field_config_edit_form_alter(&$form, FormStateInterface $form_state) {
+   $account = \Drupal::currentUser();
+-  /** @var \Drupal\field\FieldConfigInterface $field */
++  /** @var FieldConfigInterface $field */
+   $field = $form_state->getFormObject()->getEntity();
+   if (!$account->hasPermission('administer field permissions')) {
+     return $form;
+@@ -143,7 +144,7 @@ function field_permissions_field_config_edit_form_builder($entity_type, FieldCon
+  * @see field_permissions_form_field_config_edit_form_alter()
+  */
+ function field_permission_field_config_edit_form_submit(array &$form, FormStateInterface $form_state) {
+-  /** @var \Drupal\Core\Field\FieldDefinitionInterface $field */
++  /** @var FieldDefinitionInterface $field */
+   $field = $form_state->getFormObject()->getEntity();
+ 
+   // Allow all plugin types to react to the submitted form.
+diff --git a/src/Annotation/FieldPermissionType.php b/src/Annotation/FieldPermissionType.php
+index 6c387e8..694c8fe 100644
+--- a/src/Annotation/FieldPermissionType.php
++++ b/src/Annotation/FieldPermissionType.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_permissions\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -21,7 +22,7 @@ class FieldPermissionType extends Plugin {
+   /**
+    * The human-readable title.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -30,7 +31,7 @@ class FieldPermissionType extends Plugin {
+   /**
+    * The permission type description.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Controller/FieldPermissionsController.php b/src/Controller/FieldPermissionsController.php
+index 64888ce..cfe2578 100644
+--- a/src/Controller/FieldPermissionsController.php
++++ b/src/Controller/FieldPermissionsController.php
+@@ -21,32 +21,32 @@ class FieldPermissionsController extends ControllerBase {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The field permission service.
+    *
+-   * @var \Drupal\field_permissions\FieldPermissionsServiceInterface
++   * @var FieldPermissionsServiceInterface
+    */
+   protected $fieldPermissions;
+ 
+   /**
+    * The field permission type plugin manager.
+    *
+-   * @var \Drupal\field_permissions\Plugin\FieldPermissionType\Manager
++   * @var Manager
+    */
+   protected $permissionTypeManager;
+ 
+   /**
+    * Construct the field permission controller.
+    *
+-   * @param \Drupal\field_permissions\FieldPermissionsServiceInterface $field_permissions_service
++   * @param FieldPermissionsServiceInterface $field_permissions_service
+    *   Field permissions services.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\field_permissions\Plugin\FieldPermissionType\Manager $permission_type_manager
++   * @param Manager $permission_type_manager
+    *   The permission type plugin manager.
+    */
+   public function __construct(FieldPermissionsServiceInterface $field_permissions_service, EntityTypeManagerInterface $entity_type_manager, Manager $permission_type_manager) {
+@@ -113,7 +113,7 @@ class FieldPermissionsController extends ControllerBase {
+    * Build table rows.
+    */
+   protected function buildRows() {
+-    /** @var \Drupal\field\FieldStorageConfigInterface $instances */
++    /** @var FieldStorageConfigInterface $instances */
+     $instances = $this->entityTypeManager->getStorage('field_storage_config')->loadMultiple();
+     $rows = [];
+     foreach ($instances as $key => $instance) {
+@@ -125,7 +125,7 @@ class FieldPermissionsController extends ControllerBase {
+   /**
+    * Build a single row.
+    *
+-   * @param \Drupal\field\FieldStorageConfigInterface $field_storage
++   * @param FieldStorageConfigInterface $field_storage
+    *   Field to populate row.
+    *
+    * @return array
+diff --git a/src/FieldPermissionsService.php b/src/FieldPermissionsService.php
+index ed06c81..fe0dc9d 100644
+--- a/src/FieldPermissionsService.php
++++ b/src/FieldPermissionsService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_permissions;
+ 
++use Drupal\user\RoleInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+@@ -22,23 +23,23 @@ class FieldPermissionsService implements FieldPermissionsServiceInterface, Conta
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The permission type plugin manager.
+    *
+-   * @var \Drupal\field_permissions\Plugin\FieldPermissionType\Manager
++   * @var Manager
+    */
+   protected $permissionTypeManager;
+ 
+   /**
+    * Construct the field permission service.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\field_permissions\Plugin\FieldPermissionType\Manager $permission_type_manager
++   * @param Manager $permission_type_manager
+    *   The permission type plugin manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, Manager $permission_type_manager) {
+@@ -88,7 +89,7 @@ class FieldPermissionsService implements FieldPermissionsServiceInterface, Conta
+    * {@inheritdoc}
+    */
+   public function getPermissionsByRole() {
+-    /** @var \Drupal\user\RoleInterface[] $roles */
++    /** @var RoleInterface[] $roles */
+     $roles = $this->entityTypeManager->getStorage('user_role')->loadMultiple();
+     $field_field_permissions = [];
+     $field_permission_perm = $this->getAllPermissions();
+@@ -117,7 +118,7 @@ class FieldPermissionsService implements FieldPermissionsServiceInterface, Conta
+    */
+   public function getAllPermissions() {
+     $permissions = [];
+-    /** @var \Drupal\field\FieldStorageConfigInterface[] $fields */
++    /** @var FieldStorageConfigInterface[] $fields */
+     $fields = $this->entityTypeManager->getStorage('field_storage_config')->loadMultiple();
+     foreach ($fields as $key => $field) {
+       // Check if this plugin defines custom permissions.
+@@ -183,9 +184,9 @@ class FieldPermissionsService implements FieldPermissionsServiceInterface, Conta
+    * @endcode
+    * returns TRUE for all possible values of $items.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Account for which to check access.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   Field for which to check access.
+    *
+    * @return bool
+diff --git a/src/FieldPermissionsServiceInterface.php b/src/FieldPermissionsServiceInterface.php
+index 790f01a..6dc874c 100644
+--- a/src/FieldPermissionsServiceInterface.php
++++ b/src/FieldPermissionsServiceInterface.php
+@@ -53,7 +53,7 @@ interface FieldPermissionsServiceInterface {
+   /**
+    * Get the permission type for a given field.
+    *
+-   * @param \Drupal\field\FieldStorageConfigInterface $field
++   * @param FieldStorageConfigInterface $field
+    *   The field to return permissions for.
+    */
+   public function fieldGetPermissionType(FieldStorageConfigInterface $field);
+@@ -61,7 +61,7 @@ interface FieldPermissionsServiceInterface {
+   /**
+    * Field is attached to comment entity.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   Fields to get permissions.
+    *
+    * @return bool
+@@ -74,11 +74,11 @@ interface FieldPermissionsServiceInterface {
+    *
+    * @param string $operation
+    *   String operation on field.
+-   * @param \Drupal\Core\Field\FieldItemListInterface $items
++   * @param FieldItemListInterface $items
+    *   The entity field object on which to check access.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Account to get permissions.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   Fields to get permissions.
+    */
+   public function getFieldAccess($operation, FieldItemListInterface $items, AccountInterface $account, FieldDefinitionInterface $field_definition);
+diff --git a/src/Plugin/AdminFormSettingsInterface.php b/src/Plugin/AdminFormSettingsInterface.php
+index 4174b4d..d687f80 100644
+--- a/src/Plugin/AdminFormSettingsInterface.php
++++ b/src/Plugin/AdminFormSettingsInterface.php
+@@ -15,9 +15,9 @@ interface AdminFormSettingsInterface {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+-   * @param \Drupal\user\RoleStorageInterface $role_storage
++   * @param RoleStorageInterface $role_storage
+    *   The user role storage.
+    */
+   public function buildAdminForm(array &$form, FormStateInterface $form_state, RoleStorageInterface $role_storage);
+@@ -27,9 +27,9 @@ interface AdminFormSettingsInterface {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+-   * @param \Drupal\user\RoleStorageInterface $role_storage
++   * @param RoleStorageInterface $role_storage
+    *   The user role storage.
+    */
+   public function submitAdminForm(array &$form, FormStateInterface $form_state, RoleStorageInterface $role_storage);
+diff --git a/src/Plugin/FieldPermissionType/Base.php b/src/Plugin/FieldPermissionType/Base.php
+index 5989427..1a989af 100644
+--- a/src/Plugin/FieldPermissionType/Base.php
++++ b/src/Plugin/FieldPermissionType/Base.php
+@@ -17,7 +17,7 @@ abstract class Base extends PluginBase implements FieldPermissionTypeInterface,
+   /**
+    * The field storage.
+    *
+-   * @var \Drupal\field\FieldStorageConfigInterface
++   * @var FieldStorageConfigInterface
+    */
+   protected $fieldStorage;
+ 
+@@ -30,7 +30,7 @@ abstract class Base extends PluginBase implements FieldPermissionTypeInterface,
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\field\FieldStorageConfigInterface $field_storage
++   * @param FieldStorageConfigInterface $field_storage
+    *   The field storage.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, FieldStorageConfigInterface $field_storage) {
+@@ -73,7 +73,7 @@ abstract class Base extends PluginBase implements FieldPermissionTypeInterface,
+    * @endcode
+    * returns TRUE for all possible $entity values.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user to check access for.
+    *
+    * @return bool
+diff --git a/src/Plugin/FieldPermissionType/CustomAccess.php b/src/Plugin/FieldPermissionType/CustomAccess.php
+index 239f5e3..fe967cd 100644
+--- a/src/Plugin/FieldPermissionType/CustomAccess.php
++++ b/src/Plugin/FieldPermissionType/CustomAccess.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_permissions\Plugin\FieldPermissionType;
+ 
++use Drupal\user\RoleInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -75,7 +76,7 @@ class CustomAccess extends Base implements CustomPermissionsInterface, AdminForm
+    */
+   public function submitAdminForm(array &$form, FormStateInterface $form_state, RoleStorageInterface $role_storage) {
+     $custom_permissions = $form_state->getValue('permissions');
+-    /** @var \Drupal\user\RoleInterface[] $roles */
++    /** @var RoleInterface[] $roles */
+     $roles = [];
+     foreach ($custom_permissions as $permission_name => $field_perm) {
+       foreach ($field_perm as $role_name => $role_permission) {
+@@ -117,13 +118,13 @@ class CustomAccess extends Base implements CustomPermissionsInterface, AdminForm
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+-   * @param \Drupal\user\RoleStorageInterface $role_storage
++   * @param RoleStorageInterface $role_storage
+    *   The user role storage.
+    */
+   protected function addPermissionsGrid(array &$form, FormStateInterface $form_state, RoleStorageInterface $role_storage) {
+-    /** @var \Drupal\user\RoleInterface[] $roles */
++    /** @var RoleInterface[] $roles */
+     $roles = $role_storage->loadMultiple();
+     $permissions = $this->getPermissions();
+     $options = array_keys($permissions);
+diff --git a/src/Plugin/FieldPermissionType/Manager.php b/src/Plugin/FieldPermissionType/Manager.php
+index 91b437f..2400533 100644
+--- a/src/Plugin/FieldPermissionType/Manager.php
++++ b/src/Plugin/FieldPermissionType/Manager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\field_permissions\Plugin\FieldPermissionType;
+ 
++use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Component\Plugin\Factory\DefaultFactory;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+@@ -22,9 +23,9 @@ class Manager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+@@ -40,13 +41,13 @@ class Manager extends DefaultPluginManager {
+    *   The plugin ID.
+    * @param array $configuration
+    *   The plugin configuration.
+-   * @param \Drupal\field\FieldStorageConfigInterface $field_storage
++   * @param FieldStorageConfigInterface $field_storage
+    *   The field storage.
+    *
+-   * @return \Drupal\field_permissions\Plugin\FieldPermissionTypeInterface
++   * @return FieldPermissionTypeInterface
+    *   The field permission type plugin instance.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function createInstance($plugin_id, array $configuration = [], FieldStorageConfigInterface $field_storage = NULL) {
+     $plugin_definition = $this->getDefinition($plugin_id);
+diff --git a/src/Plugin/FieldPermissionTypeInterface.php b/src/Plugin/FieldPermissionTypeInterface.php
+index 76d7a9c..f225cf5 100644
+--- a/src/Plugin/FieldPermissionTypeInterface.php
++++ b/src/Plugin/FieldPermissionTypeInterface.php
+@@ -69,9 +69,9 @@ interface FieldPermissionTypeInterface extends PluginInspectionInterface, Deriva
+    *
+    * @param string $operation
+    *   The operation to check. Either 'view' or 'edit'.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity the field is attached to.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user to check access for.
+    *
+    * @return bool
+diff --git a/tests/src/Functional/FieldPermissionsCommentTest.php b/tests/src/Functional/FieldPermissionsCommentTest.php
+index 7c89433..ddd8a0e 100644
+--- a/tests/src/Functional/FieldPermissionsCommentTest.php
++++ b/tests/src/Functional/FieldPermissionsCommentTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\field_permissions\Functional;
+ 
++use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ use Drupal\field\Entity\FieldStorageConfig;
+ use Drupal\field_permissions\Plugin\FieldPermissionTypeInterface;
+ 
+@@ -27,7 +28,7 @@ class FieldPermissionsCommentTest extends FieldPermissionsTestBase {
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+@@ -65,6 +66,7 @@ class FieldPermissionsCommentTest extends FieldPermissionsTestBase {
+ 
+   /**
+    * Test field permissions on comments.
++   * @doesNotPerformAssertions
+    */
+   public function testFieldPermissionComment() {
+     // These are all run within a single test method to avoid unnecessary site
+diff --git a/tests/src/Functional/FieldPermissionsTestBase.php b/tests/src/Functional/FieldPermissionsTestBase.php
+index 72d083d..01bc5fb 100644
+--- a/tests/src/Functional/FieldPermissionsTestBase.php
++++ b/tests/src/Functional/FieldPermissionsTestBase.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\field_permissions\Functional;
+ 
++use Drupal\user\UserInterface;
++use Drupal\user\RoleInterface;
++use Drupal\node\NodeInterface;
+ use Drupal\Tests\BrowserTestBase;
+ use Drupal\user\Entity\Role;
+ 
+@@ -13,49 +16,49 @@ abstract class FieldPermissionsTestBase extends BrowserTestBase {
+   /**
+    * An administrative user with permission to configure comment settings.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+   /**
+    * An limit user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $limitedUser;
+ 
+   /**
+    * A normal user with permission.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $webUser;
+ 
+   /**
+    * The role for the admin user.
+    *
+-   * @var \Drupal\user\RoleInterface
++   * @var RoleInterface
+    */
+   protected $adminUserRole;
+ 
+   /**
+    * The role for the authenticated user.
+    *
+-   * @var \Drupal\user\RoleInterface
++   * @var RoleInterface
+    */
+   protected $limitUserRole;
+ 
+   /**
+    * The role for the anonymous user.
+    *
+-   * @var \Drupal\user\RoleInterface
++   * @var RoleInterface
+    */
+   protected $webUserRole;
+ 
+   /**
+    * A node to test with.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   protected $node;
+ 
+diff --git a/tests/src/Functional/FieldPermissionsUserTest.php b/tests/src/Functional/FieldPermissionsUserTest.php
+index a09df88..15d86cb 100644
+--- a/tests/src/Functional/FieldPermissionsUserTest.php
++++ b/tests/src/Functional/FieldPermissionsUserTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\field_permissions\Functional;
+ 
++use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+ use Drupal\field_permissions\Plugin\FieldPermissionTypeInterface;
+@@ -17,7 +18,7 @@ class FieldPermissionsUserTest extends FieldPermissionsTestBase {
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+@@ -97,7 +98,7 @@ class FieldPermissionsUserTest extends FieldPermissionsTestBase {
+   /**
+    * Tests field permissions on the user edit form for a given account.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The user account to edit.
+    */
+   protected function checkUserFieldEdit(UserInterface $account) {
+@@ -113,7 +114,7 @@ class FieldPermissionsUserTest extends FieldPermissionsTestBase {
+   /**
+    * Verify the test field is accessible when viewing the given user.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The account to verify field permissions for viewing.
+    */
+   protected function assertUserFieldAccess(UserInterface $account) {
+@@ -124,7 +125,7 @@ class FieldPermissionsUserTest extends FieldPermissionsTestBase {
+   /**
+    * Verify the test field is not accessible when viewing the given user.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The account to verify field permissions for viewing.
+    */
+   protected function assertUserFieldNoAccess(UserInterface $account) {
+@@ -136,7 +137,7 @@ class FieldPermissionsUserTest extends FieldPermissionsTestBase {
+   /**
+    * Verifies that the current logged in user can edit the user field.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The user account to edit.
+    */
+   protected function assertUserEditFieldAccess(UserInterface $account) {
+@@ -147,7 +148,7 @@ class FieldPermissionsUserTest extends FieldPermissionsTestBase {
+   /**
+    * Verifies that the current logged in user cannot edit the user field.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The user account to edit.
+    */
+   protected function assertUserEditFieldNoAccess(UserInterface $account) {
+diff --git a/tests/src/Functional/FieldReportTest.php b/tests/src/Functional/FieldReportTest.php
+index 891c2ff..becb142 100644
+--- a/tests/src/Functional/FieldReportTest.php
++++ b/tests/src/Functional/FieldReportTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\field_permissions\Functional;
+ 
++use Drupal\field\FieldStorageConfigInterface;
+ use Drupal\Core\Url;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+@@ -34,7 +35,7 @@ class FieldReportTest extends BrowserTestBase {
+   /**
+    * Field storage.
+    *
+-   * @var \Drupal\field\FieldStorageConfigInterface
++   * @var FieldStorageConfigInterface
+    */
+   protected $fieldStorage;
+ 
+@@ -96,7 +97,7 @@ class FieldReportTest extends BrowserTestBase {
+ 
+     // Grant anonymous and authenticated view permission.
+     foreach ([RoleInterface::ANONYMOUS_ID, RoleInterface::AUTHENTICATED_ID] as $role_id) {
+-      /** @var \Drupal\user\RoleInterface $role */
++      /** @var RoleInterface $role */
+       $role = $this->container->get('entity_type.manager')
+         ->getStorage('user_role')
+         ->load($role_id);
+diff --git a/tests/src/Kernel/Plugin/FieldPermissionType/ManagerTest.php b/tests/src/Kernel/Plugin/FieldPermissionType/ManagerTest.php
+index fffb3e0..8209e0c 100644
+--- a/tests/src/Kernel/Plugin/FieldPermissionType/ManagerTest.php
++++ b/tests/src/Kernel/Plugin/FieldPermissionType/ManagerTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\field_permissions\Kernel\Plugin\FieldPermissionType;
+ 
++use Drupal\field_permissions\Plugin\FieldPermissionType\Manager;
++use Drupal\user\UserInterface;
+ use Drupal\entity_test\Entity\EntityTest;
+ use Drupal\field\Entity\FieldStorageConfig;
+ use Drupal\KernelTests\KernelTestBase;
+@@ -33,14 +35,14 @@ class ManagerTest extends KernelTestBase {
+   /**
+    * The field permission plugin manager service.
+    *
+-   * @var \Drupal\field_permissions\Plugin\FieldPermissionType\Manager
++   * @var Manager
+    */
+   protected $fieldPermissionTypeManager;
+ 
+   /**
+    * A user to test with.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $account;
+ 
+diff --git a/tests/src/Kernel/ViewsFieldAccessTest.php b/tests/src/Kernel/ViewsFieldAccessTest.php
+index 0e2b26f..4871efb 100644
+--- a/tests/src/Kernel/ViewsFieldAccessTest.php
++++ b/tests/src/Kernel/ViewsFieldAccessTest.php
+@@ -2,6 +2,13 @@
+ 
+ namespace Drupal\Tests\field_permissions\Kernel;
+ 
++use Drupal\user\UserInterface;
++use Drupal\user\RoleInterface;
++use Drupal\field\FieldStorageConfigInterface;
++use Drupal\field\FieldConfigInterface;
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\Core\Session\AccountSwitcherInterface;
++use Drupal\Core\Render\RendererInterface;
+ use Drupal\entity_test\Entity\EntityTest;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+@@ -28,28 +35,28 @@ class ViewsFieldAccessTest extends ViewsKernelTestBase {
+   /**
+    * Stores an user entity with access to fields.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $userWithAccess;
+ 
+   /**
+    * Stores an user entity without access to fields.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $userWithoutAccess;
+ 
+   /**
+    * Role with access.
+    *
+-   * @var \Drupal\user\RoleInterface
++   * @var RoleInterface
+    */
+   protected $roleWithAccess;
+ 
+   /**
+    * Role without access.
+    *
+-   * @var \Drupal\user\RoleInterface
++   * @var RoleInterface
+    */
+   protected $roleWithoutAccess;
+ 
+@@ -67,21 +74,21 @@ class ViewsFieldAccessTest extends ViewsKernelTestBase {
+   /**
+    * A field to test with.
+    *
+-   * @var \Drupal\field\FieldStorageConfigInterface
++   * @var FieldStorageConfigInterface
+    */
+   protected $fieldStorage;
+ 
+   /**
+    * Field config on entity_test.
+    *
+-   * @var \Drupal\field\FieldConfigInterface
++   * @var FieldConfigInterface
+    */
+   protected $field;
+ 
+   /**
+    * An entity to test with.
+    *
+-   * @var \Drupal\entity_test\Entity\EntityTest
++   * @var EntityTest
+    */
+   protected $entity;
+ 
+@@ -184,7 +191,7 @@ class ViewsFieldAccessTest extends ViewsKernelTestBase {
+    * Checks views field access on the test entity and field.
+    */
+   protected function assertFieldAccess() {
+-    /** @var \Drupal\Core\Entity\EntityTypeInterface $entity_type */
++    /** @var EntityTypeInterface $entity_type */
+     $entity_type = $this->container->get('entity_type.manager')->getDefinition('entity_test');
+     $view_id = $this->randomMachineName();
+     $data_table = $entity_type->getDataTable();
+@@ -214,10 +221,10 @@ class ViewsFieldAccessTest extends ViewsKernelTestBase {
+     ]);
+     $entity->save();
+ 
+-    /** @var \Drupal\Core\Session\AccountSwitcherInterface $account_switcher */
++    /** @var AccountSwitcherInterface $account_switcher */
+     $account_switcher = $this->container->get('account_switcher');
+ 
+-    /** @var \Drupal\Core\Render\RendererInterface $renderer */
++    /** @var RendererInterface $renderer */
+     $renderer = $this->container->get('renderer');
+ 
+     $account_switcher->switchTo($this->userWithAccess);
+diff --git a/tests/src/Unit/FieldPermissionsServiceTest.php b/tests/src/Unit/FieldPermissionsServiceTest.php
+index 25ef92d..48fe880 100644
+--- a/tests/src/Unit/FieldPermissionsServiceTest.php
++++ b/tests/src/Unit/FieldPermissionsServiceTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\field_permissions\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Drupal\field_permissions\FieldPermissionsServiceInterface;
+ use Drupal\comment\CommentManagerInterface;
+ use Drupal\Core\DependencyInjection\Container;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -24,24 +26,25 @@ use Prophecy\Argument;
+  */
+ class FieldPermissionsServiceTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Mock entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Mock permission type manager.
+    *
+-   * @var \Drupal\field_permissions\Plugin\FieldPermissionType\Manager
++   * @var Manager
+    */
+   protected $permissionTypeManager;
+ 
+   /**
+    * The field permissions service.
+    *
+-   * @var \Drupal\field_permissions\FieldPermissionsServiceInterface
++   * @var FieldPermissionsServiceInterface
+    */
+   protected $fieldPermissionsService;
+ 
+diff --git a/tests/src/Unit/Plugin/FieldPermissionType/CustomAccessTest.php b/tests/src/Unit/Plugin/FieldPermissionType/CustomAccessTest.php
+index 3e6d723..6a1b619 100644
+--- a/tests/src/Unit/Plugin/FieldPermissionType/CustomAccessTest.php
++++ b/tests/src/Unit/Plugin/FieldPermissionType/CustomAccessTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\field_permissions\Unit\Plugin\FieldPermissionType;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\field\FieldStorageConfigInterface;
+@@ -19,10 +20,11 @@ use Drupal\user\UserInterface;
+  */
+ class CustomAccessTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * The custom access plugin.
+    *
+-   * @var \Drupal\field_permissions\Plugin\FieldPermissionType\CustomAccess
++   * @var CustomAccess
+    */
+   protected $plugin;
+ 
+diff --git a/tests/src/Unit/Plugin/FieldPermissionType/PrivateAccessTest.php b/tests/src/Unit/Plugin/FieldPermissionType/PrivateAccessTest.php
+index 4e819d0..d84b9d0 100644
+--- a/tests/src/Unit/Plugin/FieldPermissionType/PrivateAccessTest.php
++++ b/tests/src/Unit/Plugin/FieldPermissionType/PrivateAccessTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\field_permissions\Unit\Plugin\FieldPermissionType;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\field\FieldStorageConfigInterface;
+@@ -19,10 +20,11 @@ use Drupal\user\UserInterface;
+  */
+ class PrivateAccessTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * The private access plugin.
+    *
+-   * @var \Drupal\field_permissions\Plugin\FieldPermissionType\PrivateAccess
++   * @var PrivateAccess
+    */
+   protected $plugin;
+ 

@@ -1,0 +1,1534 @@
+diff --git a/data_policy.api.php b/data_policy.api.php
+index 0c7c05c..8ce3a8b 100644
+--- a/data_policy.api.php
++++ b/data_policy.api.php
+@@ -1,22 +1,23 @@
+ <?php
+ 
++use Drupal\Core\Session\AccountProxyInterface;
++use Drupal\Core\Routing\RedirectDestinationInterface;
+ /**
+  * @file
+  * Documentation for Data Policy API.
+  */
+-
+ /**
+  * Alter the data policy destination before performing the redirect.
+  *
+- * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++ * @param AccountProxyInterface $current_user
+  *   The current user.
+- * @param \Drupal\Core\Routing\RedirectDestinationInterface $destination
++ * @param RedirectDestinationInterface $destination
+  *   The original destination parameter.
+  *
+- * @return \Drupal\Core\Routing\RedirectDestinationInterface
++ * @return RedirectDestinationInterface
+  *   An altered data policy destination url.
+  */
+-function hook_data_policy_destination_alter(\Drupal\Core\Session\AccountProxyInterface $current_user, \Drupal\Core\Routing\RedirectDestinationInterface $destination) {
++function hook_data_policy_destination_alter(AccountProxyInterface $current_user, RedirectDestinationInterface $destination) {
+   if ($current_user->isAnonymous()) {
+     $destination->set('/user/login');
+   }
+diff --git a/data_policy.install b/data_policy.install
+index 72e1260..9e383c9 100644
+--- a/data_policy.install
++++ b/data_policy.install
+@@ -25,7 +25,7 @@ function data_policy_install() {
+  * Implements hook_uninstall().
+  */
+ function data_policy_uninstall() {
+-  /** @var \Drupal\data_policy\Entity\DataPolicyInterface $data_policy */
++  /** @var DataPolicyInterface $data_policy */
+   foreach (DataPolicy::loadMultiple() as $data_policy) {
+     $data_policy->delete();
+   }
+@@ -130,7 +130,7 @@ function data_policy_update_8003() {
+ function data_policy_update_8004() {
+   $name = 'views.view.data_policy_agreements';
+ 
+-  $install_source = drupal_get_path('module', 'data_policy') . '/config/install';
++  $install_source = \Drupal::service('extension.list.module')->getPath('data_policy') . '/config/install';
+   $source = new FileStorage($install_source);
+   $config_storage = \Drupal::service('config.storage');
+   $config_storage->write($name, $source->read($name));
+diff --git a/data_policy.module b/data_policy.module
+index a01ac83..827f16c 100644
+--- a/data_policy.module
++++ b/data_policy.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\data_policy\DataPolicyConsentManagerInterface;
++use Drupal\data_policy\DataPolicyConsentManager;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ /**
+  * @file
+  * data_policy.module
+@@ -91,7 +94,7 @@ function data_policy_views_data_alter(array &$data) {
+  * Implements hook_form_FORM_ID_alter().
+  */
+ function data_policy_form_user_register_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+-  /** @var \Drupal\data_policy\DataPolicyConsentManagerInterface $data_policy_manager */
++  /** @var DataPolicyConsentManagerInterface $data_policy_manager */
+   $data_policy_manager = \Drupal::service('data_policy.manager');
+ 
+   if (!$data_policy_manager->isDataPolicy()) {
+@@ -113,11 +116,11 @@ function data_policy_form_user_register_form_alter(&$form, FormStateInterface $f
+  *
+  * @param array $form
+  *   An associative array containing the structure of the form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The current state of the form.
+  */
+ function _data_policy_user_register_form_submit(array &$form, FormStateInterface $form_state) {
+-  /** @var \Drupal\data_policy\DataPolicyConsentManager $data_policy_manager */
++  /** @var DataPolicyConsentManager $data_policy_manager */
+   $data_policy_manager = \Drupal::service('data_policy.manager');
+   $values = $form_state->getValue('data_policy');
+ 
+@@ -147,7 +150,7 @@ function _data_policy_user_register_form_submit(array &$form, FormStateInterface
+  *
+  * @param array $form
+  *   An associative array containing the structure of the form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The current state of the form.
+  */
+ function _data_policy_user_register_form_validate(array &$form, FormStateInterface $form_state) {
+@@ -157,7 +160,7 @@ function _data_policy_user_register_form_validate(array &$form, FormStateInterfa
+     $form_state->clearErrors();
+ 
+     foreach ($errors as $id => $error) {
+-      /** @var \Drupal\Core\StringTranslation\TranslatableMarkup $g */
++      /** @var TranslatableMarkup $g */
+       if (strpos($id, 'data_policy') !== FALSE) {
+         $name = Markup::create($error->getArguments()['@name']);
+         $form_state->setErrorByName($id, t('@name field is required.', ['@name' => $name]));
+@@ -203,7 +206,7 @@ function data_policy_preprocess_status_messages(&$variables) {
+   if (isset($variables['message_list']['error'])) {
+     $error_messages = $variables['message_list']['error'];
+     foreach ($error_messages as $delta => $message) {
+-      /** @var \Drupal\Core\Render\Markup $message */
++      /** @var Markup $message */
+       if (strpos((string) $message, '<a href="#edit-data-policy-data-policy-') !== FALSE) {
+         $variables['message_list']['error'][$delta] = Markup::create(html_entity_decode((string) $message));
+       }
+diff --git a/modules/data_policy_export/data_policy_export.module b/modules/data_policy_export/data_policy_export.module
+index 6c83faf..7775502 100644
+--- a/modules/data_policy_export/data_policy_export.module
++++ b/modules/data_policy_export/data_policy_export.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\file\FileInterface;
+ /**
+  * @file
+  * The Data Policy Export module.
+@@ -20,7 +21,7 @@ function data_policy_export_file_download($uri) {
+   $query->condition('uri', $uri);
+   $fid = $query->execute();
+ 
+-  /** @var \Drupal\file\FileInterface $file */
++  /** @var FileInterface $file */
+   $file = File::load(reset($fid));
+ 
+   $access = FALSE;
+diff --git a/modules/data_policy_export/src/Plugin/Annotation/DataPolicyExportPlugin.php b/modules/data_policy_export/src/Plugin/Annotation/DataPolicyExportPlugin.php
+index 8a95a76..8b91280 100644
+--- a/modules/data_policy_export/src/Plugin/Annotation/DataPolicyExportPlugin.php
++++ b/modules/data_policy_export/src/Plugin/Annotation/DataPolicyExportPlugin.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\data_policy_export\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -24,7 +25,7 @@ class DataPolicyExportPlugin extends Plugin {
+   /**
+    * The label of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/modules/data_policy_export/src/Plugin/DataPolicyExportPluginBase.php b/modules/data_policy_export/src/Plugin/DataPolicyExportPluginBase.php
+index f6c5b80..bc07476 100644
+--- a/modules/data_policy_export/src/Plugin/DataPolicyExportPluginBase.php
++++ b/modules/data_policy_export/src/Plugin/DataPolicyExportPluginBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\data_policy_export\Plugin;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Component\Plugin\PluginBase;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+@@ -21,21 +22,21 @@ abstract class DataPolicyExportPluginBase extends PluginBase implements DataPoli
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   public $entityTypeManager;
+ 
+   /**
+    * The date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   public $dateFormatter;
+ 
+   /**
+    * The database.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   public $database;
+ 
+@@ -48,11 +49,11 @@ abstract class DataPolicyExportPluginBase extends PluginBase implements DataPoli
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database connection.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, DateFormatterInterface $date_formatter, Connection $database) {
+@@ -66,7 +67,7 @@ abstract class DataPolicyExportPluginBase extends PluginBase implements DataPoli
+   /**
+    * The create method.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   Container interface.
+    * @param array $configuration
+    *   An array of configuration.
+@@ -75,7 +76,7 @@ abstract class DataPolicyExportPluginBase extends PluginBase implements DataPoli
+    * @param mixed $plugin_definition
+    *   The plugin definition.
+    *
+-   * @return \Drupal\Core\Plugin\ContainerFactoryPluginInterface|\Drupal\data_policy_export\Plugin\DataPolicyExportPluginBase
++   * @return ContainerFactoryPluginInterface|\Drupal\data_policy_export\Plugin\DataPolicyExportPluginBase
+    *   Returns the DataPolicyExportPluginBase.
+    */
+   public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition) {
+@@ -92,7 +93,7 @@ abstract class DataPolicyExportPluginBase extends PluginBase implements DataPoli
+   /**
+    * Returns the header.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @return TranslatableMarkup|string
+    *   The header.
+    */
+   public function getHeader() {
+@@ -102,7 +103,7 @@ abstract class DataPolicyExportPluginBase extends PluginBase implements DataPoli
+   /**
+    * Returns the value.
+    *
+-   * @param \Drupal\data_policy\Entity\DataPolicyInterface $entity
++   * @param DataPolicyInterface $entity
+    *   The Data Policy entity to get the value from.
+    *
+    * @return string
+diff --git a/modules/data_policy_export/src/Plugin/DataPolicyExportPluginInterface.php b/modules/data_policy_export/src/Plugin/DataPolicyExportPluginInterface.php
+index f909f5e..c008393 100644
+--- a/modules/data_policy_export/src/Plugin/DataPolicyExportPluginInterface.php
++++ b/modules/data_policy_export/src/Plugin/DataPolicyExportPluginInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\data_policy_export\Plugin;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use Drupal\data_policy\Entity\DataPolicyInterface;
+ 
+@@ -13,7 +14,7 @@ interface DataPolicyExportPluginInterface extends PluginInspectionInterface {
+   /**
+    * Returns the header.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @return TranslatableMarkup|string
+    *   The header.
+    */
+   public function getHeader();
+@@ -21,7 +22,7 @@ interface DataPolicyExportPluginInterface extends PluginInspectionInterface {
+   /**
+    * Returns the value.
+    *
+-   * @param \Drupal\data_policy\Entity\DataPolicyInterface $entity
++   * @param DataPolicyInterface $entity
+    *   The Data Policy entity to get the value from.
+    *
+    * @return string
+diff --git a/modules/data_policy_export/src/Plugin/DataPolicyExportPluginManager.php b/modules/data_policy_export/src/Plugin/DataPolicyExportPluginManager.php
+index 454cfbe..0d2873c 100644
+--- a/modules/data_policy_export/src/Plugin/DataPolicyExportPluginManager.php
++++ b/modules/data_policy_export/src/Plugin/DataPolicyExportPluginManager.php
+@@ -18,9 +18,9 @@ class DataPolicyExportPluginManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Controller/DataPolicy.php b/src/Controller/DataPolicy.php
+index 7d01de9..60c3e9c 100644
+--- a/src/Controller/DataPolicy.php
++++ b/src/Controller/DataPolicy.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\data_policy\Controller;
+ 
++use Drupal\Core\Datetime\DateFormatter;
++use Drupal\Core\Render\Renderer;
++use Drupal\data_policy\Entity\DataPolicyInterface;
++use Drupal\data_policy\DataPolicyStorageInterface;
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Component\Utility\Unicode;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Access\AccessResult;
+@@ -26,50 +31,50 @@ class DataPolicy extends ControllerBase implements ContainerInjectionInterface {
+   /**
+    * The entity repository service.
+    *
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+   /**
+    * The date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\Renderer
++   * @var Renderer
+    */
+   protected $renderer;
+ 
+   /**
+    * The Data Policy consent manager.
+    *
+-   * @var \Drupal\data_policy\DataPolicyConsentManagerInterface
++   * @var DataPolicyConsentManagerInterface
+    */
+   protected $dataPolicyConsentManager;
+ 
+   /**
+    * The currently active request object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * DataPolicy constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository service.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer service.
+-   * @param \Drupal\data_policy\DataPolicyConsentManagerInterface $data_policy_consent_manager
++   * @param DataPolicyConsentManagerInterface $data_policy_consent_manager
+    *   The Data Policy consent manager.
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request.
+    */
+   public function __construct(
+@@ -124,7 +129,7 @@ class DataPolicy extends ControllerBase implements ContainerInjectionInterface {
+     $links = [];
+ 
+     foreach ($entity_ids as $entity_id) {
+-      /** @var \Drupal\data_policy\Entity\DataPolicyInterface $entity */
++      /** @var DataPolicyInterface $entity */
+       $entity = $this->entityTypeManager()->getStorage('data_policy')->load($entity_id);
+       // Get translation for the current language.
+       $entity = $this->entityRepository->getTranslationFromContext($entity);
+@@ -144,7 +149,7 @@ class DataPolicy extends ControllerBase implements ContainerInjectionInterface {
+   /**
+    * Check if data policy is created.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   The access result.
+    */
+   public function entityOverviewAccess() {
+@@ -213,10 +218,10 @@ class DataPolicy extends ControllerBase implements ContainerInjectionInterface {
+       return $build;
+     }
+ 
+-    /** @var \Drupal\data_policy\DataPolicyStorageInterface $data_policy_storage */
++    /** @var DataPolicyStorageInterface $data_policy_storage */
+     $data_policy_storage = $this->entityTypeManager()->getStorage('data_policy');
+ 
+-    /** @var \Drupal\data_policy\Entity\DataPolicyInterface $data_policy */
++    /** @var DataPolicyInterface $data_policy */
+     $data_policy = $data_policy_storage->load($entity_id);
+ 
+     $account = $this->currentUser();
+@@ -230,7 +235,7 @@ class DataPolicy extends ControllerBase implements ContainerInjectionInterface {
+     $vids = $data_policy_storage->revisionIds($data_policy);
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\data_policy\Entity\DataPolicyInterface $revision */
++      /** @var DataPolicyInterface $revision */
+       $revision = $data_policy_storage->loadRevision($vid);
+ 
+       // Only show revisions that are affected by the language that is being
+@@ -339,7 +344,7 @@ class DataPolicy extends ControllerBase implements ContainerInjectionInterface {
+   /**
+    * Check access to agreement page.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   Allow to open page when a user was not give consent on a current version
+    *   of data policy.
+    */
+@@ -357,7 +362,7 @@ class DataPolicy extends ControllerBase implements ContainerInjectionInterface {
+    * @param int $data_policy_revision
+    *   The data policy revision ID.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   Allow editing revision if it never been active.
+    */
+   public function revisionEditAccess($data_policy_revision) {
+diff --git a/src/Controller/DataPolicyInformController.php b/src/Controller/DataPolicyInformController.php
+index d869601..3b4b067 100644
+--- a/src/Controller/DataPolicyInformController.php
++++ b/src/Controller/DataPolicyInformController.php
+@@ -46,7 +46,7 @@ class DataPolicyInformController extends ControllerBase {
+    * @param string $informblock
+    *   The 'informblock' entity ID.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   The access result.
+    */
+   public function access($informblock) {
+diff --git a/src/DataPolicyConsentManager.php b/src/DataPolicyConsentManager.php
+index 567c630..b1b42ad 100644
+--- a/src/DataPolicyConsentManager.php
++++ b/src/DataPolicyConsentManager.php
+@@ -23,57 +23,57 @@ class DataPolicyConsentManager implements DataPolicyConsentManagerInterface {
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The data policy entity.
+    *
+-   * @var \Drupal\data_policy\Entity\DataPolicyInterface
++   * @var DataPolicyInterface
+    */
+   protected $entity;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * The entity repository service.
+    *
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+   /**
+    * Constructs a new GDPR Consent Manager service.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database connection.
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository service.
+    */
+   public function __construct(
+@@ -146,7 +146,7 @@ class DataPolicyConsentManager implements DataPolicyConsentManagerInterface {
+     ];
+ 
+     foreach ($links as $entity_id => $link) {
+-      /** @var \Drupal\Core\Link $link */
++      /** @var Link $link */
+       $data = [];
+       foreach ($items as $item) {
+         if (strpos($item, "[id:{$entity_id}") !== FALSE) {
+@@ -190,7 +190,7 @@ class DataPolicyConsentManager implements DataPolicyConsentManagerInterface {
+         'status' => TRUE,
+       ]);
+ 
+-    /** @var \Drupal\data_policy\DataPolicyStorageInterface $data_policy_storage */
++    /** @var DataPolicyStorageInterface $data_policy_storage */
+     $data_policy_storage = $this->entityTypeManager->getStorage('data_policy');
+     // Existing states for the current user.
+     $existing_states = array_map(function (UserConsentInterface $user_consent) {
+@@ -231,7 +231,7 @@ class DataPolicyConsentManager implements DataPolicyConsentManagerInterface {
+ 
+         // Create new "user_consent" entities with active revision from
+         // user consent text in the settings tab.
+-        /** @var \Drupal\data_policy\Entity\DataPolicyInterface $data_policy */
++        /** @var DataPolicyInterface $data_policy */
+         $data_policy = $data_policy_storage->load($value['entity_id']);
+         $is_required = $this->isRequiredEntity($value['entity_id']);
+         $this->createUserConsent($data_policy, $user_id, $state, $is_required);
+@@ -272,7 +272,7 @@ class DataPolicyConsentManager implements DataPolicyConsentManagerInterface {
+ 
+           // Create new ones, those that were previously agreed - skip.
+           foreach (array_diff($revision_ids_from_consent_text, array_flip($confirmed)) as $revision_id) {
+-            /** @var \Drupal\data_policy\Entity\DataPolicyInterface $data_policy */
++            /** @var DataPolicyInterface $data_policy */
+             $data_policy = $data_policy_storage->loadRevision($revision_id);
+             $is_required = $this->isRequiredEntity($data_policy->id());
+             $this->createUserConsent($data_policy, $user_id, $state, $is_required);
+@@ -303,7 +303,7 @@ class DataPolicyConsentManager implements DataPolicyConsentManagerInterface {
+       }
+ 
+       foreach ($entities as $entity) {
+-        /** @var \Drupal\data_policy\Entity\DataPolicyInterface $data_policy */
++        /** @var DataPolicyInterface $data_policy */
+         $data_policy = $data_policy_storage->load($entity);
+         $is_required = $this->isRequiredEntity($entity);
+         $this->createUserConsent($data_policy, $user_id, $state, $is_required);
+@@ -346,7 +346,7 @@ class DataPolicyConsentManager implements DataPolicyConsentManagerInterface {
+   /**
+    * Create the user_consent entity.
+    *
+-   * @param \Drupal\data_policy\Entity\DataPolicyInterface $data_policy
++   * @param DataPolicyInterface $data_policy
+    *   The data policy entity.
+    * @param int $user_id
+    *   The user id.
+diff --git a/src/DataPolicyHtmlRouteProvider.php b/src/DataPolicyHtmlRouteProvider.php
+index aeec2ae..6563d1e 100644
+--- a/src/DataPolicyHtmlRouteProvider.php
++++ b/src/DataPolicyHtmlRouteProvider.php
+@@ -52,10 +52,10 @@ class DataPolicyHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the version history route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getHistoryRoute(EntityTypeInterface $entity_type) {
+@@ -79,10 +79,10 @@ class DataPolicyHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionRoute(EntityTypeInterface $entity_type) {
+@@ -103,10 +103,10 @@ class DataPolicyHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision edit route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionEditRoute(EntityTypeInterface $entity_type) {
+@@ -130,10 +130,10 @@ class DataPolicyHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision revert route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionRevertRoute(EntityTypeInterface $entity_type) {
+@@ -154,10 +154,10 @@ class DataPolicyHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision delete route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionDeleteRoute(EntityTypeInterface $entity_type) {
+@@ -178,10 +178,10 @@ class DataPolicyHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision translation revert route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionTranslationRevertRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/DataPolicyListBuilder.php b/src/DataPolicyListBuilder.php
+index 39c79ac..3735833 100644
+--- a/src/DataPolicyListBuilder.php
++++ b/src/DataPolicyListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\data_policy;
+ 
++use Drupal\data_policy\Entity\DataPolicyInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ use Drupal\Core\Link;
+@@ -27,7 +28,7 @@ class DataPolicyListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\data_policy\Entity\DataPolicyInterface $entity */
++    /** @var DataPolicyInterface $entity */
+     $row['name'] = Link::createFromRoute($entity->label(), 'entity.data_policy.revision', [
+       'entity_id' => $entity->id(),
+       'data_policy_revision' => $entity->getRevisionId(),
+diff --git a/src/DataPolicyModuleInstaller.php b/src/DataPolicyModuleInstaller.php
+index 061fb74..dfb7b60 100644
+--- a/src/DataPolicyModuleInstaller.php
++++ b/src/DataPolicyModuleInstaller.php
+@@ -20,7 +20,7 @@ class DataPolicyModuleInstaller extends ModuleInstaller {
+   /**
+    * The data policy storage.
+    *
+-   * @var \Drupal\data_policy\DataPolicyStorageInterface
++   * @var DataPolicyStorageInterface
+    */
+   protected $storage;
+ 
+@@ -36,17 +36,17 @@ class DataPolicyModuleInstaller extends ModuleInstaller {
+    *
+    * @param string $root
+    *   The app root.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\DrupalKernelInterface $kernel
++   * @param DrupalKernelInterface $kernel
+    *   The drupal kernel.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Update\UpdateHookRegistry|null $update_registry
++   * @param UpdateHookRegistry|null $update_registry
+    *   (Optional) The update registry service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    */
+   public function __construct($root, ModuleHandlerInterface $module_handler, DrupalKernelInterface $kernel, Connection $connection, UpdateHookRegistry $update_registry, EntityTypeManagerInterface $entity_type_manager, ConfigFactoryInterface $config_factory) {
+diff --git a/src/DataPolicyStorageInterface.php b/src/DataPolicyStorageInterface.php
+index 3a82d5a..b58ad02 100644
+--- a/src/DataPolicyStorageInterface.php
++++ b/src/DataPolicyStorageInterface.php
+@@ -20,7 +20,7 @@ interface DataPolicyStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Gets a list of Data policy revision IDs for a specific Data policy.
+    *
+-   * @param \Drupal\data_policy\Entity\DataPolicyInterface $entity
++   * @param DataPolicyInterface $entity
+    *   The Data policy entity.
+    *
+    * @return int[]
+@@ -31,7 +31,7 @@ interface DataPolicyStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Gets a list of revision IDs having a given user as Data policy author.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user entity.
+    *
+    * @return int[]
+@@ -42,7 +42,7 @@ interface DataPolicyStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Counts the number of revisions in the default language.
+    *
+-   * @param \Drupal\data_policy\Entity\DataPolicyInterface $entity
++   * @param DataPolicyInterface $entity
+    *   The Data policy entity.
+    *
+    * @return int
+@@ -53,7 +53,7 @@ interface DataPolicyStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Unsets the language for all Data policy with the given language.
+    *
+-   * @param \Drupal\Core\Language\LanguageInterface $language
++   * @param LanguageInterface $language
+    *   The language object.
+    */
+   public function clearRevisionsLanguage(LanguageInterface $language);
+diff --git a/src/Entity/DataPolicyInterface.php b/src/Entity/DataPolicyInterface.php
+index 3e4ee34..d1c6668 100644
+--- a/src/Entity/DataPolicyInterface.php
++++ b/src/Entity/DataPolicyInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\data_policy\Entity;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\RevisionLogInterface;
+ use Drupal\Core\Entity\EntityChangedInterface;
+@@ -96,7 +97,7 @@ interface DataPolicyInterface extends ContentEntityInterface, RevisionLogInterfa
+   /**
+    * Gets the Data policy revision author.
+    *
+-   * @return \Drupal\user\UserInterface
++   * @return UserInterface
+    *   The user entity for the revision author.
+    */
+   public function getRevisionUser();
+diff --git a/src/Entity/UserConsent.php b/src/Entity/UserConsent.php
+index 9147a55..040252f 100644
+--- a/src/Entity/UserConsent.php
++++ b/src/Entity/UserConsent.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\data_policy\Entity;
+ 
++use Drupal\Component\Render\MarkupInterface;
+ use Drupal\Core\Field\BaseFieldDefinition;
+ use Drupal\Core\Entity\ContentEntityBase;
+ use Drupal\Core\Entity\EntityChangedTrait;
+@@ -192,7 +193,7 @@ class UserConsent extends ContentEntityBase implements UserConsentInterface {
+   /**
+    * Override of the default label() function to return a human-friendly name.
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface|string
++   * @return MarkupInterface|string
+    *   Return user display name.
+    */
+   public function label() {
+diff --git a/src/Entity/UserConsentInterface.php b/src/Entity/UserConsentInterface.php
+index d8ffb0e..a1be133 100644
+--- a/src/Entity/UserConsentInterface.php
++++ b/src/Entity/UserConsentInterface.php
+@@ -91,7 +91,7 @@ interface UserConsentInterface extends ContentEntityInterface, EntityChangedInte
+   /**
+    * Sets the Data policy revision author.
+    *
+-   * @param \Drupal\data_policy\Entity\DataPolicyInterface $data_policy
++   * @param DataPolicyInterface $data_policy
+    *   The data policy entity object.
+    *
+    * @return \Drupal\data_policy\Entity\UserConsentInterface
+diff --git a/src/Form/DataPolicyAddForm.php b/src/Form/DataPolicyAddForm.php
+index 573a9db..e04a6af 100644
+--- a/src/Form/DataPolicyAddForm.php
++++ b/src/Form/DataPolicyAddForm.php
+@@ -21,14 +21,14 @@ class DataPolicyAddForm extends ContentEntityForm {
+   /**
+    * The current route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The currently active request object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+@@ -49,15 +49,15 @@ class DataPolicyAddForm extends ContentEntityForm {
+   /**
+    * DataPolicyAddForm constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle info.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request.
+    */
+   public function __construct(
+diff --git a/src/Form/DataPolicyAgreement.php b/src/Form/DataPolicyAgreement.php
+index 0847d94..2b38937 100644
+--- a/src/Form/DataPolicyAgreement.php
++++ b/src/Form/DataPolicyAgreement.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\data_policy\Form;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -24,32 +25,32 @@ class DataPolicyAgreement extends FormBase {
+   /**
+    * The Data Policy consent manager.
+    *
+-   * @var \Drupal\data_policy\DataPolicyConsentManagerInterface
++   * @var DataPolicyConsentManagerInterface
+    */
+   protected $dataPolicyConsentManager;
+ 
+   /**
+    * The redirect destination helper.
+    *
+-   * @var \Drupal\Core\Routing\RedirectDestinationInterface
++   * @var RedirectDestinationInterface
+    */
+   protected $destination;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * DataPolicyAgreement constructor.
+    *
+-   * @param \Drupal\data_policy\DataPolicyConsentManagerInterface $data_policy_manager
++   * @param DataPolicyConsentManagerInterface $data_policy_manager
+    *   The Data Policy consent manager.
+-   * @param \Drupal\Core\Routing\RedirectDestinationInterface $destination
++   * @param RedirectDestinationInterface $destination
+    *   The redirect destination helper.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(
+@@ -189,7 +190,7 @@ class DataPolicyAgreement extends FormBase {
+       $form_state->clearErrors();
+ 
+       foreach ($errors as $id => $error) {
+-        /** @var \Drupal\Core\StringTranslation\TranslatableMarkup $g */
++        /** @var TranslatableMarkup $g */
+         if (strpos($id, 'data_policy') !== FALSE) {
+           $name = Markup::create($error->getArguments()['@name']);
+           $form_state->setErrorByName($id, $this->t('@name field is required.', ['@name' => $name]));
+diff --git a/src/Form/DataPolicyRevisionDeleteForm.php b/src/Form/DataPolicyRevisionDeleteForm.php
+index e8fd120..3c07bfb 100644
+--- a/src/Form/DataPolicyRevisionDeleteForm.php
++++ b/src/Form/DataPolicyRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\data_policy\Form;
+ 
++use Drupal\data_policy\Entity\DataPolicyInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -21,39 +22,39 @@ class DataPolicyRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The Data policy revision.
+    *
+-   * @var \Drupal\data_policy\Entity\DataPolicyInterface
++   * @var DataPolicyInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The Data policy storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $dataPolicyStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new DataPolicyRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection, DateFormatterInterface $date_formatter) {
+diff --git a/src/Form/DataPolicyRevisionEdit.php b/src/Form/DataPolicyRevisionEdit.php
+index 84e5537..f232deb 100644
+--- a/src/Form/DataPolicyRevisionEdit.php
++++ b/src/Form/DataPolicyRevisionEdit.php
+@@ -22,7 +22,7 @@ class DataPolicyRevisionEdit extends DataPolicyForm {
+   /**
+    * The currently active request object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+@@ -36,26 +36,26 @@ class DataPolicyRevisionEdit extends DataPolicyForm {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a DataPolicyRevisionEdit object.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity manager.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The current request.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(
+diff --git a/src/Form/DataPolicyRevisionRevertForm.php b/src/Form/DataPolicyRevisionRevertForm.php
+index 30d6280..d82282b 100644
+--- a/src/Form/DataPolicyRevisionRevertForm.php
++++ b/src/Form/DataPolicyRevisionRevertForm.php
+@@ -21,39 +21,39 @@ class DataPolicyRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The Data policy revision.
+    *
+-   * @var \Drupal\data_policy\Entity\DataPolicyInterface
++   * @var DataPolicyInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The Data policy storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $dataPolicyStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * Constructs a new DataPolicyRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The Data policy storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, TimeInterface $time) {
+@@ -148,12 +148,12 @@ class DataPolicyRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\data_policy\Entity\DataPolicyInterface $revision
++   * @param DataPolicyInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\data_policy\Entity\DataPolicyInterface
++   * @return DataPolicyInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(DataPolicyInterface $revision, FormStateInterface $form_state) {
+diff --git a/src/Form/DataPolicyRevisionRevertTranslationForm.php b/src/Form/DataPolicyRevisionRevertTranslationForm.php
+index 05f0805..1a972ba 100644
+--- a/src/Form/DataPolicyRevisionRevertTranslationForm.php
++++ b/src/Form/DataPolicyRevisionRevertTranslationForm.php
+@@ -27,20 +27,20 @@ class DataPolicyRevisionRevertTranslationForm extends DataPolicyRevisionRevertFo
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new DataPolicyRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The Data policy storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The system time.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(
+@@ -104,7 +104,7 @@ class DataPolicyRevisionRevertTranslationForm extends DataPolicyRevisionRevertFo
+   protected function prepareRevertedRevision(DataPolicyInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\data_policy\Entity\DataPolicyInterface $default_revision */
++    /** @var DataPolicyInterface $default_revision */
+     $latest_revision = $this->dataPolicyStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+diff --git a/src/Form/InformBlockForm.php b/src/Form/InformBlockForm.php
+index 6439a03..8a6c172 100644
+--- a/src/Form/InformBlockForm.php
++++ b/src/Form/InformBlockForm.php
+@@ -16,7 +16,7 @@ class InformBlockForm extends EntityForm {
+   /**
+    * Constructs an InformBlockForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManager $entityTypeManager
++   * @param EntityTypeManager $entityTypeManager
+    *   The entityTypeManager.
+    */
+   public function __construct(EntityTypeManager $entityTypeManager) {
+diff --git a/src/Plugin/Block/DataPolicyInformBlock.php b/src/Plugin/Block/DataPolicyInformBlock.php
+index 486a367..d4d8c8d 100644
+--- a/src/Plugin/Block/DataPolicyInformBlock.php
++++ b/src/Plugin/Block/DataPolicyInformBlock.php
+@@ -32,35 +32,35 @@ class DataPolicyInformBlock extends BlockBase implements ContainerFactoryPluginI
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The current path.
+    *
+-   * @var \Drupal\Core\Path\CurrentPathStack
++   * @var CurrentPathStack
+    */
+   protected $currentPath;
+ 
+   /**
+    * An alias manager to find the alias for the current system path.
+    *
+-   * @var \Drupal\path_alias\AliasManagerInterface
++   * @var AliasManagerInterface
+    */
+   protected $aliasManager;
+ 
+   /**
+    * The path matcher.
+    *
+-   * @var \Drupal\Core\Path\PathMatcherInterface
++   * @var PathMatcherInterface
+    */
+   protected $pathMatcher;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -73,15 +73,15 @@ class DataPolicyInformBlock extends BlockBase implements ContainerFactoryPluginI
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\Path\CurrentPathStack $current_path
++   * @param CurrentPathStack $current_path
+    *   The current path.
+-   * @param \Drupal\path_alias\AliasManagerInterface $alias_manager
++   * @param AliasManagerInterface $alias_manager
+    *   An alias manager to find the alias for the current system path.
+-   * @param \Drupal\Core\Path\PathMatcherInterface $path_matcher
++   * @param PathMatcherInterface $path_matcher
+    *   The path matcher service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, RequestStack $request_stack, CurrentPathStack $current_path, AliasManagerInterface $alias_manager, PathMatcherInterface $path_matcher, EntityTypeManagerInterface $entity_type_manager) {
+@@ -179,7 +179,7 @@ class DataPolicyInformBlock extends BlockBase implements ContainerFactoryPluginI
+   /**
+    * Get entity of inform_block for current page.
+    *
+-   * @return \Drupal\data_policy\InformBlockInterface|null
++   * @return InformBlockInterface|null
+    *   If current page has data for information block then will be returned
+    *   entity else NULL.
+    */
+diff --git a/src/Plugin/views/field/UserConsentDataPolicyRevision.php b/src/Plugin/views/field/UserConsentDataPolicyRevision.php
+index ae76ff4..9339569 100644
+--- a/src/Plugin/views/field/UserConsentDataPolicyRevision.php
++++ b/src/Plugin/views/field/UserConsentDataPolicyRevision.php
+@@ -21,7 +21,7 @@ class UserConsentDataPolicyRevision extends Date {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -34,11 +34,11 @@ class UserConsentDataPolicyRevision extends Date {
+    *   The plugin ID for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $date_format_storage
++   * @param EntityStorageInterface $date_format_storage
+    *   The date format storage.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, DateFormatterInterface $date_formatter, EntityStorageInterface $date_format_storage, EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Plugin/views/filter/UserConsentDataPolicyRevision.php b/src/Plugin/views/filter/UserConsentDataPolicyRevision.php
+index cdfe6ba..eebda9f 100644
+--- a/src/Plugin/views/filter/UserConsentDataPolicyRevision.php
++++ b/src/Plugin/views/filter/UserConsentDataPolicyRevision.php
+@@ -21,28 +21,28 @@ class UserConsentDataPolicyRevision extends InOperator {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -55,13 +55,13 @@ class UserConsentDataPolicyRevision extends InOperator {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, Connection $connection, DateFormatterInterface $date_formatter, ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/ProxyClass/DataPolicyModuleInstaller.php b/src/ProxyClass/DataPolicyModuleInstaller.php
+index 8370329..9c69e39 100644
+--- a/src/ProxyClass/DataPolicyModuleInstaller.php
++++ b/src/ProxyClass/DataPolicyModuleInstaller.php
+@@ -33,14 +33,14 @@ class DataPolicyModuleInstaller implements ModuleInstallerInterface {
+   /**
+    * The service container.
+    *
+-   * @var \Symfony\Component\DependencyInjection\ContainerInterface
++   * @var ContainerInterface
+    */
+   protected $container;
+ 
+   /**
+    * Constructs a ProxyClass Drupal proxy object.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The container.
+    * @param string $drupal_proxy_original_service_id
+    *   The service ID of the original service.
+diff --git a/src/RedirectSubscriber.php b/src/RedirectSubscriber.php
+index ac424ff..ddacc6b 100644
+--- a/src/RedirectSubscriber.php
++++ b/src/RedirectSubscriber.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\data_policy;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
++use Drupal\data_policy\Entity\DataPolicy;
++use Drupal\Core\Database\Query\SelectInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -16,7 +19,6 @@ use Drupal\Core\Url;
+ use Drupal\data_policy\Entity\DataPolicyInterface;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -31,86 +33,86 @@ class RedirectSubscriber implements EventSubscriberInterface {
+   /**
+    * The current active route match object.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The redirect destination helper.
+    *
+-   * @var \Drupal\Core\Routing\RedirectDestinationInterface
++   * @var RedirectDestinationInterface
+    */
+   protected $destination;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The Data Policy consent manager.
+    *
+-   * @var \Drupal\data_policy\DataPolicyConsentManagerInterface
++   * @var DataPolicyConsentManagerInterface
+    */
+   protected $dataPolicyConsentManager;
+ 
+   /**
+    * The module handler interface.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The database.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   public $database;
+ 
+   /**
+    * RedirectSubscriber constructor.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current active route match object.
+-   * @param \Drupal\Core\Routing\RedirectDestinationInterface $destination
++   * @param RedirectDestinationInterface $destination
+    *   The redirect destination helper.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+-   * @param \Drupal\data_policy\DataPolicyConsentManagerInterface $data_policy_manager
++   * @param DataPolicyConsentManagerInterface $data_policy_manager
+    *   The Data Policy consent manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler interface.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database connection.
+    */
+   public function __construct(
+@@ -146,10 +148,10 @@ class RedirectSubscriber implements EventSubscriberInterface {
+   /**
+    * This method is called when the KernelEvents::REQUEST event is dispatched.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The event.
+    */
+-  public function checkForRedirection(GetResponseEvent $event): void {
++  public function checkForRedirection(RequestEvent $event): void {
+     // Check if a data policy is set.
+     if (!$this->dataPolicyConsentManager->isDataPolicy()) {
+       return;
+@@ -209,7 +211,7 @@ class RedirectSubscriber implements EventSubscriberInterface {
+ 
+     $revisions = $this->dataPolicyConsentManager->getRevisionsByEntityIds($entity_ids);
+     foreach ($revisions as $revision) {
+-      /** @var \Drupal\data_policy\Entity\DataPolicy $revision */
++      /** @var DataPolicy $revision */
+       $saved_revision_ids[] = $revision->getRevisionId();
+     }
+ 
+@@ -279,10 +281,10 @@ class RedirectSubscriber implements EventSubscriberInterface {
+   /**
+    * Do redirect to the agreement page.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The event.
+    */
+-  private function doRedirect(GetResponseEvent $event): void {
++  private function doRedirect(RequestEvent $event): void {
+     // Set the destination that redirects the user after accepting the
+     // data policy agreements.
+     $destination = $this->getDestination();
+@@ -321,7 +323,7 @@ class RedirectSubscriber implements EventSubscriberInterface {
+   /**
+    * Get the redirect destination.
+    *
+-   * @return \Drupal\Core\Routing\RedirectDestinationInterface
++   * @return RedirectDestinationInterface
+    *   The redirect destination.
+    */
+   protected function getDestination(): RedirectDestinationInterface {
+@@ -334,7 +336,7 @@ class RedirectSubscriber implements EventSubscriberInterface {
+    * @param bool $return_query
+    *   True if the query should re returned instead of query result.
+    *
+-   * @return \Drupal\Core\Database\Query\SelectInterface|array
++   * @return SelectInterface|array
+    *   Active users.
+    */
+   private function getActiveUserRevisionData($return_query = FALSE) {
+diff --git a/src/UserConsentListBuilder.php b/src/UserConsentListBuilder.php
+index a174bb1..0fe3932 100644
+--- a/src/UserConsentListBuilder.php
++++ b/src/UserConsentListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\data_policy;
+ 
++use Drupal\data_policy\Entity\UserConsentInterface;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+@@ -20,18 +21,18 @@ class UserConsentListBuilder extends EntityListBuilder {
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new UserConsentListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, DateFormatterInterface $date_formatter) {
+@@ -67,7 +68,7 @@ class UserConsentListBuilder extends EntityListBuilder {
+    */
+   public function buildRow(EntityInterface $entity) {
+     $owner = $entity->getOwner();
+-    /** @var \Drupal\data_policy\Entity\UserConsentInterface $entity */
++    /** @var UserConsentInterface $entity */
+     return [
+       'id' => $entity->id(),
+       'user' => ($owner instanceof UserInterface) ? $owner->getDisplayName() : $this->t('Deleted user'),

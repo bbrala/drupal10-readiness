@@ -1,0 +1,1049 @@
+diff --git a/radioactivity.module b/radioactivity.module
+index f6391cb..19af0cc 100644
+--- a/radioactivity.module
++++ b/radioactivity.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\field\Entity\FieldStorageConfig;
++use Drupal\radioactivity\RadioactivityProcessorInterface;
+ /**
+  * @file
+  * Provides a field type which can be used as a hotness metric.
+@@ -57,7 +59,7 @@ function radioactivity_entity_load($entities, $type) {
+   // the field actually has something in it to trigger the formatters.
+   $fields = radioactivity_get_field_names();
+ 
+-  /** @var \Drupal\Core\Entity\FieldableEntityInterface[] $entities */
++  /** @var FieldableEntityInterface[] $entities */
+   foreach ($entities as &$entity) {
+     foreach ($fields as $field_name) {
+       if (is_a($entity, FieldableEntityInterface::class)
+@@ -86,7 +88,7 @@ function radioactivity_get_field_names() {
+ 
+   $entity_type_manager = \Drupal::service('entity_type.manager');
+ 
+-  /** @var \Drupal\field\Entity\FieldStorageConfig[] $field_storage_configs */
++  /** @var FieldStorageConfig[] $field_storage_configs */
+   if (!$field_storage_configs = $entity_type_manager->getStorage('field_storage_config')->loadByProperties(['type' => 'radioactivity'])) {
+     return $fields;
+   }
+@@ -102,7 +104,7 @@ function radioactivity_get_field_names() {
+  * Implements hook_cron().
+  */
+ function radioactivity_cron() {
+-  /** @var \Drupal\radioactivity\RadioactivityProcessorInterface $processor */
++  /** @var RadioactivityProcessorInterface $processor */
+   $processor = \Drupal::service('radioactivity.processor');
+   $processor->processDecay();
+   $processor->processIncidents();
+diff --git a/src/Controller/EmitController.php b/src/Controller/EmitController.php
+index 86dcc20..e56fddb 100644
+--- a/src/Controller/EmitController.php
++++ b/src/Controller/EmitController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\radioactivity\Controller;
+ 
++use Drupal\radioactivity\IncidentStorageInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\radioactivity\StorageFactory;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -21,14 +22,14 @@ class EmitController implements ContainerInjectionInterface {
+   /**
+    * The incident storage.
+    *
+-   * @var \Drupal\radioactivity\IncidentStorageInterface
++   * @var IncidentStorageInterface
+    */
+   protected $incidentStorage;
+ 
+   /**
+    * Constructs an EmitController object.
+    *
+-   * @param \Drupal\radioactivity\StorageFactory $storageFactory
++   * @param StorageFactory $storageFactory
+    *   Radioactivity storage factory.
+    */
+   public function __construct(StorageFactory $storageFactory) {
+@@ -47,10 +48,10 @@ class EmitController implements ContainerInjectionInterface {
+   /**
+    * Callback for /radioactivity/emit.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The request object.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   Response object.
+    */
+   public function emit(Request $request) {
+@@ -88,7 +89,7 @@ class EmitController implements ContainerInjectionInterface {
+    * @param string $message
+    *   The message content of the response.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   The response.
+    */
+   protected function buildJsonStatusResponse($status, $message) {
+diff --git a/src/DefaultIncidentStorage.php b/src/DefaultIncidentStorage.php
+index a2fcc3e..35411e7 100644
+--- a/src/DefaultIncidentStorage.php
++++ b/src/DefaultIncidentStorage.php
+@@ -12,14 +12,14 @@ class DefaultIncidentStorage implements IncidentStorageInterface {
+   /**
+    * The state key-value storage.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * DefaultIncidentStorage constructor.
+    *
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state key-value storage.
+    */
+   public function __construct(StateInterface $state) {
+@@ -48,7 +48,7 @@ class DefaultIncidentStorage implements IncidentStorageInterface {
+   public function getIncidentsByType($entity_type = '') {
+     $incidents = [];
+ 
+-    /** @var \Drupal\radioactivity\IncidentInterface[] $stored_incidents */
++    /** @var IncidentInterface[] $stored_incidents */
+     $stored_incidents = $this->state->get(self::STORAGE_KEY, []);
+     foreach ($stored_incidents as $incident) {
+       $incidents[$incident->getEntityTypeId()][$incident->getEntityId()][] = $incident;
+diff --git a/src/EntityOperations.php b/src/EntityOperations.php
+index 1005b55..450771d 100644
+--- a/src/EntityOperations.php
++++ b/src/EntityOperations.php
+@@ -20,23 +20,23 @@ class EntityOperations implements ContainerInjectionInterface {
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   private $moduleHandler;
+ 
+   /**
+    * The entity type bundle info service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   private $bundleInfo;
+ 
+   /**
+    * EntityOperations constructor.
+    *
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler
++   * @param ModuleHandlerInterface $moduleHandler
+    *   The module handler service.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $bundleInfo
++   * @param EntityTypeBundleInfoInterface $bundleInfo
+    *   The entity type bundle info service.
+    */
+   public function __construct(ModuleHandlerInterface $moduleHandler, EntityTypeBundleInfoInterface $bundleInfo) {
+@@ -57,7 +57,7 @@ class EntityOperations implements ContainerInjectionInterface {
+   /**
+    * Determines if the entity is moderated by the Content Moderation module.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to check.
+    *
+    * @return bool
+@@ -79,7 +79,7 @@ class EntityOperations implements ContainerInjectionInterface {
+   /**
+    * Acts on an entity and set published status based on the moderation state.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being saved.
+    *
+    * @see hook_entity_presave()
+diff --git a/src/Event/EnergyBelowCutoffEvent.php b/src/Event/EnergyBelowCutoffEvent.php
+index a0712dc..55b10b6 100644
+--- a/src/Event/EnergyBelowCutoffEvent.php
++++ b/src/Event/EnergyBelowCutoffEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\radioactivity\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\Core\Entity\ContentEntityInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Represents a 'Energy is below the cutoff level' event.
+@@ -17,14 +17,14 @@ class EnergyBelowCutoffEvent extends Event {
+   /**
+    * The entity.
+    *
+-   * @var \Drupal\Core\Entity\ContentEntityInterface
++   * @var ContentEntityInterface
+    */
+   public $entity;
+ 
+   /**
+    * Constructs the object.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity.
+    */
+   public function __construct(ContentEntityInterface $entity) {
+diff --git a/src/Incident.php b/src/Incident.php
+index 15362a4..daa3089 100644
+--- a/src/Incident.php
++++ b/src/Incident.php
+@@ -111,7 +111,7 @@ class Incident implements IncidentInterface {
+    * @param array $data
+    *   Associative array of incident data.
+    *
+-   * @return \Drupal\radioactivity\IncidentInterface
++   * @return IncidentInterface
+    *   An Incident object.
+    */
+   public static function createFromPostData(array $data) {
+@@ -135,7 +135,7 @@ class Incident implements IncidentInterface {
+    * @param object $formatter
+    *   The formatter in use.
+    *
+-   * @return \Drupal\radioactivity\IncidentInterface
++   * @return IncidentInterface
+    *   The incident object.
+    */
+   public static function createFromFieldItemsAndFormatter($items, $item, $formatter) {
+diff --git a/src/IncidentStorageInterface.php b/src/IncidentStorageInterface.php
+index 9861e9f..230d6f0 100644
+--- a/src/IncidentStorageInterface.php
++++ b/src/IncidentStorageInterface.php
+@@ -15,7 +15,7 @@ interface IncidentStorageInterface {
+   /**
+    * Adds an incident to the storage.
+    *
+-   * @param \Drupal\radioactivity\IncidentInterface $incident
++   * @param IncidentInterface $incident
+    *   The incident object.
+    */
+   public function addIncident(IncidentInterface $incident);
+@@ -23,7 +23,7 @@ interface IncidentStorageInterface {
+   /**
+    * Gets all incidents from the storage.
+    *
+-   * @return \Drupal\radioactivity\IncidentInterface[]
++   * @return IncidentInterface[]
+    *   Array of incident objects.
+    */
+   public function getIncidents();
+@@ -34,7 +34,7 @@ interface IncidentStorageInterface {
+    * @param string $entity_type
+    *   Entity type for selection. Default to all entity types.
+    *
+-   * @return \Drupal\radioactivity\IncidentInterface[][]
++   * @return IncidentInterface[][]
+    *   Array of incident objects keyed by entity type (1st) and entity ID (2nd).
+    */
+   public function getIncidentsByType($entity_type = '');
+diff --git a/src/Plugin/Field/FieldFormatter/RadioactivityEmitter.php b/src/Plugin/Field/FieldFormatter/RadioactivityEmitter.php
+index 8e68abc..cd98fa1 100644
+--- a/src/Plugin/Field/FieldFormatter/RadioactivityEmitter.php
++++ b/src/Plugin/Field/FieldFormatter/RadioactivityEmitter.php
+@@ -141,7 +141,7 @@ class RadioactivityEmitter extends FormatterBase {
+   /**
+    * Generate the output appropriate for one field item.
+    *
+-   * @param \Drupal\Core\Field\FieldItemInterface $item
++   * @param FieldItemInterface $item
+    *   One field item.
+    *
+    * @return string
+@@ -154,7 +154,7 @@ class RadioactivityEmitter extends FormatterBase {
+   /**
+    * Determine if the field should emit energy.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $items
++   * @param FieldItemListInterface $items
+    *   The field item list of the field.
+    *
+    * @return bool
+diff --git a/src/Plugin/QueueWorker/RadioactivityQueueWorkerBase.php b/src/Plugin/QueueWorker/RadioactivityQueueWorkerBase.php
+index 9a748bf..b4698a1 100644
+--- a/src/Plugin/QueueWorker/RadioactivityQueueWorkerBase.php
++++ b/src/Plugin/QueueWorker/RadioactivityQueueWorkerBase.php
+@@ -15,7 +15,7 @@ abstract class RadioactivityQueueWorkerBase extends QueueWorkerBase implements C
+   /**
+    * The radioactivity.processor service.
+    *
+-   * @var \Drupal\radioactivity\RadioactivityProcessorInterface
++   * @var RadioactivityProcessorInterface
+    */
+   protected $radioactivityProcessor;
+ 
+@@ -28,7 +28,7 @@ abstract class RadioactivityQueueWorkerBase extends QueueWorkerBase implements C
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\radioactivity\RadioactivityProcessorInterface $radioactivity_processor
++   * @param RadioactivityProcessorInterface $radioactivity_processor
+    *   The radioactivity.processor service.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, RadioactivityProcessorInterface $radioactivity_processor) {
+diff --git a/src/RadioactivityProcessor.php b/src/RadioactivityProcessor.php
+index 38321f9..9c14af8 100644
+--- a/src/RadioactivityProcessor.php
++++ b/src/RadioactivityProcessor.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\radioactivity;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Drupal\field\Entity\FieldStorageConfig;
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Entity\EntityPublishedInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -22,28 +25,28 @@ class RadioactivityProcessor implements RadioactivityProcessorInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The state key-value storage.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The radioactivity logger.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $log;
+ 
+   /**
+    * The radioactivity storage.
+    *
+-   * @var \Drupal\radioactivity\IncidentStorageInterface
++   * @var IncidentStorageInterface
+    */
+   protected $storage;
+ 
+@@ -57,33 +60,33 @@ class RadioactivityProcessor implements RadioactivityProcessorInterface {
+   /**
+    * The queue factory service.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queue;
+ 
+   /**
+    * The event dispatcher service.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Constructs a Radioactivity processor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The key-value storage.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger.
+-   * @param \Drupal\radioactivity\StorageFactory $storage
++   * @param StorageFactory $storage
+    *   The storage factory service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue
++   * @param QueueFactory $queue
+    *   The queue factory service.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   The event dispatcher service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, StateInterface $state, LoggerChannelFactoryInterface $logger_factory, StorageFactory $storage, TimeInterface $time, QueueFactory $queue, EventDispatcherInterface $event_dispatcher) {
+@@ -103,7 +106,7 @@ class RadioactivityProcessor implements RadioactivityProcessorInterface {
+     $resultCount = 0;
+     $processed = FALSE;
+ 
+-    /** @var \Drupal\field\Entity\FieldStorageConfig[] $fieldConfigs */
++    /** @var FieldStorageConfig[] $fieldConfigs */
+     $fieldConfigs = $this->entityTypeManager->getStorage('field_storage_config')->loadByProperties(['type' => 'radioactivity']);
+ 
+     if (empty($fieldConfigs)) {
+@@ -136,7 +139,7 @@ class RadioactivityProcessor implements RadioactivityProcessorInterface {
+    * passed since the last cron run. The number of seconds is stored in
+    * 'granularity' field setting.
+    *
+-   * @param \Drupal\field\FieldStorageConfigInterface $fieldConfig
++   * @param FieldStorageConfigInterface $fieldConfig
+    *   Configuration of the field to be checked.
+    *
+    * @return bool
+@@ -156,7 +159,7 @@ class RadioactivityProcessor implements RadioactivityProcessorInterface {
+   /**
+    * Update entities attached to given field storage.
+    *
+-   * @param \Drupal\field\FieldStorageConfigInterface $fieldConfig
++   * @param FieldStorageConfigInterface $fieldConfig
+    *   Configuration of the field to be processed.
+    *
+    * @return int
+@@ -197,7 +200,7 @@ class RadioactivityProcessor implements RadioactivityProcessorInterface {
+     $halfLife = $fieldConfig->getSetting('halflife');
+     $cutoff = $fieldConfig->getSetting('cutoff');
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface[] $entities */
++    /** @var ContentEntityInterface[] $entities */
+     $entities = $this->entityTypeManager
+       ->getStorage($entityType)
+       ->loadMultiple($entityIds);
+@@ -240,7 +243,7 @@ class RadioactivityProcessor implements RadioactivityProcessorInterface {
+         // the cutoff value. This is needed for Rules integration, but can be
+         // used by any module that wants to use events.
+         $event = new EnergyBelowCutoffEvent($entity);
+-        $this->eventDispatcher->dispatch('radioactivity_field_cutoff', $event);
++        $this->eventDispatcher->dispatch($event, 'radioactivity_field_cutoff');
+       }
+ 
+       if ($entity->getEntityType()->isRevisionable()) {
+@@ -286,12 +289,12 @@ class RadioactivityProcessor implements RadioactivityProcessorInterface {
+    * {@inheritdoc}
+    */
+   public function queueProcessIncidents($entityType, array $entityIncidents) {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface[] $entities */
++    /** @var ContentEntityInterface[] $entities */
+     $entities = $this->entityTypeManager->getStorage($entityType)->loadMultiple(array_keys($entityIncidents));
+ 
+     foreach ($entities as $entity) {
+ 
+-      /** @var \Drupal\radioactivity\IncidentInterface $incident */
++      /** @var IncidentInterface $incident */
+       foreach ($entityIncidents[$entity->id()] as $incident) {
+         $entity->get($incident->getFieldName())->energy += $incident->getEnergy();
+       }
+diff --git a/src/RadioactivityProcessorInterface.php b/src/RadioactivityProcessorInterface.php
+index 3990ee9..59d75d1 100644
+--- a/src/RadioactivityProcessorInterface.php
++++ b/src/RadioactivityProcessorInterface.php
+@@ -47,7 +47,7 @@ interface RadioactivityProcessorInterface {
+   /**
+    * Queue processing of Radioactivity decays.
+    *
+-   * @param \Drupal\field\FieldStorageConfigInterface $fieldConfig
++   * @param FieldStorageConfigInterface $fieldConfig
+    *   Configuration of the field to be processed.
+    * @param array $entityIds
+    *   Entity IDs to be processed.
+@@ -67,7 +67,7 @@ interface RadioactivityProcessorInterface {
+    *
+    * @param string $entityType
+    *   Incident entity type.
+-   * @param \Drupal\radioactivity\IncidentInterface[][] $entityIncidents
++   * @param IncidentInterface[][] $entityIncidents
+    *   Radioactivity incidents grouped per entity ID (1st) and incident ID
+    *   (2nd).
+    */
+diff --git a/src/RestIncidentStorage.php b/src/RestIncidentStorage.php
+index 053a447..8755bb0 100644
+--- a/src/RestIncidentStorage.php
++++ b/src/RestIncidentStorage.php
+@@ -103,7 +103,7 @@ class RestIncidentStorage implements RestIncidentStorageInterface {
+   protected function getDefaultEndpoint() {
+     global $base_url;
+ 
+-    return $base_url . '/' . drupal_get_path('module', 'radioactivity') . '/endpoints/file/rest.php';
++    return $base_url . '/' . \Drupal::service('extension.list.module')->getPath('radioactivity') . '/endpoints/file/rest.php';
+   }
+ 
+   /**
+diff --git a/src/StorageFactory.php b/src/StorageFactory.php
+index 1f66025..ab5684d 100644
+--- a/src/StorageFactory.php
++++ b/src/StorageFactory.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\radioactivity;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\DependencyInjection\ClassResolverInterface;
+ 
+@@ -13,23 +14,23 @@ class StorageFactory {
+   /**
+    * The radioactivity storage configuration.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The class resolver.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ClassResolverInterface
++   * @var ClassResolverInterface
+    */
+   protected $classResolver;
+ 
+   /**
+    * StorageFactory constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The configuration factory.
+-   * @param \Drupal\Core\DependencyInjection\ClassResolverInterface $classResolver
++   * @param ClassResolverInterface $classResolver
+    *   The class resolver.
+    */
+   public function __construct(ConfigFactoryInterface $configFactory, ClassResolverInterface $classResolver) {
+@@ -43,7 +44,7 @@ class StorageFactory {
+    * @param string $type
+    *   The type of storage to get.
+    *
+-   * @return \Drupal\radioactivity\IncidentStorageInterface
++   * @return IncidentStorageInterface
+    *   Instance of the requested storage.
+    */
+   public function get($type) {
+@@ -64,14 +65,14 @@ class StorageFactory {
+         $instance = $this->classResolver->getInstanceFromDefinition('radioactivity.default_incident_storage');
+     }
+ 
+-    /** @var \Drupal\radioactivity\IncidentStorageInterface $instance */
++    /** @var IncidentStorageInterface $instance */
+     return $instance;
+   }
+ 
+   /**
+    * Get the configured incident storage.
+    *
+-   * @return \Drupal\radioactivity\IncidentStorageInterface
++   * @return IncidentStorageInterface
+    *   The configured storage instance.
+    */
+   public function getConfiguredStorage() {
+diff --git a/tests/src/FunctionalJavascript/EmitTest.php b/tests/src/FunctionalJavascript/EmitTest.php
+index 077d923..91da139 100644
+--- a/tests/src/FunctionalJavascript/EmitTest.php
++++ b/tests/src/FunctionalJavascript/EmitTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\radioactivity\FunctionalJavascript;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\entity_test\Entity\EntityTestRevPub;
+ use Drupal\Tests\Traits\Core\CronRunTrait;
+ 
+ /**
+@@ -47,7 +49,7 @@ class EmitTest extends RadioactivityFunctionalJavascriptTestBase {
+     $this->cronRun();
+ 
+     // The entity has updated values, reload it.
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = \Drupal::entityTypeManager()
+       ->getStorage($this->entityType)
+       ->load($entity->id());
+@@ -72,7 +74,7 @@ class EmitTest extends RadioactivityFunctionalJavascriptTestBase {
+     $this->createEnergyFormDisplay($this->fieldName);
+     $this->createEmitterViewDisplay($this->fieldName, 1, 'raw');
+ 
+-    /** @var \Drupal\entity_test\Entity\EntityTestRevPub $entity */
++    /** @var EntityTestRevPub $entity */
+     $entity = $this->createContent();
+     $this->assetIncidentCount(0);
+ 
+diff --git a/tests/src/FunctionalJavascript/RadioactivityFunctionalJavascriptTestBase.php b/tests/src/FunctionalJavascript/RadioactivityFunctionalJavascriptTestBase.php
+index ecc8343..a8ad092 100644
+--- a/tests/src/FunctionalJavascript/RadioactivityFunctionalJavascriptTestBase.php
++++ b/tests/src/FunctionalJavascript/RadioactivityFunctionalJavascriptTestBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\radioactivity\FunctionalJavascript;
+ 
++use Drupal\user\Entity\User;
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\FunctionalJavascriptTests\WebDriverTestBase;
+ use Drupal\Tests\radioactivity\Traits\RadioactivityFunctionTestTrait;
+ 
+@@ -22,14 +24,14 @@ abstract class RadioactivityFunctionalJavascriptTestBase extends WebDriverTestBa
+   /**
+    * An admin user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $adminUser;
+ 
+   /**
+    * The entity that holds the energy field(s).
+    *
+-   * @var \Drupal\Core\Entity\ContentEntityInterface
++   * @var ContentEntityInterface
+    */
+   protected $entity;
+ 
+diff --git a/tests/src/Kernel/RadioactivityFieldTypeTest.php b/tests/src/Kernel/RadioactivityFieldTypeTest.php
+index 2885a22..3e325e4 100644
+--- a/tests/src/Kernel/RadioactivityFieldTypeTest.php
++++ b/tests/src/Kernel/RadioactivityFieldTypeTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\radioactivity\Kernel;
+ 
++use Drupal\Core\Entity\Entity\EntityViewDisplay;
++use Drupal\Core\Entity\FieldableEntityInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\entity_test\Entity\EntityTest;
+ use Drupal\Tests\field\Kernel\FieldKernelTestBase;
+@@ -26,14 +28,14 @@ class RadioactivityFieldTypeTest extends FieldKernelTestBase {
+   /**
+    * The entity view display object.
+    *
+-   * @var \Drupal\Core\Entity\Entity\EntityViewDisplay
++   * @var EntityViewDisplay
+    */
+   protected $entityViewDisplay;
+ 
+   /**
+    * The entity that contains the energy field.
+    *
+-   * @var \Drupal\Core\Entity\FieldableEntityInterface
++   * @var FieldableEntityInterface
+    */
+   protected $entity;
+ 
+@@ -51,9 +53,7 @@ class RadioactivityFieldTypeTest extends FieldKernelTestBase {
+     parent::setUp();
+ 
+     // Mock Time::getRequestTime.
+-    $dateTime = $this->getMockBuilder(TimeInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $dateTime = $this->createMock(TimeInterface::class);
+     $dateTime
+       ->expects($this->any())
+       ->method('getRequestTime')
+diff --git a/tests/src/Kernel/RadioactivityValueFormatterTest.php b/tests/src/Kernel/RadioactivityValueFormatterTest.php
+index 6fb788c..67cfce3 100644
+--- a/tests/src/Kernel/RadioactivityValueFormatterTest.php
++++ b/tests/src/Kernel/RadioactivityValueFormatterTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\radioactivity\Kernel;
+ 
++use Drupal\Core\Entity\Entity\EntityViewDisplay;
++use Drupal\Core\Entity\FieldableEntityInterface;
+ use Drupal\entity_test\Entity\EntityTest;
+ use Drupal\Tests\field\Kernel\FieldKernelTestBase;
+ use Drupal\Tests\radioactivity\Traits\RadioactivityFunctionTestTrait;
+@@ -25,14 +27,14 @@ class RadioactivityValueFormatterTest extends FieldKernelTestBase {
+   /**
+    * The entity view display object.
+    *
+-   * @var \Drupal\Core\Entity\Entity\EntityViewDisplay
++   * @var EntityViewDisplay
+    */
+   protected $entityViewDisplay;
+ 
+   /**
+    * The entity that contains the energy field.
+    *
+-   * @var \Drupal\Core\Entity\FieldableEntityInterface
++   * @var FieldableEntityInterface
+    */
+   protected $entity;
+ 
+diff --git a/tests/src/Traits/RadioactivityFunctionTestTrait.php b/tests/src/Traits/RadioactivityFunctionTestTrait.php
+index 78fa38b..1226760 100644
+--- a/tests/src/Traits/RadioactivityFunctionTestTrait.php
++++ b/tests/src/Traits/RadioactivityFunctionTestTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\radioactivity\Traits;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\Entity\EntityFormDisplay;
+ use Drupal\Core\Entity\Entity\EntityViewDisplay;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -158,7 +159,7 @@ trait RadioactivityFunctionTestTrait {
+    * @param string $display
+    *   The field display type.
+    *
+-   * @return \Drupal\Core\Entity\Entity\EntityViewDisplay
++   * @return EntityViewDisplay
+    *   The entity view display object.
+    */
+   protected function createEmitterViewDisplay($fieldName, $energy = 10, $display = 'raw') {
+@@ -187,7 +188,7 @@ trait RadioactivityFunctionTestTrait {
+    * @param int $decimals
+    *   Number of decimals to display.
+    *
+-   * @return \Drupal\Core\Entity\Entity\EntityViewDisplay
++   * @return EntityViewDisplay
+    *   The entity view display object.
+    */
+   protected function createValueViewDisplay($fieldName, $decimals = 0) {
+@@ -274,12 +275,12 @@ trait RadioactivityFunctionTestTrait {
+   /**
+    * Creates an entity.
+    *
+-   * @return \Drupal\Core\Entity\ContentEntityInterface
++   * @return ContentEntityInterface
+    *   The created entity.
+    */
+   public function createContent() {
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = \Drupal::entityTypeManager()->getStorage($this->entityType)->create([
+       'type' => $this->entityType,
+       'title' => $this->randomString(),
+@@ -292,7 +293,7 @@ trait RadioactivityFunctionTestTrait {
+   /**
+    * Assert the energy values from a field.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The host entity of the field.
+    * @param string $fieldName
+    *   The field to be asserted.
+diff --git a/tests/src/Unit/DefaultIncidentStorageTest.php b/tests/src/Unit/DefaultIncidentStorageTest.php
+index 8b7b6db..89e8cfb 100644
+--- a/tests/src/Unit/DefaultIncidentStorageTest.php
++++ b/tests/src/Unit/DefaultIncidentStorageTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\radioactivity\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Core\State\StateInterface;
+ use Drupal\radioactivity\DefaultIncidentStorage;
+ use Drupal\radioactivity\IncidentInterface;
+@@ -15,24 +16,25 @@ use Prophecy\Argument;
+  */
+ class DefaultIncidentStorageTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * A mock state storage.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The system under test.
+    *
+-   * @var \Drupal\radioactivity\DefaultIncidentStorage
++   * @var DefaultIncidentStorage
+    */
+   protected $sut;
+ 
+   /**
+    * A mock radioactivity incident.
+    *
+-   * @var \Drupal\radioactivity\IncidentInterface
++   * @var IncidentInterface
+    */
+   protected $incident;
+ 
+diff --git a/tests/src/Unit/EmitControllerTest.php b/tests/src/Unit/EmitControllerTest.php
+index 816b09c..2179b0b 100644
+--- a/tests/src/Unit/EmitControllerTest.php
++++ b/tests/src/Unit/EmitControllerTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\radioactivity\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Prophecy\Prophecy\ProphecyInterface;
++use Drupal\radioactivity\DefaultIncidentStorage;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Site\Settings;
+ use Drupal\radioactivity\Controller\EmitController;
+@@ -19,31 +22,32 @@ use Symfony\Component\HttpFoundation\Request;
+  */
+ class EmitControllerTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * The request received by the controller.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * The dependency injection container.
+    *
+-   * @var \Symfony\Component\DependencyInjection\ContainerInterface|\Prophecy\Prophecy\ProphecyInterface
++   * @var ContainerInterface|ProphecyInterface
+    */
+   protected $container;
+ 
+   /**
+    * The incident storage factory.
+    *
+-   * @var \Drupal\radioactivity\StorageFactory
++   * @var StorageFactory
+    */
+   protected $incidentStorageFactory;
+ 
+   /**
+    * The default incident storage.
+    *
+-   * @var \Drupal\radioactivity\DefaultIncidentStorage
++   * @var DefaultIncidentStorage
+    */
+   protected $defaultIncidentStorage;
+ 
+diff --git a/tests/src/Unit/RadioactivityProcessorTest.php b/tests/src/Unit/RadioactivityProcessorTest.php
+index d8c0071..0eaa2e1 100644
+--- a/tests/src/Unit/RadioactivityProcessorTest.php
++++ b/tests/src/Unit/RadioactivityProcessorTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\radioactivity\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Prophecy\Prophecy\ProphecyInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityPublishedInterface;
+@@ -31,73 +34,74 @@ use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+  */
+ class RadioactivityProcessorTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * The radioactivity processor under test.
+    *
+-   * @var \Drupal\radioactivity\RadioactivityProcessorInterface
++   * @var RadioactivityProcessorInterface
+    */
+   protected $sut;
+ 
+   /**
+    * Mock entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Mock field storage configuration.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $fieldStorageConfig;
+ 
+   /**
+    * Mock state system.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * Mock logger factory.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * Mock Radioactivity logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $loggerChannel;
+ 
+   /**
+    * The radioactivity storage factory.
+    *
+-   * @var \Drupal\radioactivity\StorageFactory
++   * @var StorageFactory
+    */
+   protected $storage;
+ 
+   /**
+    * The radioactivity incident storage.
+    *
+-   * @var \Drupal\radioactivity\IncidentStorageInterface
++   * @var IncidentStorageInterface
+    */
+   protected $incidentStorage;
+ 
+   /**
+    * The queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface|\Prophecy\Prophecy\ProphecyInterface
++   * @var EventDispatcherInterface|ProphecyInterface
+    */
+   protected $eventDispatcher;
+ 
+@@ -231,10 +235,10 @@ class RadioactivityProcessorTest extends UnitTestCase {
+       'timestamp' => $this->requestTime,
+     ])->shouldBeCalledTimes($isPublished ? 1 : 0);
+ 
+-    /** @var \Drupal\Core\Entity\EntityTypeInterface $entityType */
++    /** @var EntityTypeInterface $entityType */
+     $entityType = $this->prophesize(EntityTypeInterface::class);
+     $entityType->isRevisionable()->willReturn(FALSE);
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface|\Drupal\Core\Entity\EntityPublishedInterface $entity */
++    /** @var ContentEntityInterface|EntityPublishedInterface $entity */
+     $entity = $this->prophesize(PublishedContentEntityInterface::class);
+     $entity->getEntityType()->willReturn($entityType);
+     $entity->isPublished()->willReturn($isPublished);
+@@ -358,11 +362,11 @@ class RadioactivityProcessorTest extends UnitTestCase {
+       'timestamp' => $this->requestTime,
+     ];
+ 
+-    /** @var \Drupal\Core\Entity\EntityTypeInterface $entityType */
++    /** @var EntityTypeInterface $entityType */
+     $entityType = $this->prophesize(EntityTypeInterface::class);
+     $entityType->isRevisionable()->willReturn($isRevisonable);
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface|\Drupal\Core\Entity\EntityPublishedInterface $entity */
++    /** @var ContentEntityInterface|EntityPublishedInterface $entity */
+     $entity = $this->prophesize(PublishedContentEntityInterface::class);
+     $entity->getEntityType()->willReturn($entityType);
+     $entity->id()->willReturn(123);
+diff --git a/tests/src/Unit/RestIncidentStorageTest.php b/tests/src/Unit/RestIncidentStorageTest.php
+index 9e1b727..afebedd 100644
+--- a/tests/src/Unit/RestIncidentStorageTest.php
++++ b/tests/src/Unit/RestIncidentStorageTest.php
+@@ -17,7 +17,7 @@ class RestIncidentStorageTest extends UnitTestCase {
+   /**
+    * The RestIncidentStorage under test.
+    *
+-   * @var \Drupal\radioactivity\RestIncidentStorage
++   * @var RestIncidentStorage
+    */
+   private $sut;
+ 
+@@ -46,9 +46,7 @@ class RestIncidentStorageTest extends UnitTestCase {
+    * @covers ::addIncident
+    */
+   public function testAddIncident() {
+-    $incident = $this->getMockBuilder(IncidentInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $incident = $this->createMock(IncidentInterface::class);
+ 
+     $this->expectException("Exception");
+     $this->expectExceptionMessage("The Radioactivity rest endpoint expects incidents to be added somewhere else.");
+@@ -128,6 +126,7 @@ class RestIncidentStorageTest extends UnitTestCase {
+ 
+   /**
+    * @covers ::clearIncidents
++   * @doesNotPerformAssertions
+    */
+   public function testClearIncidents() {
+     $this->sut->expects($this->once())
+diff --git a/tests/src/Unit/RestProcessorTest.php b/tests/src/Unit/RestProcessorTest.php
+index 81f9957..8330cdd 100644
+--- a/tests/src/Unit/RestProcessorTest.php
++++ b/tests/src/Unit/RestProcessorTest.php
+@@ -15,7 +15,7 @@ class RestProcessorTest extends UnitTestCase {
+   /**
+    * The Rest Processor under test.
+    *
+-   * @var \Drupal\radioactivity\RestProcessor
++   * @var RestProcessor
+    */
+   private $sut;
+ 
+diff --git a/tests/src/Unit/StorageFactoryTest.php b/tests/src/Unit/StorageFactoryTest.php
+index 9b99f24..75b91b1 100644
+--- a/tests/src/Unit/StorageFactoryTest.php
++++ b/tests/src/Unit/StorageFactoryTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\radioactivity\Unit;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Tests\UnitTestCase;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Config\ImmutableConfig;
+@@ -19,21 +20,21 @@ class StorageFactoryTest extends UnitTestCase {
+   /**
+    * Mocked immutable configuration object.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject|\Drupal\Core\Config\ImmutableConfig
++   * @var MockObject|ImmutableConfig
+    */
+   private $config;
+ 
+   /**
+    * Mocked class resolver.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject|\Drupal\Core\DependencyInjection\ClassResolverInterface
++   * @var MockObject|ClassResolverInterface
+    */
+   private $classResolver;
+ 
+   /**
+    * Mocked config factory.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject|\Drupal\Core\Config\ConfigFactory
++   * @var MockObject|ConfigFactory
+    */
+   private $configFactory;
+ 
+@@ -62,11 +63,8 @@ class StorageFactoryTest extends UnitTestCase {
+       ->will($this->returnValue($this->config));
+ 
+     // Mock the class resolver and the classes it provides.
+-    $mockRestStorage = $this->getMockBuilder(RestIncidentStorage::class)
+-      ->getMock();
+-    $mockDefaultStorage = $this->getMockBuilder(DefaultIncidentStorage::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $mockRestStorage = $this->createMock(RestIncidentStorage::class);
++    $mockDefaultStorage = $this->createMock(DefaultIncidentStorage::class);
+ 
+     $this->classResolver = $this->getMockBuilder(ClassResolverInterface::class)
+       ->setMethods(['getInstanceFromDefinition'])

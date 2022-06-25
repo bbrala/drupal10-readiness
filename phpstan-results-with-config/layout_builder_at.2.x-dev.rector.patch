@@ -1,0 +1,174 @@
+diff --git a/layout_builder_at.install b/layout_builder_at.install
+index 6830657..f18bf32 100644
+--- a/layout_builder_at.install
++++ b/layout_builder_at.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\field\FieldStorageConfigInterface;
+ /**
+  * Layout Builder Asymmetric Translation install file.
+  */
+@@ -14,7 +15,7 @@ function layout_builder_at_install() {
+   // Makes all existing layout_section field translatable.
+   if (!\Drupal::service('config.installer')->isSyncing()) {
+ 
+-    /** @var \Drupal\field\FieldStorageConfigInterface $field_storage_config */
++    /** @var FieldStorageConfigInterface $field_storage_config */
+     foreach (\Drupal::entityTypeManager()->getStorage('field_storage_config')->loadMultiple() as $field_storage_config) {
+       // Only act on layout builder section fields.
+       if ($field_storage_config->getType() === 'layout_section' && $field_storage_config->getName() === OverridesSectionStorage::FIELD_NAME) {
+@@ -25,4 +26,4 @@ function layout_builder_at_install() {
+ 
+     }
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/layout_builder_at.module b/layout_builder_at.module
+index 3da4ba2..16d1ae1 100644
+--- a/layout_builder_at.module
++++ b/layout_builder_at.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
++use Drupal\layout_builder\SectionStorage\SectionStorageDefinition;
++use Drupal\block_content\Entity\BlockContent;
+ /**
+  * @file
+  * Provides hook implementations for Layout Builder Asymmetric Translation.
+@@ -43,7 +46,7 @@ function layout_builder_at_form_entity_form_display_edit_form_alter(&$form, Form
+   $hide = TRUE;
+   $callback_object = $form_state->getBuildInfo()['callback_object'];
+   if (isset($form['fields'][OverridesSectionStorage::FIELD_NAME]) && $callback_object instanceof EntityDisplayFormBase) {
+-    /** @var \Drupal\Core\Entity\Display\EntityFormDisplayInterface $display */
++    /** @var EntityFormDisplayInterface $display */
+     $display = $callback_object->getEntity();
+     $id = $display->getTargetEntityTypeId() . '.' . $display->getTargetBundle() . '.' . OverridesSectionStorage::FIELD_NAME;
+     $fieldConfig = FieldConfig::load($id);
+@@ -66,7 +69,7 @@ function layout_builder_at_form_entity_form_display_edit_form_alter(&$form, Form
+  * Validation callback for the manage form display screen.
+  *
+  * @param $form
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  */
+ function layout_builder_at_validate_form_display($form, FormStateInterface $form_state) {
+   $values = $form_state->getValues();
+@@ -92,7 +95,7 @@ function layout_builder_at_form_alter(&$form, FormStateInterface $form_state, $f
+  * Implements hook_layout_builder_section_storage_alter().
+  */
+ function layout_builder_at_layout_builder_section_storage_alter(array &$definitions) {
+-  /** @var \Drupal\layout_builder\SectionStorage\SectionStorageDefinition $overrides_storage_definition */
++  /** @var SectionStorageDefinition $overrides_storage_definition */
+   $overrides_storage_definition = $definitions['overrides'];
+   // Override the section storage definition to allow access to the layout tab
+   // on translations.
+@@ -116,7 +119,7 @@ function layout_builder_at_field_storage_config_presave(FieldStorageConfigInterf
+ function layout_builder_at_form_layout_builder_add_block_alter(&$form, FormStateInterface $form_state) {
+   // Set the default language of the block based on the entity language.
+   if (isset($form['settings']['block_form']['#block']) && Settings::get('layout_builder_at_set_content_block_language_to_entity', TRUE)) {
+-    /** @var \Drupal\block_content\Entity\BlockContent $block */
++    /** @var BlockContent $block */
+     $block = $form['settings']['block_form']['#block'];
+     if ($block) {
+       $contexts = $form_state->getTemporaryValue('gathered_contexts');
+diff --git a/src/Plugin/Field/FieldWidget/LayoutBuilderCopyWidget.php b/src/Plugin/Field/FieldWidget/LayoutBuilderCopyWidget.php
+index 7b2d9bb..4f3dac9 100644
+--- a/src/Plugin/Field/FieldWidget/LayoutBuilderCopyWidget.php
++++ b/src/Plugin/Field/FieldWidget/LayoutBuilderCopyWidget.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\layout_builder_at\Plugin\Field\FieldWidget;
+ 
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Core\TypedData\Exception\ReadOnlyException;
++use Drupal\layout_builder\Entity\LayoutEntityDisplayInterface;
++use Drupal\layout_builder\Section;
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\block_content\BlockContentInterface;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Component\Utility\NestedArray;
+@@ -181,12 +187,12 @@ class LayoutBuilderCopyWidget extends WidgetBase {
+   /**
+    * Extract form values.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $items
++   * @param FieldItemListInterface $items
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
+-   * @throws \Drupal\Core\TypedData\Exception\ReadOnlyException
++   * @throws EntityStorageException
++   * @throws ReadOnlyException
+    */
+   public function extractFormValues(FieldItemListInterface $items, array $form, FormStateInterface $form_state) {
+     // @todo This isn't resilient to being set twice, during validation and
+@@ -212,7 +218,7 @@ class LayoutBuilderCopyWidget extends WidgetBase {
+ 
+       // Replicate.
+       /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
+-      /** @var \Drupal\Core\Entity\ContentEntityInterface $default_entity */
++      /** @var ContentEntityInterface $default_entity */
+       $entity = $items->getEntity();
+ 
+       $sourceLanguage = NULL;
+@@ -225,11 +231,11 @@ class LayoutBuilderCopyWidget extends WidgetBase {
+ 
+       $default_entity = is_null($sourceLanguage) ? $entity->getUntranslated() : $entity->getTranslation($sourceLanguage);
+ 
+-      /** @var \Drupal\layout_builder\Entity\LayoutEntityDisplayInterface $layout */
++      /** @var LayoutEntityDisplayInterface $layout */
+       $layout = $default_entity->get(OverridesSectionStorage::FIELD_NAME);
+       $uuid = \Drupal::service('uuid');
+ 
+-      /** @var \Drupal\layout_builder\Section[] $sections */
++      /** @var Section[] $sections */
+       $sections = $layout->getSections();
+       $new_sections = [];
+       foreach ($sections as $delta => $section) {
+@@ -255,7 +261,7 @@ class LayoutBuilderCopyWidget extends WidgetBase {
+           if ($this->isInlineBlock($configuration['id'])) {
+ 
+             /** @var \Drupal\block_content\BlockContentInterface $block */
+-            /** @var \Drupal\block_content\BlockContentInterface $replicated_block */
++            /** @var BlockContentInterface $replicated_block */
+             $block = \Drupal::service('entity_type.manager')->getStorage('block_content')->loadRevision($configuration['block_revision_id']);
+             $replicated_block = $this->cloneEntity('block_content', $block->id());
+             if ($replicated_block) {
+@@ -296,18 +302,18 @@ class LayoutBuilderCopyWidget extends WidgetBase {
+    * @param $entity_type_id
+    * @param $entity_id
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|NULL
+-  */
++   * @return EntityInterface|NULL
++   */
+   protected function cloneEntity($entity_type_id, $entity_id) {
+     $clone = NULL;
+ 
+     try {
+       /** @var \Drupal\Core\Entity\EntityInterface $entity */
+-      /** @var \Drupal\Core\Entity\EntityInterface $clone */
++      /** @var EntityInterface $clone */
+       $entity = \Drupal::service('entity_type.manager')->getStorage($entity_type_id)->load($entity_id);
+       $clone = $entity->createDuplicate();
+ 
+-      /** @var \Drupal\Core\Field\FieldDefinitionInterface[] $field_definitions */
++      /** @var FieldDefinitionInterface[] $field_definitions */
+       $field_definitions = \Drupal::service('entity_field.manager')->getFieldDefinitions($entity->getEntityTypeId(), $entity->bundle());
+       foreach ($field_definitions as $definition) {
+ 
+@@ -319,7 +325,7 @@ class LayoutBuilderCopyWidget extends WidgetBase {
+           if (!empty($values)) {
+             foreach ($values as $value) {
+               /** @var \Drupal\Core\Entity\EntityInterface $reference */
+-              /** @var \Drupal\Core\Entity\EntityInterface $reference_clone */
++              /** @var EntityInterface $reference_clone */
+               $reference = \Drupal::service('entity_type.manager')->getStorage($target_type)->load($value['target_id']);
+               $reference_clone = $reference->createDuplicate();
+               $reference_clone->save();

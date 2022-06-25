@@ -1,0 +1,805 @@
+diff --git a/file_extractor.install b/file_extractor.install
+index c26c9c9..c48d416 100644
+--- a/file_extractor.install
++++ b/file_extractor.install
+@@ -6,6 +6,7 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\Core\Config\Config;
+ 
+ use Drupal\file_extractor\Form\SettingsForm;
+ 
+@@ -21,7 +22,7 @@ function file_extractor_update_9101() : void {
+  */
+ function file_extractor_update_9102() : void {
+   \Drupal::keyValue('file_extractor')->deleteAll();
+-  /** @var \Drupal\Core\Config\Config $file_extractor_settings */
++  /** @var Config $file_extractor_settings */
+   $file_extractor_settings = \Drupal::service('config.factory')->getEditable(SettingsForm::CONFIG_NAME);
+   $file_extractor_settings->clear('cache_enable');
+   $file_extractor_settings->clear('reserve_cache');
+diff --git a/file_extractor.module b/file_extractor.module
+index fa42e44..5fe52aa 100644
+--- a/file_extractor.module
++++ b/file_extractor.module
+@@ -44,7 +44,7 @@ function file_extractor_help(string $route_name, RouteMatchInterface $route_matc
+  * Implements hook_entity_base_field_info().
+  */
+ function file_extractor_entity_base_field_info(EntityTypeInterface $entity_type) : array {
+-  /** @var \Drupal\file_extractor\HookHandler\EntityTypeInfoHandler $instance */
++  /** @var EntityTypeInfoHandler $instance */
+   $instance = \Drupal::service('class_resolver')
+     ->getInstanceFromDefinition(EntityTypeInfoHandler::class);
+   return $instance->entityBaseFieldInfo($entity_type);
+diff --git a/file_extractor.post_update.php b/file_extractor.post_update.php
+index 7bfad99..26b2188 100644
+--- a/file_extractor.post_update.php
++++ b/file_extractor.post_update.php
+@@ -6,6 +6,9 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\layout_builder\Section;
+ 
+ use Drupal\file_extractor\Service\FileExtractorUpdater;
+ 
+@@ -27,7 +30,7 @@ function file_extractor_post_update_update_field_formatter_structure_in_entities
+     $layout_section_field_mapping = \Drupal::service('entity_field.manager')->getFieldMapByFieldType('layout_section');
+     foreach ($layout_section_field_mapping as $entity_type_id => $entity_fields) {
+       $sandbox['entity_fields'][$entity_type_id] = [];
+-      /** @var \Drupal\Core\Entity\EntityStorageInterface $entity_storage */
++      /** @var EntityStorageInterface $entity_storage */
+       $entity_storage = \Drupal::service('entity_type.manager')->getStorage($entity_type_id);
+ 
+       // There should be only one field but in case of custom development or
+@@ -63,7 +66,7 @@ function file_extractor_post_update_update_field_formatter_structure_in_entities
+       continue;
+     }
+ 
+-    /** @var \Drupal\Core\Entity\EntityStorageInterface $entity_storage */
++    /** @var EntityStorageInterface $entity_storage */
+     $entity_storage = \Drupal::service('entity_type.manager')->getStorage($entity_type_id);
+     /** @var string $entity_id_key */
+     $entity_id_key = $entity_storage->getEntityType()->getKey('id');
+@@ -87,7 +90,7 @@ function file_extractor_post_update_update_field_formatter_structure_in_entities
+     $query->range(0, 25);
+     /** @var int[] $entity_ids_to_update */
+     $entity_ids_to_update = $query->execute();
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface[] $entities_to_update */
++    /** @var ContentEntityInterface[] $entities_to_update */
+     $entities_to_update = $entity_storage->loadMultiple($entity_ids_to_update);
+ 
+     foreach ($entities_to_update as $entity) {
+@@ -110,7 +113,7 @@ function file_extractor_post_update_update_field_formatter_structure_in_entities
+         $sections_changed = FALSE;
+         /** @var array $sections */
+         $sections = $override_field_value->getValue();
+-        /** @var \Drupal\layout_builder\Section $section */
++        /** @var Section $section */
+         foreach ($sections as $section) {
+           $components = $section->getComponents();
+ 
+diff --git a/src/Event/FileIndexableEvent.php b/src/Event/FileIndexableEvent.php
+index 92355ed..7ca9073 100644
+--- a/src/Event/FileIndexableEvent.php
++++ b/src/Event/FileIndexableEvent.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\file_extractor\Event;
+ 
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\file\FileInterface;
+ use Drupal\Component\EventDispatcher\Event;
+ 
+@@ -15,7 +16,7 @@ class FileIndexableEvent extends Event {
+   /**
+    * The file entity.
+    *
+-   * @var \Drupal\file\FileInterface
++   * @var FileInterface
+    */
+   protected $file;
+ 
+@@ -29,7 +30,7 @@ class FileIndexableEvent extends Event {
+   /**
+    * FileIndexableEvent constructor.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   The file being manipulated.
+    */
+   public function __construct(FileInterface $file) {
+@@ -39,7 +40,7 @@ class FileIndexableEvent extends Event {
+   /**
+    * Returns the file entity.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   The entity being manipulated.
+    */
+   public function getFile() {
+diff --git a/src/Extractor/ExtractorPluginBase.php b/src/Extractor/ExtractorPluginBase.php
+index 39e3939..a8ba860 100644
+--- a/src/Extractor/ExtractorPluginBase.php
++++ b/src/Extractor/ExtractorPluginBase.php
+@@ -25,35 +25,35 @@ abstract class ExtractorPluginBase extends PluginBase implements ExtractorPlugin
+   /**
+    * Stream wrapper manager service.
+    *
+-   * @var \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface
++   * @var StreamWrapperManagerInterface
+    */
+   protected $streamWrapperManager;
+ 
+   /**
+    * Mime type guesser service.
+    *
+-   * @var \Symfony\Component\Mime\MimeTypeGuesserInterface
++   * @var MimeTypeGuesserInterface
+    */
+   protected $mimeTypeGuesser;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+@@ -122,7 +122,7 @@ abstract class ExtractorPluginBase extends PluginBase implements ExtractorPlugin
+    * @param array $form
+    *   An associative array containing the structure of the plugin form as built
+    *   by static::buildConfigurationForm().
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the complete form.
+    */
+   public function validateConfigurationForm(array &$form, FormStateInterface $form_state) : void {
+@@ -134,7 +134,7 @@ abstract class ExtractorPluginBase extends PluginBase implements ExtractorPlugin
+    * @param array $form
+    *   An associative array containing the structure of the plugin form as built
+    *   by static::buildConfigurationForm().
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the complete form.
+    */
+   public function submitConfigurationForm(array &$form, FormStateInterface $form_state) : void {
+@@ -151,7 +151,7 @@ abstract class ExtractorPluginBase extends PluginBase implements ExtractorPlugin
+    *   The real path to the file if it is a local file. An URL otherwise.
+    */
+   protected function getRealpath(string $uri) : string {
+-    /** @var \Drupal\Core\StreamWrapper\StreamWrapperInterface $wrapper */
++    /** @var StreamWrapperInterface $wrapper */
+     $wrapper = $this->streamWrapperManager->getViaUri($uri);
+     $scheme = $this->streamWrapperManager->getScheme($uri);
+     $local_wrappers = $this->streamWrapperManager->getWrappers(StreamWrapperInterface::LOCAL);
+diff --git a/src/Extractor/ExtractorPluginInterface.php b/src/Extractor/ExtractorPluginInterface.php
+index e818053..4becd6c 100644
+--- a/src/Extractor/ExtractorPluginInterface.php
++++ b/src/Extractor/ExtractorPluginInterface.php
+@@ -15,7 +15,7 @@ interface ExtractorPluginInterface extends ConfigurableInterface {
+   /**
+    * Extract file content.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   The file object.
+    *
+    * @return string
+diff --git a/src/Extractor/ExtractorPluginManager.php b/src/Extractor/ExtractorPluginManager.php
+index c108d8f..9d1426f 100644
+--- a/src/Extractor/ExtractorPluginManager.php
++++ b/src/Extractor/ExtractorPluginManager.php
+@@ -64,7 +64,7 @@ class ExtractorPluginManager extends DefaultPluginManager {
+    * {@inheritdoc}
+    */
+   public function createInstance($plugin_id, array $configuration = []) {
+-    /** @var \Drupal\file_extractor\Extractor\ExtractorPluginInterface $instance */
++    /** @var ExtractorPluginInterface $instance */
+     $instance = parent::createInstance($plugin_id);
+     $instance->setConfiguration($configuration);
+     return $instance;
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 4e9b6ab..19bc841 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -4,6 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\file_extractor\Form;
+ 
++use Drupal\file_extractor\Extractor\ExtractorPluginManager;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Core\DependencyInjection\ClassResolverInterface;
++use Drupal\file_extractor\Extractor\ExtractorPluginInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Form\SubformState;
+ use Drupal\Core\Plugin\PluginFormInterface;
+@@ -26,21 +30,21 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Text extractor plugin Manager.
+    *
+-   * @var \Drupal\file_extractor\Extractor\ExtractorPluginManager
++   * @var ExtractorPluginManager
+    */
+   protected $extractorPluginManager;
+ 
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Class resolver service.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ClassResolverInterface
++   * @var ClassResolverInterface
+    */
+   protected $classResolver;
+ 
+@@ -102,7 +106,7 @@ class SettingsForm extends ConfigFormBase {
+     $config_extraction_settings = is_null($config->get('extraction_settings')) ? [] : $config->get('extraction_settings');
+     $form_state->setTemporary($config_extraction_settings);
+     $extraction_settings_form_state = SubformState::createForSubform($form['extraction_settings'], $form, $form_state);
+-    /** @var \Drupal\file_extractor\ExtractionSettingsFormHelper $extraction_settings_form_helper */
++    /** @var ExtractionSettingsFormHelper $extraction_settings_form_helper */
+     $extraction_settings_form_helper = $this->classResolver->getInstanceFromDefinition(ExtractionSettingsFormHelper::class);
+     $form['extraction_settings'] = $extraction_settings_form_helper->buildConfigurationForm($form['extraction_settings'], $extraction_settings_form_state);
+ 
+@@ -141,7 +145,7 @@ class SettingsForm extends ConfigFormBase {
+ 
+     // Extraction settings validation.
+     $extraction_settings_form_state = SubformState::createForSubform($form['extraction_settings'], $form, $form_state);
+-    /** @var \Drupal\file_extractor\ExtractionSettingsFormHelper $extraction_settings_form_helper */
++    /** @var ExtractionSettingsFormHelper $extraction_settings_form_helper */
+     $extraction_settings_form_helper = $this->classResolver->getInstanceFromDefinition(ExtractionSettingsFormHelper::class);
+     $extraction_settings_form_helper->validateConfigurationForm($form['extraction_settings'], $extraction_settings_form_state);
+   }
+@@ -156,7 +160,7 @@ class SettingsForm extends ConfigFormBase {
+     $selected_extraction_method_settings = $form_state->getValue('extraction_method_settings', []);
+ 
+     try {
+-      /** @var \Drupal\file_extractor\Extractor\ExtractorPluginInterface $extractor_plugin */
++      /** @var ExtractorPluginInterface $extractor_plugin */
+       $extractor_plugin = $this->getExtractorPluginManager()->createInstance($selected_extraction_method, $selected_extraction_method_settings);
+ 
+       if ($extractor_plugin instanceof PluginFormInterface) {
+@@ -213,7 +217,7 @@ class SettingsForm extends ConfigFormBase {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+    */
+   public function buildExtractorConfigForm(array &$form, FormStateInterface $form_state) : void {
+@@ -277,7 +281,7 @@ class SettingsForm extends ConfigFormBase {
+    *
+    * @param array $form
+    *   The current form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    *
+    * @return array
+@@ -294,7 +298,7 @@ class SettingsForm extends ConfigFormBase {
+    * This method is required because sometimes with AJAX reloading the attribute
+    * 'extractorPluginManager' is NULL.
+    *
+-   * @return \Drupal\file_extractor\Extractor\ExtractorPluginManager
++   * @return ExtractorPluginManager
+    *   The extractor plugin manager.
+    */
+   protected function getExtractorPluginManager() {
+diff --git a/src/Form/TestForm.php b/src/Form/TestForm.php
+index f1ce3f6..81a5515 100644
+--- a/src/Form/TestForm.php
++++ b/src/Form/TestForm.php
+@@ -19,14 +19,14 @@ class TestForm extends FormBase {
+   /**
+    * The extractor manager.
+    *
+-   * @var \Drupal\file_extractor\Service\ExtractorManagerInterface
++   * @var ExtractorManagerInterface
+    */
+   protected $extractorManager;
+ 
+   /**
+    * Test file helper.
+    *
+-   * @var \Drupal\file_extractor\Service\TestFileHelperInterface
++   * @var TestFileHelperInterface
+    */
+   protected $testFileHelper;
+ 
+diff --git a/src/HookHandler/EntityTypeInfoHandler.php b/src/HookHandler/EntityTypeInfoHandler.php
+index d1bf9e0..80e221e 100644
+--- a/src/HookHandler/EntityTypeInfoHandler.php
++++ b/src/HookHandler/EntityTypeInfoHandler.php
+@@ -19,10 +19,10 @@ class EntityTypeInfoHandler {
+   /**
+    * Adds base field info to an entity type.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   Entity type for adding base fields to.
+    *
+-   * @return \Drupal\Core\Field\BaseFieldDefinition[]
++   * @return BaseFieldDefinition[]
+    *   New fields added.
+    *
+    * @see hook_entity_base_field_info()
+diff --git a/src/Plugin/Field/ExtractedFileFieldItemList.php b/src/Plugin/Field/ExtractedFileFieldItemList.php
+index 31f8856..d97bf08 100644
+--- a/src/Plugin/Field/ExtractedFileFieldItemList.php
++++ b/src/Plugin/Field/ExtractedFileFieldItemList.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\file_extractor\Plugin\Field;
+ 
++use Drupal\file_extractor\Service\ExtractorManagerInterface;
++use Drupal\Core\Field\FieldItemInterface;
+ use Drupal\Core\Field\FieldItemList;
+ use Drupal\Core\TypedData\ComputedItemListTrait;
+ use Drupal\file\FileInterface;
+@@ -29,7 +31,7 @@ class ExtractedFileFieldItemList extends FieldItemList {
+     }
+ 
+     // There does ot seem to have dependency injection in FieldItemList.
+-    /** @var \Drupal\file_extractor\Service\ExtractorManagerInterface $extractor_manager */
++    /** @var ExtractorManagerInterface $extractor_manager */
+     $extractor_manager = \Drupal::service('file_extractor.extractor_manager');
+ 
+     $extracted_data = $extractor_manager->extract($entity);
+@@ -38,7 +40,7 @@ class ExtractedFileFieldItemList extends FieldItemList {
+     // done yet or is empty, we do not create list items for the computed field.
+     if (!empty($extracted_data)) {
+       // An entity can only have a single extracted data.
+-      /** @var \Drupal\Core\Field\FieldItemInterface $field_item */
++      /** @var FieldItemInterface $field_item */
+       $field_item = $this->createItem(0, $extracted_data);
+       $this->list[0] = $field_item;
+     }
+diff --git a/src/Plugin/Field/FieldFormatter/ExtractedText.php b/src/Plugin/Field/FieldFormatter/ExtractedText.php
+index bd6aa7d..e04ae06 100644
+--- a/src/Plugin/Field/FieldFormatter/ExtractedText.php
++++ b/src/Plugin/Field/FieldFormatter/ExtractedText.php
+@@ -4,6 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\file_extractor\Plugin\Field\FieldFormatter;
+ 
++use Drupal\file_extractor\Service\ExtractorManagerInterface;
++use Drupal\Core\DependencyInjection\ClassResolverInterface;
++use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
++use Drupal\file\FileInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Form\SubformState;
+@@ -28,14 +32,14 @@ class ExtractedText extends FileFormatterBase implements ContainerFactoryPluginI
+   /**
+    * The extractor manager.
+    *
+-   * @var \Drupal\file_extractor\Service\ExtractorManagerInterface
++   * @var ExtractorManagerInterface
+    */
+   protected $extractorManager;
+ 
+   /**
+    * Class resolver service.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ClassResolverInterface
++   * @var ClassResolverInterface
+    */
+   protected $classResolver;
+ 
+@@ -87,7 +91,7 @@ class ExtractedText extends FileFormatterBase implements ContainerFactoryPluginI
+     $extraction_settings = $this->getSetting('extraction_settings');
+     $form_state->setTemporary($extraction_settings);
+     $extraction_settings_form_state = SubformState::createForSubform($form['extraction_settings'], $form, $form_state);
+-    /** @var \Drupal\file_extractor\ExtractionSettingsFormHelper $extraction_settings_form_helper */
++    /** @var ExtractionSettingsFormHelper $extraction_settings_form_helper */
+     $extraction_settings_form_helper = $this->classResolver->getInstanceFromDefinition(ExtractionSettingsFormHelper::class);
+     $form['extraction_settings'] = $extraction_settings_form_helper->buildConfigurationForm($form['extraction_settings'], $extraction_settings_form_state);
+ 
+@@ -100,14 +104,14 @@ class ExtractedText extends FileFormatterBase implements ContainerFactoryPluginI
+    *
+    * @param array $element
+    *   The form element to validate.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+    * @param array $form
+    *   The form representation.
+    */
+   public static function validateSettingsForm(array $element, FormStateInterface $form_state, array $form) : void {
+     $extraction_settings_form_state = SubformState::createForSubform($element['extraction_settings'], $form, $form_state);
+-    /** @var \Drupal\file_extractor\ExtractionSettingsFormHelper $extraction_settings_form_helper */
++    /** @var ExtractionSettingsFormHelper $extraction_settings_form_helper */
+     $extraction_settings_form_helper = \Drupal::service('class_resolver')->getInstanceFromDefinition(ExtractionSettingsFormHelper::class);
+     $extraction_settings_form_helper->validateConfigurationForm($element['extraction_settings'], $extraction_settings_form_state);
+   }
+@@ -140,7 +144,7 @@ class ExtractedText extends FileFormatterBase implements ContainerFactoryPluginI
+    * {@inheritdoc}
+    */
+   public function viewElements(FieldItemListInterface $items, $langcode) {
+-    /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface $items */
++    /** @var EntityReferenceFieldItemListInterface $items */
+     $elements = [];
+ 
+     if ($this->getSetting('override_global_extraction_settings')) {
+@@ -150,7 +154,7 @@ class ExtractedText extends FileFormatterBase implements ContainerFactoryPluginI
+     }
+ 
+     foreach ($this->getEntitiesToView($items, $langcode) as $delta => $file) {
+-      /** @var \Drupal\file\FileInterface $file */
++      /** @var FileInterface $file */
+       $elements[$delta] = [
+         '#markup' => $this->extractorManager->extract($file),
+         '#cache' => [
+diff --git a/src/Plugin/file_extractor/Extractor/TikaServerExtractor.php b/src/Plugin/file_extractor/Extractor/TikaServerExtractor.php
+index 08e7d0a..df3aa5d 100644
+--- a/src/Plugin/file_extractor/Extractor/TikaServerExtractor.php
++++ b/src/Plugin/file_extractor/Extractor/TikaServerExtractor.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\file_extractor\Plugin\file_extractor\Extractor;
+ 
++use GuzzleHttp\Client;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Plugin\PluginFormInterface;
+ use Drupal\file\FileInterface;
+@@ -24,7 +25,7 @@ class TikaServerExtractor extends ExtractorPluginBase implements PluginFormInter
+   /**
+    * The HTTP client.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $httpClient;
+ 
+diff --git a/src/Service/ExtractorManager.php b/src/Service/ExtractorManager.php
+index 322cc06..06f6dfd 100644
+--- a/src/Service/ExtractorManager.php
++++ b/src/Service/ExtractorManager.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\file_extractor\Service;
+ 
++use Drupal\file_extractor\Extractor\ExtractorPluginInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Component\Utility\Bytes;
+ use Drupal\Core\Cache\CacheBackendInterface;
+@@ -27,42 +28,42 @@ class ExtractorManager implements ExtractorManagerInterface {
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The extractor plugin manager.
+    *
+-   * @var \Drupal\file_extractor\Extractor\ExtractorPluginManager
++   * @var ExtractorPluginManager
+    */
+   protected $extractorPluginManager;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The mime type guesser.
+    *
+-   * @var \Symfony\Component\Mime\MimeTypeGuesserInterface
++   * @var MimeTypeGuesserInterface
+    */
+   protected $mimeTypeGuesser;
+ 
+   /**
+    * The event dispatcher service.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * The cache backend service.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cacheBackend;
+ 
+@@ -83,17 +84,17 @@ class ExtractorManager implements ExtractorManagerInterface {
+   /**
+    * ExtractorManager constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+-   * @param \Drupal\file_extractor\Extractor\ExtractorPluginManager $extractor_plugin_manager
++   * @param ExtractorPluginManager $extractor_plugin_manager
+    *   The extractor plugin manager.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Symfony\Component\Mime\MimeTypeGuesserInterface $mimeTypeGuesser
++   * @param MimeTypeGuesserInterface $mimeTypeGuesser
+    *   Mime type guesser service.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   The event dispatcher service.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $file_extractor_cache
++   * @param CacheBackendInterface $file_extractor_cache
+    *   The cache backend service.
+    */
+   public function __construct(
+@@ -161,7 +162,7 @@ class ExtractorManager implements ExtractorManagerInterface {
+   /**
+    * Helper function.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   The file entity to extract.
+    *
+    * @return string
+@@ -186,7 +187,7 @@ class ExtractorManager implements ExtractorManagerInterface {
+     }
+ 
+     try {
+-      /** @var \Drupal\file_extractor\Extractor\ExtractorPluginInterface $extractor_plugin */
++      /** @var ExtractorPluginInterface $extractor_plugin */
+       $extractor_plugin = $this->extractorPluginManager->createInstance($extractor_plugin_id, $extractor_plugin_settings);
+     }
+     catch (PluginException $exception) {
+@@ -203,7 +204,7 @@ class ExtractorManager implements ExtractorManagerInterface {
+   /**
+    * Check if the file is allowed to be indexed.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   A file object.
+    *
+    * @return bool
+@@ -278,7 +279,7 @@ class ExtractorManager implements ExtractorManagerInterface {
+   /**
+    * Exclude files that exceed configured max size.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   File object.
+    *
+    * @return bool
+@@ -300,7 +301,7 @@ class ExtractorManager implements ExtractorManagerInterface {
+   /**
+    * Exclude private files from being indexed.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   File object.
+    *
+    * @return bool
+diff --git a/src/Service/ExtractorManagerInterface.php b/src/Service/ExtractorManagerInterface.php
+index c90202b..c7e1ca0 100644
+--- a/src/Service/ExtractorManagerInterface.php
++++ b/src/Service/ExtractorManagerInterface.php
+@@ -14,7 +14,7 @@ interface ExtractorManagerInterface {
+   /**
+    * Extract file content.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   The file to extract content from.
+    *
+    * @return string
+diff --git a/src/Service/FileExtractorUpdater.php b/src/Service/FileExtractorUpdater.php
+index f13b6ab..78299cc 100644
+--- a/src/Service/FileExtractorUpdater.php
++++ b/src/Service/FileExtractorUpdater.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\file_extractor\Service;
+ 
++use Drupal\field\Entity\FieldConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+@@ -17,32 +18,32 @@ class FileExtractorUpdater implements FileExtractorUpdaterInterface {
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+    */
+   public function __construct(
+@@ -225,7 +226,7 @@ class FileExtractorUpdater implements FileExtractorUpdaterInterface {
+     $file_fields = &drupal_static(__FUNCTION__);
+ 
+     if (!is_null($file_fields)) {
+-      /** @var \Drupal\field\Entity\FieldConfig[] $field_instance_config_entities */
++      /** @var FieldConfig[] $field_instance_config_entities */
+       $field_instance_config_entities = $this->entityTypeManager->getStorage('field_config')->loadMultiple();
+ 
+       $file_fields = [];
+diff --git a/src/Service/TestFileHelper.php b/src/Service/TestFileHelper.php
+index cac661e..6cef3b7 100644
+--- a/src/Service/TestFileHelper.php
++++ b/src/Service/TestFileHelper.php
+@@ -18,30 +18,30 @@ class TestFileHelper implements TestFileHelperInterface {
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * File system service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * The test file.
+    *
+-   * @var \Drupal\file\FileInterface|null
++   * @var FileInterface|null
+    */
+   protected $testFile;
+ 
+   /**
+    * TestFileHelper constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   The file system service.
+    */
+   public function __construct(
+@@ -58,11 +58,11 @@ class TestFileHelper implements TestFileHelperInterface {
+   public function getTestFile() : FileInterface {
+     if (!isset($this->testFile)) {
+       // Copy the source file to public directory.
+-      $source = drupal_get_path('module', 'file_extractor');
++      $source = \Drupal::service('extension.list.module')->getPath('file_extractor');
+       $source .= '/data/' . self::TEST_FILENAME;
+       $this->fileSystem->copy($source, self::TEST_FILE_URI, FileSystemInterface::EXISTS_REPLACE);
+ 
+-      /** @var \Drupal\file\FileInterface $file */
++      /** @var FileInterface $file */
+       $file = $this->entityTypeManager->getStorage('file')->create([
+         'filename' => self::TEST_FILENAME,
+         'filemime' => 'application/pdf',
+diff --git a/src/Service/TestFileHelperInterface.php b/src/Service/TestFileHelperInterface.php
+index 8d004b4..973ccab 100644
+--- a/src/Service/TestFileHelperInterface.php
++++ b/src/Service/TestFileHelperInterface.php
+@@ -24,7 +24,7 @@ interface TestFileHelperInterface {
+   /**
+    * Helper function to get the test file.
+    *
+-   * @return \Drupal\file\FileInterface
++   * @return FileInterface
+    *   The file used for the test.
+    */
+   public function getTestFile() : FileInterface;
+diff --git a/tests/src/Functional/Extractor/TikaServerExtractorTest.php b/tests/src/Functional/Extractor/TikaServerExtractorTest.php
+index aaa49cd..0440b19 100644
+--- a/tests/src/Functional/Extractor/TikaServerExtractorTest.php
++++ b/tests/src/Functional/Extractor/TikaServerExtractorTest.php
+@@ -36,7 +36,7 @@ class TikaServerExtractorTest extends ExtractorTestBase {
+   /**
+    * The process running the Tika server.
+    *
+-   * @var \Symfony\Component\Process\Process
++   * @var Process
+    */
+   protected $process;
+ 
+diff --git a/tests/src/Traits/FileExtractorTestTrait.php b/tests/src/Traits/FileExtractorTestTrait.php
+index c41f3e2..98c42d2 100644
+--- a/tests/src/Traits/FileExtractorTestTrait.php
++++ b/tests/src/Traits/FileExtractorTestTrait.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\file_extractor\Traits;
+ 
++use Drupal\file_extractor\Service\TestFileHelperInterface;
++use Drupal\file_extractor\Extractor\ExtractorPluginInterface;
++use Drupal\file_extractor\Extractor\ExtractorPluginManager;
+ /**
+  * Avoid code duplication between test base classes.
+  */
+@@ -12,7 +15,7 @@ trait FileExtractorTestTrait {
+   /**
+    * Test file helper service.
+    *
+-   * @var \Drupal\file_extractor\Service\TestFileHelperInterface
++   * @var TestFileHelperInterface
+    */
+   protected $testFileHelper;
+ 
+@@ -33,7 +36,7 @@ trait FileExtractorTestTrait {
+   /**
+    * The tested extractor.
+    *
+-   * @var \Drupal\file_extractor\Extractor\ExtractorPluginInterface
++   * @var ExtractorPluginInterface
+    */
+   protected $extractor;
+ 
+@@ -45,7 +48,7 @@ trait FileExtractorTestTrait {
+ 
+     $this->testFileHelper = $this->container->get('file_extractor.test_file_helper');
+ 
+-    /** @var \Drupal\file_extractor\Extractor\ExtractorPluginManager $extractor_plugin_manager */
++    /** @var ExtractorPluginManager $extractor_plugin_manager */
+     $extractor_plugin_manager = $this->container->get('plugin.manager.file_extractor.extractor');
+     $this->extractor = $extractor_plugin_manager->createInstance($this->extractorPluginId, $this->extractorPluginConfiguration);
+   }

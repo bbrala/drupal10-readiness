@@ -1,0 +1,442 @@
+diff --git a/src/Cache/CacheBackendFactory.php b/src/Cache/CacheBackendFactory.php
+index 4efa1c6..bc048c1 100644
+--- a/src/Cache/CacheBackendFactory.php
++++ b/src/Cache/CacheBackendFactory.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\redis\Cache;
+ 
++use Drupal\redis\ClientInterface;
+ use Drupal\Component\Serialization\SerializationInterface;
+ use Drupal\Core\Cache\CacheFactoryInterface;
+ use Drupal\Core\Cache\CacheTagsChecksumInterface;
+@@ -13,21 +14,21 @@ use Drupal\redis\ClientFactory;
+ class CacheBackendFactory implements CacheFactoryInterface {
+ 
+   /**
+-   * @var \Drupal\redis\ClientInterface
++   * @var ClientInterface
+    */
+   protected $clientFactory;
+ 
+   /**
+    * The cache tags checksum provider.
+    *
+-   * @var \Drupal\Core\Cache\CacheTagsChecksumInterface
++   * @var CacheTagsChecksumInterface
+    */
+   protected $checksumProvider;
+ 
+   /**
+    * The serialization class to use.
+    *
+-   * @var \Drupal\Component\Serialization\SerializationInterface
++   * @var SerializationInterface
+    */
+   protected $serializer;
+ 
+@@ -45,8 +46,8 @@ class CacheBackendFactory implements CacheFactoryInterface {
+   /**
+    * Creates a redis CacheBackendFactory.
+    *
+-   * @param \Drupal\redis\ClientFactory $client_factory
+-   * @param \Drupal\Core\Cache\CacheTagsChecksumInterface $checksum_provider
++   * @param ClientFactory $client_factory
++   * @param CacheTagsChecksumInterface $checksum_provider
+    * @param \Drupal\redis\Cache\SerializationInterface $serializer
+    *   The serialization class to use.
+    */
+diff --git a/src/Cache/CacheBase.php b/src/Cache/CacheBase.php
+index 61b2d74..e6a6a71 100644
+--- a/src/Cache/CacheBase.php
++++ b/src/Cache/CacheBase.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\redis\Cache;
+ 
++use Drupal\redis\ClientInterface;
++use Drupal\Core\Cache\CacheTagsChecksumInterface;
++use Drupal\Core\Cache\CacheTagsInvalidatorInterface;
+ use \DateInterval;
+ use Drupal\Component\Assertion\Inspector;
+ use Drupal\Component\Serialization\SerializationInterface;
+@@ -55,7 +58,7 @@ abstract class CacheBase implements CacheBackendInterface {
+   /**
+    * The serialization class to use.
+    *
+-   * @var \Drupal\Component\Serialization\SerializationInterface
++   * @var SerializationInterface
+    */
+   protected $serializer;
+ 
+@@ -78,14 +81,14 @@ abstract class CacheBase implements CacheBackendInterface {
+   protected $minTtl = 0;
+ 
+   /**
+-   * @var \Drupal\redis\ClientInterface
++   * @var ClientInterface
+    */
+   protected $client;
+ 
+   /**
+    * The cache tags checksum provider.
+    *
+-   * @var \Drupal\Core\Cache\CacheTagsChecksumInterface|\Drupal\Core\Cache\CacheTagsInvalidatorInterface
++   * @var CacheTagsChecksumInterface|CacheTagsInvalidatorInterface
+    */
+   protected $checksumProvider;
+ 
+@@ -117,7 +120,7 @@ abstract class CacheBase implements CacheBackendInterface {
+    * CacheBase constructor.
+    * @param $bin
+    *   The cache bin for which the object is created.
+-   * @param \Drupal\Component\Serialization\SerializationInterface $serializer
++   * @param SerializationInterface $serializer
+    *   The serialization class to use.
+    */
+   public function __construct($bin, SerializationInterface $serializer) {
+@@ -313,7 +316,7 @@ abstract class CacheBase implements CacheBackendInterface {
+     // Check expire time, allow to have a cache invalidated explicitly, don't
+     // check if already invalid.
+     if ($cache->valid) {
+-      $cache->valid = $cache->expire == Cache::PERMANENT || $cache->expire >= REQUEST_TIME;
++      $cache->valid = $cache->expire == Cache::PERMANENT || $cache->expire >= \Drupal::time()->getRequestTime();
+ 
+       // Check if invalidateTags() has been called with any of the items's tags.
+       if ($cache->valid && !$this->checksumProvider->isValid($cache->checksum, $cache->tags)) {
+diff --git a/src/Cache/PhpRedis.php b/src/Cache/PhpRedis.php
+index df3c5e1..9604e65 100644
+--- a/src/Cache/PhpRedis.php
++++ b/src/Cache/PhpRedis.php
+@@ -22,7 +22,7 @@ class PhpRedis extends CacheBase {
+    * @param $bin
+    *   The cache bin for which the object is created.
+    * @param \Redis $client
+-   * @param \Drupal\Core\Cache\CacheTagsChecksumInterface $checksum_provider
++   * @param CacheTagsChecksumInterface $checksum_provider
+    * @param \Drupal\redis\Cache\SerializationInterface $serializer
+    *   The serialization class to use.
+    */
+diff --git a/src/Cache/Predis.php b/src/Cache/Predis.php
+index 3e75e95..f905833 100644
+--- a/src/Cache/Predis.php
++++ b/src/Cache/Predis.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\redis\Cache;
+ 
++use Predis\Client;
+ use Drupal\Component\Serialization\SerializationInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Cache\CacheTagsChecksumInterface;
+@@ -22,11 +23,11 @@ class Predis extends CacheBase {
+    * @param $bin
+    *   The cache bin for which the object is created.
+    * @param \Redis $client
+-   * @param \Drupal\Core\Cache\CacheTagsChecksumInterface $checksum_provider
++   * @param CacheTagsChecksumInterface $checksum_provider
+    * @param \Drupal\redis\Cache\SerializationInterface $serializer
+    *   The serialization class to use.
+    */
+-  public function __construct($bin, \Predis\Client $client, CacheTagsChecksumInterface $checksum_provider, SerializationInterface $serializer) {
++  public function __construct($bin, Client $client, CacheTagsChecksumInterface $checksum_provider, SerializationInterface $serializer) {
+     parent::__construct($bin, $serializer);
+     $this->client = $client;
+     $this->checksumProvider = $checksum_provider;
+diff --git a/src/ClientFactory.php b/src/ClientFactory.php
+index 0120ebc..743efad 100644
+--- a/src/ClientFactory.php
++++ b/src/ClientFactory.php
+@@ -63,7 +63,7 @@ class ClientFactory {
+   const REDIS_IMPL_RELIABLE_QUEUE = '\\Drupal\\redis\\Queue\\Reliable';
+ 
+   /**
+-   * @var \Drupal\redis\ClientInterface
++   * @var ClientInterface
+    */
+   protected static $_clientInterface;
+ 
+diff --git a/src/Controller/ReportController.php b/src/Controller/ReportController.php
+index 9ff362a..cadcdd7 100755
+--- a/src/Controller/ReportController.php
++++ b/src/Controller/ReportController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\redis\Controller;
+ 
++use Predis\Client;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Url;
+@@ -29,16 +30,16 @@ class ReportController extends ControllerBase {
+   /**
+    * The date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * ReportController constructor.
+    *
+-   * @param \Drupal\redis\ClientFactory $client_factory
++   * @param ClientFactory $client_factory
+    *   The client factory.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter.
+    */
+   public function __construct(ClientFactory $client_factory, DateFormatterInterface $date_formatter) {
+@@ -296,7 +297,7 @@ class ReportController extends ControllerBase {
+         yield from $keys;
+       }
+     }
+-    elseif ($this->redis instanceof \Predis\Client) {
++    elseif ($this->redis instanceof Client) {
+       yield from new Keyspace($this->redis, $match, $count);
+     }
+   }
+diff --git a/src/Flood/FloodFactory.php b/src/Flood/FloodFactory.php
+index 65e169d..07ba09e 100644
+--- a/src/Flood/FloodFactory.php
++++ b/src/Flood/FloodFactory.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\redis\Flood;
+ 
++use Drupal\redis\ClientInterface;
++use Drupal\Core\Flood\FloodInterface;
+ use Drupal\redis\ClientFactory;
+ use Symfony\Component\HttpFoundation\RequestStack;
+ 
+@@ -11,24 +13,24 @@ use Symfony\Component\HttpFoundation\RequestStack;
+ class FloodFactory {
+ 
+   /**
+-   * @var \Drupal\redis\ClientInterface
++   * @var ClientInterface
+    */
+   protected $clientFactory;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * Construct the PhpRedis flood backend factory.
+    *
+-   * @param \Drupal\redis\ClientFactory $client_factory
++   * @param ClientFactory $client_factory
+    *   The database connection which will be used to store the flood event
+    *   information.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack used to retrieve the current request.
+    */
+   public function __construct(ClientFactory $client_factory, RequestStack $request_stack) {
+@@ -39,7 +41,7 @@ class FloodFactory {
+   /**
+    * Get actual flood backend.
+    *
+-   * @return \Drupal\Core\Flood\FloodInterface
++   * @return FloodInterface
+    *   Return flood instance.
+    */
+   public function get() {
+diff --git a/src/Flood/PhpRedis.php b/src/Flood/PhpRedis.php
+index 06a3604..f00fce1 100644
+--- a/src/Flood/PhpRedis.php
++++ b/src/Flood/PhpRedis.php
+@@ -22,17 +22,17 @@ class PhpRedis implements FloodInterface {
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * Construct the PhpRedis flood backend.
+    *
+-   * @param \Drupal\redis\ClientFactory $client_factory
++   * @param ClientFactory $client_factory
+    *   The database connection which will be used to store the flood event
+    *   information.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack used to retrieve the current request.
+    */
+   public function __construct(ClientFactory $client_factory, RequestStack $request_stack) {
+diff --git a/src/Flood/Predis.php b/src/Flood/Predis.php
+index de28b04..ef8a037 100644
+--- a/src/Flood/Predis.php
++++ b/src/Flood/Predis.php
+@@ -22,17 +22,17 @@ class Predis implements FloodInterface {
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * Construct the PhpRedis flood backend.
+    *
+-   * @param \Drupal\redis\ClientFactory $client_factory
++   * @param ClientFactory $client_factory
+    *   The database connection which will be used to store the flood event
+    *   information.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack used to retrieve the current request.
+    */
+   public function __construct(ClientFactory $client_factory, RequestStack $request_stack) {
+diff --git a/src/Lock/LockFactory.php b/src/Lock/LockFactory.php
+index 6e8c8b1..33aaf89 100644
+--- a/src/Lock/LockFactory.php
++++ b/src/Lock/LockFactory.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\redis\Lock;
+ 
++use Drupal\redis\ClientInterface;
++use Drupal\Core\Lock\LockBackendInterface;
+ use Drupal\redis\ClientFactory;
+ 
+ /**
+@@ -10,7 +12,7 @@ use Drupal\redis\ClientFactory;
+ class LockFactory {
+ 
+   /**
+-   * @var \Drupal\redis\ClientInterface
++   * @var ClientInterface
+    */
+   protected $clientFactory;
+ 
+@@ -27,7 +29,7 @@ class LockFactory {
+    * @param bool $persistent
+    *   (optional) Whether to return a persistent lock implementation or not.
+    *
+-   * @return \Drupal\Core\Lock\LockBackendInterface
++   * @return LockBackendInterface
+    *   Return lock backend instance.
+    */
+   public function get($persistent = FALSE) {
+diff --git a/src/Queue/Predis.php b/src/Queue/Predis.php
+index 4bc7c9d..52a998d 100644
+--- a/src/Queue/Predis.php
++++ b/src/Queue/Predis.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\redis\Queue;
+ 
++use Predis\Client;
+ /**
+  * Redis queue implementation using Predis library backend.
+  *
+@@ -26,7 +27,7 @@ class Predis extends QueueBase {
+    * @param \Predis\Client $client
+    *   The Predis client.
+    */
+-  public function __construct($name, array $settings, \Predis\Client $client) {
++  public function __construct($name, array $settings, Client $client) {
+     parent::__construct($name, $settings);
+     $this->client = $client;
+   }
+diff --git a/src/Queue/QueueRedisFactory.php b/src/Queue/QueueRedisFactory.php
+index aabc1b7..6596254 100644
+--- a/src/Queue/QueueRedisFactory.php
++++ b/src/Queue/QueueRedisFactory.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\redis\Queue;
+ 
++use Drupal\Core\Database\Connection;
++use Drupal\Core\Queue\DatabaseQueue;
+ use Drupal\Core\Site\Settings;
+ use Drupal\redis\ClientFactory;
+ 
+@@ -16,21 +18,21 @@ class QueueRedisFactory {
+   const CLASS_NAMESPACE = ClientFactory::REDIS_IMPL_QUEUE;
+ 
+   /**
+-   * @var \Drupal\redis\ClientFactory
++   * @var ClientFactory
+    */
+   protected $clientFactory;
+ 
+   /**
+    * The settings array.
+    *
+-   * @var \Drupal\Core\Site\Settings
++   * @var Settings
+    */
+   protected $settings;
+ 
+   /**
+    * Constructs this factory object.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The Connection object containing the key-value tables.
+    */
+   public function __construct(ClientFactory $client_factory, Settings $settings) {
+@@ -44,7 +46,7 @@ class QueueRedisFactory {
+    * @param string $name
+    *   The name of the collection holding key and value pairs.
+    *
+-   * @return \Drupal\Core\Queue\DatabaseQueue
++   * @return DatabaseQueue
+    *   A key/value store implementation for the given $collection.
+    */
+   public function get($name) {
+diff --git a/src/Queue/ReliablePredis.php b/src/Queue/ReliablePredis.php
+index 69fedcd..0d24e51 100644
+--- a/src/Queue/ReliablePredis.php
++++ b/src/Queue/ReliablePredis.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\redis\Queue;
+ 
++use Predis\Client;
+ /**
+  * Redis queue implementation using Predis library backend.
+  *
+@@ -26,7 +27,7 @@ class ReliablePredis extends ReliableQueueBase {
+    * @param \Predis\Client $client
+    *   The Predis client.
+    */
+-  public function __construct($name, array $settings, \Predis\Client $client) {
++  public function __construct($name, array $settings, Client $client) {
+     parent::__construct($name, $settings);
+     $this->client = $client;
+   }
+diff --git a/tests/src/Functional/Lock/RedisLockFunctionalTest.php b/tests/src/Functional/Lock/RedisLockFunctionalTest.php
+index 14f3815..7273924 100644
+--- a/tests/src/Functional/Lock/RedisLockFunctionalTest.php
++++ b/tests/src/Functional/Lock/RedisLockFunctionalTest.php
+@@ -27,7 +27,7 @@ class RedisLockFunctionalTest extends LockFunctionalTest {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Write the containers_yaml update by hand, since writeSettings() doesn't
+@@ -36,7 +36,7 @@ class RedisLockFunctionalTest extends LockFunctionalTest {
+     chmod($filename, 0666);
+     $contents = file_get_contents($filename);
+     $redis_interface = self::getRedisInterfaceEnv();
+-    $module_path = drupal_get_path('module', 'redis');
++    $module_path = \Drupal::service('extension.list.module')->getPath('redis');
+     $contents .= "\n\n" . "\$settings['container_yamls'][] = '$module_path/example.services.yml';";
+     $contents .= "\n\n" . '$settings["redis.connection"]["interface"] = \'' . $redis_interface . '\';';
+     file_put_contents($filename, $contents);

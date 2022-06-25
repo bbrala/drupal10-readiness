@@ -1,0 +1,2489 @@
+diff --git a/photos.install b/photos.install
+index d54cc27..49ea050 100644
+--- a/photos.install
++++ b/photos.install
+@@ -327,7 +327,7 @@ function photos_update_8502(&$sandbox) {
+     $all_created = TRUE;
+     // Only create if the photos view doesn't exist and views is enabled.
+     if (!View::load('photos')) {
+-      $config_path = drupal_get_path('module', 'photos') . '/config/optional/views.view.photos.yml';
++      $config_path = \Drupal::service('extension.list.module')->getPath('photos') . '/config/optional/views.view.photos.yml';
+       $data = Yaml::parseFile($config_path);
+       \Drupal::configFactory()->getEditable('views.view.photos')->setData($data)->save(TRUE);
+     }
+@@ -336,7 +336,7 @@ function photos_update_8502(&$sandbox) {
+     }
+     // Album view.
+     if (!View::load('photos_album')) {
+-      $config_path = drupal_get_path('module', 'photos') . '/config/optional/views.view.photos_album.yml';
++      $config_path = \Drupal::service('extension.list.module')->getPath('photos') . '/config/optional/views.view.photos_album.yml';
+       $data = Yaml::parseFile($config_path);
+       \Drupal::configFactory()->getEditable('views.view.photos_album')->setData($data)->save(TRUE);
+     }
+@@ -345,7 +345,7 @@ function photos_update_8502(&$sandbox) {
+     }
+     // Album list view.
+     if (!View::load('photos_album_list')) {
+-      $config_path = drupal_get_path('module', 'photos') . '/config/optional/views.view.photos_album_list.yml';
++      $config_path = \Drupal::service('extension.list.module')->getPath('photos') . '/config/optional/views.view.photos_album_list.yml';
+       $data = Yaml::parseFile($config_path);
+       \Drupal::configFactory()->getEditable('views.view.photos_album_list')->setData($data)->save(TRUE);
+     }
+diff --git a/photos.module b/photos.module
+index 78b16bb..ecf0d74 100644
+--- a/photos.module
++++ b/photos.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\photos\Entity\PhotosImage;
++use Drupal\photos\PhotosImageStorageInterface;
+ /**
+  * @file
+  * Implementation of photos.module.
+@@ -631,7 +633,7 @@ function photos_node_delete(NodeInterface $node) {
+  * Implements hook_ENTITY_TYPE_delete().
+  */
+ function photos_photos_image_delete(PhotosImageInterface $photos_image) {
+-  /** @var \Drupal\photos\Entity\PhotosImage $photos_image */
++  /** @var PhotosImage $photos_image */
+   // If this entity is the album cover, clear it.
+   $db = \Drupal::database();
+   $db->update('photos_album')
+@@ -967,7 +969,7 @@ function photos_preprocess_photos_image_html(&$variables, $hook) {
+       if (!file_exists($styleUri)) {
+         $style->createDerivative($uri, $styleUri);
+       }
+-      $url = file_create_url($styleUri);
++      $url = \Drupal::service('file_url_generator')->generateAbsoluteString($styleUri);
+     }
+ 
+     // Render image view.
+@@ -1069,7 +1071,7 @@ function template_preprocess_photos_comment_count(array &$variables) {
+  */
+ function photos_preprocess_photos_image_block(&$variables) {
+   // Prepare variables for photos_image_block.html.twig.
+-  /** @var \Drupal\photos\Entity\PhotosImage $photos_image */
++  /** @var PhotosImage $photos_image */
+   $photos_image = $variables['image']['photos_image'];
+   $variables['created'] = \Drupal::service('date.formatter')->format($photos_image->getCreatedTime(), 'short');
+   $variables['user_url'] = '';
+@@ -1298,7 +1300,7 @@ function photos_help($route_name, RouteMatchInterface $route_match) {
+ function template_preprocess_photos_image(array &$variables) {
+   $variables['view_mode'] = $variables['elements']['#view_mode'];
+   $variables['photos_image'] = $variables['elements']['#photos_image'];
+-  /** @var \Drupal\photos\Entity\PhotosImage $photos_image */
++  /** @var PhotosImage $photos_image */
+   $photos_image = $variables['photos_image'];
+ 
+   // Get the album node.
+@@ -1398,7 +1400,7 @@ function photos_theme_suggestions_photos_image(array $variables) {
+ /**
+  * Returns whether the current page is the photos_image page.
+  *
+- * @param \Drupal\photos\PhotosImageInterface $photos_image
++ * @param PhotosImageInterface $photos_image
+  *   A photos_image entity.
+  *
+  * @return bool
+@@ -1477,7 +1479,7 @@ function photos_photos_image_presave(EntityInterface $entity) {
+ /**
+  * Exif module integration, update exif data.
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  *   The photos_image entity.
+  */
+ function photos_image_update_exif_data(EntityInterface $entity) {
+@@ -1510,9 +1512,9 @@ function photos_comment_links_alter(array &$links, CommentInterface $entity, arr
+       ':cid' => $cid,
+     ])->fetchField();
+     if ($fid) {
+-      /** @var \Drupal\photos\PhotosImageStorageInterface $photos_image_storage */
++      /** @var PhotosImageStorageInterface $photos_image_storage */
+       $photos_image_storage = \Drupal::entityTypeManager()->getStorage('photos_image');
+-      /** @var \Drupal\photos\PhotosImageInterface $photos_image */
++      /** @var PhotosImageInterface $photos_image */
+       $photos_image_results = $photos_image_storage->getQuery()
+         ->condition('field_image.target_id', $fid)
+         ->execute();
+diff --git a/photos.post_update.php b/photos.post_update.php
+index 2bb0156..9b56578 100644
+--- a/photos.post_update.php
++++ b/photos.post_update.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\file\FileInterface;
+ /**
+  * @file
+  * Post update functions for Photos module.
+@@ -39,7 +40,7 @@ function photos_post_update_migrate_photos_image_entity_1(&$sandbox = NULL) {
+       $sandbox['current_fid'] = $fid;
+       try {
+         $title = $result->title;
+-        /** @var \Drupal\file\FileInterface $file */
++        /** @var FileInterface $file */
+         $file = \Drupal::entityTypeManager()->getStorage('file')->load($fid);
+         $image = \Drupal::service('image.factory')->get($file->getFileUri());
+         if ($image) {
+diff --git a/photos_access/photos_access.module b/photos_access/photos_access.module
+index 38e83f0..c4b63de 100644
+--- a/photos_access/photos_access.module
++++ b/photos_access/photos_access.module
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\node\Entity\Node;
++use Drupal\photos\Entity\PhotosImage;
++use Drupal\file\FileInterface;
++use Drupal\field\Entity\FieldConfig;
+ /**
+  * @file
+  * Implementation of photos_access.module.
+@@ -47,7 +51,7 @@ function photos_access_help($route_name, RouteMatchInterface $route_match) {
+  */
+ function photos_access_form_node_form_alter(&$form, FormStateInterface &$form_state, $form_id) {
+   // Get form node.
+-  /** @var \Drupal\node\Entity\Node $node */
++  /** @var Node $node */
+   $node = $form_state->getFormObject()->getEntity();
+   if ($node && $node_type = $node->getType()) {
+     if (\Drupal::config('photos.settings')->get('photos_access_' . $node_type)) {
+@@ -155,7 +159,7 @@ function photos_access_form_node_form_alter(&$form, FormStateInterface &$form_st
+           $form['photos_privacy']['viewremove'][$u['target_id']] = [
+             '#type' => 'checkbox',
+             '#default_value' => isset($node->viewremove[$u['target_id']]) ? $node->viewremove[$u['target_id']] : '',
+-            '#title' => t('Delete: @name', ['@name' => render($u['username'])]),
++            '#title' => t('Delete: @name', ['@name' => \Drupal::service('renderer')->render($u['username'])]),
+             '#prefix' => '<div id="photos-access-remove"' . $classes . '>',
+             '#suffix' => '</div>',
+           ];
+@@ -175,7 +179,7 @@ function photos_access_form_node_form_alter(&$form, FormStateInterface &$form_st
+           $form['photos_privacy']['updateremove'][$u['target_id']] = [
+             '#type' => 'checkbox',
+             '#default_value' => isset($node->updateremove[$u['target_id']]) ? $node->updateremove[$u['target_id']] : '',
+-            '#title' => t('Delete: @name', ['@name' => render($u['username'])]),
++            '#title' => t('Delete: @name', ['@name' => \Drupal::service('renderer')->render($u['username'])]),
+             '#prefix' => '<div id="photos_access_updateremove" class="photos-access-update-remove">',
+             '#suffix' => '</div>',
+           ];
+@@ -293,7 +297,7 @@ function photos_access_move_files_form_submit(&$form, FormStateInterface $form_s
+ /**
+  * Move files from public to private and private to public as needed.
+  *
+- * @param \Drupal\node\NodeInterface $node
++ * @param NodeInterface $node
+  *   The node.
+  * @param bool $public
+  *   Whether to use the default filesystem scheme or not.
+@@ -332,7 +336,7 @@ function photos_access_move_files(NodeInterface $node, $public = TRUE) {
+   foreach ($results as $result) {
+     $photosImage = NULL;
+     try {
+-      /** @var \Drupal\photos\Entity\PhotosImage $photosImage */
++      /** @var PhotosImage $photosImage */
+       $photosImage = \Drupal::entityTypeManager()
+         ->getStorage('photos_image')
+         ->load($result->id);
+@@ -347,7 +351,7 @@ function photos_access_move_files(NodeInterface $node, $public = TRUE) {
+       foreach ($fids as $fid) {
+         $file = NULL;
+         try {
+-          /** @var \Drupal\file\FileInterface $file */
++          /** @var FileInterface $file */
+           $file = \Drupal::entityTypeManager()->getStorage('file')->load($fid);
+         }
+         catch (InvalidPluginDefinitionException $e) {
+@@ -377,7 +381,7 @@ function photos_access_move_files(NodeInterface $node, $public = TRUE) {
+           $new_uri = str_replace($old_file_wrapper, $file_wrapper, $file->getFileUri());
+           $dirname = $file_system->dirname($new_uri);
+           $file_system->prepareDirectory($dirname, FileSystemInterface::CREATE_DIRECTORY);
+-          file_move($file, $new_uri);
++          \Drupal::service('file.repository')->move($file, $new_uri);
+           // Clear image page cache.
+           $cache_tags[] = 'photos:image:' . $fid;
+         }
+@@ -565,7 +569,7 @@ function _photos_access_user_validate($users, $access_id, $collaborate = FALSE)
+ /**
+  * Update access to album.
+  *
+- * @param \Drupal\node\NodeInterface $node
++ * @param NodeInterface $node
+  *   The node being updated.
+  * @param array $privacy_settings
+  *   The album privacy settings.
+@@ -1208,7 +1212,7 @@ function photos_access_photos_image_update(EntityInterface $entity) {
+   if (!\Drupal::moduleHandler()->moduleExists('filefield_paths')) {
+     foreach ($entity->getFields() as $field) {
+       if ($field instanceof FileFieldItemList) {
+-        /** @var \Drupal\field\Entity\FieldConfig $definition */
++        /** @var FieldConfig $definition */
+         $definition = $field->getFieldDefinition();
+         // Ignore base fields.
+         if ($definition instanceof ThirdPartySettingsInterface) {
+@@ -1225,7 +1229,7 @@ function photos_access_photos_image_update(EntityInterface $entity) {
+  * Helper function to make sure file fields respect album privacy settings.
+  */
+ function _photos_access_move_field_image(EntityInterface $entity, FileFieldItemList $field) {
+-  /** @var \Drupal\photos\Entity\PhotosImage $entity */
++  /** @var PhotosImage $entity */
+   $album_node = \Drupal::entityTypeManager()->getStorage('node')->load($entity->getAlbumId());
+   // Check album privacy settings.
+   if (isset($album_node->photos_privacy) && isset($album_node->photos_privacy['viewid'])) {
+@@ -1237,7 +1241,7 @@ function _photos_access_move_field_image(EntityInterface $entity, FileFieldItemL
+       if (PrivateStream::basePath() && !empty($wrappers['private'])) {
+         // Make sure private scheme is used.
+         $file_wrapper = 'private://';
+-        /** @var \Drupal\file\FileInterface $file */
++        /** @var FileInterface $file */
+         foreach ($field->referencedEntities() as $file) {
+           $old_file_wrapper = \Drupal::service('stream_wrapper_manager')
+             ->getScheme($file->getFileUri()) . '://';
+@@ -1245,7 +1249,7 @@ function _photos_access_move_field_image(EntityInterface $entity, FileFieldItemL
+             $new_uri = str_replace($old_file_wrapper, $file_wrapper, $file->getFileUri());
+             $dirname = $file_system->dirname($new_uri);
+             $file_system->prepareDirectory($dirname, FileSystemInterface::CREATE_DIRECTORY);
+-            file_move($file, $new_uri);
++            \Drupal::service('file.repository')->move($file, $new_uri);
+           }
+         }
+       }
+diff --git a/photos_access/src/Controller/DefaultController.php b/photos_access/src/Controller/DefaultController.php
+index 6bf851b..36b2dae 100644
+--- a/photos_access/src/Controller/DefaultController.php
++++ b/photos_access/src/Controller/DefaultController.php
+@@ -17,14 +17,14 @@ class DefaultController extends ControllerBase {
+   /**
+    * The form builder.
+    *
+-   * @var \Drupal\Core\Form\FormBuilderInterface
++   * @var FormBuilderInterface
+    */
+   protected $formBuilder;
+ 
+   /**
+    * The renderer service.
+    *
+-   * @var Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+@@ -49,7 +49,7 @@ class DefaultController extends ControllerBase {
+   /**
+    * Photos album password required page.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The album node that requires the password.
+    */
+   public function photosAccessPasswordPage(NodeInterface $node) {
+diff --git a/photos_access/src/Form/PhotosAccessPasswordForm.php b/photos_access/src/Form/PhotosAccessPasswordForm.php
+index 51fec22..b9d6c9e 100644
+--- a/photos_access/src/Form/PhotosAccessPasswordForm.php
++++ b/photos_access/src/Form/PhotosAccessPasswordForm.php
+@@ -17,14 +17,14 @@ class PhotosAccessPasswordForm extends FormBase {
+   /**
+    * The database connection used to check the password.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Construct the PhotosAccessPasswordForm.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection which will be used to check the password.
+    */
+   public function __construct(Connection $connection) {
+diff --git a/photos_access/src/Plugin/views/access/PhotosAccess.php b/photos_access/src/Plugin/views/access/PhotosAccess.php
+index 95d104b..1ec43d5 100644
+--- a/photos_access/src/Plugin/views/access/PhotosAccess.php
++++ b/photos_access/src/Plugin/views/access/PhotosAccess.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos_access\Plugin\views\access;
+ 
++use Drupal\node\Entity\Node;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Cache\CacheableDependencyInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -28,14 +29,14 @@ class PhotosAccess extends AccessPluginBase implements CacheableDependencyInterf
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The current route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+@@ -48,9 +49,9 @@ class PhotosAccess extends AccessPluginBase implements CacheableDependencyInterf
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity manager service.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_manager, RouteMatchInterface $route_match) {
+@@ -115,7 +116,7 @@ class PhotosAccess extends AccessPluginBase implements CacheableDependencyInterf
+     if ($account->hasPermission('view photo')) {
+       if ($viewId && $viewId != 3) {
+         // Check node access.
+-        /** @var \Drupal\node\Entity\Node $node */
++        /** @var Node $node */
+         $node = $this->entityTypeManager->getStorage('node')->load($nid);
+         $access = $node->access('view');
+       }
+diff --git a/photos_access/tests/src/Functional/PhotosAccessTest.php b/photos_access/tests/src/Functional/PhotosAccessTest.php
+index f0ef6bd..d6a0f89 100644
+--- a/photos_access/tests/src/Functional/PhotosAccessTest.php
++++ b/photos_access/tests/src/Functional/PhotosAccessTest.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\Tests\photos\Functional;
+ 
++use Drupal\Core\Session\AccountInterface;
++use Drupal\node\Entity\Node;
++use Drupal\Core\Entity\ContentEntityStorageInterface;
++use Drupal\Core\File\FileSystemInterface;
++use Drupal\file\FileInterface;
+ use Drupal\photos\Entity\PhotosImage;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -38,35 +43,35 @@ class PhotosAccessTest extends BrowserTestBase {
+   /**
+    * The user account for testing.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+    * The user account for testing role access.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $accountEditOwnPhotosRole;
+ 
+   /**
+    * The user account for testing access denied.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $accountViewPhotosOnly;
+ 
+   /**
+    * The album node.
+    *
+-   * @var \Drupal\node\Entity\Node
++   * @var Node
+    */
+   protected $album;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Create admin user and adjust photos admin settings. This user will also
+@@ -124,7 +129,7 @@ class PhotosAccessTest extends BrowserTestBase {
+     $this->accountEditOwnPhotosRole->addRole('role_access_test');
+     $this->accountEditOwnPhotosRole->save();
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $storage */
++    /** @var ContentEntityStorageInterface $storage */
+     $storage = $this->container->get('entity_type.manager')->getStorage('node');
+     // Create a locked photos node.
+     $this->drupalGet('/node/add/photos');
+@@ -135,16 +140,16 @@ class PhotosAccessTest extends BrowserTestBase {
+     ];
+     $this->submitForm($edit, 'Save');
+     $storage->resetCache([1]);
+-    /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $storage */
++    /** @var ContentEntityStorageInterface $storage */
+     $storage = $this->container->get('entity_type.manager')->getStorage('node');
+     $this->album = $storage->load(1);
+     $this->assertNotNull($this->album->photos_privacy);
+     $this->assertEquals($this->album->photos_privacy['viewid'], 1, 'Album is set to locked.');
+ 
+     // Get test image file.
+-    /** @var \Drupal\Core\File\FileSystemInterface $fileSystem */
++    /** @var FileSystemInterface $fileSystem */
+     $fileSystem = \Drupal::service('file_system');
+-    $testImageFile = drupal_get_path('module', 'photos') . '/tests/images/photos-test-picture.jpg';
++    $testImageFile = \Drupal::service('extension.list.module')->getPath('photos') . '/tests/images/photos-test-picture.jpg';
+     // Add image to album.
+     $edit = [
+       'files[images_0]' => $fileSystem->realpath($testImageFile),
+@@ -161,7 +166,7 @@ class PhotosAccessTest extends BrowserTestBase {
+     // Get album images.
+     $photosImage = $this->container->get('entity_type.manager')->getStorage('photos_image')->load(1);
+ 
+-    /** @var \Drupal\file\FileInterface $file */
++    /** @var FileInterface $file */
+     $file = $this->container->get('entity_type.manager')->getStorage('file')->load($photosImage->field_image->target_id);
+ 
+     // Check that owner does have access.
+@@ -300,7 +305,7 @@ class PhotosAccessTest extends BrowserTestBase {
+       $this->assertSession()->responseContains('Role access');
+     }
+     $this->submitForm($edit, 'Save');
+-    /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $storage */
++    /** @var ContentEntityStorageInterface $storage */
+     $storage = $this->container->get('entity_type.manager')->getStorage('node');
+     // Must explicitly clear cache to see privacy settings?
+     // @see https://www.drupal.org/project/drupal/issues/3040878
+@@ -317,7 +322,7 @@ class PhotosAccessTest extends BrowserTestBase {
+   /**
+    * Test access to photo album, photos node, photos_image and raw image file.
+    *
+-   * @param \Drupal\photos\Entity\PhotosImage $photosImage
++   * @param PhotosImage $photosImage
+    *   The photos_image entity.
+    * @param int $viewCode
+    *   The expected response code.
+diff --git a/src/Controller/PhotosAlbumController.php b/src/Controller/PhotosAlbumController.php
+index 70401f7..506ad43 100644
+--- a/src/Controller/PhotosAlbumController.php
++++ b/src/Controller/PhotosAlbumController.php
+@@ -31,77 +31,77 @@ class PhotosAlbumController extends ControllerBase {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The image factory.
+    *
+-   * @var \Drupal\Core\Image\ImageFactory
++   * @var ImageFactory
+    */
+   protected $imageFactory;
+ 
+   /**
+    * The library discovery service.
+    *
+-   * @var \Drupal\Core\Asset\LibraryDiscoveryInterface
++   * @var LibraryDiscoveryInterface
+    */
+   protected $libraryDiscovery;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The current request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The current route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity manager service.
+-   * @param \Drupal\Core\Image\ImageFactory $image_factory
++   * @param ImageFactory $image_factory
+    *   The image factory.
+-   * @param \Drupal\Core\Asset\LibraryDiscoveryInterface $library_discovery
++   * @param LibraryDiscoveryInterface $library_discovery
+    *   The library discovery service.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The current request stack.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+    */
+   public function __construct(Connection $connection, DateFormatterInterface $date_formatter, EntityTypeManagerInterface $entity_manager, ImageFactory $image_factory, LibraryDiscoveryInterface $library_discovery, RendererInterface $renderer, RequestStack $request_stack, RouteMatchInterface $route_match) {
+@@ -144,12 +144,12 @@ class PhotosAlbumController extends ControllerBase {
+   /**
+    * A custom access check.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The current user.
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The album node entity.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   The access result.
+    */
+   public function access(AccountInterface $account, NodeInterface $node) {
+diff --git a/src/Controller/PhotosEditController.php b/src/Controller/PhotosEditController.php
+index 838469f..722dc82 100644
+--- a/src/Controller/PhotosEditController.php
++++ b/src/Controller/PhotosEditController.php
+@@ -27,68 +27,68 @@ class PhotosEditController extends ControllerBase {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The current path.
+    *
+-   * @var \Drupal\Core\Path\CurrentPathStack
++   * @var CurrentPathStack
+    */
+   protected $currentPath;
+ 
+   /**
+    * The FormBuilder object.
+    *
+-   * @var \Drupal\Core\Form\FormBuilderInterface
++   * @var FormBuilderInterface
+    */
+   protected $formBuilder;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The current request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The current route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Path\CurrentPathStack $current_path
++   * @param CurrentPathStack $current_path
+    *   The current path.
+-   * @param \Drupal\Core\Form\FormBuilderInterface $form_builder
++   * @param FormBuilderInterface $form_builder
+    *   The form builder service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The current request stack.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+    */
+   public function __construct(Connection $connection, CurrentPathStack $current_path, FormBuilderInterface $form_builder, ModuleHandlerInterface $module_handler, RendererInterface $renderer, RequestStack $request_stack, RouteMatchInterface $route_match) {
+@@ -119,12 +119,12 @@ class PhotosEditController extends ControllerBase {
+   /**
+    * A custom access check.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The album node entity.
+-   * @param \Drupal\photos\PhotosImageInterface $photos_image
++   * @param PhotosImageInterface $photos_image
+    *   The photos_image entity.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   The access result.
+    */
+   public function access(NodeInterface $node, PhotosImageInterface $photos_image) {
+@@ -147,12 +147,12 @@ class PhotosEditController extends ControllerBase {
+   /**
+    * Set album cover.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The photo album node.
+-   * @param \Drupal\photos\PhotosImageInterface $photos_image
++   * @param PhotosImageInterface $photos_image
+    *   The photos_image entity.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   Redirect to destination or photo album node page.
+    */
+   public function setAlbumCover(NodeInterface $node, PhotosImageInterface $photos_image) {
+diff --git a/src/Controller/PhotosImageViewController.php b/src/Controller/PhotosImageViewController.php
+index 0199553..23eb5a5 100644
+--- a/src/Controller/PhotosImageViewController.php
++++ b/src/Controller/PhotosImageViewController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Controller;
+ 
++use Drupal\photos\Entity\PhotosImage;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Asset\LibraryDiscoveryInterface;
+ use Drupal\Core\Database\Connection;
+@@ -28,45 +29,45 @@ class PhotosImageViewController extends EntityViewController {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The library discovery service.
+    *
+-   * @var \Drupal\Core\Asset\LibraryDiscoveryInterface
++   * @var LibraryDiscoveryInterface
+    */
+   protected $libraryDiscovery;
+ 
+   /**
+    * The current route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The entity repository service.
+    *
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer service.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Asset\LibraryDiscoveryInterface $library_discovery
++   * @param LibraryDiscoveryInterface $library_discovery
+    *   The library discovery service.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, RendererInterface $renderer, Connection $connection, LibraryDiscoveryInterface $library_discovery, RouteMatchInterface $route_match, EntityRepositoryInterface $entity_repository = NULL) {
+@@ -93,7 +94,7 @@ class PhotosImageViewController extends EntityViewController {
+   /**
+    * A custom access check.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Run access checks for this account.
+    */
+   public function access(AccountInterface $account) {
+@@ -119,7 +120,7 @@ class PhotosImageViewController extends EntityViewController {
+     }
+ 
+     $build = parent::view($photos_image, $view_mode);
+-    /** @var \Drupal\photos\Entity\PhotosImage $photosImage */
++    /** @var PhotosImage $photosImage */
+     $photosImage = $photos_image;
+ 
+     // Get config settings.
+@@ -261,7 +262,7 @@ class PhotosImageViewController extends EntityViewController {
+   /**
+    * The _title_callback for the page that renders a single photos image.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $photos_image
++   * @param EntityInterface $photos_image
+    *   The current photos_image.
+    *
+    * @return string
+diff --git a/src/Controller/PhotosLegacyImageViewController.php b/src/Controller/PhotosLegacyImageViewController.php
+index f911e30..27888b4 100644
+--- a/src/Controller/PhotosLegacyImageViewController.php
++++ b/src/Controller/PhotosLegacyImageViewController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Controller;
+ 
++use Drupal\photos\Entity\PhotosImage;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Link;
+ use Drupal\Core\Url;
+@@ -16,7 +17,7 @@ class PhotosLegacyImageViewController extends PhotosImageViewController {
+    * {@inheritdoc}
+    */
+   public function view(EntityInterface $photos_image, $view_mode = 'full', $langcode = NULL) {
+-    /** @var \Drupal\photos\Entity\PhotosImage $photosImage */
++    /** @var PhotosImage $photosImage */
+     $photosImage = $photos_image;
+     if (!$photosImage) {
+       throw new NotFoundHttpException();
+diff --git a/src/Controller/PhotosRearrangeController.php b/src/Controller/PhotosRearrangeController.php
+index 18b0514..50f857e 100644
+--- a/src/Controller/PhotosRearrangeController.php
++++ b/src/Controller/PhotosRearrangeController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Controller;
+ 
++use Drupal\photos\PhotosImageInterface;
+ use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Utility\Html;
+@@ -30,50 +31,50 @@ class PhotosRearrangeController extends ControllerBase {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The current request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The current route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity manager service.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The current request stack.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+    */
+   public function __construct(Connection $connection, EntityTypeManagerInterface $entity_manager, RendererInterface $renderer, RequestStack $request_stack, RouteMatchInterface $route_match) {
+@@ -111,14 +112,14 @@ class PhotosRearrangeController extends ControllerBase {
+   /**
+    * A custom access check.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The current user.
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The album node entity.
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user account being viewed.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   The access result.
+    */
+   public function access(AccountInterface $account = NULL, NodeInterface $node = NULL, User $user = NULL) {
+@@ -390,7 +391,7 @@ class PhotosRearrangeController extends ControllerBase {
+         foreach ($order as $imageId) {
+           if ($type == 'images') {
+             // Save sort order for images in album.
+-            /** @var \Drupal\photos\PhotosImageInterface $photosImage */
++            /** @var PhotosImageInterface $photosImage */
+             $photosImage = $photosImageStorage->load($imageId);
+             $photosImage->set('weight', $weight);
+             $photosImage->save();
+diff --git a/src/Controller/PhotosStatisticsUpdateController.php b/src/Controller/PhotosStatisticsUpdateController.php
+index 33ad6bd..fad8e1e 100644
+--- a/src/Controller/PhotosStatisticsUpdateController.php
++++ b/src/Controller/PhotosStatisticsUpdateController.php
+@@ -17,14 +17,14 @@ class PhotosStatisticsUpdateController extends ControllerBase {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(Connection $connection) {
+@@ -43,7 +43,7 @@ class PhotosStatisticsUpdateController extends ControllerBase {
+   /**
+    * Ajax callback to record photos_image visit.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   A JSON object containing the image visit count.
+    */
+   public function updateCount() {
+diff --git a/src/Entity/PhotosImage.php b/src/Entity/PhotosImage.php
+index a1c9165..3699cf7 100644
+--- a/src/Entity/PhotosImage.php
++++ b/src/Entity/PhotosImage.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Entity;
+ 
++use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Entity\EditorialContentEntityBase;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -160,7 +161,7 @@ class PhotosImage extends EditorialContentEntityBase implements PhotosImageInter
+     $photosImageFields = \Drupal::service('entity_field.manager')->getFieldDefinitions('photos_image', 'photos_image');
+     // @todo warn if other unhandled fields exist?
+     foreach ($photosImageFields as $key => $field) {
+-      /** @var \Drupal\Core\Field\FieldDefinitionInterface $field */
++      /** @var FieldDefinitionInterface $field */
+       $fieldType = $field->getType();
+       if ($fieldType == 'file' || $fieldType == 'image') {
+         // Check image and file fields.
+diff --git a/src/Form/PhotosAdminLegacySettingsForm.php b/src/Form/PhotosAdminLegacySettingsForm.php
+index 01a4976..cec5ce5 100644
+--- a/src/Form/PhotosAdminLegacySettingsForm.php
++++ b/src/Form/PhotosAdminLegacySettingsForm.php
+@@ -19,7 +19,7 @@ class PhotosAdminLegacySettingsForm extends ConfigFormBase {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -33,9 +33,9 @@ class PhotosAdminLegacySettingsForm extends ConfigFormBase {
+   /**
+    * Constructs PhotosAdminSettingsForm.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Form/PhotosAdminSettingsForm.php b/src/Form/PhotosAdminSettingsForm.php
+index 7d88361..f78369b 100644
+--- a/src/Form/PhotosAdminSettingsForm.php
++++ b/src/Form/PhotosAdminSettingsForm.php
+@@ -24,28 +24,28 @@ class PhotosAdminSettingsForm extends ConfigFormBase {
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The route builder.
+    *
+-   * @var \Drupal\Core\Routing\RouteBuilderInterface
++   * @var RouteBuilderInterface
+    */
+   protected $routeBuilder;
+ 
+@@ -59,15 +59,15 @@ class PhotosAdminSettingsForm extends ConfigFormBase {
+   /**
+    * Constructs PhotosAdminSettingsForm.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
++   * @param EntityDisplayRepositoryInterface $entity_display_repository
+    *   The entity display repository.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Routing\RouteBuilderInterface $route_builder
++   * @param RouteBuilderInterface $route_builder
+    *   The route builder.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, EntityDisplayRepositoryInterface $entity_display_repository, EntityFieldManagerInterface $entity_field_manager, ModuleHandlerInterface $module_handler, RouteBuilderInterface $route_builder) {
+diff --git a/src/Form/PhotosAdminStructureForm.php b/src/Form/PhotosAdminStructureForm.php
+index 164f185..7fd4e90 100644
+--- a/src/Form/PhotosAdminStructureForm.php
++++ b/src/Form/PhotosAdminStructureForm.php
+@@ -19,14 +19,14 @@ class PhotosAdminStructureForm extends ConfigFormBase {
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -40,11 +40,11 @@ class PhotosAdminStructureForm extends ConfigFormBase {
+   /**
+    * Constructs PhotosAdminSettingsForm.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
++   * @param EntityDisplayRepositoryInterface $entity_display_repository
+    *   The entity display repository.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, EntityDisplayRepositoryInterface $entity_display_repository, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Form/PhotosDirectoryImportForm.php b/src/Form/PhotosDirectoryImportForm.php
+index fdd8d8f..3a44170 100644
+--- a/src/Form/PhotosDirectoryImportForm.php
++++ b/src/Form/PhotosDirectoryImportForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Form;
+ 
++use Drupal\Core\Image\Image;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Database\Connection;
+@@ -28,41 +29,41 @@ class PhotosDirectoryImportForm extends FormBase {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The file system service.
+    *
+-   * @var \Drupal\Core\File\FileSystem
++   * @var FileSystem
+    */
+   protected $fileSystem;
+ 
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity manager service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\File\FileSystem $file_system
++   * @param FileSystem $file_system
+    *   The file system service.
+    */
+   public function __construct(Connection $connection, EntityTypeManagerInterface $entity_manager, ModuleHandlerInterface $module_handler, FileSystem $file_system) {
+@@ -260,7 +261,7 @@ class PhotosDirectoryImportForm extends FormBase {
+    *
+    * @param array $files
+    *   The files to be moved or copied.
+-   * @param \Drupal\user\Entity\User $account
++   * @param User $account
+    *   The selected user account.
+    * @param int $nid
+    *   The album node id.
+@@ -304,7 +305,7 @@ class PhotosDirectoryImportForm extends FormBase {
+         }
+         if ($file_processed) {
+           // Save file to album. Include title and description.
+-          /** @var \Drupal\Core\Image\Image $image */
++          /** @var Image $image */
+           $image = \Drupal::service('image.factory')->get($file_uri);
+           if ($image->getWidth()) {
+             // Create a file entity.
+diff --git a/src/Form/PhotosImageAddForm.php b/src/Form/PhotosImageAddForm.php
+index e2546a3..44e5c19 100644
+--- a/src/Form/PhotosImageAddForm.php
++++ b/src/Form/PhotosImageAddForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Form;
+ 
++use Drupal\photos\PhotosImageInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Database\Connection;
+@@ -26,49 +27,49 @@ class PhotosImageAddForm extends ContentEntityForm {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The Current User object.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+@@ -128,7 +129,7 @@ class PhotosImageAddForm extends ContentEntityForm {
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+     // Save changes.
+-    /** @var \Drupal\photos\PhotosImageInterface $photosImage */
++    /** @var PhotosImageInterface $photosImage */
+     $photosImage = $this->entity;
+     $photosImage->save();
+ 
+diff --git a/src/Form/PhotosImageDeleteForm.php b/src/Form/PhotosImageDeleteForm.php
+index e1e4725..cf38c60 100644
+--- a/src/Form/PhotosImageDeleteForm.php
++++ b/src/Form/PhotosImageDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Form;
+ 
++use Drupal\photos\PhotosImageInterface;
+ use Drupal\Core\Entity\ContentEntityDeleteForm;
+ 
+ /**
+@@ -48,7 +49,7 @@ class PhotosImageDeleteForm extends ContentEntityDeleteForm {
+    * {@inheritdoc}
+    */
+   protected function getRedirectUrl() {
+-    /** @var \Drupal\photos\PhotosImageInterface $entity */
++    /** @var PhotosImageInterface $entity */
+     $entity = $this->getEntity();
+     return $entity->getAlbumUrl();
+   }
+@@ -57,7 +58,7 @@ class PhotosImageDeleteForm extends ContentEntityDeleteForm {
+    * {@inheritdoc}
+    */
+   protected function logDeletionMessage() {
+-    /** @var \Drupal\photos\PhotosImageInterface $entity */
++    /** @var PhotosImageInterface $entity */
+     $entity = $this->getEntity();
+     $this->logger('photos')->notice('Deleted image %title.', ['%title' => $entity->label()]);
+   }
+diff --git a/src/Form/PhotosImageEditForm.php b/src/Form/PhotosImageEditForm.php
+index 76be9de..a22df95 100644
+--- a/src/Form/PhotosImageEditForm.php
++++ b/src/Form/PhotosImageEditForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Form;
+ 
++use Drupal\photos\PhotosImageInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Database\Connection;
+@@ -28,49 +29,49 @@ class PhotosImageEditForm extends ContentEntityForm {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The Current User object.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+@@ -111,7 +112,7 @@ class PhotosImageEditForm extends ContentEntityForm {
+    * {@inheritdoc}
+    */
+   public function form(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\photos\PhotosImageInterface $photosImage */
++    /** @var PhotosImageInterface $photosImage */
+     $photosImage = $this->entity;
+ 
+     // @todo phase out type (no more sub-albums...).
+diff --git a/src/Form/PhotosMediaLibraryForm.php b/src/Form/PhotosMediaLibraryForm.php
+index 7f3b25c..10c6775 100644
+--- a/src/Form/PhotosMediaLibraryForm.php
++++ b/src/Form/PhotosMediaLibraryForm.php
+@@ -93,7 +93,7 @@ class PhotosMediaLibraryForm extends AddFormBase {
+    *
+    * @param array $form
+    *   The form render array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    */
+   public function addButtonSubmit(array $form, FormStateInterface $form_state) {
+diff --git a/src/Form/PhotosUploadForm.php b/src/Form/PhotosUploadForm.php
+index abd90e9..1db8e61 100644
+--- a/src/Form/PhotosUploadForm.php
++++ b/src/Form/PhotosUploadForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\photos\Form;
+ 
++use Psr\Log\LoggerInterface;
++use Drupal\file\FileInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Database\Connection;
+@@ -31,93 +33,93 @@ class PhotosUploadForm extends FormBase {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The file system service.
+    *
+-   * @var \Drupal\Core\File\FileSystem
++   * @var FileSystem
+    */
+   protected $fileSystem;
+ 
+   /**
+    * The image factory.
+    *
+-   * @var \Drupal\Core\Image\ImageFactory
++   * @var ImageFactory
+    */
+   protected $imageFactory;
+ 
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The current route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The photos upload handler.
+    *
+-   * @var \Drupal\photos\PhotosUploadInterface
++   * @var PhotosUploadInterface
+    */
+   protected $photosUpload;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity manager service.
+-   * @param \Drupal\Core\File\FileSystem $file_system
++   * @param FileSystem $file_system
+    *   The file system service.
+-   * @param \Drupal\Core\Image\ImageFactory $image_factory
++   * @param ImageFactory $image_factory
+    *   The image factory.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+-   * @param \Drupal\photos\PhotosUploadInterface $photos_upload
++   * @param PhotosUploadInterface $photos_upload
+    *   The photos upload handler.
+    */
+   public function __construct(Connection $connection, EntityFieldManagerInterface $entity_field_manager, EntityTypeManagerInterface $entity_manager, FileSystem $file_system, ImageFactory $image_factory, MessengerInterface $messenger, ModuleHandlerInterface $module_handler, RouteMatchInterface $route_match, PhotosUploadInterface $photos_upload) {
+@@ -160,10 +162,10 @@ class PhotosUploadForm extends FormBase {
+   /**
+    * A custom access check.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The album node entity.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   The access result.
+    */
+   public function access(NodeInterface $node) {
+@@ -352,7 +354,7 @@ class PhotosUploadForm extends FormBase {
+               $image = $this->imageFactory->get($file_uri);
+               if (isset($path_parts['extension']) && $path_parts['extension'] && $image->getWidth()) {
+                 // Create a file entity.
+-                /** @var \Drupal\file\FileInterface $file */
++                /** @var FileInterface $file */
+                 $file = $this->entityTypeManager->getStorage('file')->create([
+                   'uri' => $file_uri,
+                   'uid' => $user->id(),
+@@ -435,7 +437,7 @@ class PhotosUploadForm extends FormBase {
+               // @todo file_validate_is_image?
+               if (isset($path_parts['extension']) && $path_parts['extension'] && $image->getWidth()) {
+                 // Create a file entity.
+-                /** @var \Drupal\file\FileInterface $file */
++                /** @var FileInterface $file */
+                 $file = $this->entityTypeManager->getStorage('file')->create([
+                   'uri' => $file_uri,
+                   'uid' => $user->id(),
+diff --git a/src/PhotosAccessControlHandler.php b/src/PhotosAccessControlHandler.php
+index 053db2a..c40a215 100644
+--- a/src/PhotosAccessControlHandler.php
++++ b/src/PhotosAccessControlHandler.php
+@@ -19,7 +19,7 @@ class PhotosAccessControlHandler extends EntityAccessControlHandler implements E
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -36,9 +36,9 @@ class PhotosAccessControlHandler extends EntityAccessControlHandler implements E
+   /**
+    * Constructs the photos access control handler instance.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity manager service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityTypeManagerInterface $entity_manager) {
+diff --git a/src/PhotosImageFile.php b/src/PhotosImageFile.php
+index 82a50f0..2dd2916 100644
+--- a/src/PhotosImageFile.php
++++ b/src/PhotosImageFile.php
+@@ -151,7 +151,7 @@ class PhotosImageFile {
+     $style->createDerivative($uri, $destination);
+ 
+     // Return URL.
+-    return file_create_url($destination);
++    return \Drupal::service('file_url_generator')->generateAbsoluteString($destination);
+   }
+ 
+   /**
+@@ -166,7 +166,7 @@ class PhotosImageFile {
+         $image_url = ImageStyle::load($style_name)->buildUrl($uri);
+       }
+       else {
+-        $image_url = file_create_url($uri);
++        $image_url = \Drupal::service('file_url_generator')->generateAbsoluteString($uri);
+       }
+     }
+     else {
+diff --git a/src/PhotosImageInterface.php b/src/PhotosImageInterface.php
+index 64a9e18..fbbd077 100644
+--- a/src/PhotosImageInterface.php
++++ b/src/PhotosImageInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos;
+ 
++use Drupal\Core\Url;
+ use Drupal\Core\Entity\EntityPublishedInterface;
+ use Drupal\Core\Entity\RevisionLogInterface;
+ use Drupal\user\EntityOwnerInterface;
+@@ -110,7 +111,7 @@ interface PhotosImageInterface extends ContentEntityInterface, EntityChangedInte
+   /**
+    * Gets the album url.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   The album url.
+    */
+   public function getAlbumUrl();
+diff --git a/src/PhotosImageListBuilder.php b/src/PhotosImageListBuilder.php
+index 474ecff..c2b42c5 100644
+--- a/src/PhotosImageListBuilder.php
++++ b/src/PhotosImageListBuilder.php
+@@ -20,20 +20,20 @@ class PhotosImageListBuilder extends EntityListBuilder {
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new PhotosImageListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Routing\RedirectDestinationInterface $redirect_destination
++   * @param RedirectDestinationInterface $redirect_destination
+    *   The redirect destination service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, DateFormatterInterface $date_formatter, RedirectDestinationInterface $redirect_destination) {
+@@ -89,7 +89,7 @@ class PhotosImageListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\photos\PhotosImageInterface $entity */
++    /** @var PhotosImageInterface $entity */
+     $langcode = $entity->language()->getId();
+     $uri = $entity->toUrl();
+     $options = $uri->getOptions();
+diff --git a/src/PhotosImageStorageInterface.php b/src/PhotosImageStorageInterface.php
+index 455470e..3f96452 100644
+--- a/src/PhotosImageStorageInterface.php
++++ b/src/PhotosImageStorageInterface.php
+@@ -14,7 +14,7 @@ interface PhotosImageStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Gets a list of image revision IDs for a specific image.
+    *
+-   * @param \Drupal\photos\PhotosImageInterface $image
++   * @param PhotosImageInterface $image
+    *   The image entity.
+    *
+    * @return int[]
+@@ -25,7 +25,7 @@ interface PhotosImageStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Gets a list of revision IDs having a given user as image author.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user entity.
+    *
+    * @return int[]
+@@ -36,7 +36,7 @@ interface PhotosImageStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Counts the number of revisions in the default language.
+    *
+-   * @param \Drupal\photos\PhotosImageInterface $image
++   * @param PhotosImageInterface $image
+    *   The image entity.
+    *
+    * @return int
+@@ -47,7 +47,7 @@ interface PhotosImageStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Moves an image from one album to another.
+    *
+-   * @param \Drupal\photos\PhotosImageInterface $image
++   * @param PhotosImageInterface $image
+    *   The image entity.
+    * @param int $new_album
+    *   The new image album.
+@@ -60,7 +60,7 @@ interface PhotosImageStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Unsets the language for all images with the given language.
+    *
+-   * @param \Drupal\Core\Language\LanguageInterface $language
++   * @param LanguageInterface $language
+    *   The language object.
+    */
+   public function clearRevisionsLanguage(LanguageInterface $language);
+diff --git a/src/PhotosUpload.php b/src/PhotosUpload.php
+index 5b9f5e0..9447f86 100644
+--- a/src/PhotosUpload.php
++++ b/src/PhotosUpload.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\photos;
+ 
++use Drupal\Core\Image\Image;
++use Drupal\media\MediaInterface;
+ use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Render\PlainTextOutput;
+@@ -35,122 +37,122 @@ class PhotosUpload implements PhotosUploadInterface {
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The Current User object.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The file system service.
+    *
+-   * @var \Drupal\Core\File\FileSystem
++   * @var FileSystem
+    */
+   protected $fileSystem;
+ 
+   /**
+    * File usage interface to configurate an file object.
+    *
+-   * @var \Drupal\file\FileUsage\FileUsageInterface
++   * @var FileUsageInterface
+    */
+   protected $fileUsage;
+ 
+   /**
+    * The image factory.
+    *
+-   * @var \Drupal\Core\Image\ImageFactory
++   * @var ImageFactory
+    */
+   protected $imageFactory;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The stream wrapper manager.
+    *
+-   * @var \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface
++   * @var StreamWrapperManagerInterface
+    */
+   protected $streamWrapperManager;
+ 
+   /**
+    * The token replacement instance.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $token;
+ 
+   /**
+    * Transliteration service.
+    *
+-   * @var \Drupal\Component\Transliteration\TransliterationInterface
++   * @var TransliterationInterface
+    */
+   protected $transliteration;
+ 
+   /**
+    * Creates a new AliasCleaner.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity manager service.
+-   * @param \Drupal\Core\File\FileSystem $file_system
++   * @param FileSystem $file_system
+    *   The file system service.
+-   * @param \Drupal\file\FileUsage\FileUsageInterface $file_usage
++   * @param FileUsageInterface $file_usage
+    *   File usage service.
+-   * @param \Drupal\Core\Image\ImageFactory $image_factory
++   * @param ImageFactory $image_factory
+    *   The image factory.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface $stream_wrapper_manager
++   * @param StreamWrapperManagerInterface $stream_wrapper_manager
+    *   The stream wrapper manager.
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   The token replacement instance.
+-   * @param \Drupal\Component\Transliteration\TransliterationInterface $transliteration
++   * @param TransliterationInterface $transliteration
+    *   The transliteration service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, Connection $connection, AccountInterface $current_user, EntityFieldManagerInterface $entity_field_manager, EntityTypeManagerInterface $entity_manager, FileSystem $file_system, FileUsageInterface $file_usage, ImageFactory $image_factory, MessengerInterface $messenger, ModuleHandlerInterface $module_handler, StreamWrapperManagerInterface $stream_wrapper_manager, Token $token, TransliterationInterface $transliteration) {
+@@ -250,7 +252,7 @@ class PhotosUpload implements PhotosUploadInterface {
+       }
+ 
+       // Create photos_image entity.
+-      /** @var \Drupal\Core\Image\Image $image */
++      /** @var Image $image */
+       $image = $this->imageFactory->get($file->getFileUri());
+       $defaultWeight = $this->connection->select('photos_image_field_data', 'i')
+         ->fields('i', ['weight'])
+@@ -393,7 +395,7 @@ class PhotosUpload implements PhotosUploadInterface {
+    */
+   public function saveExistingMedia($mediaId, $albumId) {
+     $config = $this->configFactory->get('photos.settings');
+-    /** @var \Drupal\media\MediaInterface $mediaItem */
++    /** @var MediaInterface $mediaItem */
+     $mediaItem = NULL;
+     try {
+       $mediaItem = $this->entityTypeManager->getStorage('media')
+@@ -491,7 +493,7 @@ class PhotosUpload implements PhotosUploadInterface {
+               break;
+             }
+             $path = $this->fileSystem->createFilename($image['name'], $this->path($scheme));
+-            if ($temp_file = file_save_data($zip->getFromIndex($x), $path)) {
++            if ($temp_file = \Drupal::service('file.repository')->writeData($zip->getFromIndex($x), $path)) {
+               // Update file values.
+               $temp_file->album_id = $params['album_id'];
+               $temp_file->nid = $params['nid'];
+diff --git a/src/PhotosUploadInterface.php b/src/PhotosUploadInterface.php
+index d791b9c..94f37f5 100644
+--- a/src/PhotosUploadInterface.php
++++ b/src/PhotosUploadInterface.php
+@@ -37,7 +37,7 @@ interface PhotosUploadInterface {
+   /**
+    * Attach image file to PhotosImage entity.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   The file entity.
+    *
+    * @return bool
+diff --git a/src/Plugin/Block/PhotosInformation.php b/src/Plugin/Block/PhotosInformation.php
+index 91d9de0..d0e182f 100644
+--- a/src/Plugin/Block/PhotosInformation.php
++++ b/src/Plugin/Block/PhotosInformation.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Plugin\Block;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Access\AccessResult;
+@@ -28,28 +29,28 @@ class PhotosInformation extends BlockBase implements ContainerFactoryPluginInter
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The current request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The current route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+@@ -62,13 +63,13 @@ class PhotosInformation extends BlockBase implements ContainerFactoryPluginInter
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity manager service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The current request stack.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, Connection $connection, EntityTypeManagerInterface $entity_manager, RequestStack $request_stack, RouteMatchInterface $route_match) {
+@@ -131,7 +132,7 @@ class PhotosInformation extends BlockBase implements ContainerFactoryPluginInter
+       $image = $query->execute()->fetchObject();
+       $blockImage = [];
+       if ($image) {
+-        /** @var \Drupal\user\UserInterface $account */
++        /** @var UserInterface $account */
+         try {
+           $account = $this->entityTypeManager->getStorage('user')
+             ->load($image->uid);
+diff --git a/src/Plugin/Field/FieldFormatter/PhotosAlbumCoverImageFormatter.php b/src/Plugin/Field/FieldFormatter/PhotosAlbumCoverImageFormatter.php
+index 31dc54a..57a84a4 100644
+--- a/src/Plugin/Field/FieldFormatter/PhotosAlbumCoverImageFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/PhotosAlbumCoverImageFormatter.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Plugin\Field\FieldFormatter;
+ 
++use Drupal\photos\PhotosImageInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Field\Plugin\Field\FieldType\EntityReferenceItem;
+@@ -68,7 +69,7 @@ class PhotosAlbumCoverImageFormatter extends ImageFormatter {
+     $elements = parent::viewElements($items, $langcode);
+     $imageLinkSetting = $this->getSetting('image_link');
+     if ($imageLinkSetting == 'photos_album') {
+-      /** @var \Drupal\photos\PhotosImageInterface $photosImage */
++      /** @var PhotosImageInterface $photosImage */
+       $photosImage = $items->getEntity();
+       $url = $photosImage->getAlbumUrl();
+       foreach ($elements as $delta => $element) {
+diff --git a/src/Plugin/Field/FieldFormatter/PhotosAlbumFormatter.php b/src/Plugin/Field/FieldFormatter/PhotosAlbumFormatter.php
+index 80d4072..1abf075 100644
+--- a/src/Plugin/Field/FieldFormatter/PhotosAlbumFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/PhotosAlbumFormatter.php
+@@ -30,7 +30,7 @@ class PhotosAlbumFormatter extends EntityReferenceFormatterBase {
+   /**
+    * The renderer service.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+@@ -41,7 +41,7 @@ class PhotosAlbumFormatter extends EntityReferenceFormatterBase {
+    *   The plugin_id for the formatter.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The definition of the field to which the formatter is associated.
+    * @param array $settings
+    *   The formatter settings.
+@@ -51,11 +51,11 @@ class PhotosAlbumFormatter extends EntityReferenceFormatterBase {
+    *   The view mode.
+    * @param array $third_party_settings
+    *   Any third party settings settings.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\image\ImageStyleStorageInterface $image_style_storage
++   * @param ImageStyleStorageInterface $image_style_storage
+    *   The image style entity storage handler.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer service.
+    */
+   public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, $label, $view_mode, array $third_party_settings, AccountInterface $current_user, ImageStyleStorageInterface $image_style_storage, RendererInterface $renderer) {
+diff --git a/src/Plugin/Field/FieldFormatter/PhotosImageMediaFieldFormatter.php b/src/Plugin/Field/FieldFormatter/PhotosImageMediaFieldFormatter.php
+index b072f02..db8f56c 100644
+--- a/src/Plugin/Field/FieldFormatter/PhotosImageMediaFieldFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/PhotosImageMediaFieldFormatter.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Plugin\Field\FieldFormatter;
+ 
++use Drupal\photos\PhotosImageInterface;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Field\Plugin\Field\FieldType\EntityReferenceItem;
+@@ -70,7 +71,7 @@ class PhotosImageMediaFieldFormatter extends MediaThumbnailFormatter {
+ 
+     $imageLinkSetting = $this->getSetting('image_link');
+     if ($imageLinkSetting == 'photos_album') {
+-      /** @var \Drupal\photos\PhotosImageInterface $photosImage */
++      /** @var PhotosImageInterface $photosImage */
+       $photosImage = $items->getEntity();
+       $url = $photosImage->getAlbumUrl();
+       foreach ($elements as $delta => $element) {
+diff --git a/src/Plugin/Search/PhotosImageSearch.php b/src/Plugin/Search/PhotosImageSearch.php
+index d205679..c39081d 100644
+--- a/src/Plugin/Search/PhotosImageSearch.php
++++ b/src/Plugin/Search/PhotosImageSearch.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Plugin\Search;
+ 
++use Drupal\node\NodeInterface;
+ use Drupal\Core\Access\AccessibleInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Cache\CacheableMetadata;
+@@ -46,63 +47,63 @@ class PhotosImageSearch extends ConfigurableSearchPluginBase implements Accessib
+   /**
+    * The current database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * The replica database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $databaseReplica;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * A module manager object.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * A config object for 'search.settings'.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $searchSettings;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The Drupal account to use for checking for access to advanced search.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+    * The Renderer service to format the username and node.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The search index.
+    *
+-   * @var \Drupal\search\SearchIndexInterface
++   * @var SearchIndexInterface
+    */
+   protected $searchIndex;
+ 
+@@ -140,7 +141,7 @@ class PhotosImageSearch extends ConfigurableSearchPluginBase implements Accessib
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+@@ -174,25 +175,25 @@ class PhotosImageSearch extends ConfigurableSearchPluginBase implements Accessib
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The current database connection.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   A module manager object.
+-   * @param \Drupal\Core\Config\Config $search_settings
++   * @param Config $search_settings
+    *   A config object for 'search.settings'.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The $account object to use for checking for access to advanced search.
+-   * @param \Drupal\Core\Database\Connection|null $database_replica
++   * @param Connection|null $database_replica
+    *   (Optional) the replica database connection.
+-   * @param \Drupal\search\SearchIndexInterface $search_index
++   * @param SearchIndexInterface $search_index
+    *   The search index.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, Connection $database, EntityTypeManagerInterface $entity_type_manager, ModuleHandlerInterface $module_handler, Config $search_settings, LanguageManagerInterface $language_manager, RendererInterface $renderer, MessengerInterface $messenger, AccountInterface $account = NULL, Connection $database_replica = NULL, SearchIndexInterface $search_index = NULL) {
+@@ -258,7 +259,7 @@ class PhotosImageSearch extends ConfigurableSearchPluginBase implements Accessib
+    * This method can assume that $this->isSearchExecutable() has already been
+    * checked and returned TRUE.
+    *
+-   * @return \Drupal\Core\Database\StatementInterface|null
++   * @return StatementInterface|null
+    *   Results from search query execute() method, or NULL if the search
+    *   failed.
+    */
+@@ -350,7 +351,7 @@ class PhotosImageSearch extends ConfigurableSearchPluginBase implements Accessib
+   /**
+    * Prepares search results for rendering.
+    *
+-   * @param \Drupal\Core\Database\StatementInterface $found
++   * @param StatementInterface $found
+    *   Results found from a successful search query execute() method.
+    *
+    * @return array
+@@ -367,11 +368,11 @@ class PhotosImageSearch extends ConfigurableSearchPluginBase implements Accessib
+ 
+     foreach ($found as $item) {
+       // Render the node.
+-      /** @var \Drupal\photos\Entity\PhotosImage $photosImage */
++      /** @var PhotosImage $photosImage */
+       $photosImage = $photosImageStorage->load($item->sid)->getTranslation($item->langcode);
+       $build = $photosImageRender->view($photosImage, 'search_result', $item->langcode);
+ 
+-      /** @var \Drupal\node\NodeInterface $node */
++      /** @var NodeInterface $node */
+       $node = $nodeStorage->load($photosImage->getAlbumId())->getTranslation($item->langcode);
+ 
+       unset($build['#theme']);
+@@ -441,7 +442,7 @@ class PhotosImageSearch extends ConfigurableSearchPluginBase implements Accessib
+   /**
+    * Adds the configured rankings to the search query.
+    *
+-   * @param \Drupal\Core\Database\Query\SelectExtender $query
++   * @param SelectExtender $query
+    *   A query object that has been extended with the Search DB Extender.
+    */
+   protected function addPhotosImageRankings(SelectExtender $query) {
+@@ -505,7 +506,7 @@ class PhotosImageSearch extends ConfigurableSearchPluginBase implements Accessib
+   /**
+    * Indexes a single node.
+    *
+-   * @param \Drupal\photos\Entity\PhotosImage $photosImage
++   * @param PhotosImage $photosImage
+    *   The photos_image to index.
+    *
+    * @return array
+diff --git a/src/Plugin/migrate/destination/Photos.php b/src/Plugin/migrate/destination/Photos.php
+index c38d278..8300fa2 100644
+--- a/src/Plugin/migrate/destination/Photos.php
++++ b/src/Plugin/migrate/destination/Photos.php
+@@ -22,7 +22,7 @@ class Photos extends DestinationBase implements ContainerFactoryPluginInterface
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+@@ -35,9 +35,9 @@ class Photos extends DestinationBase implements ContainerFactoryPluginInterface
+    *   The plugin ID.
+    * @param mixed $plugin_definition
+    *   The plugin definition.
+-   * @param \Drupal\migrate\Plugin\MigrationInterface $migration
++   * @param MigrationInterface $migration
+    *   The current migration.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, MigrationInterface $migration, Connection $connection) {
+diff --git a/src/Plugin/migrate/destination/PhotosCount.php b/src/Plugin/migrate/destination/PhotosCount.php
+index 4cef9db..19be515 100644
+--- a/src/Plugin/migrate/destination/PhotosCount.php
++++ b/src/Plugin/migrate/destination/PhotosCount.php
+@@ -22,7 +22,7 @@ class PhotosCount extends DestinationBase implements ContainerFactoryPluginInter
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+@@ -35,9 +35,9 @@ class PhotosCount extends DestinationBase implements ContainerFactoryPluginInter
+    *   The plugin ID.
+    * @param mixed $plugin_definition
+    *   The plugin definition.
+-   * @param \Drupal\migrate\Plugin\MigrationInterface $migration
++   * @param MigrationInterface $migration
+    *   The current migration.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, MigrationInterface $migration, Connection $connection) {
+diff --git a/src/Plugin/migrate/destination/PhotosImage.php b/src/Plugin/migrate/destination/PhotosImage.php
+index a54dc20..c433509 100644
+--- a/src/Plugin/migrate/destination/PhotosImage.php
++++ b/src/Plugin/migrate/destination/PhotosImage.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photos\Plugin\migrate\destination;
+ 
++use Drupal\file\FileInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+@@ -29,35 +30,35 @@ class PhotosImage extends DestinationBase implements ContainerFactoryPluginInter
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The image factory service.
+    *
+-   * @var \Drupal\Core\Image\ImageFactory
++   * @var ImageFactory
+    */
+   protected $imageFactory;
+ 
+   /**
+    * The photos upload handler.
+    *
+-   * @var \Drupal\photos\PhotosUploadInterface
++   * @var PhotosUploadInterface
+    */
+   protected $photosUpload;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+@@ -70,17 +71,17 @@ class PhotosImage extends DestinationBase implements ContainerFactoryPluginInter
+    *   The plugin ID.
+    * @param mixed $plugin_definition
+    *   The plugin definition.
+-   * @param \Drupal\migrate\Plugin\MigrationInterface $migration
++   * @param MigrationInterface $migration
+    *   The current migration.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity manager service.
+-   * @param \Drupal\Core\Image\ImageFactory $image_factory
++   * @param ImageFactory $image_factory
+    *   The image factory service.
+-   * @param \Drupal\photos\PhotosUploadInterface $photos_upload
++   * @param PhotosUploadInterface $photos_upload
+    *   The photos upload service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, MigrationInterface $migration, Connection $connection, EntityTypeManagerInterface $entity_manager, ImageFactory $image_factory, PhotosUploadInterface $photos_upload, TimeInterface $time) {
+@@ -116,7 +117,7 @@ class PhotosImage extends DestinationBase implements ContainerFactoryPluginInter
+     $title = $row->getDestinationProperty('title');
+     $fid = $row->getDestinationProperty('fid');
+     try {
+-      /** @var \Drupal\file\FileInterface $file */
++      /** @var FileInterface $file */
+       $file = $this->entityTypeManager->getStorage('file')->load($fid);
+       $image = $this->imageFactory->get($file->getFileUri());
+       if ($image) {
+diff --git a/src/Plugin/views/field/PhotosImageCover.php b/src/Plugin/views/field/PhotosImageCover.php
+index ca22c41..170add3 100644
+--- a/src/Plugin/views/field/PhotosImageCover.php
++++ b/src/Plugin/views/field/PhotosImageCover.php
+@@ -24,21 +24,21 @@ class PhotosImageCover extends FieldPluginBase {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * EntityTypeManager class.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+@@ -51,11 +51,11 @@ class PhotosImageCover extends FieldPluginBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
++   * @param EntityDisplayRepositoryInterface $entity_display_repository
+    *   The entity display repository.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, Connection $connection, EntityTypeManagerInterface $entity_type_manager, EntityDisplayRepositoryInterface $entity_display_repository = NULL) {
+@@ -139,7 +139,7 @@ class PhotosImageCover extends FieldPluginBase {
+     $picture_id = $this->getValue($values);
+     $photosImage = FALSE;
+     if ($picture_id) {
+-      /** @var \Drupal\photos\Entity\PhotosImage $photosImage */
++      /** @var PhotosImage $photosImage */
+       $photosImage = $this->entityTypeManager->getStorage('photos_image')->load($picture_id);
+     }
+     else {
+diff --git a/src/Routing/PhotosRouteSubscriber.php b/src/Routing/PhotosRouteSubscriber.php
+index fdb41c6..278c5b2 100644
+--- a/src/Routing/PhotosRouteSubscriber.php
++++ b/src/Routing/PhotosRouteSubscriber.php
+@@ -14,14 +14,14 @@ class PhotosRouteSubscriber extends RouteSubscriberBase {
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Constructs a new PhotosRouteSubscriber.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory) {
+diff --git a/tests/src/Functional/AddPhotosAlbumImageTest.php b/tests/src/Functional/AddPhotosAlbumImageTest.php
+index 5b73702..fff0540 100644
+--- a/tests/src/Functional/AddPhotosAlbumImageTest.php
++++ b/tests/src/Functional/AddPhotosAlbumImageTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\photos\Functional;
+ 
++use Drupal\Core\Session\AccountInterface;
++use Drupal\Core\Entity\ContentEntityStorageInterface;
+ use Drupal\node\Entity\Node;
+ use Drupal\photos\PhotosAlbum;
+ use Drupal\Tests\BrowserTestBase;
+@@ -37,21 +39,21 @@ class AddPhotosAlbumImageTest extends BrowserTestBase {
+   /**
+    * The user account for testing.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+    * The admin user account for testing.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $adminAccount;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     // Create user with permissions to edit own photos.
+     $this->account = $this->drupalCreateUser([
+@@ -82,7 +84,7 @@ class AddPhotosAlbumImageTest extends BrowserTestBase {
+     $album->save();
+ 
+     // Get test image file.
+-    $testPhotoUri = drupal_get_path('module', 'photos') . '/tests/images/photos-test-picture.jpg';
++    $testPhotoUri = \Drupal::service('extension.list.module')->getPath('photos') . '/tests/images/photos-test-picture.jpg';
+     $fileSystem = \Drupal::service('file_system');
+ 
+     // Post image upload form.
+@@ -111,7 +113,7 @@ class AddPhotosAlbumImageTest extends BrowserTestBase {
+     $this->submitForm($edit, 'Save');
+ 
+     // Confirm that image title has been updated.
+-    /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $storage */
++    /** @var ContentEntityStorageInterface $storage */
+     $storage = $this->container->get('entity_type.manager')->getStorage('photos_image');
+     // Must explicitly clear cache to see new title.
+     // @see https://www.drupal.org/project/drupal/issues/3040878
+diff --git a/tests/src/Kernel/CreatePhotosAlbumTest.php b/tests/src/Kernel/CreatePhotosAlbumTest.php
+index 3d21a96..56e9aa5 100644
+--- a/tests/src/Kernel/CreatePhotosAlbumTest.php
++++ b/tests/src/Kernel/CreatePhotosAlbumTest.php
+@@ -31,7 +31,7 @@ class CreatePhotosAlbumTest extends EntityKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installConfig(['system']);

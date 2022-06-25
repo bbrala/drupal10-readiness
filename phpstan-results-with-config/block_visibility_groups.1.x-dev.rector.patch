@@ -1,0 +1,833 @@
+diff --git a/block_visibility_groups.install b/block_visibility_groups.install
+index 5490014..36e4131 100644
+--- a/block_visibility_groups.install
++++ b/block_visibility_groups.install
+@@ -1,18 +1,19 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\block\Entity\Block;
+ /**
+  * @file
+  * Install, update and uninstall functions for the block_visibility_groups module.
+  */
+-
+ /**
+  * Implements hook_uninstall().
+  */
+ function block_visibility_groups_uninstall() {
+   // Remove the 'condition_group' condition from all blocks.
+-  /** @var \Drupal\Core\Entity\EntityStorageInterface $block_storage */
++  /** @var EntityStorageInterface $block_storage */
+   $block_storage = \Drupal::service('entity_type.manager')->getStorage('block');
+-  /** @var \Drupal\block\Entity\Block[] $blocks */
++  /** @var Block[] $blocks */
+   $blocks = $block_storage->loadMultiple();
+   foreach ($blocks as $block) {
+     $conditions = $block->getVisibilityConditions();
+diff --git a/block_visibility_groups.module b/block_visibility_groups.module
+index ec8886b..61f246e 100644
+--- a/block_visibility_groups.module
++++ b/block_visibility_groups.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Config\Entity\ConfigEntityType;
++use Drupal\block_visibility_groups\Entity\BlockVisibilityGroup;
+ /**
+  * @file
+  * Contains block_visibility_groups.module.
+@@ -31,7 +33,7 @@ function block_visibility_groups_help($route_name, RouteMatchInterface $route_ma
+  */
+ function block_visibility_groups_entity_type_alter(array &$entity_types) {
+   /**
+-   * @var \Drupal\Core\Config\Entity\ConfigEntityType $block_type;
++   * @var ConfigEntityType $block_type ;
+    */
+   $block_type = $entity_types['block'];
+   $block_type->setHandlerClass('list_builder', 'Drupal\block_visibility_groups\BlockVisibilityGroupedListBuilder');
+@@ -45,7 +47,7 @@ function block_visibility_groups_form_block_form_alter(&$form, FormStateInterfac
+   if (isset($form['visibility']['condition_group']['block_visibility_group']['#default_value']) &&
+     $form['visibility']['condition_group']['block_visibility_group']['#default_value']) {
+     $storage = \Drupal::entityTypeManager()->getStorage('block_visibility_group');
+-    /** @var \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup $group */
++    /** @var BlockVisibilityGroup $group */
+     $group = $storage->load($form['visibility']['condition_group']['block_visibility_group']['#default_value']);
+     if (!$group->isAllowOtherConditions()) {
+       _block_visibility_groups_remove_conditions($form['visibility']);
+diff --git a/block_visibility_groups.post_update.php b/block_visibility_groups.post_update.php
+index f335a94..6a8d23d 100644
+--- a/block_visibility_groups.post_update.php
++++ b/block_visibility_groups.post_update.php
+@@ -1,10 +1,10 @@
+ <?php
+ 
++use Drupal\user\RoleInterface;
+ /**
+  * @file
+  * Block visibility groups post updates.
+  */
+-
+ /**
+  * Grant administer block visibility groups permission.
+  *
+@@ -18,7 +18,7 @@ function block_visibility_groups_post_update_grant_administer_permission() {
+     ->getStorage('user_role')
+     ->loadMultiple();
+ 
+-  /** @var \Drupal\user\RoleInterface $role */
++  /** @var RoleInterface $role */
+   foreach ($roles as $role) {
+     if ($role->hasPermission('administer site configuration') && $role->hasPermission('administer blocks')) {
+       $role->grantPermission('administer block visibility groups');
+diff --git a/block_visibility_groups_admin/block_visibility_groups_admin.module b/block_visibility_groups_admin/block_visibility_groups_admin.module
+index 55ae711..5384543 100644
+--- a/block_visibility_groups_admin/block_visibility_groups_admin.module
++++ b/block_visibility_groups_admin/block_visibility_groups_admin.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\block_visibility_groups_admin\GroupInfo;
+ /**
+  * @file
+  * Contains hooks.
+@@ -17,7 +18,7 @@ function block_visibility_groups_admin_toolbar() {
+   $json_params = Json::encode($route->getRawParameters()->all());
+   $encoded_parameters = urlencode($json_params);
+ 
+-  /** @var \Drupal\block_visibility_groups_admin\GroupInfo $group_info */
++  /** @var GroupInfo $group_info */
+   $group_info = \Drupal::getContainer()
+     ->get('block_visibility_groups_admin.lister');
+   if ($active_groups = $group_info->getActiveGroups()) {
+diff --git a/block_visibility_groups_admin/src/ConditionCreatorManager.php b/block_visibility_groups_admin/src/ConditionCreatorManager.php
+index 5ca5333..07ebe32 100644
+--- a/block_visibility_groups_admin/src/ConditionCreatorManager.php
++++ b/block_visibility_groups_admin/src/ConditionCreatorManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\block_visibility_groups_admin;
+ 
++use Drupal\Core\Routing\RouteProvider;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\Plugin\DefaultPluginManager;
+@@ -16,8 +17,8 @@ class ConditionCreatorManager extends DefaultPluginManager {
+    * Constructor.
+    *
+    * @param \Traversable $namespaces
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param CacheBackendInterface $cache_backend
++   * @param ModuleHandlerInterface $module_handler
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+     parent::__construct('Plugin/ConditionCreator', $namespaces, $module_handler, 'Drupal\block_visibility_groups_admin\Plugin\ConditionCreatorInterface', 'Drupal\block_visibility_groups_admin\Annotation\ConditionCreator');
+@@ -38,7 +39,7 @@ class ConditionCreatorManager extends DefaultPluginManager {
+       throw new \Exception('Route name is require configuration for GroupCreatorManager');
+     }
+     $route_name = $configuration['route_name'];
+-    /** @var \Drupal\Core\Routing\RouteProvider $route_provider */
++    /** @var RouteProvider $route_provider */
+     $route_provider = \Drupal::getContainer()->get('router.route_provider');
+     $configuration['route'] = new RouteMatch($route_name, $route_provider->getRouteByName($route_name));
+     unset($configuration['route_name']);
+diff --git a/block_visibility_groups_admin/src/Controller/GroupLister.php b/block_visibility_groups_admin/src/Controller/GroupLister.php
+index 19c7c9a..66141ea 100644
+--- a/block_visibility_groups_admin/src/Controller/GroupLister.php
++++ b/block_visibility_groups_admin/src/Controller/GroupLister.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\block_visibility_groups_admin\Controller;
+ 
++use Drupal\block_visibility_groups_admin\GroupInfo;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\block_visibility_groups\Entity\BlockVisibilityGroup;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Entity\EntityTypeManager;
+ use Drupal\Core\Url;
+@@ -17,12 +20,12 @@ class GroupLister extends ControllerBase {
+   /**
+    * Drupal\block_visibility_groups_admin\GroupInfo definition.
+    *
+-   * @var \Drupal\block_visibility_groups_admin\GroupInfo
++   * @var GroupInfo
+    */
+   protected $group_info;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $storage;
+ 
+@@ -49,7 +52,7 @@ class GroupLister extends ControllerBase {
+    */
+   public function activeList($active_group_ids) {
+     $active_group_ids = explode(',', $active_group_ids);
+-    /** @var \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup[] $groups */
++    /** @var BlockVisibilityGroup[] $groups */
+     $groups = $this->storage->loadMultiple($active_group_ids);
+ 
+     $edit_links = [];
+diff --git a/block_visibility_groups_admin/src/Form/ConditionCreatorForm.php b/block_visibility_groups_admin/src/Form/ConditionCreatorForm.php
+index 4ca7d37..b9530b9 100644
+--- a/block_visibility_groups_admin/src/Form/ConditionCreatorForm.php
++++ b/block_visibility_groups_admin/src/Form/ConditionCreatorForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\block_visibility_groups_admin\Form;
+ 
++use Drupal\block_visibility_groups_admin\Plugin\ConditionCreatorInterface;
+ use Drupal\block_visibility_groups\Entity\BlockVisibilityGroup;
+ use Drupal\Component\Plugin\PluginManagerInterface;
+ use Drupal\Component\Serialization\Json;
+@@ -17,7 +18,7 @@ class ConditionCreatorForm extends FormBase {
+   /**
+    * The condition plugin manager.
+    *
+-   * @var \Drupal\Component\Plugin\PluginManagerInterface
++   * @var PluginManagerInterface
+    */
+   protected $manager;
+ 
+@@ -33,7 +34,7 @@ class ConditionCreatorForm extends FormBase {
+   /**
+    * ConditionCreatorForm constructor.
+    *
+-   * @param \Drupal\Component\Plugin\PluginManagerInterface $manager
++   * @param PluginManagerInterface $manager
+    */
+   public function __construct(PluginManagerInterface $manager) {
+     $this->manager = $manager;
+@@ -102,7 +103,7 @@ class ConditionCreatorForm extends FormBase {
+     $this->manager->getDefinitions();
+     $definitions = $this->manager->getDefinitions();
+     foreach ($definitions as $id => $info) {
+-      /** @var \Drupal\block_visibility_groups_admin\Plugin\ConditionCreatorInterface $creator */
++      /** @var ConditionCreatorInterface $creator */
+       $creator = $this->manager->createInstance(
+         $id,
+         [
+@@ -126,7 +127,7 @@ class ConditionCreatorForm extends FormBase {
+     $route_name = $form_state->getValue('route_name');
+     $parameters = $form_state->getValue('parameters');
+     foreach ($conditions as $plugin_id => $plugin_info) {
+-      /** @var \Drupal\block_visibility_groups_admin\Plugin\ConditionCreatorInterface $plugin */
++      /** @var ConditionCreatorInterface $plugin */
+       $plugin = $this->manager->createInstance(
+         $plugin_id,
+         [
+@@ -154,7 +155,7 @@ class ConditionCreatorForm extends FormBase {
+     $conditions = $this->getConditionValues($form_state);
+     $configs = [];
+     foreach ($conditions as $plugin_id => $plugin_info) {
+-      /** @var \Drupal\block_visibility_groups_admin\Plugin\ConditionCreatorInterface $plugin */
++      /** @var ConditionCreatorInterface $plugin */
+       $plugin = $this->manager->createInstance($plugin_id, ['route_name' => $route_name]);
+ 
+       if ($plugin->itemSelected($plugin_info)) {
+@@ -184,10 +185,10 @@ class ConditionCreatorForm extends FormBase {
+    * @param $label
+    * @param $configs
+    *
+-   * @return \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup
++   * @return BlockVisibilityGroup
+    */
+   protected function createGroup($id, $label, $configs) {
+-    /** @var \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup $group */
++    /** @var BlockVisibilityGroup $group */
+     $group = BlockVisibilityGroup::create(
+       [
+         'id' => $id,
+diff --git a/block_visibility_groups_admin/src/GroupInfo.php b/block_visibility_groups_admin/src/GroupInfo.php
+index 6e0123d..5e2bf61 100644
+--- a/block_visibility_groups_admin/src/GroupInfo.php
++++ b/block_visibility_groups_admin/src/GroupInfo.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\block_visibility_groups_admin;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\block_visibility_groups\Plugin\Condition\ConditionGroup;
+ use Drupal\block_visibility_groups\GroupEvaluator;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Executable\ExecutableManagerInterface;
+@@ -16,27 +18,27 @@ class GroupInfo implements GroupInfoInterface {
+   /**
+    * Drupal\block_visibility_groups\GroupEvaluator definition.
+    *
+-   * @var \Drupal\block_visibility_groups\GroupEvaluator
++   * @var GroupEvaluator
+    */
+   protected $block_visibility_groups_group_evaluator;
+ 
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $group_storage;
+ 
+   /**
+-   * @var \Drupal\Core\Executable\ExecutableManagerInterface
++   * @var ExecutableManagerInterface
+    */
+   protected $condition_manager;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\block_visibility_groups\GroupEvaluator $block_visibility_groups_group_evaluator
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
+-   * @param \Drupal\Core\Executable\ExecutableManagerInterface $condition_manager
++   * @param GroupEvaluator $block_visibility_groups_group_evaluator
++   * @param EntityTypeManagerInterface $entity_manager
++   * @param ExecutableManagerInterface $condition_manager
+    */
+   public function __construct(GroupEvaluator $block_visibility_groups_group_evaluator, EntityTypeManagerInterface $entity_manager, ExecutableManagerInterface $condition_manager) {
+     $this->block_visibility_groups_group_evaluator = $block_visibility_groups_group_evaluator;
+@@ -53,7 +55,7 @@ class GroupInfo implements GroupInfoInterface {
+     $active_groups = [];
+     /** @var BlockVisibilityGroup $group */
+     foreach ($this->group_storage->loadMultiple() as $id => $group) {
+-      /** @var \Drupal\block_visibility_groups\Plugin\Condition\ConditionGroup $condition ; */
++      /** @var ConditionGroup $condition ; */
+       $condition = $this->condition_manager->createInstance('condition_group', ['block_visibility_group' => $id]);
+       if ($condition->evaluate()) {
+         $active_groups[$id] = $group;
+diff --git a/block_visibility_groups_admin/src/Plugin/ConditionCreator/NodeTypeConditionCreator.php b/block_visibility_groups_admin/src/Plugin/ConditionCreator/NodeTypeConditionCreator.php
+index a704bd1..5c6be0c 100644
+--- a/block_visibility_groups_admin/src/Plugin/ConditionCreator/NodeTypeConditionCreator.php
++++ b/block_visibility_groups_admin/src/Plugin/ConditionCreator/NodeTypeConditionCreator.php
+@@ -22,7 +22,7 @@ class NodeTypeConditionCreator extends ConditionCreatorBase implements Container
+   /**
+    * The entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $entityStorage;
+ 
+@@ -32,7 +32,7 @@ class NodeTypeConditionCreator extends ConditionCreatorBase implements Container
+    * @param array $configuration
+    * @param string $plugin_id
+    * @param mixed $plugin_definition
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entityStorage
++   * @param EntityStorageInterface $entityStorage
+    */
+   public function __construct($configuration, $plugin_id, $plugin_definition, EntityStorageInterface $entityStorage) {
+     parent::__construct($configuration, $plugin_id, $plugin_definition);
+@@ -43,7 +43,7 @@ class NodeTypeConditionCreator extends ConditionCreatorBase implements Container
+   /**
+    * Creates an instance of the plugin.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The container to pull out services used in the plugin.
+    *
+    * @param array $configuration
+@@ -79,7 +79,7 @@ class NodeTypeConditionCreator extends ConditionCreatorBase implements Container
+     if (empty($this->configuration['parameters']['node'])) {
+       return [];
+     }
+-    /** @var \Drupal\node\Entity\Node $node */
++    /** @var Node $node */
+     $node = Node::load($this->configuration['parameters']['node']);
+     $current_type = $node->getType();
+     $node_types = $this->entityStorage->loadMultiple();
+diff --git a/block_visibility_groups_admin/src/Plugin/ConditionCreatorBase.php b/block_visibility_groups_admin/src/Plugin/ConditionCreatorBase.php
+index 88a6dd5..2bb8010 100644
+--- a/block_visibility_groups_admin/src/Plugin/ConditionCreatorBase.php
++++ b/block_visibility_groups_admin/src/Plugin/ConditionCreatorBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\block_visibility_groups_admin\Plugin;
+ 
++use Drupal\Component\Plugin\PluginManagerInterface;
++use Drupal\Core\Routing\CurrentRouteMatch;
+ use Drupal\Component\Plugin\PluginBase;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ 
+@@ -13,12 +15,12 @@ abstract class ConditionCreatorBase extends PluginBase implements ConditionCreat
+   use StringTranslationTrait;
+ 
+   /**
+-   * @var \Drupal\Component\Plugin\PluginManagerInterface
++   * @var PluginManagerInterface
+    */
+   protected $pluginManager;
+ 
+   /**
+-   * @var \Drupal\Core\Routing\CurrentRouteMatch
++   * @var CurrentRouteMatch
+    */
+   protected $route;
+ 
+diff --git a/block_visibility_groups_admin/src/Tests/GroupListerTest.php b/block_visibility_groups_admin/src/Tests/GroupListerTest.php
+index 5d0e6a7..97c1cf7 100644
+--- a/block_visibility_groups_admin/src/Tests/GroupListerTest.php
++++ b/block_visibility_groups_admin/src/Tests/GroupListerTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\block_visibility_groups_admin\Tests;
+ 
++use Drupal\block_visibility_groups\GroupEvaluator;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -14,7 +15,7 @@ class GroupListerTest extends BrowserTestBase {
+   /**
+    * Drupal\block_visibility_groups\GroupEvaluator definition.
+    *
+-   * @var \Drupal\block_visibility_groups\GroupEvaluator
++   * @var GroupEvaluator
+    */
+   protected $block_visibility_groups_group_evaluator;
+ 
+@@ -34,7 +35,7 @@ class GroupListerTest extends BrowserTestBase {
+    */
+   public function testGroupLister() {
+     // Check that the basic functions of module block_visibility_groups_admin.
+-    $this->assertEqual(TRUE, TRUE, 'Test Unit Generated via App Console.');
++    $this->assertEquals(TRUE, TRUE, 'Test Unit Generated via App Console.');
+   }
+ 
+ }
+diff --git a/src/BlockVisibilityGroupedListBuilder.php b/src/BlockVisibilityGroupedListBuilder.php
+index 50ba850..4c31620 100644
+--- a/src/BlockVisibilityGroupedListBuilder.php
++++ b/src/BlockVisibilityGroupedListBuilder.php
+@@ -35,33 +35,33 @@ class BlockVisibilityGroupedListBuilder extends BlockListBuilder {
+   /**
+    * The entity storage class for Block Visibility Groups.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $group_storage;
+ 
+   /**
+    * The state service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * Constructs a new BlockVisibilityGroupedListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Theme\ThemeManagerInterface $theme_manager
++   * @param ThemeManagerInterface $theme_manager
+    *   The theme manager.
+-   * @param \Drupal\Core\Form\FormBuilderInterface $form_builder
++   * @param FormBuilderInterface $form_builder
+    *   The form builder.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $block_visibility_group_storage
++   * @param EntityStorageInterface $block_visibility_group_storage
+    *   The group entity storage.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state system service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface|null $messenger
++   * @param MessengerInterface|null $messenger
+    *   The messenger service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, ThemeManagerInterface $theme_manager, FormBuilderInterface $form_builder, EntityStorageInterface $block_visibility_group_storage, StateInterface $state, MessengerInterface $messenger) {
+@@ -142,7 +142,7 @@ class BlockVisibilityGroupedListBuilder extends BlockListBuilder {
+           '#attributes' => ['onchange' => 'this.form.submit()'],
+         ];
+ 
+-        /** @var \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup $group */
++        /** @var BlockVisibilityGroup $group */
+         $group = $this->group_storage->load($current_block_visibility_group);
+         $form['block_visibility_group']['help'] = $this->createHelp($group);
+ 
+@@ -232,7 +232,7 @@ class BlockVisibilityGroupedListBuilder extends BlockListBuilder {
+     if ($block_visibility_group = $this->getBlockVisibilityGroup(TRUE)) {
+       foreach ($form as &$row_info) {
+         if (isset($row_info['title']['#url'])) {
+-          /** @var \Drupal\Core\Url $url */
++          /** @var Url $url */
+           $url = $row_info['title']['#url'];
+           $query = $url->getOption('query');
+           $url = Url::fromRoute('block_visibility_groups.admin_library',
+diff --git a/src/BlockVisibilityLister.php b/src/BlockVisibilityLister.php
+index 4b7c0a5..67ea715 100644
+--- a/src/BlockVisibilityLister.php
++++ b/src/BlockVisibilityLister.php
+@@ -28,7 +28,7 @@ trait BlockVisibilityLister {
+   /**
+    * Get the visibility group for a block.
+    *
+-   * @param \Drupal\block\Entity\Block $block
++   * @param Block $block
+    *   The block instance.
+    *
+    * @return string
+diff --git a/src/ConditionRedirectTrait.php b/src/ConditionRedirectTrait.php
+index f226804..faf7e35 100644
+--- a/src/ConditionRedirectTrait.php
++++ b/src/ConditionRedirectTrait.php
+@@ -14,7 +14,7 @@ trait ConditionRedirectTrait {
+   /**
+    * Ensure form redirects to the correct route.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    */
+   protected function setConditionRedirect(FormStateInterface $form_state) {
+diff --git a/src/ConditionsSetFormTrait.php b/src/ConditionsSetFormTrait.php
+index 5a511fb..d7eed43 100644
+--- a/src/ConditionsSetFormTrait.php
++++ b/src/ConditionsSetFormTrait.php
+@@ -17,7 +17,7 @@ trait ConditionsSetFormTrait {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup $block_visibility_group
++   * @param BlockVisibilityGroup $block_visibility_group
+    *   The BlockVisibilityGroup instance.
+    *
+    * @return array
+diff --git a/src/Controller/BlockVisibilityGroupController.php b/src/Controller/BlockVisibilityGroupController.php
+index 96f1154..6f9082a 100644
+--- a/src/Controller/BlockVisibilityGroupController.php
++++ b/src/Controller/BlockVisibilityGroupController.php
+@@ -19,7 +19,7 @@ class BlockVisibilityGroupController extends ControllerBase {
+   /**
+    * Drupal\Core\Condition\ConditionManager definition.
+    *
+-   * @var \Drupal\Core\Condition\ConditionManager
++   * @var ConditionManager
+    */
+   protected $conditionManager;
+ 
+@@ -55,7 +55,7 @@ class BlockVisibilityGroupController extends ControllerBase {
+   /**
+    * Presents a list of conditions to add to the block_visibility_group entity.
+    *
+-   * @param \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup $block_visibility_group
++   * @param BlockVisibilityGroup $block_visibility_group
+    *   The block_visibility_group entity.
+    * @param string $redirect
+    *   The redirect option.
+diff --git a/src/Entity/BlockVisibilityGroup.php b/src/Entity/BlockVisibilityGroup.php
+index 4859259..2546332 100644
+--- a/src/Entity/BlockVisibilityGroup.php
++++ b/src/Entity/BlockVisibilityGroup.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\block_visibility_groups\Entity;
+ 
++use Drupal\Component\Plugin\LazyPluginCollection;
++use Drupal\Core\Condition\ConditionInterface;
+ use Drupal\block_visibility_groups\BlockVisibilityGroupInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Condition\ConditionPluginCollection;
+@@ -138,14 +140,14 @@ class BlockVisibilityGroup extends ConfigEntityBase implements BlockVisibilityGr
+   /**
+    * The plugin collection that holds the conditions.
+    *
+-   * @var \Drupal\Component\Plugin\LazyPluginCollection
++   * @var LazyPluginCollection
+    */
+   protected $conditionCollection;
+ 
+   /**
+    * Returns the conditions.
+    *
+-   * @return \Drupal\Core\Condition\ConditionInterface[]|\Drupal\Core\Condition\ConditionPluginCollection
++   * @return ConditionInterface[]|ConditionPluginCollection
+    *   An array of configured condition plugins.
+    */
+   public function getConditions() {
+diff --git a/src/Form/BlockVisibilityGroupDeleteForm.php b/src/Form/BlockVisibilityGroupDeleteForm.php
+index 454dcb1..95bee33 100644
+--- a/src/Form/BlockVisibilityGroupDeleteForm.php
++++ b/src/Form/BlockVisibilityGroupDeleteForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\block_visibility_groups\Form;
+ 
++use Drupal\block\Entity\Block;
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\block_visibility_groups\BlockVisibilityLister;
+ use Drupal\Core\Entity\EntityConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -80,7 +82,7 @@ class BlockVisibilityGroupDeleteForm extends EntityConfirmFormBase {
+    *   The group id.
+    */
+   public function setBlocksGroup(array $blocks, $group_id = '') {
+-    /** @var \Drupal\block\Entity\Block $block */
++    /** @var Block $block */
+     foreach ($blocks as $block) {
+       $config = $block->getVisibilityCondition('condition_group')
+         ->getConfiguration();
+@@ -97,7 +99,7 @@ class BlockVisibilityGroupDeleteForm extends EntityConfirmFormBase {
+    *   The blocks for the group.
+    */
+   protected function getBlocksForGroup() {
+-    /** @var \Drupal\block\Entity\Block[] $all_blocks */
++    /** @var Block[] $all_blocks */
+     $all_blocks = $this->blockStorage()->loadMultiple();
+     $group_blocks = [];
+     foreach ($all_blocks as $block) {
+@@ -111,7 +113,7 @@ class BlockVisibilityGroupDeleteForm extends EntityConfirmFormBase {
+   /**
+    * Get Block Entity Storage.
+    *
+-   * @return \Drupal\Core\Entity\EntityStorageInterface
++   * @return EntityStorageInterface
+    *   Gets the block storage.
+    */
+   protected function blockStorage() {
+diff --git a/src/Form/BlockVisibilityGroupForm.php b/src/Form/BlockVisibilityGroupForm.php
+index 63c3db6..7d7d063 100644
+--- a/src/Form/BlockVisibilityGroupForm.php
++++ b/src/Form/BlockVisibilityGroupForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\block_visibility_groups\Form;
+ 
++use Drupal\block_visibility_groups\Entity\BlockVisibilityGroup;
+ use Drupal\block_visibility_groups\ConditionsSetFormTrait;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -19,7 +20,7 @@ class BlockVisibilityGroupForm extends EntityForm {
+    */
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+-    /** @var \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup $block_visibility_group */
++    /** @var BlockVisibilityGroup $block_visibility_group */
+     $block_visibility_group = $this->entity;
+     $form['label'] = [
+       '#type' => 'textfield',
+diff --git a/src/Form/ConditionAddForm.php b/src/Form/ConditionAddForm.php
+index 30546f1..4885807 100644
+--- a/src/Form/ConditionAddForm.php
++++ b/src/Form/ConditionAddForm.php
+@@ -14,14 +14,14 @@ class ConditionAddForm extends ConditionFormBase {
+   /**
+    * The condition manager.
+    *
+-   * @var \Drupal\Core\Condition\ConditionManager
++   * @var ConditionManager
+    */
+   protected $conditionManager;
+ 
+   /**
+    * Constructs a new ConditionAddForm.
+    *
+-   * @param \Drupal\Core\Condition\ConditionManager $condition_manager
++   * @param ConditionManager $condition_manager
+    *   The condition manager.
+    */
+   public function __construct(ConditionManager $condition_manager, ContextRepositoryInterface $context_repository) {
+diff --git a/src/Form/ConditionDeleteForm.php b/src/Form/ConditionDeleteForm.php
+index f4b3be8..7cdab36 100644
+--- a/src/Form/ConditionDeleteForm.php
++++ b/src/Form/ConditionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\block_visibility_groups\Form;
+ 
++use Drupal\Core\Condition\ConditionInterface;
+ use Drupal\block_visibility_groups\ConditionRedirectTrait;
+ use Drupal\block_visibility_groups\Entity\BlockVisibilityGroup;
+ use Drupal\Core\Form\ConfirmFormBase;
+@@ -17,14 +18,14 @@ class ConditionDeleteForm extends ConfirmFormBase {
+   /**
+    * The block_visibility_group entity this selection condition belongs to.
+    *
+-   * @var \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup
++   * @var BlockVisibilityGroup
+    */
+   protected $block_visibility_group;
+ 
+   /**
+    * The condition used by this form.
+    *
+-   * @var \Drupal\Core\Condition\ConditionInterface
++   * @var ConditionInterface
+    */
+   protected $condition;
+ 
+diff --git a/src/Form/ConditionFormBase.php b/src/Form/ConditionFormBase.php
+index 136752e..e37ea4b 100644
+--- a/src/Form/ConditionFormBase.php
++++ b/src/Form/ConditionFormBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\block_visibility_groups\Form;
+ 
++use Drupal\block_visibility_groups\Entity\BlockVisibilityGroup;
++use Drupal\Core\Condition\ConditionInterface;
+ use Drupal\block_visibility_groups\BlockVisibilityGroupInterface;
+ use Drupal\block_visibility_groups\ConditionRedirectTrait;
+ use Drupal\Core\Form\FormBase;
+@@ -24,28 +26,28 @@ abstract class ConditionFormBase extends FormBase {
+   /**
+    * The block_visibility_group entity this condition belongs to.
+    *
+-   * @var \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup
++   * @var BlockVisibilityGroup
+    */
+   protected $block_visibility_group;
+ 
+   /**
+    * The condition used by this form.
+    *
+-   * @var \Drupal\Core\Condition\ConditionInterface
++   * @var ConditionInterface
+    */
+   protected $condition;
+ 
+   /**
+    * The context repository service.
+    *
+-   * @var \Drupal\Core\Plugin\Context\ContextRepositoryInterface
++   * @var ContextRepositoryInterface
+    */
+   protected $contextRepository;
+ 
+   /**
+    * ConditionFormBase constructor.
+    *
+-   * @param \Drupal\Core\Plugin\Context\ContextRepositoryInterface $contextRepository
++   * @param ContextRepositoryInterface $contextRepository
+    */
+   public function __construct(ContextRepositoryInterface $context_repository) {
+     $this->contextRepository = $context_repository;
+@@ -67,7 +69,7 @@ abstract class ConditionFormBase extends FormBase {
+    *   Either a condition ID, or the plugin ID used to create a new
+    *   condition.
+    *
+-   * @return \Drupal\Core\Condition\ConditionInterface
++   * @return ConditionInterface
+    *   The condition object.
+    */
+   abstract protected function prepareCondition($condition_id);
+diff --git a/src/GroupEvaluator.php b/src/GroupEvaluator.php
+index 7b54c18..8f983da 100644
+--- a/src/GroupEvaluator.php
++++ b/src/GroupEvaluator.php
+@@ -22,14 +22,14 @@ class GroupEvaluator implements GroupEvaluatorInterface {
+   /**
+    * The plugin context handler.
+    *
+-   * @var \Drupal\Core\Plugin\Context\ContextHandlerInterface
++   * @var ContextHandlerInterface
+    */
+   protected $contextHandler;
+ 
+   /**
+    * The context manager service.
+    *
+-   * @var \Drupal\Core\Plugin\Context\ContextRepositoryInterface
++   * @var ContextRepositoryInterface
+    */
+   protected $contextRepository;
+ 
+@@ -54,7 +54,7 @@ class GroupEvaluator implements GroupEvaluatorInterface {
+   public function evaluateGroup(BlockVisibilityGroup $block_visibility_group) {
+     $group_id = $block_visibility_group->id();
+     if (!isset($this->group_evaluations[$group_id])) {
+-      /** @var \Drupal\Core\Condition\ConditionPluginCollection $conditions */
++      /** @var ConditionPluginCollection $conditions */
+       $conditions = $block_visibility_group->getConditions();
+       if (empty($conditions)) {
+         // If no conditions then always true.
+@@ -74,7 +74,7 @@ class GroupEvaluator implements GroupEvaluatorInterface {
+   /**
+    * Apply contexts.
+    *
+-   * @param \Drupal\Core\Condition\ConditionPluginCollection $conditions
++   * @param ConditionPluginCollection $conditions
+    *   A collection of condition plugins.
+    * @param string $logic
+    *   The logical operator.
+diff --git a/src/GroupEvaluatorInterface.php b/src/GroupEvaluatorInterface.php
+index ffa4516..fb14490 100644
+--- a/src/GroupEvaluatorInterface.php
++++ b/src/GroupEvaluatorInterface.php
+@@ -14,7 +14,7 @@ interface GroupEvaluatorInterface {
+   /**
+    * Evaluate Block Visibility Group.
+    *
+-   * @param \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup $block_visibility_group
++   * @param BlockVisibilityGroup $block_visibility_group
+    *   The block visibility group entity.
+    *
+    * @return bool
+diff --git a/src/Plugin/Condition/ConditionGroup.php b/src/Plugin/Condition/ConditionGroup.php
+index acd2f3a..c8d7630 100644
+--- a/src/Plugin/Condition/ConditionGroup.php
++++ b/src/Plugin/Condition/ConditionGroup.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\block_visibility_groups\Plugin\Condition;
+ 
++use Drupal\block_visibility_groups\Entity\BlockVisibilityGroup;
+ use Drupal\block_visibility_groups\GroupEvaluator;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Condition\ConditionPluginBase;
+@@ -28,28 +29,28 @@ class ConditionGroup extends ConditionPluginBase implements ContainerFactoryPlug
+   /**
+    * The condition plugin manager.
+    *
+-   * @var \Drupal\Core\Executable\ExecutableManagerInterface
++   * @var ExecutableManagerInterface
+    */
+   protected $manager;
+ 
+   /**
+    * The entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $entityStorage;
+ 
+   /**
+    * The current Request object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * The group evaluator.
+    *
+-   * @var \Drupal\block_visibility_groups\GroupEvaluator
++   * @var GroupEvaluator
+    */
+   protected $groupEvaluator;
+ 
+@@ -64,7 +65,7 @@ class ConditionGroup extends ConditionPluginBase implements ContainerFactoryPlug
+     if (empty($block_visibility_group_id)) {
+       return TRUE;
+     }
+-    /** @var \Drupal\block_visibility_groups\Entity\BlockVisibilityGroup $block_visibility_group */
++    /** @var BlockVisibilityGroup $block_visibility_group */
+     if ($block_visibility_group = $this->entityStorage->load($block_visibility_group_id)) {
+       return $this->groupEvaluator->evaluateGroup($block_visibility_group);
+     }
+@@ -131,7 +132,7 @@ class ConditionGroup extends ConditionPluginBase implements ContainerFactoryPlug
+   /**
+    * Creates an instance of the plugin.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The container to pull out services used in the plugin.
+    * @param array $configuration
+    *   A configuration array containing information about the plugin instance.

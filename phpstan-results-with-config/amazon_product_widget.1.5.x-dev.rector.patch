@@ -1,0 +1,1299 @@
+diff --git a/amazon_product_widget.api.php b/amazon_product_widget.api.php
+index 1d70dab..f579e0a 100644
+--- a/amazon_product_widget.api.php
++++ b/amazon_product_widget.api.php
+@@ -14,9 +14,9 @@ use Drupal\node\NodeInterface;
+  *
+  * @param array $products_container
+  *   The products container.
+- * @param \Drupal\amazon_product_widget\Plugin\Field\FieldType\AmazonProductField $product_field
++ * @param AmazonProductField $product_field
+  *   The field the product widget is attached to.
+- * @param \Drupal\node\NodeInterface|null $node
++ * @param NodeInterface|null $node
+  *   The node the product field is bound to. Can be NULL.
+  */
+ function hook_amazon_product_widget_alter_product_data(array &$products_container, AmazonProductField $product_field, ?NodeInterface $node = NULL) {
+@@ -25,7 +25,7 @@ function hook_amazon_product_widget_alter_product_data(array &$products_containe
+ /**
+  * Alters the validation of product data.
+  *
+- * @param \Drupal\amazon_product_widget\Plugin\Field\FieldType\AmazonProductField $product_field
++ * @param AmazonProductField $product_field
+  *   The product field.
+  * @param array $product_data
+  *   The product data.
+@@ -43,7 +43,7 @@ function hook_amazon_product_widget_alter_validate_product_data(AmazonProductFie
+  * Allows you to alter the ASINs returned for the entity. This could be useful
+  * if they are stored in a different place than the AmazonProductField.
+  *
+- * @param \Drupal\Core\Entity\FieldableEntityInterface $entity
++ * @param FieldableEntityInterface $entity
+  *   The entity that is being searched.
+  *
+  * @return array
+diff --git a/amazon_product_widget.install b/amazon_product_widget.install
+index 8d72e88..f86e647 100644
+--- a/amazon_product_widget.install
++++ b/amazon_product_widget.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Config\StorageInterface;
+ /**
+  * @file
+  * Install file.
+@@ -172,7 +173,7 @@ function amazon_product_widget_uninstall() {
+     $menuLink->delete();
+   }
+ 
+-  /** @var \Drupal\Core\Config\StorageInterface $configStorage */
++  /** @var StorageInterface $configStorage */
+   $configStorage = \Drupal::service('config.storage');
+   if ($configStorage->exists('views.view.amazon_product_widget_product_overview')) {
+     $configStorage->delete('views.view.amazon_product_widget_product_overview');
+diff --git a/amazon_product_widget.module b/amazon_product_widget.module
+index 0a846df..58ef920 100644
+--- a/amazon_product_widget.module
++++ b/amazon_product_widget.module
+@@ -1,5 +1,10 @@
+ <?php
+ 
++use Drupal\amazon_product_widget\ProductService;
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\Core\State\StateInterface;
++use Drupal\amazon_product_widget\DealFeedService;
++use Drupal\amazon_product_widget\ProductUsageService;
+ /**
+  * @file
+  * Module file.
+@@ -68,7 +73,7 @@ function amazon_product_widget_theme($existing, $type, $theme, $path) {
+  * Implements hook_cron().
+  */
+ function amazon_product_widget_cron() {
+-  /** @var \Drupal\amazon_product_widget\ProductService $product_service */
++  /** @var ProductService $product_service */
+   $product_service = \Drupal::service('amazon_product_widget.product_service');
+   try {
+     $product_service->queueSearchResults();
+@@ -103,7 +108,7 @@ function amazon_product_widget_is_valid_asin($asin) {
+  * Get all ASINS which are stored in product widgets.
+  */
+ function amazon_product_widget_get_all_asins() {
+-  /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $field_manager */
++  /** @var EntityFieldManagerInterface $field_manager */
+   $field_manager = \Drupal::service('entity_field.manager');
+   $fields_map = $field_manager->getFieldMapByFieldType('amazon_product_widget_field_type');
+   $asins = [];
+@@ -123,9 +128,9 @@ function amazon_product_widget_get_all_asins() {
+  * Called when cron is run.
+  */
+ function _amazon_product_widget_deals_cron_update() {
+-  /** @var \Drupal\Core\State\StateInterface $state */
++  /** @var StateInterface $state */
+   $state = \Drupal::state();
+-  /** @var \Drupal\amazon_product_widget\DealFeedService $dealFeedService */
++  /** @var DealFeedService $dealFeedService */
+   $dealFeedService = \Drupal::service('amazon_product_widget.deal_feed_service');
+ 
+   if (!$dealFeedService->isActivated()) {
+@@ -219,8 +224,8 @@ function amazon_product_widget_validate_product_data(array $data) : bool {
+ /**
+  * Implements hook_entity_presave().
+  */
+-function amazon_product_widget_entity_presave(Drupal\Core\Entity\EntityInterface $entity) {
+-  /** @var \Drupal\amazon_product_widget\ProductUsageService $productUsage */
++function amazon_product_widget_entity_presave(EntityInterface $entity) {
++  /** @var ProductUsageService $productUsage */
+   $productUsage = \Drupal::service('amazon_product_widget.usage');
+   $productUsage->update($entity);
+ }
+@@ -230,7 +235,7 @@ function amazon_product_widget_entity_presave(Drupal\Core\Entity\EntityInterface
+  */
+ function _amazon_product_widget_asin_map_cron_optimize() {
+   $state = \Drupal::state();
+-  /** @var \Drupal\amazon_product_widget\ProductUsageService $usageService */
++  /** @var ProductUsageService $usageService */
+   $usageService = \Drupal::service('amazon_product_widget.usage');
+   $currentTime = time();
+   $lastRunTime = $state->get('amazon_product_widget.asin_map_last_optimize', 0);
+diff --git a/amazon_product_widget.post_update.php b/amazon_product_widget.post_update.php
+index a82717b..5de3324 100644
+--- a/amazon_product_widget.post_update.php
++++ b/amazon_product_widget.post_update.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Config\StorageInterface;
+ /**
+  * @file
+  * Post update hooks.
+@@ -13,9 +14,9 @@ use Drupal\menu_link_content\Entity\MenuLinkContent;
+  */
+ function amazon_product_widget_post_update_install_view(&$sandbox) {
+   // Import the product overview view.
+-  $configPath = drupal_get_path('module', 'amazon_product_widget') . '/config/install';
++  $configPath = \Drupal::service('extension.list.module')->getPath('amazon_product_widget') . '/config/install';
+   $source = new FileStorage($configPath);
+-  /** @var \Drupal\Core\Config\StorageInterface $configStorage */
++  /** @var StorageInterface $configStorage */
+   $configStorage = \Drupal::service('config.storage');
+   if (!$configStorage->exists('views.view.amazon_product_widget_product_overview')) {
+     $configStorage->write('views.view.amazon_product_widget_product_overview', $source->read('views.view.amazon_product_widget_product_overview'));
+@@ -43,9 +44,9 @@ function amazon_product_widget_post_update_install_view(&$sandbox) {
+  */
+ function amazon_product_widget_post_update_install_unavailable_products_view(&$sandbox) {
+   // Import the product overview view.
+-  $configPath = drupal_get_path('module', 'amazon_product_widget') . '/config/install';
++  $configPath = \Drupal::service('extension.list.module')->getPath('amazon_product_widget') . '/config/install';
+   $source = new FileStorage($configPath);
+-  /** @var \Drupal\Core\Config\StorageInterface $configStorage */
++  /** @var StorageInterface $configStorage */
+   $configStorage = \Drupal::service('config.storage');
+   if (!$configStorage->exists('views.view.amazon_product_widget_unavailable_products')) {
+     $configStorage->write('views.view.amazon_product_widget_unavailable_products', $source->read('views.view.amazon_product_widget_unavailable_products'));
+@@ -75,7 +76,7 @@ function amazon_product_widget_post_update_unavailable_products_view(&$sandbox)
+   $module = \Drupal::moduleHandler()->getModule('amazon_product_widget');
+   $configPath = $module->getPath() . '/config/install';
+   $source = new FileStorage($configPath);
+-  /** @var \Drupal\Core\Config\StorageInterface $configStorage */
++  /** @var StorageInterface $configStorage */
+   $configStorage = \Drupal::service('config.storage');
+   if ($configStorage->exists('views.view.amazon_product_widget_unavailable_products')) {
+     $configStorage->write('views.view.amazon_product_widget_unavailable_products', $source->read('views.view.amazon_product_widget_unavailable_products'));
+diff --git a/src/BatchDealImportService.php b/src/BatchDealImportService.php
+index 897e911..35589c2 100644
+--- a/src/BatchDealImportService.php
++++ b/src/BatchDealImportService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\amazon_product_widget;
+ 
++use Drupal\Core\Messenger\MessengerInterface;
+ use Drupal\Core\Site\Settings;
+ 
+ /**
+@@ -22,7 +23,7 @@ class BatchDealImportService {
+    *   The context.
+    */
+   public static function importChunked(string $filename, int $total, &$context) {
+-    /** @var \Drupal\amazon_product_widget\DealFeedService $dealFeedService */
++    /** @var DealFeedService $dealFeedService */
+     $dealFeedService = \Drupal::service('amazon_product_widget.deal_feed_service');
+     $maxProcessingTime = $dealFeedService->getMaxProcessingTime();
+ 
+@@ -98,9 +99,9 @@ class BatchDealImportService {
+    *   The operations array.
+    */
+   public static function finishImport(bool $success, array $results, array $operations) {
+-    /** @var \Drupal\amazon_product_widget\DealFeedService $dealFeedService */
++    /** @var DealFeedService $dealFeedService */
+     $dealFeedService = \Drupal::service('amazon_product_widget.deal_feed_service');
+-    /** @var \Drupal\Core\Messenger\MessengerInterface $messenger */
++    /** @var MessengerInterface $messenger */
+     $messenger = \Drupal::messenger();
+ 
+     if ($results['errors'] >= $dealFeedService->getMaxDealImportErrors()) {
+diff --git a/src/BatchProductMapUpdateService.php b/src/BatchProductMapUpdateService.php
+index 643fa14..aaee13f 100644
+--- a/src/BatchProductMapUpdateService.php
++++ b/src/BatchProductMapUpdateService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\amazon_product_widget;
+ 
++use Drupal\Core\Messenger\MessengerInterface;
+ /**
+  * Handles batch update of product usage table.
+  *
+@@ -21,7 +22,7 @@ class BatchProductMapUpdateService {
+    */
+   public static function update(array $nodeIds, int $total, &$context) {
+     $entityTypeManager = \Drupal::entityTypeManager();
+-    /** @var \Drupal\amazon_product_widget\ProductUsageService $usageService */
++    /** @var ProductUsageService $usageService */
+     $usageService = \Drupal::service('amazon_product_widget.usage');
+ 
+     try {
+@@ -56,7 +57,7 @@ class BatchProductMapUpdateService {
+    *   Operations.
+    */
+   public static function finish(bool $success, array $results, array $operations) {
+-    /** @var \Drupal\Core\Messenger\MessengerInterface $messenger */
++    /** @var MessengerInterface $messenger */
+     $messenger = \Drupal::messenger();
+     if ($success) {
+       $messenger->addMessage(t('Successfully processed @count items.', [
+diff --git a/src/Commands/AmazonProductWidgetCommands.php b/src/Commands/AmazonProductWidgetCommands.php
+index e5ede45..e7474ba 100644
+--- a/src/Commands/AmazonProductWidgetCommands.php
++++ b/src/Commands/AmazonProductWidgetCommands.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\amazon_product_widget\Commands;
+ 
++use Drupal\Core\Queue\QueueInterface;
++use Drupal\amazon_product_widget\Plugin\QueueWorker\ProductDataUpdate;
+ use Drupal\amazon_product_widget\BatchProductMapUpdateService;
+ use Drupal\amazon_product_widget\DealFeedService;
+ use Drupal\amazon_product_widget\Exception\AmazonApiDisabledException;
+@@ -29,57 +31,57 @@ class AmazonProductWidgetCommands extends DrushCommands {
+   /**
+    * ProductService.
+    *
+-   * @var \Drupal\amazon_product_widget\ProductService
++   * @var ProductService
+    */
+   protected $productService;
+ 
+   /**
+    * Queue.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+   /**
+    * QueueWorkerManagerInterface.
+    *
+-   * @var \Drupal\Core\Queue\QueueWorkerManagerInterface
++   * @var QueueWorkerManagerInterface
+    */
+   protected $queueWorker;
+ 
+   /**
+    * DealFeedService.
+    *
+-   * @var \Drupal\amazon_product_widget\DealFeedService
++   * @var DealFeedService
+    */
+   protected $dealFeedService;
+ 
+   /**
+    * ProductUsageService.
+    *
+-   * @var \Drupal\amazon_product_widget\ProductUsageService
++   * @var ProductUsageService
+    */
+   protected $productUsage;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * AmazonProductWidgetCommands constructor.
+    *
+-   * @param \Drupal\amazon_product_widget\ProductService $productService
++   * @param ProductService $productService
+    *   ProductService.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue
++   * @param QueueFactory $queue
+    *   QueueFactory.
+-   * @param \Drupal\Core\Queue\QueueWorkerManagerInterface $queueWorker
++   * @param QueueWorkerManagerInterface $queueWorker
+    *   QueueWorkerManagerInterface.
+-   * @param \Drupal\amazon_product_widget\DealFeedService $dealFeedService
++   * @param DealFeedService $dealFeedService
+    *   Deal feed service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity type manager.
+    */
+   public function __construct(ProductService $productService, QueueFactory $queue, QueueWorkerManagerInterface $queueWorker, DealFeedService $dealFeedService, ProductUsageService $productUsage, EntityTypeManagerInterface $entityTypeManager) {
+@@ -125,7 +127,7 @@ class AmazonProductWidgetCommands extends DrushCommands {
+     if ($this->productService->getProductStore()->hasStaleData()) {
+       $this->productService->queueProductRenewal();
+ 
+-      /** @var \Drupal\amazon_product_widget\Plugin\QueueWorker\ProductDataUpdate $queueWorker */
++      /** @var ProductDataUpdate $queueWorker */
+       $queueWorker = $this->queueWorker->createInstance('amazon_product_widget.product_data_update');
+       while ($item = $queue->claimItem()) {
+         try {
+diff --git a/src/Controller/AmazonProductController.php b/src/Controller/AmazonProductController.php
+index 25465f0..e263924 100644
+--- a/src/Controller/AmazonProductController.php
++++ b/src/Controller/AmazonProductController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\amazon_product_widget\Controller;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\amazon_product_widget\DealFeedServiceTrait;
+ use Drupal\amazon_product_widget\Plugin\Field\FieldType\AmazonProductField;
+ use Drupal\amazon_product_widget\ProductServiceTrait;
+@@ -28,50 +29,50 @@ class AmazonProductController extends ControllerBase {
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * Lock backend.
+    *
+-   * @var \Drupal\Core\Lock\LockBackendInterface
++   * @var LockBackendInterface
+    */
+   protected $lock;
+ 
+   /**
+    * Amazon product widget settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $settings;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Product usage service.
+    *
+-   * @var \Drupal\amazon_product_widget\ProductUsageService
++   * @var ProductUsageService
+    */
+   protected $productUsage;
+ 
+   /**
+    * AmazonProductController constructor.
+    *
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+-   * @param \Drupal\Core\Lock\LockBackendInterface $lock
++   * @param LockBackendInterface $lock
+    *   Lock backend.
+-   * @param \Drupal\Core\Config\ImmutableConfig $settings
++   * @param ImmutableConfig $settings
+    *   Amazon product widget settings.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity type manager.
+-   * @param \Drupal\amazon_product_widget\ProductUsageService $productUsage
++   * @param ProductUsageService $productUsage
+    *   Product usage service.
+    */
+   public function __construct(RendererInterface $renderer, LockBackendInterface $lock, ImmutableConfig $settings, EntityTypeManagerInterface $entityTypeManager, ProductUsageService $productUsage) {
+@@ -123,11 +124,11 @@ class AmazonProductController extends ControllerBase {
+       $node = $this->entityTypeManager->getStorage('node')->load($node_id);
+     }
+ 
+-    /** @var \Drupal\Core\Entity\EntityStorageInterface $storage */
++    /** @var EntityStorageInterface $storage */
+     $storage = $this->entityTypeManager()->getStorage($entity_type);
+     if ($entity = $storage->load($entity_id)) {
+       if ($entity->hasField($fieldname)) {
+-        /** @var \Drupal\amazon_product_widget\Plugin\Field\FieldType\AmazonProductField $field */
++        /** @var AmazonProductField $field */
+         $product_field = $entity->get($fieldname)->first();
+         if ($product_field instanceof AmazonProductField) {
+           $cacheability = CacheableMetadata::createFromObject($entity)->merge($cacheability);
+diff --git a/src/DealFeedService.php b/src/DealFeedService.php
+index 1c0c493..945481c 100644
+--- a/src/DealFeedService.php
++++ b/src/DealFeedService.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\amazon_product_widget;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use GuzzleHttp\Exception\GuzzleException;
+ use DateTime;
+ use Drupal\amazon_product_widget\Exception\AmazonDealApiDisabledException;
+ use Drupal\amazon_product_widget\Exception\AmazonServiceException;
+@@ -45,7 +47,7 @@ class DealFeedService {
+   /**
+    * Amazon product widget deal feed settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $settings;
+ 
+@@ -59,36 +61,36 @@ class DealFeedService {
+   /**
+    * File system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * Deal store.
+    *
+-   * @var \Drupal\amazon_product_widget\DealStore
++   * @var DealStore
+    */
+   protected $dealStore;
+ 
+   /**
+    * Lock.
+    *
+-   * @var \Drupal\Core\Lock\LockBackendInterface
++   * @var LockBackendInterface
+    */
+   protected $lock;
+ 
+   /**
+    * DealFeedService constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config
++   * @param ConfigFactoryInterface $config
+    *   Config factory.
+    * @param \GuzzleHttp\Client $httpClient
+    *   Guzzle client.
+-   * @param \Drupal\Core\File\FileSystemInterface $fileSystem
++   * @param FileSystemInterface $fileSystem
+    *   File system.
+-   * @param \Drupal\amazon_product_widget\DealStore $dealStore
++   * @param DealStore $dealStore
+    *   Deal store.
+-   * @param \Drupal\Core\Lock\LockBackendInterface $lock
++   * @param LockBackendInterface $lock
+    *   Lock.
+    */
+   public function __construct(ConfigFactoryInterface $config, GuzzleClient $httpClient, FileSystemInterface $fileSystem, DealStore $dealStore, LockBackendInterface $lock) {
+@@ -125,7 +127,7 @@ class DealFeedService {
+    * @param int $entries
+    *   How many entries to import. (default is all)
+    *
+-   * @return \Drupal\amazon_product_widget\DealImportState|NULL
++   * @return DealImportState|NULL
+    *   The deal import state, or NULL if the file could not be opened.
+    */
+   public function import(string $path, int $start = 0, int $entries = -1) {
+@@ -242,8 +244,8 @@ class DealFeedService {
+    * @return string
+    *   The path to the file where the CSV was stored.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonServiceException
++   * @throws GuzzleException
++   * @throws AmazonServiceException
+    */
+   public function downloadDealsCsv($destination = NULL) {
+     $username = $this->settings->get(DealFeedSettingsForm::SETTINGS_DEAL_FEED_USERNAME);
+@@ -290,9 +292,9 @@ class DealFeedService {
+    * @param string $path
+    *   The path to the CSV file. (optional)
+    *
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonDealApiDisabledException
+-   * @throws \GuzzleHttp\Exception\GuzzleException
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonServiceException
++   * @throws AmazonDealApiDisabledException
++   * @throws GuzzleException
++   * @throws AmazonServiceException
+    */
+   public function update(string $path = NULL) {
+     if (!$this->isActivated()) {
+@@ -400,7 +402,7 @@ class DealFeedService {
+   /**
+    * Returns the deal store.
+    *
+-   * @return \Drupal\amazon_product_widget\DealStore
++   * @return DealStore
+    *   Deal store.
+    */
+   public function getDealStore() {
+diff --git a/src/DealFeedServiceTrait.php b/src/DealFeedServiceTrait.php
+index c4f7144..c4e2174 100644
+--- a/src/DealFeedServiceTrait.php
++++ b/src/DealFeedServiceTrait.php
+@@ -10,14 +10,14 @@ trait DealFeedServiceTrait {
+   /**
+    * Deal service.
+    *
+-   * @var \Drupal\amazon_product_widget\DealFeedService
++   * @var DealFeedService
+    */
+   protected $dealService;
+ 
+   /**
+    * Returns an instance of DealFeedService.
+    *
+-   * @return \Drupal\amazon_product_widget\DealFeedService
++   * @return DealFeedService
+    */
+   public function getDealService() {
+     if (!$this->dealService) {
+diff --git a/src/DealStore.php b/src/DealStore.php
+index 45dbc8f..e01bf04 100644
+--- a/src/DealStore.php
++++ b/src/DealStore.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\amazon_product_widget;
+ 
++use Drupal\Core\Database\StatementInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+@@ -30,23 +31,23 @@ class DealStore {
+   /**
+    * Database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Time interface.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * DealStore constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   Database connection.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   Time interface.
+    */
+   public function __construct(Connection $connection, TimeInterface $time) {
+@@ -60,7 +61,7 @@ class DealStore {
+    * @param array $deal
+    *   The deal to insert or update.
+    *
+-   * @return \Drupal\Core\Database\StatementInterface|int|null
++   * @return StatementInterface|int|null
+    *   Returns STATUS_INSERT, STATUS_UPDATE or NULL
+    *
+    * @throws \Exception
+diff --git a/src/EventSubscriber/AmazonApiSubscriber.php b/src/EventSubscriber/AmazonApiSubscriber.php
+index 5f3c0e6..bef0592 100644
+--- a/src/EventSubscriber/AmazonApiSubscriber.php
++++ b/src/EventSubscriber/AmazonApiSubscriber.php
+@@ -2,12 +2,13 @@
+ 
+ namespace Drupal\amazon_product_widget\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
++use Symfony\Component\HttpKernel\Event\ResponseEvent;
++use Drupal\Core\Cache\CacheableJsonResponse;
+ use Drupal\Core\Cache\CacheableResponseInterface;
+ use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Routing\RouteMatchInterface;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+-use Symfony\Component\HttpKernel\Event\FilterResponseEvent;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -18,23 +19,23 @@ class AmazonApiSubscriber implements EventSubscriberInterface {
+   /**
+    * The route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * Amazon product widget settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $settings;
+ 
+   /**
+    * Constructs the AmazonApiSubscriber.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+-   * @param \Drupal\Core\Config\ImmutableConfig $settings
++   * @param ImmutableConfig $settings
+    *   Amazon product widget settings.
+    */
+   public function __construct(RouteMatchInterface $route_match, ImmutableConfig $settings) {
+@@ -57,12 +58,12 @@ class AmazonApiSubscriber implements EventSubscriberInterface {
+   /**
+    * Unset cookie so the whole request acts as anonymous for everybody.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The event to process.
+    *
+    * @see \Drupal\Core\EventSubscriber\FinishResponseSubscriber::onRespond()
+    */
+-  public function onRequest(GetResponseEvent $event) {
++  public function onRequest(RequestEvent $event) {
+     if (!$event->isMasterRequest()) {
+       return;
+     }
+@@ -83,17 +84,17 @@ class AmazonApiSubscriber implements EventSubscriberInterface {
+   /**
+    * Sets proper cache control header.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\FilterResponseEvent $event
++   * @param ResponseEvent $event
+    *   The event to process.
+    *
+    * @see \Drupal\Core\EventSubscriber\FinishResponseSubscriber::onRespond()
+    */
+-  public function onRespond(FilterResponseEvent $event) {
++  public function onRespond(ResponseEvent $event) {
+     if (!$event->isMasterRequest()) {
+       return;
+     }
+     if ($this->routeMatch->getRouteName() == 'amazon_product_widget.product_api') {
+-      /** @var \Drupal\Core\Cache\CacheableJsonResponse $response */
++      /** @var CacheableJsonResponse $response */
+       $response = $event->getResponse();
+       // Adjust cache control headers.
+       $response->headers->removeCacheControlDirective('must-revalidate');
+diff --git a/src/Form/DealFeedCheckForm.php b/src/Form/DealFeedCheckForm.php
+index ca030b8..5247135 100644
+--- a/src/Form/DealFeedCheckForm.php
++++ b/src/Form/DealFeedCheckForm.php
+@@ -18,14 +18,14 @@ class DealFeedCheckForm extends FormBase implements ContainerInjectionInterface
+   /**
+    * The deal feed service.
+    *
+-   * @var \Drupal\amazon_product_widget\DealFeedService
++   * @var DealFeedService
+    */
+   protected $dealFeedService;
+ 
+   /**
+    * DealFeedCheckForm constructor.
+    *
+-   * @param \Drupal\amazon_product_widget\DealFeedService $dealFeedService
++   * @param DealFeedService $dealFeedService
+    *   The deal feed service.
+    */
+   public function __construct(DealFeedService $dealFeedService) {
+diff --git a/src/Form/DealFeedSettingsForm.php b/src/Form/DealFeedSettingsForm.php
+index 9e1bdfa..8094877 100644
+--- a/src/Form/DealFeedSettingsForm.php
++++ b/src/Form/DealFeedSettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\amazon_product_widget\Form;
+ 
++use Drupal\file\FileInterface;
+ use Drupal\amazon_product_widget\ConfigSettingsTrait;
+ use Drupal\amazon_product_widget\DealFeedService;
+ use Drupal\amazon_product_widget\Exception\AmazonDealApiDisabledException;
+@@ -34,34 +35,34 @@ class DealFeedSettingsForm extends ConfigFormBase {
+   /**
+    * The Deal Feed service.
+    *
+-   * @var \Drupal\amazon_product_widget\DealFeedService
++   * @var DealFeedService
+    */
+   protected $dealService;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * State.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * DealFeedSettingsForm constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory.
+-   * @param \Drupal\amazon_product_widget\DealFeedService $dealService
++   * @param DealFeedService $dealService
+    *   Deal feed service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity type manager.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   State.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, DealFeedService $dealService, EntityTypeManagerInterface $entityTypeManager, StateInterface $state) {
+@@ -238,7 +239,7 @@ class DealFeedSettingsForm extends ConfigFormBase {
+       try {
+         if ($triggering === 'source_csv') {
+           $fileId = $form_state->getValue('source_csv_file')[0];
+-          /** @var \Drupal\file\FileInterface $managedFile */
++          /** @var FileInterface $managedFile */
+           $managedFile = $this->entityTypeManager->getStorage('file')->load($fileId);
+ 
+           if ($managedFile) {
+diff --git a/src/Form/ProductRenewalForm.php b/src/Form/ProductRenewalForm.php
+index f2b0d4e..d153c4d 100644
+--- a/src/Form/ProductRenewalForm.php
++++ b/src/Form/ProductRenewalForm.php
+@@ -21,14 +21,14 @@ class ProductRenewalForm extends FormBase {
+   /**
+    * Product service.
+    *
+-   * @var \Drupal\amazon_product_widget\ProductService
++   * @var ProductService
+    */
+   protected $productService;
+ 
+   /**
+    * ProductRenewalForm constructor.
+    *
+-   * @param \Drupal\amazon_product_widget\ProductService $product_service
++   * @param ProductService $product_service
+    *   Product service.
+    */
+   public function __construct(ProductService $product_service) {
+diff --git a/src/Plugin/Field/FieldFormatter/AmazonProductFieldFormatter.php b/src/Plugin/Field/FieldFormatter/AmazonProductFieldFormatter.php
+index 062749b..50b2339 100644
+--- a/src/Plugin/Field/FieldFormatter/AmazonProductFieldFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/AmazonProductFieldFormatter.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\amazon_product_widget\Plugin\Field\FieldFormatter;
+ 
++use Drupal\amazon_product_widget\Plugin\Field\FieldType\AmazonProductField;
+ use Drupal\amazon_product_widget\ProductServiceTrait;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Field\FormatterBase;
+@@ -28,7 +29,7 @@ class AmazonProductFieldFormatter extends FormatterBase {
+    * {@inheritdoc}
+    */
+   public function viewElements(FieldItemListInterface $items, $langcode) {
+-    /** @var \Drupal\amazon_product_widget\Plugin\Field\FieldType\AmazonProductField $field */
++    /** @var AmazonProductField $field */
+     $field = $items->first();
+ 
+     if (empty($field)) {
+diff --git a/src/Plugin/Field/FieldWidget/AmazonProductWidget.php b/src/Plugin/Field/FieldWidget/AmazonProductWidget.php
+index aa9c6d8..378cbb2 100644
+--- a/src/Plugin/Field/FieldWidget/AmazonProductWidget.php
++++ b/src/Plugin/Field/FieldWidget/AmazonProductWidget.php
+@@ -31,7 +31,7 @@ class AmazonProductWidget extends WidgetBase implements ContainerFactoryPluginIn
+   /**
+    * Product service.
+    *
+-   * @var \Drupal\amazon_product_widget\ProductService
++   * @var ProductService
+    */
+   protected $productService;
+ 
+@@ -149,7 +149,7 @@ class AmazonProductWidget extends WidgetBase implements ContainerFactoryPluginIn
+    *
+    * @param array $element
+    *   Form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state.
+    */
+   public function validateAsins(array $element, FormStateInterface $form_state) {
+diff --git a/src/Plugin/QueueWorker/ProductDataUpdate.php b/src/Plugin/QueueWorker/ProductDataUpdate.php
+index 03ad549..b6e390a 100644
+--- a/src/Plugin/QueueWorker/ProductDataUpdate.php
++++ b/src/Plugin/QueueWorker/ProductDataUpdate.php
+@@ -27,7 +27,7 @@ class ProductDataUpdate extends QueueWorkerBase implements ContainerFactoryPlugi
+   /**
+    * Product service.
+    *
+-   * @var \Drupal\amazon_product_widget\ProductService
++   * @var ProductService
+    */
+   protected $productService;
+ 
+@@ -47,7 +47,7 @@ class ProductDataUpdate extends QueueWorkerBase implements ContainerFactoryPlugi
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\amazon_product_widget\ProductService $product_service
++   * @param ProductService $product_service
+    *   Product service.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, ProductService $product_service) {
+diff --git a/src/Plugin/views/field/DealStatus.php b/src/Plugin/views/field/DealStatus.php
+index 87c66bd..5c45a6a 100644
+--- a/src/Plugin/views/field/DealStatus.php
++++ b/src/Plugin/views/field/DealStatus.php
+@@ -19,7 +19,7 @@ class DealStatus extends FieldPluginBase {
+   /**
+    * Deal feed service.
+    *
+-   * @var \Drupal\amazon_product_widget\DealFeedService
++   * @var DealFeedService
+    */
+   protected $dealFeedService;
+ 
+@@ -32,7 +32,7 @@ class DealStatus extends FieldPluginBase {
+    *   Plugin id.
+    * @param $plugin_definition
+    *   Plugin definition.
+-   * @param \Drupal\amazon_product_widget\DealFeedService $dealFeedService
++   * @param DealFeedService $dealFeedService
+    *   Deal feed service.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, DealFeedService $dealFeedService) {
+diff --git a/src/Plugin/views/field/EntityUrl.php b/src/Plugin/views/field/EntityUrl.php
+index fa58448..220e369 100644
+--- a/src/Plugin/views/field/EntityUrl.php
++++ b/src/Plugin/views/field/EntityUrl.php
+@@ -24,7 +24,7 @@ class EntityUrl extends FieldPluginBase {
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+diff --git a/src/Plugin/views/field/UnavailableAsins.php b/src/Plugin/views/field/UnavailableAsins.php
+index 9c5671f..8768259 100644
+--- a/src/Plugin/views/field/UnavailableAsins.php
++++ b/src/Plugin/views/field/UnavailableAsins.php
+@@ -25,14 +25,14 @@ class UnavailableAsins extends FieldPluginBase {
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\amazon_product_widget\ProductUsageService
++   * @var ProductUsageService
+    */
+   protected $usageService;
+ 
+   /**
+    * Product usage service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+diff --git a/src/ProductService.php b/src/ProductService.php
+index 2174194..a8e029a 100644
+--- a/src/ProductService.php
++++ b/src/ProductService.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\amazon_product_widget;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Amazon\ProductAdvertisingAPI\v1\ApiException;
+ use Amazon\ProductAdvertisingAPI\v1\com\amazon\paapi5\v1\GetItemsRequest;
+ use Amazon\ProductAdvertisingAPI\v1\com\amazon\paapi5\v1\GetItemsResource;
+ use Amazon\ProductAdvertisingAPI\v1\com\amazon\paapi5\v1\PartnerType;
+@@ -34,14 +36,14 @@ class ProductService {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManager
++   * @var EntityTypeManager
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Amazon product widget settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $settings;
+ 
+@@ -51,14 +53,14 @@ class ProductService {
+    * Key value store with ASIN-number as keys and serialized product data as
+    * data.
+    *
+-   * @var \Drupal\amazon_product_widget\productStore
++   * @var productStore
+    */
+   protected $productStore;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -68,28 +70,28 @@ class ProductService {
+    * Key value store with a hashed search term string as key and a list of
+    * ASINs which were returned from amazon search as data.
+    *
+-   * @var \Drupal\amazon_product_widget\productStore
++   * @var productStore
+    */
+   protected $searchResultStore;
+ 
+   /**
+    * State.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * Lock backend.
+    *
+-   * @var \Drupal\Core\Lock\LockBackendInterface
++   * @var LockBackendInterface
+    */
+   protected $lock;
+ 
+   /**
+    * Queue for fetching product data.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+@@ -117,28 +119,28 @@ class ProductService {
+   /**
+    * The deal feed service.
+    *
+-   * @var \Drupal\amazon_product_widget\DealFeedService
++   * @var DealFeedService
+    */
+   protected $dealService;
+ 
+   /**
+    * ProductService constructor.
+    *
+-   * @param \Drupal\amazon_product_widget\ProductStoreFactory $store_factory
++   * @param ProductStoreFactory $store_factory
+    *   Product store.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   State.
+-   * @param \Drupal\Core\Lock\LockBackendInterface $lock
++   * @param LockBackendInterface $lock
+    *   Lock backend.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config
++   * @param ConfigFactoryInterface $config
+    *   Config factory.
+-   * @param \Drupal\Core\Queue\QueueInterface $queue
++   * @param QueueInterface $queue
+    *   The queue.
+-   * @param \Drupal\Core\Entity\EntityTypeManager $entityTypeManager
++   * @param EntityTypeManager $entityTypeManager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler
++   * @param ModuleHandlerInterface $moduleHandler
+    *   The module handler.
+-   * @param \Drupal\amazon_product_widget\DealFeedService $dealService
++   * @param DealFeedService $dealService
+    *   Deal feed service.
+    */
+   public function __construct(ProductStoreFactory $store_factory, StateInterface $state, LockBackendInterface $lock, ConfigFactoryInterface $config, QueueInterface $queue, EntityTypeManager $entityTypeManager, ModuleHandlerInterface $moduleHandler, DealFeedService $dealService) {
+@@ -168,7 +170,7 @@ class ProductService {
+   /**
+    * Gets the product store.
+    *
+-   * @return \Drupal\amazon_product_widget\productStore
++   * @return productStore
+    */
+   public function getProductStore() {
+     return $this->productStore;
+@@ -177,7 +179,7 @@ class ProductService {
+   /**
+    * Gets the search result store.
+    *
+-   * @return \Drupal\amazon_product_widget\productStore
++   * @return productStore
+    */
+   public function getSearchResultStore() {
+     return $this->searchResultStore;
+@@ -198,8 +200,8 @@ class ProductService {
+    *   Associative array with ASIN-number as key, and product data as values.
+    *   If no data was retrieved for an ASIN, then the value is FALSE.
+    *
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonApiDisabledException
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonRequestLimitReachedException
++   * @throws AmazonApiDisabledException
++   * @throws AmazonRequestLimitReachedException
+    */
+   public function getProductData(array $asins, bool $renew = FALSE) : array {
+     $asins = array_unique($asins);
+@@ -246,8 +248,8 @@ class ProductService {
+    *   An array of ASIN-numbers which are the top result for that search, with
+    *   the first item in the array being the top result.
+    *
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonApiDisabledException
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonRequestLimitReachedException
++   * @throws AmazonApiDisabledException
++   * @throws AmazonRequestLimitReachedException
+    */
+   public function getSearchResults($search_terms, $category = ProductService::AMAZON_CATEGORY_DEFAULT, $renew = FALSE) {
+     if (empty($search_terms)) {
+@@ -313,8 +315,8 @@ class ProductService {
+    *   Associative array with ASIN-number as key, and product data as values.
+    *   If no data was retrieved for an ASIN, then the value is FALSE.
+    *
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonApiDisabledException
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonRequestLimitReachedException
++   * @throws AmazonApiDisabledException
++   * @throws AmazonRequestLimitReachedException
+    */
+   protected function fetchAmazonProducts(array $asins) {
+     if ($this->amazonApiDisabled) {
+@@ -395,9 +397,9 @@ class ProductService {
+    *   Associative array with ASIN-number as key, and product data as values.
+    *   If no data was retrieved for an ASIN, then the value is FALSE.
+    *
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonApiDisabledException
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonRequestLimitReachedException
+-   * @throws \Amazon\ProductAdvertisingAPI\v1\ApiException
++   * @throws AmazonApiDisabledException
++   * @throws AmazonRequestLimitReachedException
++   * @throws ApiException
+    */
+   protected function fetchItemData(array $asins) {
+     if (empty($asins)) {
+@@ -558,8 +560,8 @@ class ProductService {
+    * @return string[]
+    *   An array of ASIN-numbers which are the top result for that search.
+    *
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonApiDisabledException
+-   * @throws \Drupal\amazon_product_widget\Exception\AmazonRequestLimitReachedException
++   * @throws AmazonApiDisabledException
++   * @throws AmazonRequestLimitReachedException
+    */
+   public function fetchAmazonSearchResults($search_terms, $category = ProductService::AMAZON_CATEGORY_DEFAULT) {
+     if ($this->amazonApiDisabled) {
+@@ -674,9 +676,9 @@ class ProductService {
+   /**
+    * Builds products for theming with fallback.
+    *
+-   * @param \Drupal\amazon_product_widget\Plugin\Field\FieldType\AmazonProductField $product_field
++   * @param AmazonProductField $product_field
+    *   Product field.
+-   * @param \Drupal\node\NodeInterface|null $node
++   * @param NodeInterface|null $node
+    *   Node the product field is on.
+    *
+    * @return mixed[]
+@@ -723,9 +725,9 @@ class ProductService {
+   /**
+    * Gets the raw product data with fallback.
+    *
+-   * @param \Drupal\amazon_product_widget\Plugin\Field\FieldType\AmazonProductField $product_field
++   * @param AmazonProductField $product_field
+    *   Product field.
+-   * @param \Drupal\node\NodeInterface|null $node
++   * @param NodeInterface|null $node
+    *   The node the product field is attached to.
+    *
+    * @return mixed[]
+diff --git a/src/ProductServiceTrait.php b/src/ProductServiceTrait.php
+index f5f39c0..daf1bdd 100644
+--- a/src/ProductServiceTrait.php
++++ b/src/ProductServiceTrait.php
+@@ -10,14 +10,14 @@ trait ProductServiceTrait {
+   /**
+    * Product service.
+    *
+-   * @var \Drupal\amazon_product_widget\ProductService
++   * @var ProductService
+    */
+   protected $productService;
+ 
+   /**
+    * Returns an instance of ProductService.
+    *
+-   * @return \Drupal\amazon_product_widget\ProductService
++   * @return ProductService
+    */
+   public function getProductService() {
+     if (!$this->productService) {
+diff --git a/src/ProductStore.php b/src/ProductStore.php
+index de8242c..c282374 100644
+--- a/src/ProductStore.php
++++ b/src/ProductStore.php
+@@ -45,7 +45,7 @@ class ProductStore extends DatabaseStorage {
+   /**
+    * TimeInterface.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+@@ -54,11 +54,11 @@ class ProductStore extends DatabaseStorage {
+    *
+    * @param string $collection
+    *   The name of the collection holding key and value pairs.
+-   * @param \Drupal\Component\Serialization\SerializationInterface $serializer
++   * @param SerializationInterface $serializer
+    *   The serialization class to use.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection to use.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The TimeInterface object.
+    */
+   public function __construct($collection, SerializationInterface $serializer, Connection $connection, TimeInterface $time) {
+diff --git a/src/ProductStoreFactory.php b/src/ProductStoreFactory.php
+index a1a1ed7..774970d 100644
+--- a/src/ProductStoreFactory.php
++++ b/src/ProductStoreFactory.php
+@@ -15,18 +15,18 @@ class ProductStoreFactory extends KeyValueDatabaseFactory {
+   /**
+    * TimeInterface.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * Constructs this factory object.
+    *
+-   * @param \Drupal\Component\Serialization\SerializationInterface $serializer
++   * @param SerializationInterface $serializer
+    *   The serialization class to use.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The Connection object containing the key-value tables.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The TimeInterface object that keeps time.
+    */
+   public function __construct(SerializationInterface $serializer, Connection $connection, TimeInterface $time) {
+@@ -37,7 +37,7 @@ class ProductStoreFactory extends KeyValueDatabaseFactory {
+   /**
+    * {@inheritdoc}
+    *
+-   * @return \Drupal\amazon_product_widget\ProductStore
++   * @return ProductStore
+    */
+   public function get($collection) {
+     return new ProductStore($collection, $this->serializer, $this->connection, $this->time);
+diff --git a/src/ProductUsageService.php b/src/ProductUsageService.php
+index ffa6744..8d121b9 100644
+--- a/src/ProductUsageService.php
++++ b/src/ProductUsageService.php
+@@ -19,32 +19,32 @@ class ProductUsageService {
+   /**
+    * Database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * EntityFieldManager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $fieldManager;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * ProductUsageService constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   Database connection.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $fieldManager
++   * @param EntityFieldManagerInterface $fieldManager
+    *   EntityFieldManager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler
++   * @param ModuleHandlerInterface $moduleHandler
+    *   Module handler.
+    */
+   public function __construct(Connection $database, EntityFieldManagerInterface $fieldManager, ModuleHandlerInterface $moduleHandler) {
+@@ -56,7 +56,7 @@ class ProductUsageService {
+   /**
+    * Updates ASIN mapping for the given entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity to update the mapping for.
+    */
+   public function update(EntityInterface $entity) {
+@@ -87,7 +87,7 @@ class ProductUsageService {
+ 
+       if ($definition->getType() === 'amazon_product_widget_field_type') {
+         try {
+-          /** @var \Drupal\amazon_product_widget\Plugin\Field\FieldType\AmazonProductField $productField */
++          /** @var AmazonProductField $productField */
+           $productField = $entity->get($fieldName)->first();
+           if (!$productField instanceof AmazonProductField) {
+             continue;
+@@ -100,14 +100,14 @@ class ProductUsageService {
+         }
+       }
+       elseif ($definition->getType() === 'entity_reference_revisions' || $definition->getType() === 'entity_reference') {
+-        /** @var \Drupal\Core\Entity\EntityInterface $referenceField */
++        /** @var EntityInterface $referenceField */
+         $referenceField = $entity->get($fieldName);
+         if (!$referenceField) {
+           continue;
+         }
+         $referencedEntities = $referenceField->referencedEntities();
+ 
+-        /** @var \Drupal\Core\Entity\FieldableEntityInterface $referencedEntity */
++        /** @var FieldableEntityInterface $referencedEntity */
+         foreach ($referencedEntities as $referencedEntity) {
+           if (!$referencedEntity instanceof FieldableEntityInterface) {
+             continue;
+@@ -117,7 +117,7 @@ class ProductUsageService {
+           foreach ($fields as $field) {
+             if ($field->getType() === 'amazon_product_widget_field_type') {
+               try {
+-                /** @var \Drupal\amazon_product_widget\Plugin\Field\FieldType\AmazonProductField $productField */
++                /** @var AmazonProductField $productField */
+                 $productField = $referencedEntity->get($field->getName())->first();
+                 if (!$productField instanceof AmazonProductField) {
+                   continue;
+@@ -195,7 +195,7 @@ class ProductUsageService {
+   /**
+    * Returns the unavailable ASINs in the given entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity.
+    *
+    * @return array
+@@ -242,7 +242,7 @@ class ProductUsageService {
+   /**
+    * Returns the ASINs contained within the given entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to search.
+    *
+    * @return array

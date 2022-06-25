@@ -1,0 +1,1459 @@
+diff --git a/src/Commands/YamlContentCommands.php b/src/Commands/YamlContentCommands.php
+index 1f21f79..604f935 100644
+--- a/src/Commands/YamlContentCommands.php
++++ b/src/Commands/YamlContentCommands.php
+@@ -1,6 +1,7 @@
+ <?php
+ namespace Drupal\yaml_content\Commands;
+ 
++use Drupal\yaml_content\ContentLoader\ContentLoaderInterface;
+ use Drupal\yaml_content\Service\LoadHelper;
+ use Drush\Commands\DrushCommands;
+ 
+@@ -12,14 +13,14 @@ class YamlContentCommands extends DrushCommands {
+   /**
+    * Content Loader.
+    *
+-   * @var \Drupal\yaml_content\ContentLoader\ContentLoaderInterface
++   * @var ContentLoaderInterface
+    */
+   protected $loader;
+ 
+   /**
+    * ContentLoader constructor.
+    *
+-   * @param \Drupal\yaml_content\Service\LoadHelper $loader
++   * @param LoadHelper $loader
+    *   YAML Content loader service.
+    */
+   public function __construct(LoadHelper $loader) {
+diff --git a/src/ContentLoader/ContentLoader.php b/src/ContentLoader/ContentLoader.php
+index 570a357..2efe199 100644
+--- a/src/ContentLoader/ContentLoader.php
++++ b/src/ContentLoader/ContentLoader.php
+@@ -2,6 +2,16 @@
+ 
+ namespace Drupal\yaml_content\ContentLoader;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\yaml_content\Service\EntityLoadHelper;
++use Drupal\Core\Extension\ModuleHandlerInterface;
++use Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher;
++use Drupal\yaml_content\Plugin\YamlContentProcessManager;
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Entity\FieldableEntityInterface;
+ use Drupal\Core\Field\EntityReferenceFieldItemList;
+@@ -25,42 +35,42 @@ class ContentLoader implements ContentLoaderInterface {
+   /**
+    * Dependency injection container.
+    *
+-   * @var \Symfony\Component\DependencyInjection\ContainerInterface
++   * @var ContainerInterface
+    */
+   protected $container;
+ 
+   /**
+    * The entity type manager interface.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Helper service to load entities.
+    *
+-   * @var \Drupal\yaml_content\Service\EntityLoadHelper
++   * @var EntityLoadHelper
+    */
+   protected $entityLoadHelper;
+ 
+   /**
+    * The module handler interface for invoking any hooks.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Event dispatcher service to report events throughout the loading process.
+    *
+-   * @var \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher
++   * @var ContainerAwareEventDispatcher
+    */
+   protected $dispatcher;
+ 
+   /**
+    * YAML parser.
+    *
+-   * @var \Symfony\Component\Yaml\Parser
++   * @var Parser
+    */
+   protected $parser;
+ 
+@@ -93,14 +103,14 @@ class ContentLoader implements ContentLoaderInterface {
+   protected $contentFile;
+ 
+   /**
+-   * @var \Drupal\yaml_content\Plugin\YamlContentProcessManager
++   * @var YamlContentProcessManager
+    */
+   protected $processManager;
+ 
+   /**
+    * ContentLoader constructor.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The dependency injection container to load dependent services.
+    */
+   public function __construct(ContainerInterface $container) {
+@@ -119,7 +129,7 @@ class ContentLoader implements ContentLoaderInterface {
+   /**
+    * Get the YAML parser service.
+    *
+-   * @return \Symfony\Component\Yaml\Parser
++   * @return Parser
+    *   The YAML parser service.
+    */
+   protected function getParser() {
+@@ -133,7 +143,7 @@ class ContentLoader implements ContentLoaderInterface {
+   /**
+    * Get the EntityTypeManager service.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @return EntityTypeManagerInterface
+    *   The EntityTypeManager service.
+    */
+   public function getEntityTypeManager() {
+@@ -149,7 +159,7 @@ class ContentLoader implements ContentLoaderInterface {
+   /**
+    * Get the EntityLoadHelper service.
+    *
+-   * @return \Drupal\yaml_content\Service\EntityLoadHelper
++   * @return EntityLoadHelper
+    *   The EntityLoadHelper service.
+    */
+   protected function getEntityLoadHelper() {
+@@ -165,7 +175,7 @@ class ContentLoader implements ContentLoaderInterface {
+   /**
+    * Get the ProcessManager service.
+    *
+-   * @return \Drupal\yaml_content\Plugin\YamlContentProcessManager
++   * @return YamlContentProcessManager
+    *   The ProcessManager service.
+    */
+   protected function getProcessManager() {
+@@ -181,7 +191,7 @@ class ContentLoader implements ContentLoaderInterface {
+   /**
+    * Get the module handler service.
+    *
+-   * @return \Drupal\Core\Extension\ModuleHandlerInterface
++   * @return ModuleHandlerInterface
+    *   The module handler service.
+    */
+   protected function getModuleHandler() {
+@@ -197,7 +207,7 @@ class ContentLoader implements ContentLoaderInterface {
+   /**
+    * Get the event dispatcher service.
+    *
+-   * @return \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher
++   * @return ContainerAwareEventDispatcher
+    *   The event dispatcher service.
+    */
+   protected function getEventDispatcher() {
+@@ -255,7 +265,7 @@ class ContentLoader implements ContentLoaderInterface {
+    * @param string $entity_type
+    *   The entity type id of the definition to load.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeInterface|null
++   * @return EntityTypeInterface|null
+    *   The entity type definition or NULL if the definition could not be loaded.
+    */
+   protected function getEntityTypeDefinition($entity_type) {
+@@ -268,10 +278,10 @@ class ContentLoader implements ContentLoaderInterface {
+    * @param string $entity_type
+    *   The entity type id of the definition to load.
+    *
+-   * @return \Drupal\Core\Entity\EntityStorageInterface
++   * @return EntityStorageInterface
+    *   The storage handler service for the entity type.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   protected function getEntityStorage($entity_type) {
+     return $this->getEntityTypeManager()->getStorage($entity_type);
+@@ -291,7 +301,7 @@ class ContentLoader implements ContentLoaderInterface {
+ 
+     // Dispatch the event notification.
+     $content_parsed_event = new ContentParsedEvent($this, $this->contentFile, $this->parsedContent);
+-    $this->getEventDispatcher()->dispatch(YamlContentEvents::CONTENT_PARSED, $content_parsed_event);
++    $this->getEventDispatcher()->dispatch($content_parsed_event, YamlContentEvents::CONTENT_PARSED);
+ 
+     return $this->parsedContent;
+   }
+@@ -311,13 +321,13 @@ class ContentLoader implements ContentLoaderInterface {
+ 
+       // Dispatch the pre-save event.
+       $entity_pre_save_event = new EntityPreSaveEvent($this, $entity, $content_item);
+-      $this->getEventDispatcher()->dispatch(YamlContentEvents::ENTITY_PRE_SAVE, $entity_pre_save_event);
++      $this->getEventDispatcher()->dispatch($entity_pre_save_event, YamlContentEvents::ENTITY_PRE_SAVE);
+ 
+       $entity->save();
+ 
+       // Dispatch the post-save event.
+       $entity_post_save_event = new EntityPostSaveEvent($this, $entity, $content_item);
+-      $this->getEventDispatcher()->dispatch(YamlContentEvents::ENTITY_POST_SAVE, $entity_post_save_event);
++      $this->getEventDispatcher()->dispatch($entity_post_save_event, YamlContentEvents::ENTITY_POST_SAVE);
+ 
+       $loaded_content[] = $entity;
+     }
+@@ -337,10 +347,10 @@ class ContentLoader implements ContentLoaderInterface {
+    * @param array $content_data
+    *   The array of content data to be parsed.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   The created entity from the parsed content data.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function buildEntity($entity_type, array $content_data) {
+     // Load entity type definition.
+@@ -348,7 +358,7 @@ class ContentLoader implements ContentLoaderInterface {
+ 
+     // Dispatch the entity import event.
+     $entity_import_event = new EntityImportEvent($this, $entity_definition, $content_data);
+-    $this->getEventDispatcher()->dispatch(YamlContentEvents::IMPORT_ENTITY, $entity_import_event);
++    $this->getEventDispatcher()->dispatch($entity_import_event, YamlContentEvents::IMPORT_ENTITY);
+ 
+     // Parse properties for creation and fields for processing.
+     $attributes = $this->getContentAttributes($entity_type, $content_data);
+@@ -402,13 +412,13 @@ class ContentLoader implements ContentLoaderInterface {
+    * @param array $content_data
+    *   The array of content data to be parsed.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   A loaded matching entity if existence checking is enabled and a matching
+    *   entity was found, or a new one stubbed from simple properties otherwise.
+    *
+    * @see \Drupal\yaml_content\ContentLoader\ContentLoader::existenceCheck()
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   public function createEntity($entity_type, array $content_data) {
+     // If existence checking is enabled, attempt to load the entity first.
+@@ -433,13 +443,13 @@ class ContentLoader implements ContentLoaderInterface {
+   /**
+    * Populate entity field data into an entity object.
+    *
+-   * @param \Drupal\Core\Entity\FieldableEntityInterface $entity
++   * @param FieldableEntityInterface $entity
+    *   The entity object being populated for import.
+    * @param array $fields
+    *   Content import data for entity fields keyed by field name.
+    *
+-   * @throws \Drupal\Core\Field\FieldException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws FieldException
++   * @throws EntityStorageException
+    *
+    * @todo Add events for overall pre/post field import process.
+    * @todo Throw more specific exceptions.
+@@ -452,7 +462,7 @@ class ContentLoader implements ContentLoaderInterface {
+ 
+           // Dispatch field import event prior to populating fields.
+           $field_import_event = new FieldImportEvent($this, $entity, $field_instance, $field_data);
+-          $this->getEventDispatcher()->dispatch(YamlContentEvents::IMPORT_FIELD, $field_import_event);
++          $this->getEventDispatcher()->dispatch($field_import_event, YamlContentEvents::IMPORT_FIELD);
+ 
+           $this->populateField($field_instance, $field_data);
+         }
+@@ -477,7 +487,7 @@ class ContentLoader implements ContentLoaderInterface {
+    * @param array $field_data
+    *   The field data.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *
+    * @todo Handle field data types more dynamically with typed data.
+    */
+@@ -517,7 +527,7 @@ class ContentLoader implements ContentLoaderInterface {
+         // Test if this is a paragraph field.
+         $target_type = $field->getFieldDefinition()->getSetting('target_type');
+         if ($target_type == 'paragraph') {
+-          /** @var \Drupal\Core\Entity\EntityInterface[] $entities */
++          /** @var EntityInterface[] $entities */
+           $entities = $field->referencedEntities();
+           foreach ($entities as $entity) {
+             $entity->delete();
+@@ -585,10 +595,10 @@ class ContentLoader implements ContentLoaderInterface {
+    * @param array $content_data
+    *   The import content structure representing the entity being searched for.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|false
++   * @return EntityInterface|false
+    *   Return a matching entity if one is found, or FALSE otherwise.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    *
+    * @todo Potentially move this into a separate helper class.
+    */
+diff --git a/src/ContentLoader/ContentLoaderInterface.php b/src/ContentLoader/ContentLoaderInterface.php
+index 1d9680d..70e0d3c 100644
+--- a/src/ContentLoader/ContentLoaderInterface.php
++++ b/src/ContentLoader/ContentLoaderInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\yaml_content\ContentLoader;
+ 
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ 
+ /**
+@@ -57,7 +58,7 @@ interface ContentLoaderInterface extends ContainerInjectionInterface {
+    * @param array $content_data
+    *   The parsed content data.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   The entity returned after building from the parsed content data.
+    */
+   public function buildEntity($entity_type, array $content_data);
+diff --git a/src/Event/ContentParsedEvent.php b/src/Event/ContentParsedEvent.php
+index 6ad1f04..97a0772 100644
+--- a/src/Event/ContentParsedEvent.php
++++ b/src/Event/ContentParsedEvent.php
+@@ -26,7 +26,7 @@ class ContentParsedEvent extends EventBase {
+   /**
+    * Constructs a yaml content content parsed event object.
+    *
+-   * @param \Drupal\yaml_content\ContentLoader\ContentLoaderInterface $loader
++   * @param ContentLoaderInterface $loader
+    *   The active Content Loader that triggered the event.
+    * @param string $content_file
+    *   The full file path for the content file that was parsed.
+diff --git a/src/Event/DataImportEvent.php b/src/Event/DataImportEvent.php
+index 9a84f4e..0d50a2b 100644
+--- a/src/Event/DataImportEvent.php
++++ b/src/Event/DataImportEvent.php
+@@ -19,7 +19,7 @@ class DataImportEvent extends EventBase {
+   /**
+    * Constructs a yaml content entity pre-save event object.
+    *
+-   * @param \Drupal\yaml_content\ContentLoader\ContentLoaderInterface $loader
++   * @param ContentLoaderInterface $loader
+    *   The active Content Loader that triggered the event.
+    * @param array $content_data
+    *   The parsed content loaded from the content file to be loaded into
+diff --git a/src/Event/EntityImportEvent.php b/src/Event/EntityImportEvent.php
+index 1f4faef..50bdb8b 100644
+--- a/src/Event/EntityImportEvent.php
++++ b/src/Event/EntityImportEvent.php
+@@ -13,16 +13,16 @@ class EntityImportEvent extends DataImportEvent {
+   /**
+    * The entity type object for the entity being created.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeInterface
++   * @var EntityTypeInterface
+    */
+   protected $entityType;
+ 
+   /**
+    * Constructs a yaml content entity import event object.
+    *
+-   * @param \Drupal\yaml_content\ContentLoader\ContentLoaderInterface $loader
++   * @param ContentLoaderInterface $loader
+    *   The active Content Loader that triggered the event.
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The field definition for the field being populated.
+    * @param array $content_data
+    *   The parsed content loaded from the content file to be loaded into
+@@ -37,7 +37,7 @@ class EntityImportEvent extends DataImportEvent {
+   /**
+    * Gets the field definition object for the field being populated.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeInterface
++   * @return EntityTypeInterface
+    *   The entity type object for the entity being created.
+    */
+   public function getEntityType() {
+diff --git a/src/Event/EntityPostSaveEvent.php b/src/Event/EntityPostSaveEvent.php
+index 6345fb2..8c99f96 100644
+--- a/src/Event/EntityPostSaveEvent.php
++++ b/src/Event/EntityPostSaveEvent.php
+@@ -13,7 +13,7 @@ class EntityPostSaveEvent extends EventBase {
+   /**
+    * The imported and saved entity object.
+    *
+-   * @var \Drupal\Core\Entity\EntityInterface
++   * @var EntityInterface
+    */
+   protected $entity;
+ 
+@@ -27,9 +27,9 @@ class EntityPostSaveEvent extends EventBase {
+   /**
+    * Constructs a yaml content entity post-save event object.
+    *
+-   * @param \Drupal\yaml_content\ContentLoader\ContentLoaderInterface $loader
++   * @param ContentLoaderInterface $loader
+    *   The active Content Loader that triggered the event.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity loaded with content and saved.
+    * @param array $content_data
+    *   The parsed content loaded from the content file resulting in this entity.
+@@ -44,7 +44,7 @@ class EntityPostSaveEvent extends EventBase {
+   /**
+    * Gets the entity that was imported and saved.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   The saved entity object.
+    */
+   public function getEntity() {
+diff --git a/src/Event/EntityPreSaveEvent.php b/src/Event/EntityPreSaveEvent.php
+index 4c32597..dc20711 100644
+--- a/src/Event/EntityPreSaveEvent.php
++++ b/src/Event/EntityPreSaveEvent.php
+@@ -13,7 +13,7 @@ class EntityPreSaveEvent extends EventBase {
+   /**
+    * The entity prepared to be saved.
+    *
+-   * @var \Drupal\Core\Entity\EntityInterface
++   * @var EntityInterface
+    */
+   protected $entity;
+ 
+@@ -27,9 +27,9 @@ class EntityPreSaveEvent extends EventBase {
+   /**
+    * Constructs a yaml content entity pre-save event object.
+    *
+-   * @param \Drupal\yaml_content\ContentLoader\ContentLoaderInterface $loader
++   * @param ContentLoaderInterface $loader
+    *   The active Content Loader that triggered the event.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity loaded with content and prepared for saving.
+    * @param array $content_data
+    *   The parsed content loaded from the content file resulting in this entity.
+@@ -44,7 +44,7 @@ class EntityPreSaveEvent extends EventBase {
+   /**
+    * Gets the entity that is populated and prepared for saving.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   The created entity prepared to be saved.
+    */
+   public function getEntity() {
+diff --git a/src/Event/EventBase.php b/src/Event/EventBase.php
+index d145ab7..0aa47a9 100644
+--- a/src/Event/EventBase.php
++++ b/src/Event/EventBase.php
+@@ -2,7 +2,7 @@
+ 
+ namespace Drupal\yaml_content\Event;
+ 
+-use Symfony\Component\EventDispatcher\Event;
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\yaml_content\ContentLoader\ContentLoaderInterface;
+ 
+ /**
+@@ -13,14 +13,14 @@ class EventBase extends Event {
+   /**
+    * The ContentLoader being actively executed and triggering the event.
+    *
+-   * @var \Drupal\yaml_content\ContentLoader\ContentLoaderInterface
++   * @var ContentLoaderInterface
+    */
+   protected $contentLoader;
+ 
+   /**
+    * Constructs a yaml content content parsed event object.
+    *
+-   * @param \Drupal\yaml_content\ContentLoader\ContentLoaderInterface $loader
++   * @param ContentLoaderInterface $loader
+    *   The ContentLoader object that triggered the event.
+    */
+   public function __construct(ContentLoaderInterface $loader) {
+@@ -30,7 +30,7 @@ class EventBase extends Event {
+   /**
+    * Gets the ContentLoader object that triggered the event.
+    *
+-   * @return \Drupal\yaml_content\ContentLoader\ContentLoaderInterface
++   * @return ContentLoaderInterface
+    *   The ContentLoader object that triggered the event.
+    */
+   public function getContentLoader() {
+diff --git a/src/Event/FieldImportEvent.php b/src/Event/FieldImportEvent.php
+index ea18ebc..cba869a 100644
+--- a/src/Event/FieldImportEvent.php
++++ b/src/Event/FieldImportEvent.php
+@@ -14,25 +14,25 @@ class FieldImportEvent extends DataImportEvent {
+   /**
+    * The entity being populated with field data.
+    *
+-   * @var \Drupal\Core\Entity\EntityInterface
++   * @var EntityInterface
+    */
+   protected $entity;
+ 
+   /**
+    * The field object being populated.
+    *
+-   * @var \Drupal\Core\Field\FieldItemListInterface
++   * @var FieldItemListInterface
+    */
+   protected $field;
+ 
+   /**
+    * Constructs a yaml content field import event object.
+    *
+-   * @param \Drupal\yaml_content\ContentLoader\ContentLoaderInterface $loader
++   * @param ContentLoaderInterface $loader
+    *   The active Content Loader that triggered the event.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being populated with field data.
+-   * @param \Drupal\Core\Field\FieldItemListInterface $field
++   * @param FieldItemListInterface $field
+    *   The field object being populated.
+    * @param array $content_data
+    *   The parsed content loaded from the content file to be loaded into
+@@ -48,7 +48,7 @@ class FieldImportEvent extends DataImportEvent {
+   /**
+    * Gets the entity being populated with field data.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   The entity being populated with field data.
+    */
+   public function getEntity() {
+@@ -58,7 +58,7 @@ class FieldImportEvent extends DataImportEvent {
+   /**
+    * Gets the field object being populated.
+    *
+-   * @return \Drupal\Core\Field\FieldItemListInterface
++   * @return FieldItemListInterface
+    *   The field object being populated.
+    */
+   public function getField() {
+diff --git a/src/EventSubscriber/MenuHierarchySubscriber.php b/src/EventSubscriber/MenuHierarchySubscriber.php
+index e59398a..9bcb06b 100644
+--- a/src/EventSubscriber/MenuHierarchySubscriber.php
++++ b/src/EventSubscriber/MenuHierarchySubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\yaml_content\EventSubscriber;
+ 
++use Drupal\Core\Menu\MenuLinkInterface;
+ use Drupal\menu_link_content\MenuLinkContentInterface;
+ use Drupal\yaml_content\Event\EntityPreSaveEvent;
+ use Drupal\yaml_content\Event\YamlContentEvents;
+@@ -30,7 +31,7 @@ class MenuHierarchySubscriber implements EventSubscriberInterface {
+   /**
+    * Convert loaded parent entities for menu items to an expected value format.
+    *
+-   * @param \Drupal\yaml_content\Event\EntityPreSaveEvent $event
++   * @param EntityPreSaveEvent $event
+    *   The entity pre-save event containing data being processed.
+    */
+   public function serializeMenuParent(EntityPreSaveEvent $event) {
+@@ -47,7 +48,7 @@ class MenuHierarchySubscriber implements EventSubscriberInterface {
+       return;
+     }
+ 
+-    /** @var \Drupal\Core\Menu\MenuLinkInterface $entity */
++    /** @var MenuLinkInterface $entity */
+     $entity = $event->getEntity();
+     $parent_value = $entity->parent->first()->value;
+ 
+diff --git a/src/Plugin/ProcessingContext.php b/src/Plugin/ProcessingContext.php
+index 95910d2..ae8f84f 100644
+--- a/src/Plugin/ProcessingContext.php
++++ b/src/Plugin/ProcessingContext.php
+@@ -13,21 +13,21 @@ class ProcessingContext {
+   /**
+    * The field currently being processed.
+    *
+-   * @var \Drupal\Core\Field\FieldItemListInterface
++   * @var FieldItemListInterface
+    */
+   protected $field;
+ 
+   /**
+    * The active content loader instance.
+    *
+-   * @var \Drupal\yaml_content\ContentLoader\ContentLoaderInterface
++   * @var ContentLoaderInterface
+    */
+   protected $contentLoader;
+ 
+   /**
+    * Set the field context.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $field
++   * @param FieldItemListInterface $field
+    *   The field currently being processed.
+    */
+   public function setField(FieldItemListInterface $field) {
+@@ -37,7 +37,7 @@ class ProcessingContext {
+   /**
+    * Get the field context.
+    *
+-   * @return \Drupal\Core\Field\FieldItemListInterface
++   * @return FieldItemListInterface
+    *   The field currently being processed.
+    */
+   public function getField() {
+@@ -51,7 +51,7 @@ class ProcessingContext {
+   /**
+    * Set the content loader context.
+    *
+-   * @param \Drupal\yaml_content\ContentLoader\ContentLoaderInterface $contentLoader
++   * @param ContentLoaderInterface $contentLoader
+    *   The content loader instance actively loading content.
+    */
+   public function setContentLoader(ContentLoaderInterface $contentLoader) {
+@@ -61,7 +61,7 @@ class ProcessingContext {
+   /**
+    * Get the content loader context.
+    *
+-   * @return \Drupal\yaml_content\ContentLoader\ContentLoaderInterface
++   * @return ContentLoaderInterface
+    *   The content loader instance actively loading content.
+    */
+   public function getContentLoader() {
+diff --git a/src/Plugin/YamlContentProcessInterface.php b/src/Plugin/YamlContentProcessInterface.php
+index d30fbbe..441bbc1 100644
+--- a/src/Plugin/YamlContentProcessInterface.php
++++ b/src/Plugin/YamlContentProcessInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\yaml_content\Plugin;
+ 
++use Drupal\Core\TypedData\Exception\MissingDataException;
+ /**
+  * An interface for all YAML Content process plugins to implement.
+  */
+@@ -10,7 +11,7 @@ interface YamlContentProcessInterface {
+   /**
+    * Processes field data.
+    *
+-   * @param \Drupal\yaml_content\Plugin\ProcessingContext $context
++   * @param ProcessingContext $context
+    *   The processing context.
+    * @param array $field_data
+    *   The field data.
+@@ -18,7 +19,7 @@ interface YamlContentProcessInterface {
+    * @return array|int
+    *   The entity id.
+    *
+-   * @throws \Drupal\Core\TypedData\Exception\MissingDataException
++   * @throws MissingDataException
+    *   Error for missing data.
+    *
+    * @see \Drupal\yaml_content\Plugin\YamlContentProcessManager::preprocessFieldData()
+diff --git a/src/Plugin/YamlContentProcessManager.php b/src/Plugin/YamlContentProcessManager.php
+index 2659811..592ce65 100644
+--- a/src/Plugin/YamlContentProcessManager.php
++++ b/src/Plugin/YamlContentProcessManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\yaml_content\Plugin;
+ 
++use Drupal\Core\TypedData\Exception\MissingDataException;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\Plugin\DefaultPluginManager;
+@@ -18,9 +19,9 @@ class YamlContentProcessManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+@@ -55,12 +56,12 @@ class YamlContentProcessManager extends DefaultPluginManager {
+    * The `$field_data` array is passed by reference and may be modified directly
+    * by the callback implementation.
+    *
+-   * @param \Drupal\yaml_content\Plugin\ProcessingContext $context
++   * @param ProcessingContext $context
+    *   The processing context.
+    * @param array|string $field_data
+    *   The field data.
+    *
+-   * @throws \Drupal\Core\TypedData\Exception\MissingDataException
++   * @throws MissingDataException
+    */
+   public function preprocessFieldData(ProcessingContext $context, &$field_data) {
+     // Break here if the field data is not an array since there can be no
+@@ -79,7 +80,7 @@ class YamlContentProcessManager extends DefaultPluginManager {
+       $process_config = $field_data['#process'];
+       if (isset($process_config['callback'])) {
+         $plugin_id = $process_config['callback'];
+-        /** @var \Drupal\yaml_content\Plugin\YamlContentProcessInterface $plugin */
++        /** @var YamlContentProcessInterface $plugin */
+         $plugin = $this->createInstance($plugin_id, $process_config['args']);
+         $plugin->process($context, $field_data);
+       }
+diff --git a/src/Plugin/yaml_content/process/File.php b/src/Plugin/yaml_content/process/File.php
+index 8cf5d2a..0a955d6 100644
+--- a/src/Plugin/yaml_content/process/File.php
++++ b/src/Plugin/yaml_content/process/File.php
+@@ -50,7 +50,7 @@ class File extends YamlContentProcessBase implements YamlContentProcessInterface
+         ->prepareDirectory($destination, FileSystemInterface::CREATE_DIRECTORY);
+ 
+       // Save the file data or return an existing file.
+-      $file = file_save_data($output, $destination . $filename, FileSystemInterface::EXISTS_REPLACE);
++      $file = \Drupal::service('file.repository')->writeData($output, $destination . $filename, FileSystemInterface::EXISTS_REPLACE);
+ 
+       // Use the newly created file id as the value.
+       $field_data['target_id'] = $file->id();
+diff --git a/src/Plugin/yaml_content/process/LayoutSection.php b/src/Plugin/yaml_content/process/LayoutSection.php
+index 7f51485..c34cb91 100644
+--- a/src/Plugin/yaml_content/process/LayoutSection.php
++++ b/src/Plugin/yaml_content/process/LayoutSection.php
+@@ -23,7 +23,7 @@ class LayoutSection extends YamlContentProcessBase implements ContainerFactoryPl
+   /**
+    * The UUID generator.
+    *
+-   * @var \Drupal\Component\Uuid\UuidInterface
++   * @var UuidInterface
+    */
+   protected $uuidGenerator;
+ 
+@@ -36,7 +36,7 @@ class LayoutSection extends YamlContentProcessBase implements ContainerFactoryPl
+    *   The plugin ID for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Component\Uuid\UuidInterface $uuid
++   * @param UuidInterface $uuid
+    *   The UUID generator.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, UuidInterface $uuid) {
+diff --git a/src/Plugin/yaml_content/process/Reference.php b/src/Plugin/yaml_content/process/Reference.php
+index 5349780..19a24ea 100644
+--- a/src/Plugin/yaml_content/process/Reference.php
++++ b/src/Plugin/yaml_content/process/Reference.php
+@@ -23,7 +23,7 @@ class Reference extends YamlContentProcessBase implements YamlContentProcessInte
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -36,7 +36,7 @@ class Reference extends YamlContentProcessBase implements YamlContentProcessInte
+    *   The plugin ID for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity manager.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Service/EntityLoadHelper.php b/src/Service/EntityLoadHelper.php
+index e85254c..f6de5b9 100644
+--- a/src/Service/EntityLoadHelper.php
++++ b/src/Service/EntityLoadHelper.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\yaml_content\Service;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityTypeInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -30,28 +36,28 @@ class EntityLoadHelper implements ContainerInjectionInterface {
+   /**
+    * Dependency injection container.
+    *
+-   * @var \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @var ContainerInterface $container
+    */
+   protected $container;
+ 
+   /**
+    * The entity type manager interface.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity field manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * Constructs the entity load helper service.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The dependency injection container to laod dependent services.
+    */
+   public function __construct(ContainerInterface $container) {
+@@ -75,7 +81,7 @@ class EntityLoadHelper implements ContainerInjectionInterface {
+    * @param array $content_data
+    *   The import content structure representing the entity being searched for.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|false
++   * @return EntityInterface|false
+    *   Return a matching entity if one is found, or FALSE otherwise.
+    */
+   public function entityExists($entity_type, array $content_data) {
+@@ -96,7 +102,7 @@ class EntityLoadHelper implements ContainerInjectionInterface {
+    * @param array $content_data
+    *   The import content structure representing the entity being searched for.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|false
++   * @return EntityInterface|false
+    *   Return a matching entity if one is found, or FALSE otherwise.
+    */
+   public function loadEntity($entity_type, array $content_data) {
+@@ -121,7 +127,7 @@ class EntityLoadHelper implements ContainerInjectionInterface {
+    * @param string $uuid
+    *   The UUID of the entity to be searched for.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|false
++   * @return EntityInterface|false
+    */
+   public function loadByUuid($entity_type, $uuid) {
+     // Load the entity type storage handler.
+@@ -139,10 +145,10 @@ class EntityLoadHelper implements ContainerInjectionInterface {
+    * @param string $entity_type
+    *   The entity type id of the definition to load.
+    *
+-   * @return \Drupal\Core\Entity\EntityStorageInterface
++   * @return EntityStorageInterface
+    *   The storage handler service for the entity type.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   protected function getEntityStorage($entity_type) {
+     return $this->getEntityTypeManager()->getStorage($entity_type);
+@@ -151,7 +157,7 @@ class EntityLoadHelper implements ContainerInjectionInterface {
+   /**
+    * Get the EntityTypeManager service.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @return EntityTypeManagerInterface
+    *   The EntityTypeManager service.
+    */
+   protected function getEntityTypeManager() {
+@@ -176,10 +182,10 @@ class EntityLoadHelper implements ContainerInjectionInterface {
+    * @param array $content_data
+    *   The import content structure representing the entity being searched for.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|false
++   * @return EntityInterface|false
+    *   Return a matching entity if one is found, or FALSE otherwise.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   public function loadByProperties($entity_type, array $content_data) {
+ 
+@@ -314,7 +320,7 @@ class EntityLoadHelper implements ContainerInjectionInterface {
+   /**
+    * Get the entity field manager service.
+    *
+-   * @return \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @return EntityFieldManagerInterface
+    *   The entity field manager service.
+    */
+   protected function getEntityFieldManager() {
+@@ -333,7 +339,7 @@ class EntityLoadHelper implements ContainerInjectionInterface {
+    * @param $entity_type
+    *   The entity type ID.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeInterface|null
++   * @return EntityTypeInterface|null
+    *   The entity type definition or NULL if it could not be loaded.
+    */
+   protected function getEntityDefinition($entity_type) {
+diff --git a/src/Service/LoadHelper.php b/src/Service/LoadHelper.php
+index 6ae48a4..3cb03bc 100644
+--- a/src/Service/LoadHelper.php
++++ b/src/Service/LoadHelper.php
+@@ -17,25 +17,25 @@ class LoadHelper {
+   /**
+    * The content loader to use for importing content.
+    *
+-   * @var \Drupal\yaml_content\ContentLoader\ContentLoaderInterface
++   * @var ContentLoaderInterface
+    */
+   protected $loader;
+ 
+   /**
+    * The logging channel for recording import events.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Constructs the load helper service.
+    *
+-   * @param \Drupal\yaml_content\ContentLoader\ContentLoaderInterface $content_loader
++   * @param ContentLoaderInterface $content_loader
+    *   The content loader service to use for content imports.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logging channel for recording import events.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $translation
++   * @param TranslationInterface $translation
+    *   String translation service for message logging.
+    */
+   public function __construct(ContentLoaderInterface $content_loader, LoggerInterface $logger, TranslationInterface $translation) {
+@@ -81,7 +81,7 @@ class LoadHelper {
+    *   matching `*.content.yml` are queued for import.
+    */
+   public function importModule($module, $file = NULL) {
+-    $path = drupal_get_path('module', $module);
++    $path = \Drupal::service('extension.list.module')->getPath($module);
+ 
+     $this->loader->setContentPath($path);
+ 
+@@ -107,7 +107,7 @@ class LoadHelper {
+    *   matching `*.content.yml` are queued for import.
+    */
+   public function importProfile($profile, $file = NULL) {
+-    $path = drupal_get_path('profile', $profile);
++    $path = \Drupal::service('extension.list.profile')->getPath($profile);
+ 
+     $this->loader->setContentPath($path);
+ 
+diff --git a/tests/src/Functional/NodeImportTest.php b/tests/src/Functional/NodeImportTest.php
+index eb86cd7..bb579f1 100644
+--- a/tests/src/Functional/NodeImportTest.php
++++ b/tests/src/Functional/NodeImportTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\yaml_content\Functional;
+ 
++use org\bovigo\vfs\vfsStreamContent;
++use Drupal\yaml_content\ContentLoader\ContentLoader;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\Tests\field\Traits\EntityReferenceTestTrait;
+ use Drupal\Tests\BrowserTestBase;
+@@ -23,14 +25,14 @@ class NodeImportTest extends BrowserTestBase {
+   /**
+    * Directory where test files are to be created.
+    *
+-   * @var \org\bovigo\vfs\vfsStreamContent $contentDirectory
++   * @var vfsStreamContent $contentDirectory
+    */
+   protected $contentDirectory;
+ 
+   /**
+    * Prepared Content Loader service for testing.
+    *
+-   * @var \Drupal\yaml_content\ContentLoader\ContentLoader $contentLoader
++   * @var ContentLoader $contentLoader
+    */
+   protected $contentLoader;
+ 
+@@ -55,7 +57,7 @@ class NodeImportTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Create our article content type.
+@@ -67,7 +69,7 @@ class NodeImportTest extends BrowserTestBase {
+     // Prepare the content loader.
+     $this->contentLoader = \Drupal::service('yaml_content.content_loader');
+     // Look for content files in the tests directory.
+-    $this->contentLoader->setContentPath(drupal_get_path('module', 'yaml_content') . '/tests');
++    $this->contentLoader->setContentPath(\Drupal::service('extension.list.module')->getPath('yaml_content') . '/tests');
+   }
+ 
+   /**
+diff --git a/tests/src/Functional/Plugin/yaml_content/process/FileTest.php b/tests/src/Functional/Plugin/yaml_content/process/FileTest.php
+index 19e7898..121eedf 100644
+--- a/tests/src/Functional/Plugin/yaml_content/process/FileTest.php
++++ b/tests/src/Functional/Plugin/yaml_content/process/FileTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\yaml_content\Functional\Plugin\yaml_content\process;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Core\Field\BaseFieldDefinition;
+ use Drupal\Core\Field\FieldItemList;
+ use Drupal\Core\TypedData\DataDefinition;
+@@ -25,6 +26,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+  */
+ class FileTest extends BrowserTestBase {
+ 
++  use ProphecyTrait;
+   use LoadFixturesTrait;
+ 
+   protected static $modules = ['file'];
+diff --git a/tests/src/Functional/TaxonomyImportTest.php b/tests/src/Functional/TaxonomyImportTest.php
+index e985ff6..08fa1bf 100644
+--- a/tests/src/Functional/TaxonomyImportTest.php
++++ b/tests/src/Functional/TaxonomyImportTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\yaml_content\Functional;
+ 
++use org\bovigo\vfs\vfsStreamContent;
++use Drupal\yaml_content\ContentLoader\ContentLoader;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -20,14 +22,14 @@ class TaxonomyImportTest extends BrowserTestBase {
+   /**
+    * Directory where test files are to be created.
+    *
+-   * @var \org\bovigo\vfs\vfsStreamContent $contentDirectory
++   * @var vfsStreamContent $contentDirectory
+    */
+   protected $contentDirectory;
+ 
+   /**
+    * Prepared Content Loader service for testing.
+    *
+-   * @var \Drupal\yaml_content\ContentLoader\ContentLoader $contentLoader
++   * @var ContentLoader $contentLoader
+    */
+   protected $contentLoader;
+ 
+@@ -47,13 +49,13 @@ class TaxonomyImportTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Prepare the content loader.
+     $this->contentLoader = \Drupal::service('yaml_content.content_loader');
+     // Look for content files in the tests directory.
+-    $this->contentLoader->setContentPath(drupal_get_path('module', 'yaml_content') . '/tests');
++    $this->contentLoader->setContentPath(\Drupal::service('extension.list.module')->getPath('yaml_content') . '/tests');
+   }
+ 
+   /**
+@@ -78,7 +80,7 @@ class TaxonomyImportTest extends BrowserTestBase {
+   /**
+    * Assert that a given entity is a taxonomy term.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity object being checked.
+    * @param string $title
+    *   The expected label of the entity argument.
+diff --git a/tests/src/Unit/ContentLoader/ContentLoaderTest.php b/tests/src/Unit/ContentLoader/ContentLoaderTest.php
+index 1a4f200..037b174 100644
+--- a/tests/src/Unit/ContentLoader/ContentLoaderTest.php
++++ b/tests/src/Unit/ContentLoader/ContentLoaderTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\yaml_content\Unit\ContentLoader;
+ 
++use PHPUnit\Framework\Error\Warning;
+ use Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher;
+ use Drupal\Core\Field\BaseFieldDefinition;
+ use Drupal\Core\Field\FieldItemList;
+@@ -36,6 +37,7 @@ class ContentLoaderTest extends ContentLoaderTestBase {
+    * @todo Handle parse failure
+    * @todo Test no array at top level of content
+    * @todo Confirm array structure loaded
++   * @doesNotPerformAssertions
+    */
+   public function testParseContent() {
+     $this->markTestIncomplete();
+@@ -54,7 +56,7 @@ class ContentLoaderTest extends ContentLoaderTestBase {
+      $this->contentLoader->setContentPath($this->root->url());
+ 
+      // Parse the test file expecting an error for the missing file.
+-     $this->expectException(\PHPUnit\Framework\Error\Warning::class);
++     $this->expectException(Warning::class);
+      $this->contentLoader->parseContent($test_file);
+    }
+ 
+@@ -88,6 +90,7 @@ class ContentLoaderTest extends ContentLoaderTestBase {
+    * Test the entry point content loading behavior.
+    *
+    * @covers ::loadContent
++   * @doesNotPerformAssertions
+    */
+   public function testLoadContent() {
+     $this->markTestIncomplete();
+@@ -121,6 +124,7 @@ class ContentLoaderTest extends ContentLoaderTestBase {
+ 
+   /**
+    * @covers ::populateField
++   * @doesNotPerformAssertions
+    */
+   public function testPopulateFieldProcess() {
+     $field_definition = new BaseFieldDefinition();
+diff --git a/tests/src/Unit/ContentLoader/ContentLoaderTestBase.php b/tests/src/Unit/ContentLoader/ContentLoaderTestBase.php
+index 5678fcf..f1cc23a 100644
+--- a/tests/src/Unit/ContentLoader/ContentLoaderTestBase.php
++++ b/tests/src/Unit/ContentLoader/ContentLoaderTestBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\yaml_content\Unit\ContentLoader;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Tests\UnitTestCase;
+ use org\bovigo\vfs\vfsStream;
+ use Drupal\yaml_content\ContentLoader\ContentLoader;
+@@ -14,7 +15,7 @@ abstract class ContentLoaderTestBase extends UnitTestCase {
+   /**
+    * A prepared ContentLoader object for testing.
+    *
+-   * @var \Drupal\yaml_content\ContentLoader\ContentLoader
++   * @var ContentLoader
+    */
+   protected $contentLoader;
+ 
+@@ -29,7 +30,7 @@ abstract class ContentLoaderTestBase extends UnitTestCase {
+    *   this argument is omitted all methods are mocked and execute their
+    *   original code.
+    *
+-   * @return \PHPUnit\Framework\MockObject\MockObject
++   * @return MockObject
+    *   The mocked ContentLoader object with
+    */
+   protected function getContentLoaderMock($stubbed_methods = NULL) {
+@@ -63,7 +64,7 @@ abstract class ContentLoaderTestBase extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Prepare the directory structure.
+diff --git a/tests/src/Unit/ContentLoader/ExistenceCheckingTest.php b/tests/src/Unit/ContentLoader/ExistenceCheckingTest.php
+index 5b8ca96..85582c7 100644
+--- a/tests/src/Unit/ContentLoader/ExistenceCheckingTest.php
++++ b/tests/src/Unit/ContentLoader/ExistenceCheckingTest.php
+@@ -50,7 +50,7 @@ class ExistenceCheckingTest extends ContentLoaderTestBase {
+   /**
+    * Confirm the default value for existenceCheck().
+    *
+-   * @return \Drupal\yaml_content\ContentLoader\ContentLoader
++   * @return ContentLoader
+    *   The ContentLoader service being tested.
+    *
+    * @covers ::existenceCheck
+@@ -64,10 +64,10 @@ class ExistenceCheckingTest extends ContentLoaderTestBase {
+   /**
+    * Confirm the existence check value can be enabled.
+    *
+-   * @param \Drupal\yaml_content\ContentLoader\ContentLoader $content_loader
++   * @param ContentLoader $content_loader
+    *   The ContentLoader service being tested.
+    *
+-   * @return \Drupal\yaml_content\ContentLoader\ContentLoader
++   * @return ContentLoader
+    *   The ContentLoader service being tested.
+    *
+    * @depends testExistenceCheckDefault
+@@ -86,7 +86,7 @@ class ExistenceCheckingTest extends ContentLoaderTestBase {
+   /**
+    * Confirm the existence check value can be disabled.
+    *
+-   * @param \Drupal\yaml_content\ContentLoader\ContentLoader $content_loader
++   * @param ContentLoader $content_loader
+    *   The ContentLoader service being tested.
+    *
+    * @depends testEnableExistenceCheck
+@@ -112,6 +112,7 @@ class ExistenceCheckingTest extends ContentLoaderTestBase {
+    *
+    * @covers ::buildEntity
+    * @covers ::createEntity
++   * @doesNotPerformAssertions
+    */
+   public function testBuildEntityCallsCreateEntity($entity_type, array $test_content) {
+     $this->markTestSkipped('Enable this test once event dispatching is consolidated.');
+@@ -247,6 +248,7 @@ class ExistenceCheckingTest extends ContentLoaderTestBase {
+    * Confirm `createEntity()` does not create a new entity if a match is found.
+    *
+    * @covers ::createEntity
++   * @doesNotPerformAssertions
+    */
+   public function testCreateEntityLoadsMatchingEntityWhenFound() {
+     $this->markTestIncomplete();
+@@ -254,6 +256,7 @@ class ExistenceCheckingTest extends ContentLoaderTestBase {
+ 
+   /**
+    * Confirm `createEntity()` creates a new entity if a match is not found.
++   * @doesNotPerformAssertions
+    */
+   public function testCreateEntityCreatesNewEntityWhenMatchNotFound() {
+     $this->markTestIncomplete();
+@@ -261,6 +264,7 @@ class ExistenceCheckingTest extends ContentLoaderTestBase {
+ 
+   /**
+    * Confirm `createEntity()` does not change an existing entity if loaded.
++   * @doesNotPerformAssertions
+    */
+   public function testCreateEntityDoesNotChangeExistingEntities() {
+     $this->markTestIncomplete();
+diff --git a/tests/src/Unit/EntityLoadHelper/EntityLoadHelperTest.php b/tests/src/Unit/EntityLoadHelper/EntityLoadHelperTest.php
+index ede40ad..698dfdb 100644
+--- a/tests/src/Unit/EntityLoadHelper/EntityLoadHelperTest.php
++++ b/tests/src/Unit/EntityLoadHelper/EntityLoadHelperTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\yaml_content\Unit\EntityLoadHelper;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\ContentEntityTypeInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -22,7 +23,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+   /**
+    * A prepared EntityLoadHelper object for testing.
+    *
+-   * @var \Drupal\yaml_content\Service\EntityLoadHelper|\PHPUnit\Framework\MockObject\MockObject
++   * @var EntityLoadHelper|MockObject
+    */
+   protected $loadHelper;
+ 
+@@ -37,7 +38,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    *   this argument is omitted all methods are mocked and execute their
+    *   original code.
+    *
+-   * @return \PHPUnit\Framework\MockObject\MockObject
++   * @return MockObject
+    *   The mocked ContentLoader object with
+    */
+   protected function getEntityLoadHelperMock($stubbed_methods = NULL) {
+@@ -54,6 +55,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test the entity type manager is lazy loaded upon request.
+    *
+    * @covers ::getEntityTypeManager
++   * @doesNotPerformAssertions
+    */
+   public function testEntityTypeManagerIsLazyLoaded() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -63,6 +65,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test the entity field manager is lazy loaded upon request.
+    *
+    * @covers ::getEntityFieldManager
++   * @doesNotPerformAssertions
+    */
+   public function testEntityFieldManagerIsLazyLoaded() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -367,6 +370,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test that UUID search only includes the UUID and entity type.
+    *
+    * @covers ::loadByUuid
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByUuidSearchesByUuidOnly() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -376,6 +380,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test loadByUuid returns only the first match.
+    *
+    * @covers ::loadByUuid
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByUuidReturnsOnlyOneMatch() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -385,6 +390,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test loadByUuid returns false if no match is found.
+    *
+    * @covers ::loadByUuid
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByUuidReturnsFalseIfNoMatchIsFound() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -394,6 +400,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test that property search only includes content property values.
+    *
+    * @covers ::loadByProperties
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByPropertiesSearchesByPropertiesOnly() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -403,6 +410,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test loadByProperties returns only the first match.
+    *
+    * @covers ::loadByProperties
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByPropertiesReturnsOnlyOneMatch() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -412,6 +420,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test loadByUuid returns false if no match is found.
+    *
+    * @covers ::loadByProperties
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByPropertiesReturnsFalseIfNoMatchIsFound() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -552,7 +561,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * @param string $entity_type
+    *   The identifier for the entity type definition being mocked.
+    *
+-   * @return \PHPUnit\Framework\MockObject\MockObject|ContentEntityTypeInterface
++   * @return MockObject|ContentEntityTypeInterface
+    *   The mock for the entity definition.
+    */
+   public function getEntityDefinition($entity_type) {
+@@ -589,7 +598,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+   /**
+    * Get a mock for an entity storage handler.
+    *
+-   * @return \PHPUnit\Framework\MockObject\MockObject|EntityStorageInterface
++   * @return MockObject|EntityStorageInterface
+    */
+   protected function getEntityStorageMock() {
+     $mock = $this->getMockForAbstractClass(EntityStorageInterface::class);
+@@ -600,7 +609,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+   /**
+    * Get a mock for an entity.
+    *
+-   * @return \PHPUnit\Framework\MockObject\MockObject|ContentEntityInterface
++   * @return MockObject|ContentEntityInterface
+    */
+   protected function getEntityMock() {
+     $mock = $this->getMockForAbstractClass(ContentEntityInterface::class);
+diff --git a/tests/src/Unit/Plugin/yaml_content/process/FileTest.php b/tests/src/Unit/Plugin/yaml_content/process/FileTest.php
+index 7f9436a..6326fa8 100644
+--- a/tests/src/Unit/Plugin/yaml_content/process/FileTest.php
++++ b/tests/src/Unit/Plugin/yaml_content/process/FileTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\yaml_content\Unit\Plugin\yaml_content\process;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Tests\UnitTestCase;
+ use Drupal\Tests\yaml_content\Traits\LoadFixturesTrait;
+ use Drupal\yaml_content\ContentLoader\ContentLoader;
+@@ -21,19 +22,20 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+  */
+ class FileTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   use LoadFixturesTrait;
+ 
+   /**
+    * The file process plugin being tested.
+    *
+-   * @var \Drupal\yaml_content\Plugin\yaml_content\process\File
++   * @var File
+    */
+   protected $filePlugin;
+ 
+   /**
+    * Setup the file process plugin for all tests.
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+     $args = [
+       'my_entity',
+diff --git a/tests/src/Unit/Plugin/yaml_content/process/ReferenceTest.php b/tests/src/Unit/Plugin/yaml_content/process/ReferenceTest.php
+index b4a2848..bf47b77 100644
+--- a/tests/src/Unit/Plugin/yaml_content/process/ReferenceTest.php
++++ b/tests/src/Unit/Plugin/yaml_content/process/ReferenceTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\yaml_content\Unit\Plugin\yaml_content\process;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Prophecy\Prophecy\ObjectProphecy;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -21,31 +23,32 @@ use Prophecy\Argument;
+  */
+ class ReferenceTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * The entity type manager service mock.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface|\Prophecy\Prophecy\ObjectProphecy
++   * @var EntityTypeManagerInterface|ObjectProphecy
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity storage handler mock.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface|\Prophecy\Prophecy\ObjectProphecy
++   * @var EntityStorageInterface|ObjectProphecy
+    */
+   protected $entityStorageHandler;
+ 
+   /**
+    * The reference process plugin being tested.
+    *
+-   * @var \Drupal\yaml_content\Plugin\yaml_content\process\Reference
++   * @var Reference
+    */
+   protected $reference;
+ 
+   /**
+    * Setup mocks and a reference plugin for all tests.
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+     $this->entityTypeManager = $this->prophesize(EntityTypeManagerInterface::class);
+     $this->entityStorageHandler = $this->prophesize(EntityStorageInterface::class);
+diff --git a/yaml_content.api.php b/yaml_content.api.php
+index 2ddacb7..57643f3 100644
+--- a/yaml_content.api.php
++++ b/yaml_content.api.php
+@@ -1,16 +1,16 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityInterface;
+ /**
+  * @file
+  * API functionality for the yaml_content module.
+  */
+-
+ /**
+  * Process imported content after an entire file has been parsed and imported.
+  *
+  * @param string $content_file
+  *   The name of the file that has just finished importing content.
+- * @param \Drupal\Core\Entity\EntityInterface[] $loaded_content
++ * @param EntityInterface[] $loaded_content
+  *   An array of loaded entity data from the parsed content data.
+  * @param array $content_data
+  *   The parsed content array loaded from `$content_file`.

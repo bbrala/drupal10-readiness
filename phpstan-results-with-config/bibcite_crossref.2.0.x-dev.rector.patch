@@ -1,0 +1,163 @@
+diff --git a/bibcite_crossref.info.yml b/bibcite_crossref.info.yml
+index 9a1eb95..93a2e79 100644
+--- a/bibcite_crossref.info.yml
++++ b/bibcite_crossref.info.yml
+@@ -1,7 +1,7 @@
+ name: 'Bibliography & Citation - Crossref'
+ type: module
+ description: 'Provides DOI lookup functionality.'
+-core_version_requirement: ^9
++core_version_requirement: ^9 || ^10
+ package: 'Bibliography & Citation - Formats'
+ configure: bibcite_crossref.settings
+ dependencies:
+diff --git a/bibcite_crossref.module b/bibcite_crossref.module
+index f72996c..4a21aac 100644
+--- a/bibcite_crossref.module
++++ b/bibcite_crossref.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\TempStore\PrivateTempStore;
+ /**
+  * @file
+  * Module hooks.
+@@ -14,7 +15,7 @@ use Drupal\Core\Form\FormStateInterface;
+  * Populate form values from tempstore.
+  */
+ function bibcite_crossref_bibcite_reference_prepare_form(ReferenceInterface $entity, $operation, FormStateInterface $form_state) {
+-  /** @var \Drupal\Core\TempStore\PrivateTempStore $temp_storage */
++  /** @var PrivateTempStore $temp_storage */
+   $temp_storage = \Drupal::service('tempstore.private')->get('bibcite_entity_doi_lookup');
+   $current_user_id = \Drupal::currentUser()->id();
+   $populated_entity = $temp_storage->get($current_user_id);
+diff --git a/src/CrossrefClient.php b/src/CrossrefClient.php
+index 3a1e288..bd11d59 100644
+--- a/src/CrossrefClient.php
++++ b/src/CrossrefClient.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bibcite_crossref;
+ 
++use function GuzzleHttp\json_encode;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use GuzzleHttp\Client;
+ use RenanBr\CrossRefClient as RenanBrCrossRefClient;
+@@ -21,16 +22,16 @@ class CrossrefClient implements CrossrefClientInterface {
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * HumanNameParser constructor.
+    *
+-   * @param \GuzzleHttp\Client $http_client
++   * @param Client $http_client
+    *   The HTTP client.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   A config factory for retrieving required config objects.
+    *
+    * @todo Type hint for $http_client should be \GuzzleHttp\ClientInterface. \RenanBr\CrossRefClient::__construct() signature should be fixed for this first.
+@@ -85,7 +86,7 @@ class CrossrefClient implements CrossrefClientInterface {
+    */
+   protected function requestRaw($path, array $parameters = []) {
+     $result = $this->request($path, $parameters);
+-    return \GuzzleHttp\json_encode($result);
++    return json_encode($result);
+   }
+ 
+ }
+diff --git a/src/EventSubscriber/CrossrefSubscriber.php b/src/EventSubscriber/CrossrefSubscriber.php
+index 6173711..b5f7ee5 100644
+--- a/src/EventSubscriber/CrossrefSubscriber.php
++++ b/src/EventSubscriber/CrossrefSubscriber.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\bibcite_crossref\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -16,10 +16,10 @@ class CrossrefSubscriber implements EventSubscriberInterface {
+   /**
+    * Register content type formats on the request object.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The Event to process.
+    */
+-  public function onKernelRequest(GetResponseEvent $event) {
++  public function onKernelRequest(RequestEvent $event) {
+     $event->getRequest()->setFormat('crossref', ['application/x-crossref-refer']);
+   }
+ 
+diff --git a/src/Form/DoiLookupForm.php b/src/Form/DoiLookupForm.php
+index e3f6b8b..dc10f0c 100644
+--- a/src/Form/DoiLookupForm.php
++++ b/src/Form/DoiLookupForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bibcite_crossref\Form;
+ 
++use Symfony\Component\Serializer\Serializer;
+ use Drupal\bibcite_crossref\CrossrefClientInterface;
+ use Drupal\bibcite_entity\Entity\Reference;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+@@ -20,41 +21,41 @@ class DoiLookupForm extends FormBase {
+   /**
+    * Serializer service.
+    *
+-   * @var \Symfony\Component\Serializer\Serializer
++   * @var Serializer
+    */
+   protected $serializer;
+ 
+   /**
+    * Module temp store.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStore
++   * @var PrivateTempStore
+    */
+   protected $tempStore;
+ 
+   /**
+    * Crossref client service.
+    *
+-   * @var \Drupal\bibcite_crossref\CrossrefClientInterface
++   * @var CrossrefClientInterface
+    */
+   protected $crossrefClient;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Doi lookup form constructor.
+    *
+-   * @param \Symfony\Component\Serializer\SerializerInterface $serializer
++   * @param SerializerInterface $serializer
+    *   Import plugins manager.
+-   * @param \Drupal\Core\TempStore\PrivateTempStore $temp_store
++   * @param PrivateTempStore $temp_store
+    *   Module temp store.
+-   * @param \Drupal\bibcite_crossref\CrossrefClientInterface $crossref_client
++   * @param CrossrefClientInterface $crossref_client
+    *   Crossref client service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(SerializerInterface $serializer, PrivateTempStore $temp_store, CrossrefClientInterface $crossref_client, ModuleHandlerInterface $module_handler) {

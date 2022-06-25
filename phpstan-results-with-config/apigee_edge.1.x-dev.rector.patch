@@ -1,0 +1,1248 @@
+diff --git a/apigee_edge.api.php b/apigee_edge.api.php
+index 656d28b..40dcb45 100644
+--- a/apigee_edge.api.php
++++ b/apigee_edge.api.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ /**
+  * @file
+  * Copyright 2020 Google Inc.
+@@ -18,7 +19,6 @@
+  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+  * MA 02110-1301, USA.
+  */
+-
+ /**
+  * Hooks for apigee_edge module.
+  */
+@@ -26,14 +26,13 @@
+  * @addtogroup hooks
+  * @{
+  */
+-
+ /**
+  * Alters the title of app listing page and its default menu link item.
+  *
+- * @param \Drupal\Core\StringTranslation\TranslatableMarkup $title
++ * @param TranslatableMarkup $title
+  *   The menu link/page title.
+  */
+-function hook_apigee_edge_app_listing_page_title_alter(\Drupal\Core\StringTranslation\TranslatableMarkup &$title) {
++function hook_apigee_edge_app_listing_page_title_alter(TranslatableMarkup &$title) {
+ }
+ 
+ /**
+diff --git a/apigee_edge.install b/apigee_edge.install
+index 14559ad..a3c22df 100644
+--- a/apigee_edge.install
++++ b/apigee_edge.install
+@@ -1,5 +1,10 @@
+ <?php
+ 
++use Drupal\apigee_edge\SDKConnectorInterface;
++use Drupal\Core\Field\FieldStorageDefinitionInterface;
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface;
++use Drupal\Core\Entity\EntityDisplayRepository;
+ /**
+  * @file
+  * Copyright 2018 Google Inc.
+@@ -52,7 +57,7 @@ function apigee_edge_requirements($phase) {
+ 
+   }
+   elseif ($phase === 'runtime') {
+-    /** @var \Drupal\apigee_edge\SDKConnectorInterface $sdk_connector */
++    /** @var SDKConnectorInterface $sdk_connector */
+     $sdk_connector = \Drupal::service('apigee_edge.sdk_connector');
+     try {
+       $sdk_connector->testConnection();
+@@ -215,7 +220,7 @@ function apigee_edge_update_8101() {
+   $definition_update_manager = \Drupal::entityDefinitionUpdateManager();
+   $last_installed_schema_repository = \Drupal::service('entity.last_installed_schema.repository');
+ 
+-  /** @var \Drupal\Core\Field\FieldStorageDefinitionInterface[] $field_storage_definitions */
++  /** @var FieldStorageDefinitionInterface[] $field_storage_definitions */
+   $field_storage_definitions = $last_installed_schema_repository->getLastInstalledFieldStorageDefinitions($entity_type_id);
+   $entity_type = $definition_update_manager->getEntityType($entity_type_id);
+ 
+@@ -265,9 +270,9 @@ function apigee_edge_update_8102() {
+   $entity_type_id = 'user';
+   $fields = ['first_name', 'last_name'];
+ 
+-  /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager */
++  /** @var EntityFieldManagerInterface $entity_field_manager */
+   $entity_field_manager = Drupal::service('entity_field.manager');
+-  /** @var \Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface $last_installed_schema_repository */
++  /** @var EntityLastInstalledSchemaRepositoryInterface $last_installed_schema_repository */
+   $last_installed_schema_repository = \Drupal::service('entity.last_installed_schema.repository');
+ 
+   $field_definitions = $entity_field_manager->getFieldStorageDefinitions($entity_type_id);
+@@ -304,7 +309,7 @@ function apigee_edge_update_8104() {
+       continue;
+     }
+ 
+-    /** @var \Drupal\Core\Entity\EntityDisplayRepository $entity_display_repository */
++    /** @var EntityDisplayRepository $entity_display_repository */
+     $entity_display_repository = \Drupal::service('entity_display.repository');
+     $entity_view_display = $entity_display_repository->getViewDisplay($entity_type_id, $entity_type_id);
+ 
+diff --git a/apigee_edge.module b/apigee_edge.module
+index dae10e2..4e6b5cb 100644
+--- a/apigee_edge.module
++++ b/apigee_edge.module
+@@ -1,5 +1,26 @@
+ <?php
+ 
++use Drupal\apigee_edge\KeyEntityFormEnhancer;
++use Drupal\apigee_edge\Entity\EdgeEntityInterface;
++use Drupal\Core\Controller\TitleResolverInterface;
++use Drupal\Core\Routing\RouteProviderInterface;
++use Drupal\Core\Field\FieldDefinitionInterface;
++use Drupal\apigee_edge\Entity\AppWarningsCheckerInterface;
++use Drupal\apigee_edge\Entity\ApiProductInterface;
++use Drupal\apigee_edge\SDKConnectorInterface;
++use Drupal\user\RegisterForm;
++use Drupal\Core\TempStore\PrivateTempStore;
++use Drupal\Core\Datetime\DateFormatterInterface;
++use Drupal\apigee_edge\UserDeveloperConverterInterface;
++use Drupal\apigee_edge\FieldAttributeConverterInterface;
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Drupal\field\FieldConfigInterface;
++use Drupal\key\KeyInterface;
++use Drupal\apigee_edge\Entity\DeveloperApp;
++use Drupal\apigee_edge\Entity\Storage\DeveloperStorageInterface;
++use Drupal\Core\Access\AccessResultInterface;
++use Drupal\apigee_edge\Entity\DeveloperAppInterface;
++use Drupal\apigee_edge\Entity\Storage\DeveloperAppStorageInterface;
+ /**
+  * @file
+  * Copyright 2018 Google Inc.
+@@ -88,7 +109,7 @@ function apigee_edge_form_apigee_edge_authentication_form_alter(array &$form, Fo
+   // Even if the original Key forms should not be altered, the Authentication
+   // form provided by this module should still work the same.
+   if ($do_not_alter_key_entity_forms) {
+-    /** @var \Drupal\apigee_edge\KeyEntityFormEnhancer $key_entity_form_enhancer */
++    /** @var KeyEntityFormEnhancer $key_entity_form_enhancer */
+     $key_entity_form_enhancer = \Drupal::service('apigee_edge.key_entity_form_enhancer');
+     $key_entity_form_enhancer->alterForm($form, $form_state);
+   }
+@@ -106,7 +127,7 @@ function apigee_edge_form_key_form_alter(array &$form, FormStateInterface $form_
+     return;
+   }
+ 
+-  /** @var \Drupal\apigee_edge\KeyEntityFormEnhancer $key_entity_form_enhancer */
++  /** @var KeyEntityFormEnhancer $key_entity_form_enhancer */
+   $key_entity_form_enhancer = \Drupal::service('apigee_edge.key_entity_form_enhancer');
+   // Only those Key forms gets altered that defines an Apigee Edge key type.
+   $key_entity_form_enhancer->alterForm($form, $form_state);
+@@ -163,7 +184,7 @@ function template_preprocess_apigee_secret(&$variables) {
+  */
+ function template_preprocess_apigee_entity(array &$variables) {
+   $variables['view_mode'] = $variables['elements']['#view_mode'];
+-  /** @var \Drupal\apigee_edge\Entity\EdgeEntityInterface $entity */
++  /** @var EdgeEntityInterface $entity */
+   $entity = $variables['entity'] = $variables['elements']['#entity'];
+ 
+   $variables['label'] = $entity->label();
+@@ -184,7 +205,7 @@ function template_preprocess_apigee_entity(array &$variables) {
+  */
+ function apigee_edge_theme_suggestions_apigee_entity(array $variables) {
+   $suggestions = [];
+-  /** @var \Drupal\apigee_edge\Entity\EdgeEntityInterface $entity */
++  /** @var EdgeEntityInterface $entity */
+   $entity = $variables['elements']['#entity'];
+   $sanitized_view_mode = str_replace('.', '_', $variables['elements']['#view_mode']);
+ 
+@@ -259,9 +280,9 @@ function apigee_edge_system_breadcrumb_alter(Breadcrumb &$breadcrumb, RouteMatch
+   }
+   if ($route_match->getRouteName() === 'entity.developer_app.add_form_for_developer') {
+     $collection_route_by_developer_name = 'entity.developer_app.collection_by_developer';
+-    /** @var \Drupal\Core\Controller\TitleResolverInterface $title_resolver */
++    /** @var TitleResolverInterface $title_resolver */
+     $title_resolver = \Drupal::service('title_resolver');
+-    /** @var \Drupal\Core\Routing\RouteProviderInterface $route_provider */
++    /** @var RouteProviderInterface $route_provider */
+     $route_provider = \Drupal::service('router.route_provider');
+     $breadcrumb->addLink(Link::createFromRoute(
+       $title_resolver->getTitle(\Drupal::requestStack()->getCurrentRequest(), $route_provider->getRouteByName($collection_route_by_developer_name)),
+@@ -337,9 +358,9 @@ function apigee_edge_entity_base_field_info(EntityTypeInterface $entity_type) {
+  * Implements hook_entity_base_field_info_alter().
+  */
+ function apigee_edge_entity_base_field_info_alter(&$fields, EntityTypeInterface $entity_type) {
+-  /** @var \Drupal\Core\Field\FieldDefinitionInterface[] $fields */
++  /** @var FieldDefinitionInterface[] $fields */
+   if ($entity_type->id() === 'user') {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition $mail */
++    /** @var BaseFieldDefinition $mail */
+     $mail = $fields['mail'];
+     $mail->setRequired(TRUE);
+     $mail->addConstraint('DeveloperMailUnique');
+@@ -408,7 +429,7 @@ function apigee_edge_entity_view(array &$build, EntityInterface $entity, EntityV
+     }
+ 
+     if ($display->getComponent('credentials')) {
+-      /** @var \Drupal\apigee_edge\Entity\AppInterface $entity */
++      /** @var AppInterface $entity */
+       $defaults = [
+         '#cache' => [
+           'contexts' => $entity->getCacheContexts(),
+@@ -469,7 +490,7 @@ function apigee_edge_entity_view(array &$build, EntityInterface $entity, EntityV
+   }
+ 
+   if ($display->getComponent('warnings')) {
+-    /** @var \Drupal\apigee_edge\Entity\AppWarningsCheckerInterface $app_warnings_checker */
++    /** @var AppWarningsCheckerInterface $app_warnings_checker */
+     $app_warnings_checker = \Drupal::service('apigee_edge.entity.app_warnings_checker');
+     $warnings = array_filter($app_warnings_checker->getWarnings($entity));
+     if (count($warnings)) {
+@@ -505,7 +526,7 @@ function apigee_edge_entity_view(array &$build, EntityInterface $entity, EntityV
+  * apigee_edge.settings.developer.api_product_access.
+  */
+ function apigee_edge_api_product_access(EntityInterface $entity, $operation, AccountInterface $account) {
+-  /** @var \Drupal\apigee_edge\Entity\ApiProductInterface $entity */
++  /** @var ApiProductInterface $entity */
+   if (!in_array($operation, ['view', 'view label', 'assign'])) {
+     return AccessResult::neutral(sprintf('%s is not supported by %s.', $operation, __FUNCTION__));
+   }
+@@ -553,8 +574,7 @@ function apigee_edge_entity_access(EntityInterface $entity, $operation, AccountI
+     return AccessResult::neutral();
+   }
+ 
+-  /** @var \Drupal\apigee_edge\Entity\AppInterface $entity **/
+-
++  /** @var AppInterface $entity **/
+   $approved_credentials = array_filter($entity->getCredentials(), function (AppCredentialInterface $credential) {
+     return $credential->getStatus() === AppCredentialInterface::STATUS_APPROVED;
+   });
+@@ -582,7 +602,7 @@ function apigee_edge_form_entity_form_display_edit_form_alter(&$form, FormStateI
+  *
+  * @param array $form
+  *   Form array.
+- * @param Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   Form state.
+  */
+ function _apigee_edge_developer_app_entity_form_display_edit_form_validate(array &$form, FormStateInterface $form_state) {
+@@ -602,7 +622,7 @@ function _apigee_edge_developer_app_entity_form_display_edit_form_validate(array
+  *
+  * @param array $form_element
+  *   Form element array.
+- * @param Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   Form state object.
+  *
+  * @return array
+@@ -627,7 +647,7 @@ function apigee_edge_mail($key, &$message, $params) {
+   $token_service = \Drupal::token();
+   $language_manager = \Drupal::languageManager();
+   $langcode = $message['langcode'];
+-  /** @var \Drupal\Core\Session\AccountInterface $account */
++  /** @var AccountInterface $account */
+   $account = $params['account'];
+   $variables = ['user' => $account];
+ 
+@@ -676,7 +696,7 @@ function _apigee_edge_existing_developer_mail_tokens(array &$replacements, array
+ /**
+  * Sends a verification email to the developer email that is already taken.
+  *
+- * @param \Drupal\Core\Session\AccountInterface $account
++ * @param AccountInterface $account
+  *   The user object of the account being notified. Must contain at
+  *   least the fields 'uid', 'name', and 'mail'.
+  * @param string $langcode
+@@ -745,7 +765,7 @@ function apigee_edge_form_user_form_alter(&$form, FormStateInterface $form_state
+  *
+  * @param array $form
+  *   Form array.
+- * @param Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   Form state object.
+  */
+ function apigee_edge_form_user_form_developer_email_validate(array $form, FormStateInterface $form_state) {
+@@ -850,7 +870,7 @@ function apigee_edge_form_user_register_form_alter(&$form, FormStateInterface $f
+  *
+  * @param array $form
+  *   Form array.
+- * @param Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   Form state object.
+  *
+  * @return array
+@@ -871,14 +891,14 @@ function apigee_edge_form_user_register_form_after_build(array $form, FormStateI
+  *
+  * @param array $form
+  *   Form array.
+- * @param Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   Form state object.
+  */
+ function apigee_edge_form_user_form_api_connection_validate(array $form, FormStateInterface $form_state) {
+   // If there is no connection to Apigee Edge interrupt the registration/user
+   // update, otherwise it could be a security leak if a developer exists in
+   // Apigee Edge with the same email address.
+-  /** @var \Drupal\apigee_edge\SDKConnectorInterface $sdk_connector */
++  /** @var SDKConnectorInterface $sdk_connector */
+   $sdk_connector = \Drupal::service('apigee_edge.sdk_connector');
+   try {
+     $sdk_connector->testConnection();
+@@ -898,7 +918,7 @@ function apigee_edge_form_user_form_api_connection_validate(array $form, FormSta
+  *
+  * @param array $form
+  *   Form array.
+- * @param Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   Form state object.
+  */
+ function apigee_edge_form_user_register_form_developer_email_validate(array $form, FormStateInterface $form_state) {
+@@ -907,7 +927,7 @@ function apigee_edge_form_user_register_form_developer_email_validate(array $for
+     return;
+   }
+ 
+-  /** @var \Drupal\user\RegisterForm $registerForm */
++  /** @var RegisterForm $registerForm */
+   $registerForm = $form_state->getFormObject();
+   // Pass this information to hook_user_presave() in case if we would get
+   // there.
+@@ -931,7 +951,7 @@ function apigee_edge_form_user_register_form_developer_email_validate(array $for
+   $request = \Drupal::request();
+   $token = $request->query->get($config->get('verification_token'));
+   $timestamp = $request->query->get('timestamp');
+-  /** @var \Drupal\user\UserInterface $account */
++  /** @var UserInterface $account */
+   // Build user object from the submitted form values.
+   $account = $registerForm->buildEntity($form, $form_state);
+   // If required parameters are available in the url.
+@@ -956,7 +976,7 @@ function apigee_edge_form_user_register_form_developer_email_validate(array $for
+   // in case of anonymous user because every page request creates a new, empty
+   // private temp storage.
+   $storage = \Drupal::service('tempstore.shared');
+-  /** @var \Drupal\Core\TempStore\PrivateTempStore $sendNotifications */
++  /** @var PrivateTempStore $sendNotifications */
+   $sendNotifications = $storage->get('apigee_edge_developer_email_verification_sent');
+   // Do not send multiple email verifications to the same email address
+   // every time when form validation fails with an error.
+@@ -977,7 +997,7 @@ function apigee_edge_form_user_register_form_developer_email_validate(array $for
+  *
+  * Based on user_cancel_url().
+  *
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   User object.
+  * @param array $options
+  *   (optional) A keyed array of settings. Supported options are:
+@@ -1019,7 +1039,7 @@ function _apigee_edge_existing_developer_email_verification_link(UserInterface $
+  *
+  * Based on user_pass_rehash().
+  *
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   User object.
+  * @param string $timestamp
+  *   Timestamp for seed.
+@@ -1038,7 +1058,7 @@ function apigee_edge_existing_developer_registration_hash(UserInterface $account
+ /**
+  * Validates token for a registration with an existing developer email on Edge.
+  *
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   User object.
+  * @param string $token
+  *   Generated token from the url.
+@@ -1071,13 +1091,13 @@ function apigee_edge_existing_developer_registration_hash_validate(UserInterface
+  *   - attributes: HTML attributes for the containing element.
+  */
+ function template_preprocess_app_credential_product_list(array &$variables) {
+-  /** @var \Apigee\Edge\Structure\CredentialProduct[] $cred_products */
++  /** @var CredentialProduct[] $cred_products */
+   $cred_products = $variables['elements']['#credential_products'];
+   $cred_product_ids = array_map(function ($product) {
+-    /** @var \Apigee\Edge\Structure\CredentialProduct $product */
++    /** @var CredentialProduct $product */
+     return $product->getApiproduct();
+   }, $cred_products);
+-  /** @var \Drupal\apigee_edge\Entity\ApiProduct[] $allProducts */
++  /** @var ApiProduct[] $allProducts */
+   $variables['#api_product_entities'] = $allProducts = ApiProduct::loadMultiple($cred_product_ids);
+   $variables += ['content' => []];
+   foreach ($cred_products as $product) {
+@@ -1138,11 +1158,11 @@ function template_preprocess_app_credential_product_list(array &$variables) {
+  *   - attributes: HTML attributes for the containing element.
+  */
+ function template_preprocess_app_credential(array &$variables) {
+-  /** @var \Apigee\Edge\Api\Management\Entity\AppCredentialInterface $credential */
++  /** @var AppCredentialInterface $credential */
+   $credential = $variables['elements']['#credential'];
+-  /** @var \Drupal\apigee_edge\Entity\AppInterface $app */
++  /** @var AppInterface $app */
+   $app = $variables['elements']['#app'];
+-  /** @var \Drupal\Core\Datetime\DateFormatterInterface $dateFormatter */
++  /** @var DateFormatterInterface $dateFormatter */
+   $dateFormatter = Drupal::service('date.formatter');
+   $serializer = new AppCredentialSerializer();
+   // Convert app entity to an array.
+@@ -1299,14 +1319,14 @@ function apigee_edge_user_presave(UserInterface $account) {
+     return;
+   }
+ 
+-  /** @var \Drupal\apigee_edge\UserDeveloperConverterInterface $user_developer */
++  /** @var UserDeveloperConverterInterface $user_developer */
+   $user_developer = \Drupal::service('apigee_edge.converter.user_developer');
+-  /** @var \Drupal\apigee_edge\FieldAttributeConverterInterface $field_to_attribute */
++  /** @var FieldAttributeConverterInterface $field_to_attribute */
+   $field_to_attribute = \Drupal::service('apigee_edge.converter.field_attribute');
+-  /** @var \Drupal\Core\Logger\LoggerChannelInterface $logger */
++  /** @var LoggerChannelInterface $logger */
+   $logger = \Drupal::service('logger.channel.apigee_edge');
+   try {
+-    /** @var \Drupal\apigee_edge\Entity\Developer $developer */
++    /** @var Developer $developer */
+     $result = $user_developer->convertUser($account);
+     // There were no changes.
+     if ($result->getSuccessfullyAppliedChanges() === 0) {
+@@ -1412,12 +1432,12 @@ function apigee_edge_user_presave(UserInterface $account) {
+  */
+ function apigee_edge_user_cancel(array $edit, UserInterface $account, $method) {
+   if ($method === 'user_cancel_block_unpublish' || $method === 'user_cancel_block') {
+-    /** @var \Drupal\apigee_edge\UserDeveloperConverterInterface $user_developer */
++    /** @var UserDeveloperConverterInterface $user_developer */
+     $user_developer = \Drupal::service('apigee_edge.converter.user_developer');
+-    /** @var \Drupal\Core\Logger\LoggerChannelInterface $logger */
++    /** @var LoggerChannelInterface $logger */
+     $logger = \Drupal::service('logger.channel.apigee_edge');
+     try {
+-      /** @var \Drupal\apigee_edge\Entity\Developer $developer */
++      /** @var Developer $developer */
+       $developer = $user_developer->convertUser($account)->getDeveloper();
+       $developer->save();
+     }
+@@ -1487,7 +1507,7 @@ function apigee_edge_user_delete(UserInterface $account) {
+   }
+ 
+   try {
+-    /** @var \Drupal\apigee_edge\Entity\Developer $developer */
++    /** @var Developer $developer */
+     $developer = Developer::load($account->getEmail());
+     // Sanity check, the developer may not exist in Apigee Edge.
+     if ($developer) {
+@@ -1509,7 +1529,7 @@ function apigee_edge_user_delete(UserInterface $account) {
+  * Removes field name from the module's configuration after deleting the field.
+  */
+ function apigee_edge_field_config_delete(EntityInterface $entity) {
+-  /** @var \Drupal\field\FieldConfigInterface $entity */
++  /** @var FieldConfigInterface $entity */
+   $user_fields_to_sync = \Drupal::configFactory()
+     ->get('apigee_edge.sync')
+     ->get('user_fields_to_sync');
+@@ -1538,7 +1558,7 @@ function apigee_edge_form_field_ui_field_storage_add_form_alter(array &$form, Fo
+  *
+  * @param array $form
+  *   An associative array containing the structure of the form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The current state of the form.
+  */
+ function apigee_edge_field_ui_field_storage_add_form_submit(array &$form, FormStateInterface &$form_state) {
+@@ -1559,7 +1579,7 @@ function apigee_edge_field_ui_field_storage_add_form_submit(array &$form, FormSt
+  * Implements hook_key_delete().
+  */
+ function apigee_edge_key_delete(EntityInterface $entity) {
+-  /** @var \Drupal\key\KeyInterface $entity */
++  /** @var KeyInterface $entity */
+   $active_key = \Drupal::configFactory()
+     ->get('apigee_edge.auth')
+     ->get('active_key');
+@@ -1576,7 +1596,7 @@ function apigee_edge_key_delete(EntityInterface $entity) {
+  * Implements hook_cron().
+  */
+ function apigee_edge_cron() {
+-  /** @var \Drupal\apigee_edge\JobExecutor $executor */
++  /** @var JobExecutor $executor */
+   $executor = \Drupal::service('apigee_edge.job_executor');
+   // Schedules 100 items from the job table.
+   // The reason of this is to avoid race conditions.
+@@ -1593,7 +1613,7 @@ function apigee_edge_cron() {
+ /**
+  * Returns the job executor instance.
+  *
+- * @return \Drupal\apigee_edge\JobExecutor
++ * @return JobExecutor
+  *   The job executor instance.
+  */
+ function apigee_edge_get_executor(): JobExecutor {
+@@ -1631,7 +1651,7 @@ function apigee_edge_preprocess_table(&$variables) {
+  */
+ function apigee_edge_developer_storage_load(array $entities) {
+   $developerId_mail_map = [];
+-  /** @var \Drupal\apigee_edge\Entity\Developer $entity */
++  /** @var Developer $entity */
+   foreach ($entities as $entity) {
+     $developerId_mail_map[$entity->getDeveloperId()] = $entity->getEmail();
+   }
+@@ -1663,16 +1683,16 @@ function apigee_edge_developer_storage_load(array $entities) {
+  */
+ function apigee_edge_developer_app_storage_load(array $entities) {
+   $developer_ids = [];
+-  /** @var \Drupal\apigee_edge\Entity\DeveloperApp $entity */
++  /** @var DeveloperApp $entity */
+   foreach ($entities as $entity) {
+     $developer_ids[] = $entity->getDeveloperId();
+   }
+   $developer_ids = array_unique($developer_ids);
+   $dev_id_mail_map = [];
+-  /** @var \Drupal\apigee_edge\Entity\Storage\DeveloperStorageInterface $developer_storage */
++  /** @var DeveloperStorageInterface $developer_storage */
+   $developer_storage = \Drupal::entityTypeManager()->getStorage('developer');
+   foreach ($developer_storage->loadByProperties(['developerId' => $developer_ids]) as $developer) {
+-    /** @var \Drupal\apigee_edge\Entity\Developer $developer */
++    /** @var Developer $developer */
+     $dev_id_mail_map[$developer->uuid()] = $developer->getEmail();
+   }
+ 
+@@ -1724,13 +1744,13 @@ function apigee_edge_developer_app_storage_load(array $entities) {
+  *
+  * @param string $product_name
+  *   API Product name.
+- * @param \Drupal\Core\Session\AccountInterface|null $account
++ * @param AccountInterface|null $account
+  *   (optional) The user session for which to check access, or NULL to check
+  *   access for the current user. Defaults to NULL.
+  * @param bool $return_as_object
+  *   (optional) Defaults to FALSE.
+  *
+- * @return \Drupal\Core\Access\AccessResultInterface|bool
++ * @return AccessResultInterface|bool
+  *   The access result. Returns a boolean if $return_as_object is FALSE (this
+  *   is the default) and otherwise an AccessResultInterface object.
+  *   When a boolean is returned, the result of AccessInterface::isAllowed() is
+@@ -1748,13 +1768,13 @@ function _apigee_edge_user_has_an_app_with_product(string $product_name, Account
+     $result = AccessResult::neutral('Anonymous user does not have a developer account on Apigee Edge.');
+   }
+   else {
+-    /** @var \Drupal\apigee_edge\Entity\DeveloperAppInterface|null $app_with_product */
++    /** @var DeveloperAppInterface|null $app_with_product */
+     $app_with_product = NULL;
+-    /** @var \Drupal\apigee_edge\Entity\Storage\DeveloperAppStorageInterface $developer_app_storage */
++    /** @var DeveloperAppStorageInterface $developer_app_storage */
+     $developer_app_storage = \Drupal::entityTypeManager()->getStorage('developer_app');
+ 
+     foreach ($developer_app_storage->loadByDeveloper($account->getEmail()) as $app) {
+-      /** @var \Apigee\Edge\Api\Management\Entity\AppCredentialInterface $credential */
++      /** @var AppCredentialInterface $credential */
+       foreach ($app->getCredentials() as $credential) {
+         $product_ids = array_map(function (CredentialProduct $product) {
+           return $product->getApiproduct();
+@@ -1824,7 +1844,7 @@ function apigee_edge_cache_flush() {
+ /**
+  * Gets the title of app listing page.
+  *
+- * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++ * @return TranslatableMarkup
+  *   The title of the page.
+  */
+ function apigee_edge_app_listing_page_title(): TranslatableMarkup {
+diff --git a/modules/apigee_edge_actions/apigee_edge_actions.module b/modules/apigee_edge_actions/apigee_edge_actions.module
+index 77e9e1e..6360745 100644
+--- a/modules/apigee_edge_actions/apigee_edge_actions.module
++++ b/modules/apigee_edge_actions/apigee_edge_actions.module
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\apigee_edge_teams\Entity\TeamAppInterface;
++use Drupal\apigee_edge\Entity\EdgeEntityInterface;
+ /**
+  * Copyright 2020 Google Inc.
+  *
+@@ -57,13 +61,13 @@ function apigee_edge_actions_rules_action_info_alter(&$info) {
+ /**
+  * Helper to dispatch an entity event.
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  *   The entity.
+  * @param string $event_name
+  *   The event name.
+  *
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++ * @throws InvalidPluginDefinitionException
++ * @throws PluginNotFoundException
+  */
+ function _apigee_edge_actions_dispatch_entity_event(EntityInterface $entity, string $event_name) {
+   if (!Drupal::service('apigee_edge_actions.edge_entity_type_manager')
+@@ -93,7 +97,7 @@ function _apigee_edge_actions_dispatch_entity_event(EntityInterface $entity, str
+       $user_id = $developer->getEmail();
+     }
+     else {
+-      /** @var \Drupal\apigee_edge_teams\Entity\TeamAppInterface $entity */
++      /** @var TeamAppInterface $entity */
+       // For TeamApps, getAppOwner() is a team name, not a developer or email,
+       // and we cannot rely on getCreatedBy() as it is deprecated, so we
+       // default to the current user for the developer.
+@@ -114,7 +118,7 @@ function _apigee_edge_actions_dispatch_entity_event(EntityInterface $entity, str
+     $arguments["{$entity->getEntityTypeId()}_unchanged"] = $entity->original;
+   }
+ 
+-  /** @var \Drupal\apigee_edge\Entity\EdgeEntityInterface $entity */
++  /** @var EdgeEntityInterface $entity */
+   Drupal::service('event_dispatcher')
+     ->dispatch($dispatched_event_name, new EdgeEntityEventEdge($entity, $arguments));
+ }
+diff --git a/modules/apigee_edge_actions/apigee_edge_actions.tokens.inc b/modules/apigee_edge_actions/apigee_edge_actions.tokens.inc
+index a5e7064..15a9bb0 100644
+--- a/modules/apigee_edge_actions/apigee_edge_actions.tokens.inc
++++ b/modules/apigee_edge_actions/apigee_edge_actions.tokens.inc
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\field\FieldStorageConfigInterface;
+ /**
+  * @file
+  * Implements tokens for Apigee Edge entities.
+@@ -32,7 +34,7 @@ use Drupal\Core\Render\BubbleableMetadata;
+  * Implements hook_token_info_alter().
+  */
+ function apigee_edge_actions_token_info_alter(&$info) {
+-  /** @var \Drupal\Core\Entity\EntityTypeInterface[] $apigee_entity_types */
++  /** @var EntityTypeInterface[] $apigee_entity_types */
+   $apigee_entity_types = Drupal::service('apigee_edge_actions.edge_entity_type_manager')->getEntityTypes();
+   $type_info = Drupal::service('plugin.manager.field.field_type')->getDefinitions();
+ 
+@@ -51,7 +53,7 @@ function apigee_edge_actions_token_info_alter(&$info) {
+ 
+       $fields = Drupal::service('entity_field.manager')->getFieldStorageDefinitions($entity_type->id());
+       foreach ($fields as $field_name => $field) {
+-        /** @var \Drupal\field\FieldStorageConfigInterface $field */
++        /** @var FieldStorageConfigInterface $field */
+         $params['@type'] = $type_info[$field->getType()]['label'];
+         $description = t('@type field.', $params);
+ 
+diff --git a/modules/apigee_edge_actions/modules/apigee_edge_actions_debug/src/EventSubscriber/ApigeeEdgeActionsDebugEventSubscriber.php b/modules/apigee_edge_actions/modules/apigee_edge_actions_debug/src/EventSubscriber/ApigeeEdgeActionsDebugEventSubscriber.php
+index aa46647..7223fd3 100644
+--- a/modules/apigee_edge_actions/modules/apigee_edge_actions_debug/src/EventSubscriber/ApigeeEdgeActionsDebugEventSubscriber.php
++++ b/modules/apigee_edge_actions/modules/apigee_edge_actions_debug/src/EventSubscriber/ApigeeEdgeActionsDebugEventSubscriber.php
+@@ -20,9 +20,9 @@
+ 
+ namespace Drupal\apigee_edge_actions_debug\EventSubscriber;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\apigee_edge_actions\Event\ApigeeEdgeActionsEventInterface;
+ use Drupal\Core\Logger\LoggerChannelInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ 
+ /**
+@@ -33,14 +33,14 @@ class ApigeeEdgeActionsDebugEventSubscriber implements EventSubscriberInterface
+   /**
+    * The logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * ApigeeEdgeActionsDebugEventSubscriber constructor.
+    *
+-   * @param \Drupal\Core\Logger\LoggerChannelInterface $logger
++   * @param LoggerChannelInterface $logger
+    *   The logger channel.
+    */
+   public function __construct(LoggerChannelInterface $logger) {
+@@ -50,7 +50,7 @@ class ApigeeEdgeActionsDebugEventSubscriber implements EventSubscriberInterface
+   /**
+    * Responds to rules events.
+    *
+-   * @param \Symfony\Component\EventDispatcher\Event $event
++   * @param Event $event
+    *   The event object.
+    * @param string $event_name
+    *   The event name.
+diff --git a/modules/apigee_edge_actions/src/ApigeeActionsEntityTypeHelper.php b/modules/apigee_edge_actions/src/ApigeeActionsEntityTypeHelper.php
+index a246ac1..c499d75 100644
+--- a/modules/apigee_edge_actions/src/ApigeeActionsEntityTypeHelper.php
++++ b/modules/apigee_edge_actions/src/ApigeeActionsEntityTypeHelper.php
+@@ -32,14 +32,14 @@ class ApigeeActionsEntityTypeHelper implements ApigeeActionsEntityTypeHelperInte
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * ApigeeAppEntityTypeManager constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/modules/apigee_edge_actions/src/ApigeeActionsEntityTypeHelperInterface.php b/modules/apigee_edge_actions/src/ApigeeActionsEntityTypeHelperInterface.php
+index c3e36be..eaebaa8 100644
+--- a/modules/apigee_edge_actions/src/ApigeeActionsEntityTypeHelperInterface.php
++++ b/modules/apigee_edge_actions/src/ApigeeActionsEntityTypeHelperInterface.php
+@@ -30,7 +30,7 @@ interface ApigeeActionsEntityTypeHelperInterface {
+   /**
+    * Returns an array of Apigee Edge entity types.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeInterface[]
++   * @return EntityTypeInterface[]
+    *   An array of Apigee Edge entity types.
+    */
+   public function getEntityTypes(): array;
+@@ -38,7 +38,7 @@ interface ApigeeActionsEntityTypeHelperInterface {
+   /**
+    * Determines if the given entity type is a fieldable Edge entity type.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+    * @return bool
+diff --git a/modules/apigee_edge_actions/src/EventSubscriber/AppCredentialEventSubscriber.php b/modules/apigee_edge_actions/src/EventSubscriber/AppCredentialEventSubscriber.php
+index 5ea4bca..673e3de 100644
+--- a/modules/apigee_edge_actions/src/EventSubscriber/AppCredentialEventSubscriber.php
++++ b/modules/apigee_edge_actions/src/EventSubscriber/AppCredentialEventSubscriber.php
+@@ -20,6 +20,9 @@
+ 
+ namespace Drupal\apigee_edge_actions\EventSubscriber;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
++use Drupal\apigee_edge\Entity\Developer;
++use Drupal\apigee_edge\Entity\ApiProductInterface;
+ use Drupal\apigee_edge_actions\Event\EdgeEntityEventEdge;
+ use Drupal\apigee_edge\Entity\AppInterface;
+ use Drupal\apigee_edge\Event\AppCredentialAddApiProductEvent;
+@@ -28,7 +31,6 @@ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Logger\LoggerChannelInterface;
+ use Drupal\Core\Session\AccountInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ 
+@@ -42,41 +44,41 @@ class AppCredentialEventSubscriber implements EventSubscriberInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManger;
+ 
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * The logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * AppCredentialEventSubscriber constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   The event dispatcher.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Logger\LoggerChannelInterface $logger
++   * @param LoggerChannelInterface $logger
+    *   The logger channel.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EventDispatcherInterface $event_dispatcher, AccountInterface $current_user, LoggerChannelInterface $logger) {
+@@ -89,7 +91,7 @@ class AppCredentialEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Responds to add product events.
+    *
+-   * @param \Drupal\apigee_edge\Event\AppCredentialAddApiProductEvent $event
++   * @param AppCredentialAddApiProductEvent $event
+    *   The app credential add product event.
+    */
+   public function onAddProduct(AppCredentialAddApiProductEvent $event) {
+@@ -99,7 +101,7 @@ class AppCredentialEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Responds to remove product events.
+    *
+-   * @param \Drupal\apigee_edge\Event\AppCredentialDeleteApiProductEvent $event
++   * @param AppCredentialDeleteApiProductEvent $event
+    *   The app credential remove product event.
+    */
+   public function onRemoveProduct(AppCredentialDeleteApiProductEvent $event) {
+@@ -121,7 +123,7 @@ class AppCredentialEventSubscriber implements EventSubscriberInterface {
+    *
+    * @param string $rules_event_name
+    *   The name of the rules event.
+-   * @param \Symfony\Component\EventDispatcher\Event $event
++   * @param Event $event
+    *   The api credential event.
+    * @param array $api_products
+    *   An array of api products.
+@@ -134,7 +136,7 @@ class AppCredentialEventSubscriber implements EventSubscriberInterface {
+       if ('developer_app' == $app_type) {
+         // For developer apps, get the Drupal account from the app owner.
+         /** @var \Drupal\apigee_edge\Entity\Storage\DeveloperStorageInterface $developer_storage */
+-        /** @var \Drupal\apigee_edge\Entity\Developer $owner */
++        /** @var Developer $owner */
+         $developer_storage = $this->entityTypeManger->getStorage($event->getAppType());
+         $owner = $developer_storage->load($event->getOwnerId());
+         $developer = user_load_by_mail($owner->getEmail());
+@@ -146,16 +148,17 @@ class AppCredentialEventSubscriber implements EventSubscriberInterface {
+       }
+ 
+       foreach ($api_products as $product) {
+-        /** @var \Drupal\apigee_edge\Entity\ApiProductInterface $api_product */
++        /** @var ApiProductInterface $api_product */
+         $api_product = $this->entityTypeManger
+           ->getStorage('api_product')
+           ->load($product);
+-        $this->eventDispatcher->dispatch($rules_event_name, new EdgeEntityEventEdge($app, [
++        $this->eventDispatcher->dispatch(new EdgeEntityEventEdge($app, [
+           $app_type => $app,
+           'developer' => $developer,
+           'api_product_name' => $api_product->getName(),
+           'api_product_display_name' => $api_product->getDisplayName(),
+-        ]));
++        ]),
++        $rules_event_name);
+       }
+     }
+     catch (PluginException $exception) {
+@@ -173,7 +176,7 @@ class AppCredentialEventSubscriber implements EventSubscriberInterface {
+    * @param string $app_type
+    *   The type of the app.
+    *
+-   * @return \Drupal\apigee_edge\Entity\AppInterface|null
++   * @return AppInterface|null
+    *   The app with the provided name or null.
+    */
+   protected function getAppByName(string $name, string $owner_id, string $app_type): ?AppInterface {
+diff --git a/modules/apigee_edge_actions/src/Plugin/RulesEvent/EdgeEntityEventDeriverBase.php b/modules/apigee_edge_actions/src/Plugin/RulesEvent/EdgeEntityEventDeriverBase.php
+index b7bc19f..20aae44 100644
+--- a/modules/apigee_edge_actions/src/Plugin/RulesEvent/EdgeEntityEventDeriverBase.php
++++ b/modules/apigee_edge_actions/src/Plugin/RulesEvent/EdgeEntityEventDeriverBase.php
+@@ -38,14 +38,14 @@ abstract class EdgeEntityEventDeriverBase extends DeriverBase implements EdgeEnt
+   /**
+    * The apigee app entity type manager service.
+    *
+-   * @var \Drupal\apigee_edge_actions\ApigeeActionsEntityTypeHelperInterface
++   * @var ApigeeActionsEntityTypeHelperInterface
+    */
+   protected $edgeEntityTypeManager;
+ 
+   /**
+    * AppEventDeriver constructor.
+    *
+-   * @param \Drupal\apigee_edge_actions\ApigeeActionsEntityTypeHelperInterface $edge_entity_type_manager
++   * @param ApigeeActionsEntityTypeHelperInterface $edge_entity_type_manager
+    *   The apigee app entity type manager service.
+    */
+   public function __construct(ApigeeActionsEntityTypeHelperInterface $edge_entity_type_manager) {
+diff --git a/modules/apigee_edge_actions/src/Plugin/RulesEvent/EdgeEntityEventDeriverInterface.php b/modules/apigee_edge_actions/src/Plugin/RulesEvent/EdgeEntityEventDeriverInterface.php
+index 1ea24d9..ac820d8 100644
+--- a/modules/apigee_edge_actions/src/Plugin/RulesEvent/EdgeEntityEventDeriverInterface.php
++++ b/modules/apigee_edge_actions/src/Plugin/RulesEvent/EdgeEntityEventDeriverInterface.php
+@@ -31,7 +31,7 @@ interface EdgeEntityEventDeriverInterface extends ContainerDeriverInterface {
+   /**
+    * Returns the event's label. Example: 'After saving a new App'.
+    *
+-   * @param \Drupal\apigee_edge\Entity\EdgeEntityTypeInterface $entity_type
++   * @param EdgeEntityTypeInterface $entity_type
+    *   The Apigee Edge entity type.
+    *
+    * @return string
+@@ -42,7 +42,7 @@ interface EdgeEntityEventDeriverInterface extends ContainerDeriverInterface {
+   /**
+    * Returns an array of event context.
+    *
+-   * @param \Drupal\apigee_edge\Entity\EdgeEntityTypeInterface $entity_type
++   * @param EdgeEntityTypeInterface $entity_type
+    *   The Apigee Edge entity type.
+    *
+    * @return array
+diff --git a/modules/apigee_edge_actions/src/TeamMembershipManager.php b/modules/apigee_edge_actions/src/TeamMembershipManager.php
+index 03a7ebc..ad0c66e 100644
+--- a/modules/apigee_edge_actions/src/TeamMembershipManager.php
++++ b/modules/apigee_edge_actions/src/TeamMembershipManager.php
+@@ -20,6 +20,8 @@
+ 
+ namespace Drupal\apigee_edge_actions;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\apigee_edge_actions\Event\EdgeEntityEventEdge;
+ use Drupal\apigee_edge\Entity\Controller\DeveloperControllerInterface;
+ use Drupal\apigee_edge\Entity\DeveloperCompaniesCacheInterface;
+@@ -39,77 +41,77 @@ class TeamMembershipManager implements TeamMembershipManagerInterface {
+   /**
+    * The team membership manager service.
+    *
+-   * @var \Drupal\apigee_edge_teams\TeamMembershipManagerInterface
++   * @var TeamMembershipManagerInterface
+    */
+   private $inner;
+ 
+   /**
+    * The event dispatcher service.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   private $eventDispatcher;
+ 
+   /**
+    * The company members controller factory service.
+    *
+-   * @var \Drupal\apigee_edge_teams\CompanyMembersControllerFactoryInterface
++   * @var CompanyMembersControllerFactoryInterface
+    */
+   private $companyMembersControllerFactory;
+ 
+   /**
+    * The developer companies cache.
+    *
+-   * @var \Drupal\apigee_edge\Entity\DeveloperCompaniesCacheInterface
++   * @var DeveloperCompaniesCacheInterface
+    */
+   private $developerCompaniesCache;
+ 
+   /**
+    * The developer controller service.
+    *
+-   * @var \Drupal\apigee_edge\Entity\Controller\DeveloperControllerInterface
++   * @var DeveloperControllerInterface
+    */
+   private $developerController;
+ 
+   /**
+    * The cache tags invalidator service.
+    *
+-   * @var \Drupal\Core\Cache\CacheTagsInvalidatorInterface
++   * @var CacheTagsInvalidatorInterface
+    */
+   private $cacheTagsInvalidator;
+ 
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+    * The logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   private $logger;
+ 
+   /**
+    * TeamMembershipManager constructor.
+    *
+-   * @param \Drupal\apigee_edge_teams\TeamMembershipManagerInterface $inner
++   * @param TeamMembershipManagerInterface $inner
+    *   The Apigee Edge team manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\apigee_edge_teams\CompanyMembersControllerFactoryInterface $company_members_controller_factory
++   * @param CompanyMembersControllerFactoryInterface $company_members_controller_factory
+    *   The company members controller factory service.
+-   * @param \Drupal\apigee_edge\Entity\Controller\DeveloperControllerInterface $developer_controller
++   * @param DeveloperControllerInterface $developer_controller
+    *   The developer controller service.
+-   * @param \Drupal\apigee_edge\Entity\DeveloperCompaniesCacheInterface $developer_companies_cache
++   * @param DeveloperCompaniesCacheInterface $developer_companies_cache
+    *   The developer companies cache.
+-   * @param \Drupal\Core\Cache\CacheTagsInvalidatorInterface $cache_tags_invalidator
++   * @param CacheTagsInvalidatorInterface $cache_tags_invalidator
+    *   The cache tags invalidator service.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   The event dispatcher service.
+    */
+   public function __construct(TeamMembershipManagerInterface $inner, EntityTypeManagerInterface $entity_type_manager, CompanyMembersControllerFactoryInterface $company_members_controller_factory, DeveloperControllerInterface $developer_controller, DeveloperCompaniesCacheInterface $developer_companies_cache, CacheTagsInvalidatorInterface $cache_tags_invalidator, LoggerInterface $logger, EventDispatcherInterface $event_dispatcher) {
+@@ -165,8 +167,8 @@ class TeamMembershipManager implements TeamMembershipManagerInterface {
+    * @param array $developers
+    *   An array of developers.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function dispatchEvent(string $event, string $team, array $developers) {
+     $team = $this->entityTypeManager->getStorage('team')->load($team);
+@@ -177,10 +179,11 @@ class TeamMembershipManager implements TeamMembershipManagerInterface {
+ 
+     // Dispatch an event for each developer.
+     foreach ($developers as $developer) {
+-      $this->eventDispatcher->dispatch($event, new EdgeEntityEventEdge($team, [
++      $this->eventDispatcher->dispatch(new EdgeEntityEventEdge($team, [
+         'team' => $team,
+         'member' => $users_by_mail[$developer],
+-      ]));
++      ]),
++      $event);
+     }
+   }
+ 
+diff --git a/modules/apigee_edge_apiproduct_rbac/apigee_edge_apiproduct_rbac.module b/modules/apigee_edge_apiproduct_rbac/apigee_edge_apiproduct_rbac.module
+index 7896c0e..cf02c46 100644
+--- a/modules/apigee_edge_apiproduct_rbac/apigee_edge_apiproduct_rbac.module
++++ b/modules/apigee_edge_apiproduct_rbac/apigee_edge_apiproduct_rbac.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Apigee\Edge\Api\Management\Controller\ApiProductControllerInterface;
+ /**
+  * @file
+  * Copyright 2018 Google Inc.
+@@ -54,7 +55,7 @@ function apigee_edge_apiproduct_rbac_module_implements_alter(&$implementations,
+  * @see apigee_edge_api_product_access()
+  */
+ function apigee_edge_apiproduct_rbac_api_product_access(EntityInterface $entity, $operation, AccountInterface $account) {
+-  /** @var \Drupal\apigee_edge\Entity\ApiProductInterface $entity */
++  /** @var ApiProductInterface $entity */
+   if (!in_array($operation, ['view', 'view label', 'assign'])) {
+     return AccessResult::neutral(sprintf('%s is not supported by %s.', $operation, __FUNCTION__));
+   }
+@@ -181,7 +182,7 @@ function apigee_edge_apiproduct_rbac_form_apigee_edge_api_product_access_control
+     ];
+   }
+ 
+-  /** @var \Drupal\apigee_edge\Entity\ApiProductInterface[] $api_products */
++  /** @var ApiProductInterface[] $api_products */
+   $api_products = $api_product_storage->loadMultiple();
+   // Sort products alphabetically (display name is an attribute so sorting in
+   // the query level does not work).
+@@ -250,7 +251,7 @@ function apigee_edge_apiproduct_rbac_form_apigee_edge_api_product_access_control
+       'grant_access_if_attribute_missing',
+     ], FALSE))
+     ->save();
+-  /** @var \Apigee\Edge\Api\Management\Controller\ApiProductControllerInterface $controller */
++  /** @var ApiProductControllerInterface $controller */
+   $rid_product_map = [];
+   foreach ($form_state->getValue(['rbac', 'role_names'], []) as $rid => $name) {
+     // Do not store roles with by pass permission in the attribute
+diff --git a/modules/apigee_edge_apiproduct_rbac/src/RoleBasedAccessSettingsBatch.php b/modules/apigee_edge_apiproduct_rbac/src/RoleBasedAccessSettingsBatch.php
+index 967db86..ccf9584 100644
+--- a/modules/apigee_edge_apiproduct_rbac/src/RoleBasedAccessSettingsBatch.php
++++ b/modules/apigee_edge_apiproduct_rbac/src/RoleBasedAccessSettingsBatch.php
+@@ -20,6 +20,7 @@
+ 
+ namespace Drupal\apigee_edge_apiproduct_rbac;
+ 
++use Apigee\Edge\Api\Management\Controller\ApiProductControllerInterface;
+ use Apigee\Edge\Exception\ApiException;
+ use Apigee\Edge\Exception\ApiResponseException;
+ use Drupal\Component\Utility\Xss;
+@@ -57,7 +58,7 @@ final class RoleBasedAccessSettingsBatch {
+     }
+ 
+     // Process API products by groups of 5.
+-    /** @var \Apigee\Edge\Api\Management\Controller\ApiProductControllerInterface $controller */
++    /** @var ApiProductControllerInterface $controller */
+     $controller = \Drupal::service('apigee_edge.controller.api_product');
+ 
+     foreach (array_slice($product_name_display_name_map, $context['sandbox']['progress'], 5) as $product_name => $product_display_name) {
+diff --git a/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/apigee_edge_apiproduct_rbac_test.module b/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/apigee_edge_apiproduct_rbac_test.module
+index 8c54638..f955e41 100644
+--- a/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/apigee_edge_apiproduct_rbac_test.module
++++ b/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/apigee_edge_apiproduct_rbac_test.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
+ /**
+  * @file
+  * Copyright 2018 Google Inc.
+@@ -18,15 +19,13 @@
+  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+  * MA 02110-1301, USA.
+  */
+-
+ /**
+  * Module file for Apigee Edge API Product RBAC tests.
+  */
+-
+ /**
+  * Implements hook_entity_type_build().
+  */
+ function apigee_edge_apiproduct_rbac_test_entity_type_build(array &$entity_types) {
+-  /** @var \Drupal\Core\Entity\EntityTypeInterface[] $entity_types */
++  /** @var EntityTypeInterface[] $entity_types */
+   $entity_types['api_product']->setStorageClass('Drupal\apigee_edge_apiproduct_rbac_test\ApiProductStorage');
+ }
+diff --git a/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/src/ApiProductController.php b/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/src/ApiProductController.php
+index 743a338..5dfcba0 100644
+--- a/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/src/ApiProductController.php
++++ b/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/src/ApiProductController.php
+@@ -20,6 +20,7 @@
+ 
+ namespace Drupal\apigee_edge_apiproduct_rbac_test;
+ 
++use Apigee\Edge\Serializer\EntitySerializerInterface;
+ use Apigee\Edge\Api\Management\Entity\ApiProduct;
+ use Apigee\Edge\Api\Management\Entity\ApiProductInterface;
+ use Apigee\Edge\Api\Management\Serializer\ApiProductSerializer;
+@@ -47,30 +48,30 @@ final class ApiProductController implements ApiProductControllerInterface {
+   /**
+    * The decorated service.
+    *
+-   * @var \Drupal\apigee_edge\Entity\Controller\ApiProductControllerInterface
++   * @var ApiProductControllerInterface
+    */
+   private $innerService;
+ 
+   /**
+    * The state key/value store.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   private $state;
+ 
+   /**
+    * The entity serializer.
+    *
+-   * @var \Apigee\Edge\Serializer\EntitySerializerInterface
++   * @var EntitySerializerInterface
+    */
+   private $entitySerializer;
+ 
+   /**
+    * ApiProductController constructor.
+    *
+-   * @param \Drupal\apigee_edge\Entity\Controller\ApiProductControllerInterface $inner_service
++   * @param ApiProductControllerInterface $inner_service
+    *   The decorated API product controller service.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The States API.
+    */
+   public function __construct(ApiProductControllerInterface $inner_service, StateInterface $state) {
+@@ -199,12 +200,12 @@ final class ApiProductController implements ApiProductControllerInterface {
+   /**
+    * Sets attributes from States API on an API product entity.
+    *
+-   * @param \Apigee\Edge\Api\Management\Entity\ApiProductInterface $entity
++   * @param ApiProductInterface $entity
+    *   API product entity.
+    */
+   private function setAttributesFromStates(ApiProductInterface $entity) {
+     if ($attributes = $this->state->get($this->generateApiProductAttributeStateKey($entity->id()))) {
+-      /** @var \Apigee\Edge\Structure\AttributesProperty $property */
++      /** @var AttributesProperty $property */
+       $property = $this->entitySerializer->denormalize($attributes, AttributesProperty::class);
+       $entity->setAttributes($property);
+     }
+diff --git a/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/src/ApiProductStorage.php b/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/src/ApiProductStorage.php
+index b1d5ccd..11d3b7a 100644
+--- a/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/src/ApiProductStorage.php
++++ b/modules/apigee_edge_apiproduct_rbac/tests/modules/apigee_edge_apiproduct_rbac_test/src/ApiProductStorage.php
+@@ -38,26 +38,26 @@ final class ApiProductStorage extends OriginalApiProductStorage {
+   /**
+    * The state key/value store.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   private $state;
+ 
+   /**
+    * Constructs an APIProductStorage instance.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   The cache backend to be used.
+-   * @param \Drupal\Core\Cache\MemoryCache\MemoryCacheInterface $memory_cache
++   * @param MemoryCacheInterface $memory_cache
+    *   The memory cache.
+-   * @param \Drupal\Component\Datetime\TimeInterface $system_time
++   * @param TimeInterface $system_time
+    *   The system time.
+-   * @param \Drupal\apigee_edge\Entity\Controller\ApiProductControllerInterface $api_product_controller
++   * @param ApiProductControllerInterface $api_product_controller
+    *   The API product controller service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config
++   * @param ConfigFactoryInterface $config
+    *   Configuration factory.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state key/value store.
+    */
+   public function __construct(EntityTypeInterface $entity_type, CacheBackendInterface $cache_backend, MemoryCacheInterface $memory_cache, TimeInterface $system_time, ApiProductControllerInterface $api_product_controller, ConfigFactoryInterface $config, StateInterface $state) {
+diff --git a/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAnonymousAuthenticatedTest.php b/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAnonymousAuthenticatedTest.php
+index 941397b..4e4b373 100644
+--- a/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAnonymousAuthenticatedTest.php
++++ b/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAnonymousAuthenticatedTest.php
+@@ -38,7 +38,7 @@ class ApiProductRoleBasedAccessAnonymousAuthenticatedTest extends ApiProductRole
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->ridCombinations = $this->calculateRidCombinations([AccountInterface::ANONYMOUS_ROLE, AccountInterface::AUTHENTICATED_ROLE]);
+   }
+diff --git a/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAnonymousInternalTest.php b/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAnonymousInternalTest.php
+index 045bcc8..d52d480 100644
+--- a/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAnonymousInternalTest.php
++++ b/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAnonymousInternalTest.php
+@@ -38,7 +38,7 @@ class ApiProductRoleBasedAccessAnonymousInternalTest extends ApiProductRoleBased
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->ridCombinations = $this->calculateRidCombinations([AccountInterface::ANONYMOUS_ROLE, self::INTERNAL_ROLE]);
+   }
+diff --git a/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAuthenticatedInternalTest.php b/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAuthenticatedInternalTest.php
+index 2e19f81..30412e4 100644
+--- a/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAuthenticatedInternalTest.php
++++ b/modules/apigee_edge_apiproduct_rbac/tests/src/FunctionalJavascript/ApiProductRoleBasedAccessAuthenticatedInternalTest.php
+@@ -38,7 +38,7 @@ class ApiProductRoleBasedAccessAuthenticatedInternalTest extends ApiProductRoleB
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->ridCombinations = $this->calculateRidCombinations([AccountInterface::ANONYMOUS_ROLE, AccountInterface::AUTHENTICATED_ROLE]);
+   }

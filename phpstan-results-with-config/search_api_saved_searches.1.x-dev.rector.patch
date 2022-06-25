@@ -1,0 +1,1829 @@
+diff --git a/search_api_saved_searches.module b/search_api_saved_searches.module
+index 721d6f5..62447ad 100644
+--- a/search_api_saved_searches.module
++++ b/search_api_saved_searches.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\search_api_saved_searches\SavedSearchInterface;
+ /**
+  * @file
+  * Allows visitors to bookmark searches and get notifications for new results.
+@@ -158,7 +159,7 @@ function search_api_saved_searches_user_update(UserInterface $account) {
+  * Associates all anonymously created saved searches with the same mail address
+  * with that user account.
+  *
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   The user account in question.
+  */
+ function _search_api_saved_searches_claim_anonymous_searches(UserInterface $account) {
+@@ -184,7 +185,7 @@ function _search_api_saved_searches_claim_anonymous_searches(UserInterface $acco
+ /**
+  * Deactivates all saved searches for a specific user account.
+  *
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   The user account in question.
+  */
+ function _search_api_saved_searches_deactivate_searches(UserInterface $account) {
+@@ -206,14 +207,14 @@ function _search_api_saved_searches_deactivate_searches(UserInterface $account)
+  *
+  * Only used for searches that use the "E-Mail" notification plugin.
+  *
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   The user account in question.
+- * @param \Drupal\user\UserInterface $original
++ * @param UserInterface $original
+  *   The old version of the user account, with the old mail address.
+  */
+ function _search_api_saved_searches_adapt_mail(UserInterface $account, UserInterface $original) {
+   $searches = _search_api_saved_searches_load_searches($account->id(), $original->getEmail());
+-  /** @var \Drupal\search_api_saved_searches\Entity\SavedSearch $search */
++  /** @var SavedSearch $search */
+   foreach ($searches as $search) {
+     $search->set('mail', $account->getEmail());
+     try {
+@@ -243,7 +244,7 @@ function search_api_saved_searches_user_delete(UserInterface $account) {
+  * @param string|null $mail
+  *   (optional) The e-mail address to filter for, if any.
+  *
+- * @return \Drupal\search_api_saved_searches\SavedSearchInterface[]
++ * @return SavedSearchInterface[]
+  *   The requested saved searches.
+  */
+ function _search_api_saved_searches_load_searches(?int $uid = NULL, ?string $mail = NULL): array {
+@@ -259,7 +260,7 @@ function _search_api_saved_searches_load_searches(?int $uid = NULL, ?string $mai
+     if (!$ids) {
+       return [];
+     }
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchInterface[] $searches */
++    /** @var SavedSearchInterface[] $searches */
+     $searches = \Drupal::entityTypeManager()
+       ->getStorage('search_api_saved_search')
+       ->loadMultiple($ids);
+@@ -349,7 +350,7 @@ function search_api_saved_searches_search_api_saved_search_presave(EntityInterfa
+   }
+ 
+   try {
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchInterface $search */
++    /** @var SavedSearchInterface $search */
+     $type = $search->getType();
+ 
+     // If the type doesn't use the "E-mail" notification plugin, we're done.
+@@ -357,7 +358,7 @@ function search_api_saved_searches_search_api_saved_search_presave(EntityInterfa
+       return;
+     }
+     // Otherwise, check whether the "Activation mail" setting is even enabled.
+-    /** @var \Drupal\search_api_saved_searches\Plugin\search_api_saved_searches\notification\Email $plugin */
++    /** @var Email $plugin */
+     $plugin = $type->getNotificationPlugin('email');
+     if (!$plugin->getConfiguration()['activate']['send']) {
+       return;
+diff --git a/search_api_saved_searches.tokens.inc b/search_api_saved_searches.tokens.inc
+index c2b1137..e692da1 100644
+--- a/search_api_saved_searches.tokens.inc
++++ b/search_api_saved_searches.tokens.inc
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\user\UserInterface;
++use Drupal\search_api_saved_searches\SavedSearchInterface;
++use Drupal\search_api\Query\ResultSetInterface;
+ /**
+  * @file
+  * Builds placeholder replacement tokens for saved searches.
+@@ -104,7 +107,7 @@ function search_api_saved_searches_tokens($type, $tokens, array $data, array $op
+   $replacements = [];
+ 
+   if ($type === 'user' && !empty($data['user'])) {
+-    /** @var \Drupal\user\UserInterface $user */
++    /** @var UserInterface $user */
+     $user = $data['user'];
+ 
+     if (isset($tokens['search-api-saved-searches-url'])) {
+@@ -125,7 +128,7 @@ function search_api_saved_searches_tokens($type, $tokens, array $data, array $op
+   }
+ 
+   if ($type === 'search-api-saved-search' && !empty($data['search_api_saved_search'])) {
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchInterface $search */
++    /** @var SavedSearchInterface $search */
+     $search = $data['search_api_saved_search'];
+ 
+     foreach ($tokens as $name => $original) {
+@@ -193,7 +196,7 @@ function search_api_saved_searches_tokens($type, $tokens, array $data, array $op
+   }
+ 
+   if ($type === 'search-api-saved-search-results' && !empty($data['search_api_results'])) {
+-    /** @var \Drupal\search_api\Query\ResultSetInterface $results */
++    /** @var ResultSetInterface $results */
+     $results = $data['search_api_results'];
+ 
+     foreach ($tokens as $name => $original) {
+diff --git a/src/Annotation/SearchApiSavedSearchesNotification.php b/src/Annotation/SearchApiSavedSearchesNotification.php
+index 5ef0e8d..3c680fa 100644
+--- a/src/Annotation/SearchApiSavedSearchesNotification.php
++++ b/src/Annotation/SearchApiSavedSearchesNotification.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\search_api_saved_searches\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -28,7 +29,7 @@ class SearchApiSavedSearchesNotification extends Plugin {
+    *
+    * @ingroup plugin_translatable
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    */
+   public $label;
+ 
+@@ -37,7 +38,7 @@ class SearchApiSavedSearchesNotification extends Plugin {
+    *
+    * @ingroup plugin_translatable
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    */
+   public $description;
+ 
+diff --git a/src/Commands/SavedSearchCommands.php b/src/Commands/SavedSearchCommands.php
+index eaf2f02..cb4687f 100644
+--- a/src/Commands/SavedSearchCommands.php
++++ b/src/Commands/SavedSearchCommands.php
+@@ -13,14 +13,14 @@ class SavedSearchCommands extends DrushCommands {
+   /**
+    * The service for checking saved searches for new results.
+    *
+-   * @var \Drupal\search_api_saved_searches\Service\NewResultsCheck
++   * @var NewResultsCheck
+    */
+   protected $newResultsCheck;
+ 
+   /**
+    * Constructs a new class instance.
+    *
+-   * @param \Drupal\search_api_saved_searches\Service\NewResultsCheck $new_results_check
++   * @param NewResultsCheck $new_results_check
+    *   The service for checking saved searches for new results.
+    */
+   public function __construct(NewResultsCheck $new_results_check) {
+diff --git a/src/Controller/SavedSearchController.php b/src/Controller/SavedSearchController.php
+index 6f73426..9736508 100644
+--- a/src/Controller/SavedSearchController.php
++++ b/src/Controller/SavedSearchController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\search_api_saved_searches\Controller;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Url;
+ use Drupal\search_api_saved_searches\SavedSearchInterface;
+@@ -17,13 +18,13 @@ class SavedSearchController extends ControllerBase {
+   /**
+    * Redirects to the search page for the given saved search.
+    *
+-   * @param \Drupal\search_api_saved_searches\SavedSearchInterface $search_api_saved_search
++   * @param SavedSearchInterface $search_api_saved_search
+    *   The saved search.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirect to the search page.
+    *
+-   * @throws \Symfony\Component\HttpKernel\Exception\NotFoundHttpException
++   * @throws NotFoundHttpException
+    *   Thrown if the search didn't specify a search page path.
+    */
+   public function viewSearch(SavedSearchInterface $search_api_saved_search): Response {
+@@ -38,13 +39,13 @@ class SavedSearchController extends ControllerBase {
+   /**
+    * Activates a (currently disabled) saved search.
+    *
+-   * @param \Drupal\search_api_saved_searches\SavedSearchInterface $search_api_saved_search
++   * @param SavedSearchInterface $search_api_saved_search
+    *   The saved search to activate.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirect to either the search page or the site's front page.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   Thrown if saving the saved search failed.
+    */
+   public function activateSearch(SavedSearchInterface $search_api_saved_search): Response {
+diff --git a/src/Entity/SavedSearch.php b/src/Entity/SavedSearch.php
+index 4d9a3bf..1a982d0 100644
+--- a/src/Entity/SavedSearch.php
++++ b/src/Entity/SavedSearch.php
+@@ -82,7 +82,7 @@ class SavedSearch extends ContentEntityBase implements SavedSearchInterface {
+    * {@inheritdoc}
+    */
+   public static function baseFieldDefinitions(EntityTypeInterface $entity_type): array {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition[] $fields */
++    /** @var BaseFieldDefinition[] $fields */
+     $fields = parent::baseFieldDefinitions($entity_type);
+     try {
+       $fields += static::ownerBaseFieldDefinitions($entity_type);
+@@ -260,7 +260,7 @@ class SavedSearch extends ContentEntityBase implements SavedSearchInterface {
+   public static function bundleFieldDefinitions(EntityTypeInterface $entity_type, $bundle, array $base_field_definitions): array {
+     $fields = parent::bundleFieldDefinitions($entity_type, $bundle, $base_field_definitions);
+ 
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface $type */
++    /** @var SavedSearchTypeInterface $type */
+     try {
+       $type = \Drupal::entityTypeManager()
+         ->getStorage('search_api_saved_search_type')
+@@ -303,10 +303,10 @@ class SavedSearch extends ContentEntityBase implements SavedSearchInterface {
+   /**
+    * Cleans up a search query prior to storing it in a saved search.
+    *
+-   * @param \Drupal\search_api\Query\QueryInterface $query
++   * @param QueryInterface $query
+    *   The search query.
+    *
+-   * @return \Drupal\search_api\Query\QueryInterface
++   * @return QueryInterface
+    *   A cleaned-up copy of the search query.
+    */
+   protected static function getCleanQueryForStorage(QueryInterface $query): QueryInterface {
+@@ -423,7 +423,7 @@ class SavedSearch extends ContentEntityBase implements SavedSearchInterface {
+       $new_results_check = \Drupal::getContainer()
+         ->get('search_api_saved_searches.new_results_check');
+       if (!empty($this->cachedProperties['executed query'])) {
+-        /** @var \Drupal\search_api\Query\QueryInterface $query */
++        /** @var QueryInterface $query */
+         $query = $this->cachedProperties['executed query'];
+         $items = $query->getResults()->getResultItems();
+         $new_results_check->saveKnownResults($this, $items);
+diff --git a/src/Entity/SavedSearchAccessControlHandler.php b/src/Entity/SavedSearchAccessControlHandler.php
+index ecde49b..d4b3684 100644
+--- a/src/Entity/SavedSearchAccessControlHandler.php
++++ b/src/Entity/SavedSearchAccessControlHandler.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\search_api_saved_searches\Entity;
+ 
++use Drupal\search_api_saved_searches\SavedSearchInterface;
++use Drupal\search_api_saved_searches\SavedSearchTypeInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Access\AccessResultInterface;
+@@ -33,14 +35,14 @@ class SavedSearchAccessControlHandler extends EntityAccessControlHandler impleme
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface|null
++   * @var EntityTypeManagerInterface|null
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack|null
++   * @var RequestStack|null
+    */
+   protected $requestStack;
+ 
+@@ -59,7 +61,7 @@ class SavedSearchAccessControlHandler extends EntityAccessControlHandler impleme
+   /**
+    * Retrieves the entity type manager.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @return EntityTypeManagerInterface
+    *   The entity type manager.
+    */
+   public function getEntityTypeManager(): EntityTypeManagerInterface {
+@@ -69,7 +71,7 @@ class SavedSearchAccessControlHandler extends EntityAccessControlHandler impleme
+   /**
+    * Sets the entity type manager.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The new entity type manager.
+    *
+    * @return $this
+@@ -82,7 +84,7 @@ class SavedSearchAccessControlHandler extends EntityAccessControlHandler impleme
+   /**
+    * Retrieves the request stack.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RequestStack
++   * @return RequestStack
+    *   The request stack.
+    */
+   public function getRequestStack(): RequestStack {
+@@ -92,7 +94,7 @@ class SavedSearchAccessControlHandler extends EntityAccessControlHandler impleme
+   /**
+    * Sets the request stack.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The new request stack.
+    *
+    * @return $this
+@@ -106,7 +108,7 @@ class SavedSearchAccessControlHandler extends EntityAccessControlHandler impleme
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account): AccessResultInterface {
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchInterface $entity */
++    /** @var SavedSearchInterface $entity */
+     $access = parent::checkAccess($entity, $operation, $account);
+ 
+     if (!$access->isAllowed()) {
+@@ -180,7 +182,7 @@ class SavedSearchAccessControlHandler extends EntityAccessControlHandler impleme
+       $bundle = $field_definition->getTargetBundle();
+       if ($plugin_id && $bundle) {
+         try {
+-          /** @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface $type */
++          /** @var SavedSearchTypeInterface $type */
+           $type = $this->getEntityTypeManager()
+             ->getStorage('search_api_saved_search_type')
+             ->load($bundle);
+@@ -204,12 +206,12 @@ class SavedSearchAccessControlHandler extends EntityAccessControlHandler impleme
+   /**
+    * Checks access for using saved searches of a specific bundle.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user session for which to check access.
+    * @param string $bundle
+    *   The bundle for which to check usage access.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   protected function checkBundleAccess(AccountInterface $account, string $bundle): AccessResultInterface {
+diff --git a/src/Entity/SavedSearchType.php b/src/Entity/SavedSearchType.php
+index 72326c2..92f0387 100644
+--- a/src/Entity/SavedSearchType.php
++++ b/src/Entity/SavedSearchType.php
+@@ -118,7 +118,7 @@ class SavedSearchType extends ConfigEntityBundleBase implements SavedSearchTypeI
+    * configuration we should therefore always manipulate this property instead
+    * of the stored one.
+    *
+-   * @var \Drupal\search_api_saved_searches\Notification\NotificationPluginInterface[]|null
++   * @var NotificationPluginInterface[]|null
+    *
+    * @see getNotificationPlugins()
+    */
+@@ -237,9 +237,9 @@ class SavedSearchType extends ConfigEntityBundleBase implements SavedSearchTypeI
+   /**
+    * Adapts field storage definitions to a changes in a type.
+    *
+-   * @param \Drupal\search_api_saved_searches\SavedSearchTypeInterface $old
++   * @param SavedSearchTypeInterface $old
+    *   The old version of the search type.
+-   * @param \Drupal\search_api_saved_searches\SavedSearchTypeInterface $new
++   * @param SavedSearchTypeInterface $new
+    *   The new version of the search type.
+    */
+   protected static function adaptFieldStorageDefinitions(SavedSearchTypeInterface $old, SavedSearchTypeInterface $new) {
+@@ -258,7 +258,7 @@ class SavedSearchType extends ConfigEntityBundleBase implements SavedSearchTypeI
+     // Collect all fields that exist for the entity type regardless of this
+     // type/bundle (because they are (also) defined by other bundles).
+     $fields_from_other_types = [];
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface $type */
++    /** @var SavedSearchTypeInterface $type */
+     foreach (static::loadMultiple() as $type) {
+       if ($type->id() != $old->id()) {
+         $fields_from_other_types += $type->getNotificationPluginFieldDefinitions();
+@@ -309,7 +309,7 @@ class SavedSearchType extends ConfigEntityBundleBase implements SavedSearchTypeI
+       watchdog_exception('search_api_saved_searches', $e);
+     }
+ 
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface $type */
++    /** @var SavedSearchTypeInterface $type */
+     foreach ($entities as $type) {
+       $new = static::create(['id' => $type->id()]);
+       static::adaptFieldStorageDefinitions($type, $new);
+diff --git a/src/Form/SavedSearchCreateForm.php b/src/Form/SavedSearchCreateForm.php
+index eb2b171..ebb4069 100644
+--- a/src/Form/SavedSearchCreateForm.php
++++ b/src/Form/SavedSearchCreateForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\search_api_saved_searches\Form;
+ 
++use Drupal\search_api_saved_searches\SavedSearchInterface;
+ use Drupal\Core\Entity\ContentEntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -52,7 +53,7 @@ class SavedSearchCreateForm extends ContentEntityForm {
+    *
+    * @param array $form
+    *   The current form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    *
+    * @return array
+@@ -69,7 +70,7 @@ class SavedSearchCreateForm extends ContentEntityForm {
+     $return = parent::save($form, $form_state);
+ 
+     if ($return === SAVED_NEW) {
+-      /** @var \Drupal\search_api_saved_searches\SavedSearchInterface $search */
++      /** @var SavedSearchInterface $search */
+       $search = $this->entity;
+       $enabled = $this->entity->get('status')->__get('value');
+       if ($enabled) {
+diff --git a/src/Form/SavedSearchDeleteConfirmForm.php b/src/Form/SavedSearchDeleteConfirmForm.php
+index d42b1c2..8c30180 100644
+--- a/src/Form/SavedSearchDeleteConfirmForm.php
++++ b/src/Form/SavedSearchDeleteConfirmForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\search_api_saved_searches\Form;
+ 
++use Drupal\search_api_saved_searches\SavedSearchInterface;
+ use Drupal\Core\Entity\ContentEntityConfirmFormBase;
+ use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -16,7 +17,7 @@ class SavedSearchDeleteConfirmForm extends ContentEntityConfirmFormBase {
+   /**
+    * The entity being used by this form.
+    *
+-   * @var \Drupal\search_api_saved_searches\SavedSearchInterface
++   * @var SavedSearchInterface
+    */
+   protected $entity;
+ 
+diff --git a/src/Form/SavedSearchForm.php b/src/Form/SavedSearchForm.php
+index 80e1eef..9cd85e5 100644
+--- a/src/Form/SavedSearchForm.php
++++ b/src/Form/SavedSearchForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\search_api_saved_searches\Form;
+ 
++use Drupal\search_api_saved_searches\SavedSearchInterface;
+ use Drupal\Core\Entity\ContentEntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -16,7 +17,7 @@ class SavedSearchForm extends ContentEntityForm {
+   public function form(array $form, FormStateInterface $form_state): array {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchInterface $search */
++    /** @var SavedSearchInterface $search */
+     $search = $this->getEntity();
+ 
+     $args['%search_label'] = $search->label();
+diff --git a/src/Form/SavedSearchTypeDeleteConfirmForm.php b/src/Form/SavedSearchTypeDeleteConfirmForm.php
+index 60c638e..aaa1f52 100644
+--- a/src/Form/SavedSearchTypeDeleteConfirmForm.php
++++ b/src/Form/SavedSearchTypeDeleteConfirmForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\search_api_saved_searches\Form;
+ 
++use Drupal\search_api_saved_searches\SavedSearchTypeInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Config\ConfigManager;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+@@ -24,7 +25,7 @@ class SavedSearchTypeDeleteConfirmForm extends EntityConfirmFormBase {
+   /**
+    * The config manager.
+    *
+-   * @var \Drupal\Core\Config\ConfigManager|null
++   * @var ConfigManager|null
+    */
+   protected $configManager;
+ 
+@@ -42,7 +43,7 @@ class SavedSearchTypeDeleteConfirmForm extends EntityConfirmFormBase {
+   /**
+    * Retrieves the config manager.
+    *
+-   * @return \Drupal\Core\Config\ConfigManager
++   * @return ConfigManager
+    *   The config manager.
+    */
+   public function getConfigManager(): ConfigManager {
+@@ -52,7 +53,7 @@ class SavedSearchTypeDeleteConfirmForm extends EntityConfirmFormBase {
+   /**
+    * Sets the config manager.
+    *
+-   * @param \Drupal\Core\Config\ConfigManager $config_manager
++   * @param ConfigManager $config_manager
+    *   The new config manager.
+    *
+    * @return $this
+@@ -93,7 +94,7 @@ class SavedSearchTypeDeleteConfirmForm extends EntityConfirmFormBase {
+ 
+     // Add information about the changes to dependent entities.
+     // @see \Drupal\Core\Entity\EntityDeleteForm::buildForm()
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface $entity */
++    /** @var SavedSearchTypeInterface $entity */
+     $entity = $this->getEntity();
+     $this->addDependencyListsToForm($form, $entity->getConfigDependencyKey(), $this->getConfigNamesToDelete($entity), $this->getConfigManager(), $this->entityTypeManager);
+ 
+@@ -103,7 +104,7 @@ class SavedSearchTypeDeleteConfirmForm extends EntityConfirmFormBase {
+   /**
+    * Returns config names to delete for the deletion confirmation form.
+    *
+-   * @param \Drupal\Core\Config\Entity\ConfigEntityInterface $entity
++   * @param ConfigEntityInterface $entity
+    *   The entity being deleted.
+    *
+    * @return string[]
+@@ -130,10 +131,10 @@ class SavedSearchTypeDeleteConfirmForm extends EntityConfirmFormBase {
+   /**
+    * Returns the route to go to if the user cancels the action.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   A URL object.
+    *
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws EntityMalformedException
+    *   Thrown if the URL could not be created.
+    */
+   public function getCancelUrl(): Url {
+diff --git a/src/Form/SavedSearchTypeForm.php b/src/Form/SavedSearchTypeForm.php
+index e28326f..befa8db 100644
+--- a/src/Form/SavedSearchTypeForm.php
++++ b/src/Form/SavedSearchTypeForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\search_api_saved_searches\Form;
+ 
++use Drupal\search_api_saved_searches\SavedSearchTypeInterface;
++use Drupal\search_api\IndexInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -22,28 +24,28 @@ class SavedSearchTypeForm extends EntityForm {
+   /**
+    * The entity being used by this form.
+    *
+-   * @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface
++   * @var SavedSearchTypeInterface
+    */
+   protected $entity;
+ 
+   /**
+    * The notification plugin manager.
+    *
+-   * @var \Drupal\search_api_saved_searches\Notification\NotificationPluginManagerInterface|null
++   * @var NotificationPluginManagerInterface|null
+    */
+   protected $notificationPluginManager;
+ 
+   /**
+    * The display plugin manager.
+    *
+-   * @var \Drupal\search_api\Display\DisplayPluginManager|null
++   * @var DisplayPluginManager|null
+    */
+   protected $displayPluginManager;
+ 
+   /**
+    * The data type helper.
+    *
+-   * @var \Drupal\search_api\Utility\DataTypeHelperInterface|null
++   * @var DataTypeHelperInterface|null
+    */
+   protected $dataTypeHelper;
+ 
+@@ -65,7 +67,7 @@ class SavedSearchTypeForm extends EntityForm {
+   /**
+    * Retrieves the entity type manager.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @return EntityTypeManagerInterface
+    *   The entity type manager.
+    */
+   public function getEntityTypeManager(): EntityTypeManagerInterface {
+@@ -75,7 +77,7 @@ class SavedSearchTypeForm extends EntityForm {
+   /**
+    * Retrieves the notification plugin manager.
+    *
+-   * @return \Drupal\search_api_saved_searches\Notification\NotificationPluginManagerInterface
++   * @return NotificationPluginManagerInterface
+    *   The notification plugin manager.
+    */
+   public function getNotificationPluginManager(): NotificationPluginManagerInterface {
+@@ -85,7 +87,7 @@ class SavedSearchTypeForm extends EntityForm {
+   /**
+    * Sets the notification plugin manager.
+    *
+-   * @param \Drupal\search_api_saved_searches\Notification\NotificationPluginManagerInterface $notification_plugin_manager
++   * @param NotificationPluginManagerInterface $notification_plugin_manager
+    *   The new notification plugin manager.
+    *
+    * @return $this
+@@ -98,7 +100,7 @@ class SavedSearchTypeForm extends EntityForm {
+   /**
+    * Retrieves the display plugin manager.
+    *
+-   * @return \Drupal\search_api\Display\DisplayPluginManager
++   * @return DisplayPluginManager
+    *   The display plugin manager.
+    */
+   public function getDisplayPluginManager(): DisplayPluginManager {
+@@ -108,7 +110,7 @@ class SavedSearchTypeForm extends EntityForm {
+   /**
+    * Sets the display plugin manager.
+    *
+-   * @param \Drupal\search_api\Display\DisplayPluginManager $display_plugin_manager
++   * @param DisplayPluginManager $display_plugin_manager
+    *   The new display plugin manager.
+    *
+    * @return $this
+@@ -121,7 +123,7 @@ class SavedSearchTypeForm extends EntityForm {
+   /**
+    * Retrieves the data type helper.
+    *
+-   * @return \Drupal\search_api\Utility\DataTypeHelperInterface
++   * @return DataTypeHelperInterface
+    *   The data type helper.
+    */
+   public function getDataTypeHelper(): DataTypeHelperInterface {
+@@ -131,7 +133,7 @@ class SavedSearchTypeForm extends EntityForm {
+   /**
+    * Sets the data type helper.
+    *
+-   * @param \Drupal\search_api\Utility\DataTypeHelperInterface $data_type_helper
++   * @param DataTypeHelperInterface $data_type_helper
+    *   The new data type helper.
+    *
+    * @return $this
+@@ -329,7 +331,7 @@ class SavedSearchTypeForm extends EntityForm {
+     // Populate the actual options for "date_field", along with the #states for
+     // "query_limit".
+     try {
+-      /** @var \Drupal\search_api\IndexInterface[] $indexes */
++      /** @var IndexInterface[] $indexes */
+       $indexes = $this->getEntityTypeManager()
+         ->getStorage('search_api_index')
+         ->loadMultiple();
+@@ -374,7 +376,7 @@ class SavedSearchTypeForm extends EntityForm {
+    *
+    * @param array $form
+    *   The current form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    */
+   protected function buildNotificationPluginConfigForm(array &$form, FormStateInterface $form_state): void {
+@@ -433,7 +435,7 @@ class SavedSearchTypeForm extends EntityForm {
+    *
+    * @param array $form
+    *   The current form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    *
+    * @return array
+@@ -452,7 +454,7 @@ class SavedSearchTypeForm extends EntityForm {
+    *
+    * @param array $form
+    *   The current form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    *
+    * @noinspection PhpUnusedParameterInspection
+@@ -468,7 +470,7 @@ class SavedSearchTypeForm extends EntityForm {
+   public function validateForm(array &$form, FormStateInterface $form_state) {
+     parent::validateForm($form, $form_state);
+ 
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface $type */
++    /** @var SavedSearchTypeInterface $type */
+     $type = $this->getEntity();
+ 
+     // Store the selected displays as a numerically indexed array.
+@@ -532,16 +534,16 @@ class SavedSearchTypeForm extends EntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @throws \Drupal\search_api_saved_searches\SavedSearchesException
++   * @throws SavedSearchesException
+    *   Thrown if the plugins could not be loaded.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     parent::submitForm($form, $form_state);
+ 
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface $type */
++    /** @var SavedSearchTypeInterface $type */
+     $type = $this->getEntity();
+ 
+     $plugin_ids = $form_state->getValue('notification_plugins', []);
+diff --git a/src/Notification/NotificationPluginBase.php b/src/Notification/NotificationPluginBase.php
+index 6b89be0..8ab02ad 100644
+--- a/src/Notification/NotificationPluginBase.php
++++ b/src/Notification/NotificationPluginBase.php
+@@ -42,7 +42,7 @@ abstract class NotificationPluginBase extends ConfigurablePluginBase implements
+   /**
+    * The saved search type to which this plugin is attached.
+    *
+-   * @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface
++   * @var SavedSearchTypeInterface
+    */
+   protected $savedSearchType;
+ 
+diff --git a/src/Notification/NotificationPluginInterface.php b/src/Notification/NotificationPluginInterface.php
+index 94daa4b..38cef8d 100644
+--- a/src/Notification/NotificationPluginInterface.php
++++ b/src/Notification/NotificationPluginInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\search_api_saved_searches\Notification;
+ 
++use Drupal\search_api_saved_searches\BundleFieldDefinition;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+@@ -24,7 +25,7 @@ interface NotificationPluginInterface extends ConfigurablePluginInterface {
+   /**
+    * Retrieves the saved search type.
+    *
+-   * @return \Drupal\search_api_saved_searches\SavedSearchTypeInterface
++   * @return SavedSearchTypeInterface
+    *   The saved search type to which this plugin is attached.
+    */
+   public function getSavedSearchType(): SavedSearchTypeInterface;
+@@ -32,7 +33,7 @@ interface NotificationPluginInterface extends ConfigurablePluginInterface {
+   /**
+    * Sets the saved search type.
+    *
+-   * @param \Drupal\search_api_saved_searches\SavedSearchTypeInterface $type
++   * @param SavedSearchTypeInterface $type
+    *   The new saved search type for this plugin.
+    *
+    * @return $this
+@@ -49,7 +50,7 @@ interface NotificationPluginInterface extends ConfigurablePluginInterface {
+    * providing module's responsibility to provide an update hook calling field
+    * storage definition listener's CRUD methods as appropriate.
+    *
+-   * @return \Drupal\search_api_saved_searches\BundleFieldDefinition[]
++   * @return BundleFieldDefinition[]
+    *   An array of bundle field definitions, keyed by field name.
+    */
+   public function getFieldDefinitions(): array;
+@@ -73,16 +74,16 @@ interface NotificationPluginInterface extends ConfigurablePluginInterface {
+    * @param string $operation
+    *   The operation access should be checked for.
+    *   Usually one of "view" or "edit".
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The field definition.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user session for which to check access.
+-   * @param \Drupal\Core\Field\FieldItemListInterface|null $items
++   * @param FieldItemListInterface|null $items
+    *   (optional) The field values for which to check access, or NULL if access
+    *   is checked for the field definition, without any specific value
+    *   available.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    *
+    * @see \Drupal\search_api_saved_searches\Entity\SavedSearchAccessControlHandler::checkFieldAccess()
+@@ -92,9 +93,9 @@ interface NotificationPluginInterface extends ConfigurablePluginInterface {
+   /**
+    * Notifies the search's owner of new results.
+    *
+-   * @param \Drupal\search_api_saved_searches\SavedSearchInterface $search
++   * @param SavedSearchInterface $search
+    *   The saved search for which to report new results.
+-   * @param \Drupal\search_api\Query\ResultSetInterface $results
++   * @param ResultSetInterface $results
+    *   The new results.
+    */
+   public function notify(SavedSearchInterface $search, ResultSetInterface $results): void;
+diff --git a/src/Notification/NotificationPluginManager.php b/src/Notification/NotificationPluginManager.php
+index a7c4cca..63647c9 100644
+--- a/src/Notification/NotificationPluginManager.php
++++ b/src/Notification/NotificationPluginManager.php
+@@ -25,9 +25,9 @@ class NotificationPluginManager extends DefaultPluginManager implements Notifica
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Notification/NotificationPluginManagerInterface.php b/src/Notification/NotificationPluginManagerInterface.php
+index 5dfaaa8..1141385 100644
+--- a/src/Notification/NotificationPluginManagerInterface.php
++++ b/src/Notification/NotificationPluginManagerInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\search_api_saved_searches\Notification;
+ 
++use Drupal\search_api_saved_searches\SavedSearchesException;
+ use Drupal\Component\Plugin\PluginManagerInterface;
+ use Drupal\search_api_saved_searches\SavedSearchTypeInterface;
+ 
+@@ -13,17 +14,17 @@ interface NotificationPluginManagerInterface extends PluginManagerInterface {
+   /**
+    * Creates a notification plugin for the given saved search type.
+    *
+-   * @param \Drupal\search_api_saved_searches\SavedSearchTypeInterface $type
++   * @param SavedSearchTypeInterface $type
+    *   The saved search type.
+    * @param string $plugin_id
+    *   The ID of the notification plugin to create.
+    * @param array $configuration
+    *   (optional) The configuration to set for the plugin.
+    *
+-   * @return \Drupal\search_api_saved_searches\Notification\NotificationPluginInterface
++   * @return NotificationPluginInterface
+    *   The created notification plugin.
+    *
+-   * @throws \Drupal\search_api_saved_searches\SavedSearchesException
++   * @throws SavedSearchesException
+    *   Thrown if an unknown plugin ID is given.
+    */
+   public function createPlugin(SavedSearchTypeInterface $type, string $plugin_id, array $configuration = []): NotificationPluginInterface;
+@@ -31,7 +32,7 @@ interface NotificationPluginManagerInterface extends PluginManagerInterface {
+   /**
+    * Creates multiple notification plugins for the given saved search type.
+    *
+-   * @param \Drupal\search_api_saved_searches\SavedSearchTypeInterface $type
++   * @param SavedSearchTypeInterface $type
+    *   The saved search type.
+    * @param string[]|null $plugin_ids
+    *   (optional) The IDs of the plugins to create, or NULL to create instances
+@@ -41,10 +42,10 @@ interface NotificationPluginManagerInterface extends PluginManagerInterface {
+    *   Missing configurations are either taken from the saved search type's
+    *   stored settings, if they are present there, or default to an empty array.
+    *
+-   * @return \Drupal\search_api_saved_searches\Notification\NotificationPluginInterface[]
++   * @return NotificationPluginInterface[]
+    *   The created notification plugins.
+    *
+-   * @throws \Drupal\search_api_saved_searches\SavedSearchesException
++   * @throws SavedSearchesException
+    *   Thrown if an unknown plugin ID is given.
+    */
+   public function createPlugins(SavedSearchTypeInterface $type, array $plugin_ids = NULL, array $configurations = []): array;
+diff --git a/src/Permissions.php b/src/Permissions.php
+index 8f4bef9..b8c1037 100644
+--- a/src/Permissions.php
++++ b/src/Permissions.php
+@@ -18,7 +18,7 @@ class Permissions implements ContainerInjectionInterface {
+   /**
+    * The saved search type storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $storage;
+ 
+@@ -39,10 +39,10 @@ class Permissions implements ContainerInjectionInterface {
+   /**
+    * Retrieves the saved search type storage.
+    *
+-   * @return \Drupal\Core\Entity\EntityStorageInterface
++   * @return EntityStorageInterface
+    *   The saved search type storage.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    *   Thrown if the storage handler could not be retrieved.
+    */
+   public function getStorage(): EntityStorageInterface {
+@@ -53,7 +53,7 @@ class Permissions implements ContainerInjectionInterface {
+   /**
+    * Sets the saved search type storage.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The new saved search type storage.
+    *
+    * @return $this
+diff --git a/src/Plugin/Block/SaveSearch.php b/src/Plugin/Block/SaveSearch.php
+index d2d8697..fb4bce9 100644
+--- a/src/Plugin/Block/SaveSearch.php
++++ b/src/Plugin/Block/SaveSearch.php
+@@ -31,28 +31,28 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface|null
++   * @var EntityTypeManagerInterface|null
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The form builder.
+    *
+-   * @var \Drupal\Core\Form\FormBuilderInterface|null
++   * @var FormBuilderInterface|null
+    */
+   protected $formBuilder;
+ 
+   /**
+    * The query helper.
+    *
+-   * @var \Drupal\search_api\Utility\QueryHelperInterface|null
++   * @var QueryHelperInterface|null
+    */
+   protected $queryHelper;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack|null
++   * @var RequestStack|null
+    */
+   protected $requestStack;
+ 
+@@ -74,7 +74,7 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * Retrieves the entity type manager.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @return EntityTypeManagerInterface
+    *   The entity type manager.
+    */
+   public function getEntityTypeManager(): EntityTypeManagerInterface {
+@@ -84,7 +84,7 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * Sets the entity type manager.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The new entity type manager.
+    *
+    * @return $this
+@@ -97,7 +97,7 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * Retrieves the form builder.
+    *
+-   * @return \Drupal\Core\Form\FormBuilderInterface
++   * @return FormBuilderInterface
+    *   The form builder.
+    */
+   public function getFormBuilder(): FormBuilderInterface {
+@@ -107,7 +107,7 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * Sets the form builder.
+    *
+-   * @param \Drupal\Core\Form\FormBuilderInterface $form_builder
++   * @param FormBuilderInterface $form_builder
+    *   The new form builder.
+    *
+    * @return $this
+@@ -120,7 +120,7 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * Retrieves the query helper.
+    *
+-   * @return \Drupal\search_api\Utility\QueryHelperInterface
++   * @return QueryHelperInterface
+    *   The query helper.
+    */
+   public function getQueryHelper(): QueryHelperInterface {
+@@ -130,7 +130,7 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * Sets the query helper.
+    *
+-   * @param \Drupal\search_api\Utility\QueryHelperInterface $query_helper
++   * @param QueryHelperInterface $query_helper
+    *   The new query helper.
+    *
+    * @return $this
+@@ -143,7 +143,7 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * Retrieves the request stack.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RequestStack
++   * @return RequestStack
+    *   The request stack.
+    */
+   public function getRequestStack(): RequestStack {
+@@ -153,7 +153,7 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * Sets the request stack.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The new request stack.
+    *
+    * @return $this
+@@ -180,13 +180,13 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+    *
+    * @param array $form
+    *   The form definition array for the block configuration form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+    *   The renderable form array representing the entire configuration form.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    *   Thrown if the "Saved search type" entity storage could not be retrieved.
+    */
+   public function blockForm($form, FormStateInterface $form_state): array {
+@@ -316,7 +316,7 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * Loads the saved search type used for this block.
+    *
+-   * @return \Drupal\search_api_saved_searches\SavedSearchTypeInterface|null
++   * @return SavedSearchTypeInterface|null
+    *   The saved search type, or NULL if it couldn't be loaded.
+    */
+   protected function getSavedSearchType(): ?SavedSearchTypeInterface {
+@@ -324,7 +324,7 @@ class SaveSearch extends BlockBase implements ContainerFactoryPluginInterface {
+       return NULL;
+     }
+     try {
+-      /** @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface $type */
++      /** @var SavedSearchTypeInterface $type */
+       $type = $this->getEntityTypeManager()
+         ->getStorage('search_api_saved_search_type')
+         ->load($this->configuration['type']);
+diff --git a/src/Plugin/DataType/SearchQueryData.php b/src/Plugin/DataType/SearchQueryData.php
+index 50043c0..9d2e076 100644
+--- a/src/Plugin/DataType/SearchQueryData.php
++++ b/src/Plugin/DataType/SearchQueryData.php
+@@ -19,7 +19,7 @@ class SearchQueryData extends TypedData {
+   /**
+    * The search query.
+    *
+-   * @var \Drupal\search_api\Query\QueryInterface
++   * @var QueryInterface
+    */
+   protected $value;
+ 
+diff --git a/src/Plugin/search_api_saved_searches/notification/Email.php b/src/Plugin/search_api_saved_searches/notification/Email.php
+index c1e4848..0814608 100644
+--- a/src/Plugin/search_api_saved_searches/notification/Email.php
++++ b/src/Plugin/search_api_saved_searches/notification/Email.php
+@@ -48,28 +48,28 @@ class Email extends NotificationPluginBase implements PluginFormInterface {
+   /**
+    * The mail service.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface|null
++   * @var MailManagerInterface|null
+    */
+   protected $mailService;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface|null
++   * @var ConfigFactoryInterface|null
+    */
+   protected $configFactory;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface|null
++   * @var LanguageManagerInterface|null
+    */
+   protected $languageManager;
+ 
+   /**
+    * The token service.
+    *
+-   * @var \Drupal\Core\Utility\Token|null
++   * @var Token|null
+    */
+   protected $tokenService;
+ 
+@@ -91,7 +91,7 @@ class Email extends NotificationPluginBase implements PluginFormInterface {
+   /**
+    * Retrieves the mail service.
+    *
+-   * @return \Drupal\Core\Mail\MailManagerInterface
++   * @return MailManagerInterface
+    *   The mail service.
+    */
+   public function getMailService(): MailManagerInterface {
+@@ -101,7 +101,7 @@ class Email extends NotificationPluginBase implements PluginFormInterface {
+   /**
+    * Sets the mail service.
+    *
+-   * @param \Drupal\Core\Mail\MailManagerInterface $mail_service
++   * @param MailManagerInterface $mail_service
+    *   The new mail service.
+    *
+    * @return $this
+@@ -114,7 +114,7 @@ class Email extends NotificationPluginBase implements PluginFormInterface {
+   /**
+    * Retrieves the config factory.
+    *
+-   * @return \Drupal\Core\Config\ConfigFactoryInterface
++   * @return ConfigFactoryInterface
+    *   The config factory.
+    */
+   public function getConfigFactory(): ConfigFactoryInterface {
+@@ -124,7 +124,7 @@ class Email extends NotificationPluginBase implements PluginFormInterface {
+   /**
+    * Sets the config factory.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The new config factory.
+    *
+    * @return $this
+@@ -137,7 +137,7 @@ class Email extends NotificationPluginBase implements PluginFormInterface {
+   /**
+    * Retrieves the language manager.
+    *
+-   * @return \Drupal\Core\Language\LanguageManagerInterface
++   * @return LanguageManagerInterface
+    *   The language manager.
+    */
+   public function getLanguageManager(): LanguageManagerInterface {
+@@ -147,7 +147,7 @@ class Email extends NotificationPluginBase implements PluginFormInterface {
+   /**
+    * Sets the language manager.
+    *
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The new language manager.
+    *
+    * @return $this
+@@ -160,7 +160,7 @@ class Email extends NotificationPluginBase implements PluginFormInterface {
+   /**
+    * Retrieves the token service.
+    *
+-   * @return \Drupal\Core\Utility\Token
++   * @return Token
+    *   The token service.
+    */
+   public function getTokenService(): Token {
+@@ -170,7 +170,7 @@ class Email extends NotificationPluginBase implements PluginFormInterface {
+   /**
+    * Sets the token service.
+    *
+-   * @param \Drupal\Core\Utility\Token $token_service
++   * @param Token $token_service
+    *   The new token service.
+    *
+    * @return $this
+@@ -539,7 +539,7 @@ There are new results for your saved search "@search_label":
+    *     results.
+    */
+   protected function getMail(string $mail_type, &$message, $params): void {
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchInterface $search */
++    /** @var SavedSearchInterface $search */
+     $search = $params['search'];
+     $account = $search->getOwner();
+     $data = [
+@@ -577,7 +577,7 @@ There are new results for your saved search "@search_label":
+   /**
+    * Retrieves the language code to use in mails for the given search.
+    *
+-   * @param \Drupal\search_api_saved_searches\SavedSearchInterface $search
++   * @param SavedSearchInterface $search
+    *   The saved search in question.
+    *
+    * @return string
+diff --git a/src/Plugin/views/argument_validator/CurrentAuthenticatedUser.php b/src/Plugin/views/argument_validator/CurrentAuthenticatedUser.php
+index 63aa440..61b95e9 100644
+--- a/src/Plugin/views/argument_validator/CurrentAuthenticatedUser.php
++++ b/src/Plugin/views/argument_validator/CurrentAuthenticatedUser.php
+@@ -27,14 +27,14 @@ class CurrentAuthenticatedUser extends ArgumentValidatorPluginBase implements Ca
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface|null
++   * @var AccountInterface|null
+    */
+   protected $currentUser;
+ 
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface|null
++   * @var EntityTypeManagerInterface|null
+    */
+   protected $entityTypeManager;
+ 
+@@ -54,7 +54,7 @@ class CurrentAuthenticatedUser extends ArgumentValidatorPluginBase implements Ca
+   /**
+    * Retrieves the current user.
+    *
+-   * @return \Drupal\Core\Session\AccountInterface
++   * @return AccountInterface
+    *   The current user.
+    */
+   public function getCurrentUser(): AccountInterface {
+@@ -64,7 +64,7 @@ class CurrentAuthenticatedUser extends ArgumentValidatorPluginBase implements Ca
+   /**
+    * Sets the current user.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The new current user.
+    *
+    * @return $this
+@@ -77,7 +77,7 @@ class CurrentAuthenticatedUser extends ArgumentValidatorPluginBase implements Ca
+   /**
+    * Retrieves the entity type manager.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @return EntityTypeManagerInterface
+    *   The entity type manager.
+    */
+   public function getEntityTypeManager(): EntityTypeManagerInterface {
+@@ -87,7 +87,7 @@ class CurrentAuthenticatedUser extends ArgumentValidatorPluginBase implements Ca
+   /**
+    * Sets the entity type manager.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The new entity type manager.
+    *
+    * @return $this
+diff --git a/src/SavedSearchInterface.php b/src/SavedSearchInterface.php
+index 1327580..0930b61 100644
+--- a/src/SavedSearchInterface.php
++++ b/src/SavedSearchInterface.php
+@@ -14,10 +14,10 @@ interface SavedSearchInterface extends ContentEntityInterface, EntityOwnerInterf
+   /**
+    * Retrieves the type (bundle) entity for this saved search.
+    *
+-   * @return \Drupal\search_api_saved_searches\SavedSearchTypeInterface
++   * @return SavedSearchTypeInterface
+    *   The type entity for this saved search.
+    *
+-   * @throws \Drupal\search_api_saved_searches\SavedSearchesException
++   * @throws SavedSearchesException
+    *   Thrown if the type is unknown.
+    */
+   public function getType(): SavedSearchTypeInterface;
+@@ -34,7 +34,7 @@ interface SavedSearchInterface extends ContentEntityInterface, EntityOwnerInterf
+   /**
+    * Retrieves the search query of this saved search.
+    *
+-   * @return \Drupal\search_api\Query\QueryInterface|null
++   * @return QueryInterface|null
+    *   The search query of this saved search, or NULL if it couldn't be
+    *   retrieved.
+    */
+@@ -43,7 +43,7 @@ interface SavedSearchInterface extends ContentEntityInterface, EntityOwnerInterf
+   /**
+    * Sets the search query.
+    *
+-   * @param \Drupal\search_api\Query\QueryInterface $query
++   * @param QueryInterface $query
+    *   The new query.
+    *
+    * @return $this
+diff --git a/src/SavedSearchTypeInterface.php b/src/SavedSearchTypeInterface.php
+index bceda2c..22c14c5 100644
+--- a/src/SavedSearchTypeInterface.php
++++ b/src/SavedSearchTypeInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\search_api_saved_searches;
+ 
++use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ use Drupal\search_api\Query\QueryInterface;
+ use Drupal\search_api\Utility\QueryHelperInterface;
+@@ -24,7 +25,7 @@ interface SavedSearchTypeInterface extends ConfigEntityInterface {
+   /**
+    * Retrieves this saved search type's notification plugins.
+    *
+-   * @return \Drupal\search_api_saved_searches\Notification\NotificationPluginInterface[]
++   * @return NotificationPluginInterface[]
+    *   The notification plugins used by this saved search type, keyed by plugin
+    *   ID.
+    */
+@@ -60,10 +61,10 @@ interface SavedSearchTypeInterface extends ConfigEntityInterface {
+    * @param string $notification_plugin_id
+    *   The ID of the notification plugin to return.
+    *
+-   * @return \Drupal\search_api_saved_searches\Notification\NotificationPluginInterface
++   * @return NotificationPluginInterface
+    *   The notification plugin with the given ID.
+    *
+-   * @throws \Drupal\search_api_saved_searches\SavedSearchesException
++   * @throws SavedSearchesException
+    *   Thrown if the specified notification plugin isn't enabled for this saved
+    *   search type, or couldn't be loaded.
+    */
+@@ -74,7 +75,7 @@ interface SavedSearchTypeInterface extends ConfigEntityInterface {
+    *
+    * An existing notification plugin with the same ID will be replaced.
+    *
+-   * @param \Drupal\search_api_saved_searches\Notification\NotificationPluginInterface $notification_plugin
++   * @param NotificationPluginInterface $notification_plugin
+    *   The notification plugin to be added.
+    *
+    * @return $this
+@@ -94,7 +95,7 @@ interface SavedSearchTypeInterface extends ConfigEntityInterface {
+   /**
+    * Sets this saved search type's notification plugins.
+    *
+-   * @param \Drupal\search_api_saved_searches\Notification\NotificationPluginInterface[] $notification_plugins
++   * @param NotificationPluginInterface[] $notification_plugins
+    *   An array of notification plugins.
+    *
+    * @return $this
+@@ -104,7 +105,7 @@ interface SavedSearchTypeInterface extends ConfigEntityInterface {
+   /**
+    * Retrieves all field definitions defined by notification plugins.
+    *
+-   * @return \Drupal\Core\Field\FieldDefinitionInterface[]
++   * @return FieldDefinitionInterface[]
+    *   All field definitions defined by notification plugins for this type,
+    *   keyed by field name.
+    */
+@@ -134,11 +135,11 @@ interface SavedSearchTypeInterface extends ConfigEntityInterface {
+   /**
+    * Retrieves an active search query that can be saved with this type.
+    *
+-   * @param \Drupal\search_api\Utility\QueryHelperInterface|null $query_helper
++   * @param QueryHelperInterface|null $query_helper
+    *   (optional) The query helper service to use. Otherwise, it will be
+    *   retrieved from the container.
+    *
+-   * @return \Drupal\search_api\Query\QueryInterface|null
++   * @return QueryInterface|null
+    *   A search query that was executed in this page request and which can be
+    *   saved with this saved search type. Or NULL if no such query could be
+    *   found.
+diff --git a/src/SavedSearchTypeListBuilder.php b/src/SavedSearchTypeListBuilder.php
+index 20d5bd4..0499db1 100644
+--- a/src/SavedSearchTypeListBuilder.php
++++ b/src/SavedSearchTypeListBuilder.php
+@@ -25,7 +25,7 @@ class SavedSearchTypeListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity): array {
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface $entity */
++    /** @var SavedSearchTypeInterface $entity */
+     $status = $entity->status();
+     $status_label = $status ? $this->t('Enabled') : $this->t('Disabled');
+     $status_icon = [
+diff --git a/src/Service/EmailQueue.php b/src/Service/EmailQueue.php
+index f4d4ed7..77e5d1f 100644
+--- a/src/Service/EmailQueue.php
++++ b/src/Service/EmailQueue.php
+@@ -13,7 +13,7 @@ class EmailQueue implements DestructableInterface {
+   /**
+    * The mail manager service.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+   protected $mail;
+ 
+@@ -27,7 +27,7 @@ class EmailQueue implements DestructableInterface {
+   /**
+    * Constructs a new class instance.
+    *
+-   * @param \Drupal\Core\Mail\MailManagerInterface $mail
++   * @param MailManagerInterface $mail
+    *   The mail manager service.
+    */
+   public function __construct(MailManagerInterface $mail) {
+diff --git a/src/Service/NewResultsCheck.php b/src/Service/NewResultsCheck.php
+index 9891c39..5b5c440 100644
+--- a/src/Service/NewResultsCheck.php
++++ b/src/Service/NewResultsCheck.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\search_api_saved_searches\Service;
+ 
++use Drupal\search_api_saved_searches\SavedSearchTypeInterface;
++use Drupal\search_api\Item\ItemInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -29,34 +31,34 @@ class NewResultsCheck {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * Constructs a new class instance.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The config factory.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger to use.
+    */
+   public function __construct(EntityTypeManagerInterface $entityTypeManager, ConfigFactoryInterface $configFactory, TimeInterface $time, LoggerInterface $logger) {
+@@ -69,10 +71,10 @@ class NewResultsCheck {
+   /**
+    * Retrieves the saved search entity storage.
+    *
+-   * @return \Drupal\Core\Entity\EntityStorageInterface
++   * @return EntityStorageInterface
+    *   The saved search entity storage.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    *   Thrown if the storage could not be retrieved.
+    */
+   protected function getSearchStorage(): EntityStorageInterface {
+@@ -82,10 +84,10 @@ class NewResultsCheck {
+   /**
+    * Retrieves the saved search type entity storage.
+    *
+-   * @return \Drupal\Core\Entity\EntityStorageInterface
++   * @return EntityStorageInterface
+    *   The saved search type entity storage.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    *   Thrown if the storage could not be retrieved.
+    */
+   protected function getSearchTypeStorage(): EntityStorageInterface {
+@@ -113,7 +115,7 @@ class NewResultsCheck {
+     $now = $this->time->getRequestTime();
+ 
+     try {
+-      /** @var \Drupal\search_api_saved_searches\SavedSearchInterface[] $searches */
++      /** @var SavedSearchInterface[] $searches */
+       $searches = $this->getSearchStorage()->loadMultiple($search_ids);
+     }
+     catch (PluginException $e) {
+@@ -211,7 +213,7 @@ class NewResultsCheck {
+    */
+   public function getTypesWithNotification(): ?array {
+     try {
+-      /** @var \Drupal\search_api_saved_searches\SavedSearchTypeInterface[] $types */
++      /** @var SavedSearchTypeInterface[] $types */
+       $types = $this->getSearchTypeStorage()->loadMultiple();
+     }
+     catch (PluginException $e) {
+@@ -233,13 +235,13 @@ class NewResultsCheck {
+   /**
+    * Retrieves new results for the given search.
+    *
+-   * @param \Drupal\search_api_saved_searches\SavedSearchInterface $search
++   * @param SavedSearchInterface $search
+    *   The saved search to check for new results.
+    *
+-   * @return \Drupal\search_api\Query\ResultSetInterface|null
++   * @return ResultSetInterface|null
+    *   The new results, if any could be found. NULL otherwise.
+    *
+-   * @throws \Drupal\search_api_saved_searches\SavedSearchesException
++   * @throws SavedSearchesException
+    *   Thrown if an error was encountered (like an invalid type or query, or the
+    *   search query failing).
+    */
+@@ -324,9 +326,9 @@ class NewResultsCheck {
+   /**
+    * Saves the known ("old") results for a saved search.
+    *
+-   * @param \Drupal\search_api_saved_searches\SavedSearchInterface $search
++   * @param SavedSearchInterface $search
+    *   The saved search.
+-   * @param \Drupal\search_api\Item\ItemInterface[] $items
++   * @param ItemInterface[] $items
+    *   The known results to save. Passing already saved results here will cause
+    *   this method to fail.
+    *
+diff --git a/tests/src/Functional/CacheabilityTest.php b/tests/src/Functional/CacheabilityTest.php
+index 637e78c..608a52d 100644
+--- a/tests/src/Functional/CacheabilityTest.php
++++ b/tests/src/Functional/CacheabilityTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\search_api_saved_searches\Functional;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\search_api_saved_searches\Entity\SavedSearchAccessControlHandler;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -29,14 +30,14 @@ class CacheabilityTest extends BrowserTestBase {
+   /**
+    * The admin user used in this test.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $adminUser;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $permissions = [
+diff --git a/tests/src/Functional/FacetsIntegrationTest.php b/tests/src/Functional/FacetsIntegrationTest.php
+index 3a11b94..5748fe1 100644
+--- a/tests/src/Functional/FacetsIntegrationTest.php
++++ b/tests/src/Functional/FacetsIntegrationTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\search_api_saved_searches\Functional;
+ 
++use Drupal\Core\Session\AccountInterface;
++use Drupal\search_api\Item\ItemInterface;
+ use Drupal\Core\Url;
+ use Drupal\search_api_saved_searches\Entity\SavedSearch;
+ use Drupal\search_api_saved_searches\SavedSearchInterface;
+@@ -39,14 +41,14 @@ class FacetsIntegrationTest extends BrowserTestBase {
+   /**
+    * The test user account.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->setUpExampleStructure();
+@@ -89,7 +91,7 @@ class FacetsIntegrationTest extends BrowserTestBase {
+     $this->assertEquals($url->toString(), $this->getSession()->getCurrentUrl());
+ 
+     $searches = SavedSearch::loadMultiple();
+-    /** @var \Drupal\search_api_saved_searches\SavedSearchInterface $search */
++    /** @var SavedSearchInterface $search */
+     $search = reset($searches);
+     $this->assertInstanceOf(SavedSearchInterface::class, $search);
+     $this->assertEquals($uid, $search->getOwnerId());
+@@ -114,7 +116,7 @@ class FacetsIntegrationTest extends BrowserTestBase {
+     $new_results = $new_results_check->getNewResults($search);
+     $this->assertEquals(1, $new_results->getResultCount());
+     $items = $new_results->getResultItems();
+-    /** @var \Drupal\search_api\Item\ItemInterface $item */
++    /** @var ItemInterface $item */
+     $item = reset($items);
+     $this->assertEquals(7, $item->getOriginalObject()->getValue()->id());
+   }
+diff --git a/tests/src/Functional/IntegrationTest.php b/tests/src/Functional/IntegrationTest.php
+index b5c7055..52d7768 100644
+--- a/tests/src/Functional/IntegrationTest.php
++++ b/tests/src/Functional/IntegrationTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\search_api_saved_searches\Functional;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\Component\Utility\Html;
+ use Drupal\search_api_saved_searches\Entity\SavedSearchAccessControlHandler;
+ use Drupal\search_api_saved_searches\Entity\SavedSearchType;
+@@ -41,28 +42,28 @@ class IntegrationTest extends BrowserTestBase {
+   /**
+    * A admin user used in this test.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $adminUser;
+ 
+   /**
+    * A non-admin user used in this test.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $registeredUser;
+ 
+   /**
+    * A second non-admin user used in this test.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $registeredUser2;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Create test users.
+diff --git a/tests/src/Kernel/EmailActivationTest.php b/tests/src/Kernel/EmailActivationTest.php
+index ec221fa..db9cb4f 100644
+--- a/tests/src/Kernel/EmailActivationTest.php
++++ b/tests/src/Kernel/EmailActivationTest.php
+@@ -38,14 +38,14 @@ class EmailActivationTest extends KernelTestBase {
+    *
+    * 0 is the anonymous user, 1 is an admin user, 2 is a normal registered user.
+    *
+-   * @var \Drupal\user\Entity\User[]
++   * @var User[]
+    */
+   protected $users = [];
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installEntitySchema('user');
+diff --git a/tests/src/Kernel/EmailNotificationsTest.php b/tests/src/Kernel/EmailNotificationsTest.php
+index 753f289..03926ed 100644
+--- a/tests/src/Kernel/EmailNotificationsTest.php
++++ b/tests/src/Kernel/EmailNotificationsTest.php
+@@ -35,14 +35,14 @@ class EmailNotificationsTest extends KernelTestBase {
+   /**
+    * The notifications plugin to test.
+    *
+-   * @var \Drupal\search_api_saved_searches\Plugin\search_api_saved_searches\notification\Email
++   * @var Email
+    */
+   protected $plugin;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installEntitySchema('user');
+diff --git a/tests/src/Kernel/EmailTranslationTest.php b/tests/src/Kernel/EmailTranslationTest.php
+index 327a294..d7cb5ac 100644
+--- a/tests/src/Kernel/EmailTranslationTest.php
++++ b/tests/src/Kernel/EmailTranslationTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\search_api_saved_searches\Kernel;
+ 
++use Drupal\search_api\IndexInterface;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\language\Entity\ConfigurableLanguage;
+@@ -48,7 +49,7 @@ class EmailTranslationTest extends KernelTestBase {
+   /**
+    * The test index used.
+    *
+-   * @var \Drupal\search_api\IndexInterface
++   * @var IndexInterface
+    */
+   protected $index;
+ 
+@@ -62,7 +63,7 @@ class EmailTranslationTest extends KernelTestBase {
+   /**
+    * The test time service.
+    *
+-   * @var \Drupal\Tests\search_api\Kernel\TestTimeService
++   * @var TestTimeService
+    */
+   protected $timeService;
+ 
+diff --git a/tests/src/Kernel/NewResultsCheckTest.php b/tests/src/Kernel/NewResultsCheckTest.php
+index 452519e..14436b9 100644
+--- a/tests/src/Kernel/NewResultsCheckTest.php
++++ b/tests/src/Kernel/NewResultsCheckTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\search_api_saved_searches\Kernel;
+ 
++use Drupal\search_api\IndexInterface;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\search_api\Entity\Index;
+ use Drupal\search_api\Query\QueryInterface;
+@@ -40,14 +41,14 @@ class NewResultsCheckTest extends KernelTestBase {
+   /**
+    * The search index used for testing.
+    *
+-   * @var \Drupal\search_api\IndexInterface
++   * @var IndexInterface
+    */
+   protected $index;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installEntitySchema('user');
+diff --git a/tests/src/Kernel/SavedSearchCrudTest.php b/tests/src/Kernel/SavedSearchCrudTest.php
+index 7583ae6..3439c8a 100644
+--- a/tests/src/Kernel/SavedSearchCrudTest.php
++++ b/tests/src/Kernel/SavedSearchCrudTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\search_api_saved_searches\Kernel;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\search_api\Entity\Index;
+ use Drupal\search_api\Entity\Server;
+@@ -37,7 +38,7 @@ class SavedSearchCrudTest extends KernelTestBase {
+   /**
+    * A mock "new results check" service.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject|\Drupal\search_api_saved_searches\Service\NewResultsCheck
++   * @var MockObject|NewResultsCheck
+    */
+   protected $newResultsCheck;
+ 
+diff --git a/tests/src/Kernel/SavedSearchTypeCrudTest.php b/tests/src/Kernel/SavedSearchTypeCrudTest.php
+index f381ceb..6209d61 100644
+--- a/tests/src/Kernel/SavedSearchTypeCrudTest.php
++++ b/tests/src/Kernel/SavedSearchTypeCrudTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\search_api_saved_searches\Kernel;
+ 
++use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
+ use Drupal\KernelTests\KernelTestBase;
+ 
+ /**
+@@ -55,7 +56,7 @@ class SavedSearchTypeCrudTest extends KernelTestBase {
+     $this->assertEquals(['default'], array_keys($bundles));
+ 
+     // The "create" form display was created for the new bundle and looks good.
+-    /** @var \Drupal\Core\Entity\Display\EntityFormDisplayInterface $form_display */
++    /** @var EntityFormDisplayInterface $form_display */
+     $form_display = $this->container->get('entity_type.manager')
+       ->getStorage('entity_form_display')
+       ->load('search_api_saved_search.default.create');
+diff --git a/tests/src/Kernel/UserCrudReactionTest.php b/tests/src/Kernel/UserCrudReactionTest.php
+index 7407f69..21eca7b 100644
+--- a/tests/src/Kernel/UserCrudReactionTest.php
++++ b/tests/src/Kernel/UserCrudReactionTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\search_api_saved_searches\Kernel;
+ 
++use Drupal\user\UserInterface;
++use Drupal\search_api_saved_searches\SavedSearchInterface;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\search_api\Entity\Index;
+ use Drupal\search_api_saved_searches\Entity\SavedSearch;
+@@ -29,21 +31,21 @@ class UserCrudReactionTest extends KernelTestBase {
+   /**
+    * The test user used in these tests.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $testUser;
+ 
+   /**
+    * Saved searches created for testing.
+    *
+-   * @var \Drupal\search_api_saved_searches\SavedSearchInterface[]
++   * @var SavedSearchInterface[]
+    */
+   protected $savedSearches = [];
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installConfig('search_api_saved_searches');

@@ -1,0 +1,203 @@
+diff --git a/layoutbuilder_extras.module b/layoutbuilder_extras.module
+index ee4b779..be9bd40 100644
+--- a/layoutbuilder_extras.module
++++ b/layoutbuilder_extras.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\node\Entity\Node;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\layoutbuilder_extras\LayoutBuilderElementOverride;
+ /**
+  * @file
+  * Module file for Layout builder extras.
+@@ -30,7 +33,7 @@ function layoutbuilder_extras_help($route_name, RouteMatchInterface $route_match
+  */
+ function layoutbuilder_extras_form_node_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+   $lbeConfig = \Drupal::config(LayoutBuilderExtrasSettingsForm::SETTINGSNAME);
+-  /** @var \Drupal\node\Entity\Node $node */
++  /** @var Node $node */
+   $node = $form_state->getFormObject()->getEntity();
+ 
+   try {
+@@ -60,7 +63,7 @@ function layoutbuilder_extras_form_node_form_alter(&$form, FormStateInterface $f
+  *
+  * @param array $form
+  *   The form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   Form state.
+  */
+ function layoutbuilder_extras_node_submit_redirect_layoutbuilder(array $form, FormStateInterface $form_state) {
+@@ -135,7 +138,7 @@ function layoutbuilder_extras_preprocess_layout(array &$variables) {
+   if ($lbeConfig->get('empty_region_placeholder') && ($isLayoutBuilderRoute || $isAdminRoute)) {
+     $placeHolderText = $lbeConfig->get('empty_region_placeholder_text')['value'];
+     if (empty($placeHolderText)) {
+-      $placeHolderText = new \Drupal\Core\StringTranslation\TranslatableMarkup('Add content here');
++      $placeHolderText = new TranslatableMarkup('Add content here');
+     }
+ 
+     $regions = array_keys($variables['layout']->getRegions());
+@@ -278,7 +281,7 @@ function layoutbuilder_extras_page_attachments(array &$attachments) {
+  */
+ function layoutbuilder_extras_element_info_alter(array &$types) {
+   $types['layout_builder']['#pre_render'][] =
+-    [\Drupal\layoutbuilder_extras\LayoutBuilderElementOverride::class, 'preRenderOverride'];
++    [LayoutBuilderElementOverride::class, 'preRenderOverride'];
+ }
+ 
+ /**
+diff --git a/src/Controller/AlterSectionController.php b/src/Controller/AlterSectionController.php
+index a58e87e..a5d8387 100644
+--- a/src/Controller/AlterSectionController.php
++++ b/src/Controller/AlterSectionController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutbuilder_extras\Controller;
+ 
++use Drupal\Core\Ajax\AjaxResponse;
+ use Drupal\Core\Ajax\AjaxHelperTrait;
+ use Drupal\Core\Ajax\ReplaceCommand;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+@@ -26,7 +27,7 @@ class AlterSectionController implements ContainerInjectionInterface {
+   /**
+    * The section storage.
+    *
+-   * @var \Drupal\layout_builder\SectionStorageInterface
++   * @var SectionStorageInterface
+    */
+   protected $sectionStorage;
+ 
+@@ -64,12 +65,12 @@ class AlterSectionController implements ContainerInjectionInterface {
+   /**
+    * Alter a layout plugin's layout
+    *
+-   * @param \Drupal\layout_builder\SectionStorageInterface $section_storage
++   * @param SectionStorageInterface $section_storage
+    *   The section storage.
+    * @param int $delta
+    *   The delta of the section to splice.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   The response.
+    */
+   public function build(SectionStorageInterface $section_storage, int $delta, $plugin_id) {
+@@ -111,7 +112,7 @@ class AlterSectionController implements ContainerInjectionInterface {
+   /**
+    * Reorder the components from switching between layouts.
+    *
+-   * @param \Drupal\layout_builder\Section $section
++   * @param Section $section
+    */
+   private function reorderComponents($section) {
+     $newLayoutRegions = array_keys($section->getLayout()->getPluginDefinition()->getRegions());
+diff --git a/src/Form/LayoutBuilderExtrasSettingsForm.php b/src/Form/LayoutBuilderExtrasSettingsForm.php
+index c254883..4b7a972 100644
+--- a/src/Form/LayoutBuilderExtrasSettingsForm.php
++++ b/src/Form/LayoutBuilderExtrasSettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutbuilder_extras\Form;
+ 
++use Drupal\user\Entity\Role;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -105,10 +106,10 @@ class LayoutBuilderExtrasSettingsForm extends ConfigFormBase {
+       '#description' => $this->t('You can also configure for which roles the contextual links should still be shown.'),
+       '#default_value' => $config->get('contextual_links_only_lb') ?? FALSE,
+     ];
+-    $roles = \Drupal\user\Entity\Role::loadMultiple();
++    $roles = Role::loadMultiple();
+     $roleOptions = [];
+     foreach ($roles as $roleID => $roleObject) {
+-      /** @var \Drupal\user\Entity\Role $roleObject */
++      /** @var Role $roleObject */
+       $roleOptions[$roleID] = $roleObject->label();
+     }
+     $form['contextual_links']['contextual_links_roles'] = [
+diff --git a/src/LayoutBuilderElementOverride.php b/src/LayoutBuilderElementOverride.php
+index e8043f3..22f3c83 100644
+--- a/src/LayoutBuilderElementOverride.php
++++ b/src/LayoutBuilderElementOverride.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\layoutbuilder_extras;
+ 
++use Drupal\Core\Url;
+ use Drupal\Core\Security\TrustedCallbackInterface;
+ use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\layoutbuilder_extras\Form\LayoutBuilderExtrasSettingsForm;
+@@ -52,7 +53,7 @@ class LayoutBuilderElementOverride implements TrustedCallbackInterface {
+ 
+       // Add section.
+       if (isset($lbElement['link']) && !$isSectionLibraryEnabled) {
+-        /** @var \Drupal\Core\Url $url */
++        /** @var Url $url */
+         $url = $lbElement['link']['#url'];
+         if ($url->getRouteName() !== 'layout_builder.choose_section') {
+           continue;
+diff --git a/src/LayoutBuilderExtras.php b/src/LayoutBuilderExtras.php
+index d6e4b34..188e58a 100644
+--- a/src/LayoutBuilderExtras.php
++++ b/src/LayoutBuilderExtras.php
+@@ -22,10 +22,10 @@ class LayoutBuilderExtras {
+    *
+    * @param array $form
+    *   Form object.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   An ajax response to maybe change the content.
+    */
+   public function ajaxSave(array &$form, FormStateInterface $form_state) {
+@@ -51,12 +51,12 @@ class LayoutBuilderExtras {
+   /**
+    * Validate and submitted configure section form.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    * @param array $form
+    *   The form.
+    *
+-   * @return \Drupal\layout_builder\Form\ConfigureSectionForm
++   * @return ConfigureSectionForm
+    *   A configure section form that is validated an submitted.
+    */
+   private function validateAndSubmitConfigureSectionForm(FormStateInterface $form_state, array &$form): ConfigureSectionForm {
+diff --git a/src/Menu/ContextualLinkManager.php b/src/Menu/ContextualLinkManager.php
+index 4845062..66c93f5 100755
+--- a/src/Menu/ContextualLinkManager.php
++++ b/src/Menu/ContextualLinkManager.php
+@@ -35,19 +35,19 @@ class ContextualLinkManager extends \Drupal\Core\Menu\ContextualLinkManager {
+    *
+    * @param \Drupal\Core\Menu\ContextualLinkManager $original_service
+    *   The original contextual links manager service we are decorating.
+-   * @param \Drupal\Core\Controller\ControllerResolverInterface $controller_resolver
++   * @param ControllerResolverInterface $controller_resolver
+    *   The controller resolver.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   The cache backend.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\Core\Access\AccessManagerInterface $access_manager
++   * @param AccessManagerInterface $access_manager
+    *   The access manager.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The current user.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+    * @param ConfigFactoryInterface $configFactory
+    *   The config factory.

@@ -1,0 +1,978 @@
+diff --git a/src/ApostrophTranslatorUI.php b/src/ApostrophTranslatorUI.php
+index a603ee4..1738033 100644
+--- a/src/ApostrophTranslatorUI.php
++++ b/src/ApostrophTranslatorUI.php
+@@ -8,6 +8,10 @@
+ 
+ namespace Drupal\tmgmt_apostrophgroup_provider;
+ 
++use Drupal\tmgmt\TranslatorInterface;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Configuration;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Api\ServiceStatusApi;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Api\TranslationApi;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\tmgmt_apostrophgroup_provider\Restclient\Api;
+@@ -30,7 +34,7 @@ class ApostrophTranslatorUI extends TranslatorPluginUiBase {
+    */
+   public function buildConfigurationForm(array $form, FormStateInterface $form_state) {
+     $form = parent::buildConfigurationForm($form, $form_state);
+-    /** @var \Drupal\tmgmt\TranslatorInterface $translator */
++    /** @var TranslatorInterface $translator */
+     $translator = $form_state->getFormObject()->getEntity();
+     $apostrophsettings = $translator->getSetting('apostroph-settings');
+     $cronsettings = $translator->getSetting('cron-settings');
+@@ -169,11 +173,11 @@ class ApostrophTranslatorUI extends TranslatorPluginUiBase {
+         $apostrophsettings = $settings['apostroph-settings'];
+         $username = $apostrophsettings['username'];
+         $password = $apostrophsettings['password'];
+-        $config = new Restclient\Configuration();
++        $config = new Configuration();
+         $config->setHost($apostrophsettings['url']);
+         $config->setUsername($username);
+         $config->setPassword($password);
+-        $status_api = new Api\ServiceStatusApi(NULL,$config);
++        $status_api = new ServiceStatusApi(NULL,$config);
+         $response = $status_api->status();
+         //$form_state->setValue(array('settings','apostroph-settings','password'),'');
+         //$translator->setSetting('apostroph-settings',$apostrophsettings);
+@@ -242,11 +246,11 @@ class ApostrophTranslatorUI extends TranslatorPluginUiBase {
+     //TODO: get new status from remote job using api.
+     $translator = $job->getTranslator();
+     $apostrophsettings = $translator->getSetting('apostroph-settings');
+-    $config = new Restclient\Configuration();
++    $config = new Configuration();
+     $config->setHost($apostrophsettings['url']);
+     $config->setUsername($apostrophsettings['username']);
+     $config->setPassword($apostrophsettings['password']);
+-    $translation_api = new Api\TranslationApi(NULL, $config);
++    $translation_api = new TranslationApi(NULL, $config);
+     $all_translations = $translation_api->translations();
+     $status = "n/a";
+     $remote_job_id = $job->getReference();
+diff --git a/src/Plugin/tmgmt/Translator/ApostrophTranslator.php b/src/Plugin/tmgmt/Translator/ApostrophTranslator.php
+index 0f6cba2..e4a5822 100644
+--- a/src/Plugin/tmgmt/Translator/ApostrophTranslator.php
++++ b/src/Plugin/tmgmt/Translator/ApostrophTranslator.php
+@@ -9,6 +9,10 @@
+ 
+ namespace Drupal\tmgmt_apostrophgroup_provider\Plugin\tmgmt\Translator;
+ 
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Configuration;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Api\TranslationApi;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationData;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\tmgmt\Entity\Job;
+ use Drupal\tmgmt\Entity\JobItem;
+@@ -56,7 +60,7 @@ class ApostrophTranslator extends TranslatorPluginBase
+    * During the translation process, Job::getItems() will only return job items
+    * that are not already fully translated.
+    *
+-   * @param \Drupal\tmgmt\JobInterface $job
++   * @param JobInterface $job
+    *   The job that should be submitted.
+    *
+    * @see hook_tmgmt_job_before_request_translation()
+@@ -64,7 +68,7 @@ class ApostrophTranslator extends TranslatorPluginBase
+    *
+    * @ingroup tmgmt_remote_languages_mapping
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function requestTranslation(JobInterface $job)
+   {
+@@ -92,7 +96,7 @@ class ApostrophTranslator extends TranslatorPluginBase
+           $labelname = $joblabel;
+           $name = $labelname . "_" . $job->id() . "_all_" . $job->getRemoteSourceLanguage() . '_' . $job->getRemoteTargetLanguage() . '.xlf';
+           $jobpath = $allfilespath . "/" . $name;
+-          $file = file_save_data($exporter->export($job), $jobpath, FileSystemInterface::EXISTS_REPLACE);
++          $file = \Drupal::service('file.repository')->writeData($exporter->export($job), $jobpath, FileSystemInterface::EXISTS_REPLACE);
+           $filearrayexportedfiles['all'] = $file;
+         } else {
+           // Export each item of the job in separate file.
+@@ -100,7 +104,7 @@ class ApostrophTranslator extends TranslatorPluginBase
+             $labelname = GeneralHelper::getStringNoSpeChars($item->label());
+             $name = $labelname . "_" . $job->id() . "_" . $item->id() . "_" . $job->getRemoteSourceLanguage() . '_' . $job->getRemoteTargetLanguage() . '.xlf';
+             $itempath = $allfilespath . "/" . $name;
+-            $file = file_save_data($exporter->exportItem($item), $itempath, FileSystemInterface::EXISTS_REPLACE);
++            $file = \Drupal::service('file.repository')->writeData($exporter->exportItem($item), $itempath, FileSystemInterface::EXISTS_REPLACE);
+             $filearrayexportedfiles[$item->id()] = $file;
+           }
+         }
+@@ -118,19 +122,19 @@ class ApostrophTranslator extends TranslatorPluginBase
+             \Drupal::service('file.usage')->add($zipfileobj, 'tmgmt_apostrophgroup_provider', 'tmgmt_job', $job->id());
+           }
+           // TODO: send zip to Apostroph.
+-          $config = new Restclient\Configuration();
++          $config = new Configuration();
+           $config->setHost($apostrophsettings['url']);
+           $config->setUsername($apostrophsettings['username']);
+           $config->setPassword($apostrophsettings['password']);
+-          $translation_api = new Api\TranslationApi(NULL, $config);
++          $translation_api = new TranslationApi(NULL, $config);
+           $translation_data = GeneralHelper::createTranslationRequest($apostrophsettings, $job, $zipPath);
+-          $translation_request = new Model\TranslationData($translation_data);
++          $translation_request = new TranslationData($translation_data);
+           $response = $translation_api->createnewTranslation($translation_request);
+           $remote_job_id = $response->getTranslationId();
+           $job->set('reference', $remote_job_id);
+ 
+           $job->submitted("Job sent to provider!");
+-          $messageTopass .= '<a href="' . file_create_url($zipPath) . '">' . Xss::filter(GeneralHelper::getJobLabelNoSpeChars($job)) . '</a>';
++          $messageTopass .= '<a href="' . \Drupal::service('file_url_generator')->generateAbsoluteString($zipPath) . '">' . Xss::filter(GeneralHelper::getJobLabelNoSpeChars($job)) . '</a>';
+           \Drupal::messenger()->addMessage(Markup::create($messageTopass));
+           // As exported files are transfered as zip, delete org. exports as already in the zip.
+           // Add zip to transfer array.
+@@ -180,11 +184,11 @@ class ApostrophTranslator extends TranslatorPluginBase
+     try {
+       $translator = $job->getTranslator();
+       $apostrophsettings = $translator->getSetting('apostroph-settings');
+-      $config = new Restclient\Configuration();
++      $config = new Configuration();
+       $config->setHost($apostrophsettings['url']);
+       $config->setUsername($apostrophsettings['username']);
+       $config->setPassword($apostrophsettings['password']);
+-      $translation_api = new Api\TranslationApi(NULL, $config);
++      $translation_api = new TranslationApi(NULL, $config);
+       $response = $translation_api->cancelTranslationWithHttpInfo($job->getReference());
+       $job->aborted();
+       $job->addMessage(t("Apostroph Job cancelled:") . $job->getReference());
+diff --git a/src/Restclient/Api/ServiceStatusApi.php b/src/Restclient/Api/ServiceStatusApi.php
+index bd10e30..2eac9a2 100644
+--- a/src/Restclient/Api/ServiceStatusApi.php
++++ b/src/Restclient/Api/ServiceStatusApi.php
+@@ -27,6 +27,9 @@
+ 
+ namespace Drupal\tmgmt_apostrophgroup_provider\Restclient\Api;
+ 
++use GuzzleHttp\Promise\PromiseInterface;
++use function GuzzleHttp\json_encode;
++use function GuzzleHttp\Psr7\build_query;
+ use GuzzleHttp\Client;
+ use GuzzleHttp\ClientInterface;
+ use GuzzleHttp\Exception\RequestException;
+@@ -92,7 +95,7 @@ class ServiceStatusApi
+      * Status
+      *
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+      * @return array of null, HTTP status code, HTTP response headers (array of strings)
+      */
+@@ -107,7 +110,7 @@ class ServiceStatusApi
+      * Status
+      *
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+      * @return array of null, HTTP status code, HTTP response headers (array of strings)
+      */
+@@ -160,7 +163,7 @@ class ServiceStatusApi
+      *
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function statusAsync()
+     {
+@@ -179,7 +182,7 @@ class ServiceStatusApi
+      *
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function statusAsyncWithHttpInfo()
+     {
+@@ -214,7 +217,7 @@ class ServiceStatusApi
+      *
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Psr7\Request
++     * @return Request
+      */
+     protected function statusRequest()
+     {
+@@ -248,7 +251,7 @@ class ServiceStatusApi
+             $httpBody = $_tempBody;
+             // \stdClass has no __toString(), so we should encode it manually
+             if ($httpBody instanceof \stdClass && $headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($httpBody);
++                $httpBody = json_encode($httpBody);
+             }
+         } elseif (count($formParams) > 0) {
+             if ($multipart) {
+@@ -263,11 +266,11 @@ class ServiceStatusApi
+                 $httpBody = new MultipartStream($multipartContents);
+ 
+             } elseif ($headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($formParams);
++                $httpBody = json_encode($formParams);
+ 
+             } else {
+                 // for HTTP post (form)
+-                $httpBody = \GuzzleHttp\Psr7\build_query($formParams);
++                $httpBody = build_query($formParams);
+             }
+         }
+ 
+@@ -287,7 +290,7 @@ class ServiceStatusApi
+             $headers
+         );
+ 
+-        $query = \GuzzleHttp\Psr7\build_query($queryParams);
++        $query = build_query($queryParams);
+         return new Request(
+             'GET',
+             $this->config->getHost() . $resourcePath . ($query ? "?{$query}" : ''),
+diff --git a/src/Restclient/Api/TranslationApi.php b/src/Restclient/Api/TranslationApi.php
+index 9135cc1..ec995cf 100644
+--- a/src/Restclient/Api/TranslationApi.php
++++ b/src/Restclient/Api/TranslationApi.php
+@@ -27,6 +27,12 @@
+ 
+ namespace Drupal\tmgmt_apostrophgroup_provider\Restclient\Api;
+ 
++use GuzzleHttp\Promise\PromiseInterface;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationData;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationStatus;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\RejectInfoData;
++use function GuzzleHttp\json_encode;
++use function GuzzleHttp\Psr7\build_query;
+ use GuzzleHttp\Client;
+ use GuzzleHttp\ClientInterface;
+ use GuzzleHttp\Exception\RequestException;
+@@ -93,7 +99,7 @@ class TranslationApi
+      *
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+      * @return void
+      */
+@@ -109,7 +115,7 @@ class TranslationApi
+      *
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+      * @return array of null, HTTP status code, HTTP response headers (array of strings)
+      */
+@@ -163,7 +169,7 @@ class TranslationApi
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function cancelTranslationAsync($translation_id)
+     {
+@@ -183,7 +189,7 @@ class TranslationApi
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function cancelTranslationAsyncWithHttpInfo($translation_id)
+     {
+@@ -219,7 +225,7 @@ class TranslationApi
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Psr7\Request
++     * @return Request
+      */
+     protected function cancelTranslationRequest($translation_id)
+     {
+@@ -267,7 +273,7 @@ class TranslationApi
+             $httpBody = $_tempBody;
+             // \stdClass has no __toString(), so we should encode it manually
+             if ($httpBody instanceof \stdClass && $headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($httpBody);
++                $httpBody = json_encode($httpBody);
+             }
+         } elseif (count($formParams) > 0) {
+             if ($multipart) {
+@@ -282,11 +288,11 @@ class TranslationApi
+                 $httpBody = new MultipartStream($multipartContents);
+ 
+             } elseif ($headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($formParams);
++                $httpBody = json_encode($formParams);
+ 
+             } else {
+                 // for HTTP post (form)
+-                $httpBody = \GuzzleHttp\Psr7\build_query($formParams);
++                $httpBody = build_query($formParams);
+             }
+         }
+ 
+@@ -306,7 +312,7 @@ class TranslationApi
+             $headers
+         );
+ 
+-        $query = \GuzzleHttp\Psr7\build_query($queryParams);
++        $query = build_query($queryParams);
+         return new Request(
+             'POST',
+             $this->config->getHost() . $resourcePath . ($query ? "?{$query}" : ''),
+@@ -320,11 +326,11 @@ class TranslationApi
+      *
+      * Create new Translation
+      *
+-     * @param  \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationData $body Daten zur Übersetzung (required)
++     * @param TranslationData $body Daten zur Übersetzung (required)
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+-     * @return \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationStatus
++     * @return TranslationStatus
+      */
+     public function createnewTranslation($body)
+     {
+@@ -337,9 +343,9 @@ class TranslationApi
+      *
+      * Create new Translation
+      *
+-     * @param  \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationData $body Daten zur Übersetzung (required)
++     * @param TranslationData $body Daten zur Übersetzung (required)
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+      * @return array of \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationStatus, HTTP status code, HTTP response headers (array of strings)
+      */
+@@ -412,10 +418,10 @@ class TranslationApi
+      *
+      * Create new Translation
+      *
+-     * @param  \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationData $body Daten zur Übersetzung (required)
++     * @param TranslationData $body Daten zur Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function createnewTranslationAsync($body)
+     {
+@@ -432,10 +438,10 @@ class TranslationApi
+      *
+      * Create new Translation
+      *
+-     * @param  \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationData $body Daten zur Übersetzung (required)
++     * @param TranslationData $body Daten zur Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function createnewTranslationAsyncWithHttpInfo($body)
+     {
+@@ -482,10 +488,10 @@ class TranslationApi
+     /**
+      * Create request for operation 'createnewTranslation'
+      *
+-     * @param  \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationData $body Daten zur Übersetzung (required)
++     * @param TranslationData $body Daten zur Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Psr7\Request
++     * @return Request
+      */
+     protected function createnewTranslationRequest($body)
+     {
+@@ -528,7 +534,7 @@ class TranslationApi
+             $httpBody = $_tempBody;
+             // \stdClass has no __toString(), so we should encode it manually
+             if ($httpBody instanceof \stdClass && $headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($httpBody);
++                $httpBody = json_encode($httpBody);
+             }
+         } elseif (count($formParams) > 0) {
+             if ($multipart) {
+@@ -543,11 +549,11 @@ class TranslationApi
+                 $httpBody = new MultipartStream($multipartContents);
+ 
+             } elseif ($headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($formParams);
++                $httpBody = json_encode($formParams);
+ 
+             } else {
+                 // for HTTP post (form)
+-                $httpBody = \GuzzleHttp\Psr7\build_query($formParams);
++                $httpBody = build_query($formParams);
+             }
+         }
+ 
+@@ -567,7 +573,7 @@ class TranslationApi
+             $headers
+         );
+ 
+-        $query = \GuzzleHttp\Psr7\build_query($queryParams);
++        $query = build_query($queryParams);
+         return new Request(
+             'POST',
+             $this->config->getHost() . $resourcePath . ($query ? "?{$query}" : ''),
+@@ -581,10 +587,10 @@ class TranslationApi
+      *
+      * Reject Translation
+      *
+-     * @param  \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\RejectInfoData $body body (required)
++     * @param RejectInfoData $body body (required)
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+      * @return void
+      */
+@@ -598,10 +604,10 @@ class TranslationApi
+      *
+      * Reject Translation
+      *
+-     * @param  \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\RejectInfoData $body (required)
++     * @param RejectInfoData $body (required)
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+      * @return array of null, HTTP status code, HTTP response headers (array of strings)
+      */
+@@ -652,11 +658,11 @@ class TranslationApi
+      *
+      * Reject Translation
+      *
+-     * @param  \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\RejectInfoData $body (required)
++     * @param RejectInfoData $body (required)
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function rejectTranslationAsync($body, $translation_id)
+     {
+@@ -673,11 +679,11 @@ class TranslationApi
+      *
+      * Reject Translation
+      *
+-     * @param  \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\RejectInfoData $body (required)
++     * @param RejectInfoData $body (required)
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function rejectTranslationAsyncWithHttpInfo($body, $translation_id)
+     {
+@@ -710,11 +716,11 @@ class TranslationApi
+     /**
+      * Create request for operation 'rejectTranslation'
+      *
+-     * @param  \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\RejectInfoData $body (required)
++     * @param RejectInfoData $body (required)
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Psr7\Request
++     * @return Request
+      */
+     protected function rejectTranslationRequest($body, $translation_id)
+     {
+@@ -771,7 +777,7 @@ class TranslationApi
+             $httpBody = $_tempBody;
+             // \stdClass has no __toString(), so we should encode it manually
+             if ($httpBody instanceof \stdClass && $headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($httpBody);
++                $httpBody = json_encode($httpBody);
+             }
+         } elseif (count($formParams) > 0) {
+             if ($multipart) {
+@@ -786,11 +792,11 @@ class TranslationApi
+                 $httpBody = new MultipartStream($multipartContents);
+ 
+             } elseif ($headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($formParams);
++                $httpBody = json_encode($formParams);
+ 
+             } else {
+                 // for HTTP post (form)
+-                $httpBody = \GuzzleHttp\Psr7\build_query($formParams);
++                $httpBody = build_query($formParams);
+             }
+         }
+ 
+@@ -810,7 +816,7 @@ class TranslationApi
+             $headers
+         );
+ 
+-        $query = \GuzzleHttp\Psr7\build_query($queryParams);
++        $query = build_query($queryParams);
+         return new Request(
+             'POST',
+             $this->config->getHost() . $resourcePath . ($query ? "?{$query}" : ''),
+@@ -826,7 +832,7 @@ class TranslationApi
+      *
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+      * @return string
+      */
+@@ -843,7 +849,7 @@ class TranslationApi
+      *
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+      * @return array of string, HTTP status code, HTTP response headers (array of strings)
+      */
+@@ -919,7 +925,7 @@ class TranslationApi
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function translationbyIDAsync($translation_id)
+     {
+@@ -939,7 +945,7 @@ class TranslationApi
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function translationbyIDAsyncWithHttpInfo($translation_id)
+     {
+@@ -989,7 +995,7 @@ class TranslationApi
+      * @param  string $translation_id ID der Übersetzung (required)
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Psr7\Request
++     * @return Request
+      */
+     protected function translationbyIDRequest($translation_id)
+     {
+@@ -1037,7 +1043,7 @@ class TranslationApi
+             $httpBody = $_tempBody;
+             // \stdClass has no __toString(), so we should encode it manually
+             if ($httpBody instanceof \stdClass && $headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($httpBody);
++                $httpBody = json_encode($httpBody);
+             }
+         } elseif (count($formParams) > 0) {
+             if ($multipart) {
+@@ -1052,11 +1058,11 @@ class TranslationApi
+                 $httpBody = new MultipartStream($multipartContents);
+ 
+             } elseif ($headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($formParams);
++                $httpBody = json_encode($formParams);
+ 
+             } else {
+                 // for HTTP post (form)
+-                $httpBody = \GuzzleHttp\Psr7\build_query($formParams);
++                $httpBody = build_query($formParams);
+             }
+         }
+ 
+@@ -1076,7 +1082,7 @@ class TranslationApi
+             $headers
+         );
+ 
+-        $query = \GuzzleHttp\Psr7\build_query($queryParams);
++        $query = build_query($queryParams);
+         return new Request(
+             'GET',
+             $this->config->getHost() . $resourcePath . ($query ? "?{$query}" : ''),
+@@ -1091,9 +1097,9 @@ class TranslationApi
+      * Translations
+      *
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+-     * @return \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationStatus[]
++     * @return TranslationStatus[]
+      */
+     public function translations()
+     {
+@@ -1107,7 +1113,7 @@ class TranslationApi
+      * Translations
+      *
+      *
+-     * @throws \Drupal\tmgmt_apostrophgroup_provider\Restclient\ApiException on non-2xx response
++     * @throws ApiException on non-2xx response
+      * @throws \InvalidArgumentException
+      * @return array of \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\TranslationStatus[], HTTP status code, HTTP response headers (array of strings)
+      */
+@@ -1182,7 +1188,7 @@ class TranslationApi
+      *
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function translationsAsync()
+     {
+@@ -1201,7 +1207,7 @@ class TranslationApi
+      *
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Promise\PromiseInterface
++     * @return PromiseInterface
+      */
+     public function translationsAsyncWithHttpInfo()
+     {
+@@ -1250,7 +1256,7 @@ class TranslationApi
+      *
+      *
+      * @throws \InvalidArgumentException
+-     * @return \GuzzleHttp\Psr7\Request
++     * @return Request
+      */
+     protected function translationsRequest()
+     {
+@@ -1284,7 +1290,7 @@ class TranslationApi
+             $httpBody = $_tempBody;
+             // \stdClass has no __toString(), so we should encode it manually
+             if ($httpBody instanceof \stdClass && $headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($httpBody);
++                $httpBody = json_encode($httpBody);
+             }
+         } elseif (count($formParams) > 0) {
+             if ($multipart) {
+@@ -1299,11 +1305,11 @@ class TranslationApi
+                 $httpBody = new MultipartStream($multipartContents);
+ 
+             } elseif ($headers['Content-Type'] === 'application/json') {
+-                $httpBody = \GuzzleHttp\json_encode($formParams);
++                $httpBody = json_encode($formParams);
+ 
+             } else {
+                 // for HTTP post (form)
+-                $httpBody = \GuzzleHttp\Psr7\build_query($formParams);
++                $httpBody = build_query($formParams);
+             }
+         }
+ 
+@@ -1323,7 +1329,7 @@ class TranslationApi
+             $headers
+         );
+ 
+-        $query = \GuzzleHttp\Psr7\build_query($queryParams);
++        $query = build_query($queryParams);
+         return new Request(
+             'GET',
+             $this->config->getHost() . $resourcePath . ($query ? "?{$query}" : ''),
+diff --git a/src/Restclient/Model/TranslationStatus.php b/src/Restclient/Model/TranslationStatus.php
+index 3c638b0..548bf20 100644
+--- a/src/Restclient/Model/TranslationStatus.php
++++ b/src/Restclient/Model/TranslationStatus.php
+@@ -235,7 +235,7 @@ class TranslationStatus implements ModelInterface, ArrayAccess
+     /**
+      * Gets state
+      *
+-     * @return \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\OrderState
++     * @return OrderState
+      */
+     public function getState()
+     {
+@@ -245,7 +245,7 @@ class TranslationStatus implements ModelInterface, ArrayAccess
+     /**
+      * Sets state
+      *
+-     * @param \Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\OrderState $state state
++     * @param OrderState $state state
+      *
+      * @return $this
+      */
+diff --git a/src/Restclient/ObjectSerializer.php b/src/Restclient/ObjectSerializer.php
+index a318fc5..658b475 100644
+--- a/src/Restclient/ObjectSerializer.php
++++ b/src/Restclient/ObjectSerializer.php
+@@ -28,6 +28,7 @@
+ 
+ namespace Drupal\tmgmt_apostrophgroup_provider\Restclient;
+ 
++use Psr\Http\Message\StreamInterface;
+ /**
+  * ObjectSerializer Class Doc Comment
+  *
+@@ -265,8 +266,7 @@ class ObjectSerializer
+             settype($data, $class);
+             return $data;
+         } elseif ($class === '\SplFileObject') {
+-            /** @var \Psr\Http\Message\StreamInterface $data */
+-
++            /** @var StreamInterface $data */
+             // determine file name
+             if (array_key_exists('Content-Disposition', $httpHeaders) &&
+                 preg_match('/inline; filename=[\'"]?([^\'"\s]+)[\'"]?$/i', $httpHeaders['Content-Disposition'], $match)) {
+diff --git a/src/Util/AXliff.php b/src/Util/AXliff.php
+index f917670..2959760 100644
+--- a/src/Util/AXliff.php
++++ b/src/Util/AXliff.php
+@@ -23,7 +23,7 @@ class AXliff extends Xliff {
+   /**
+    * Exports each item into its own file.
+    *
+-   * @param \Drupal\tmgmt\JobItemInterface $jobItem
++   * @param JobItemInterface $jobItem
+    *   JobItem that should be exported.
+    * @param array $conditions
+    *   Conditions.
+diff --git a/src/Util/GeneralHelper.php b/src/Util/GeneralHelper.php
+index cd0b275..1ebb188 100644
+--- a/src/Util/GeneralHelper.php
++++ b/src/Util/GeneralHelper.php
+@@ -8,6 +8,10 @@
+ 
+ namespace Drupal\tmgmt_apostrophgroup_provider\Util;
+ 
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\file\FileInterface;
+ use Drupal\tmgmt\Entity\JobItem;
+ use Drupal\tmgmt\Entity\Job;
+@@ -23,7 +27,7 @@ class GeneralHelper {
+   /**
+    * Get label of the job.
+    *
+-   * @param \Drupal\tmgmt\JobInterface $job
++   * @param JobInterface $job
+    *   Job.
+    *
+    * @return string
+@@ -36,7 +40,7 @@ class GeneralHelper {
+   /**
+    * Remove spec. characters from label.
+    *
+-   * @param \Drupal\tmgmt\JobInterface $job
++   * @param JobInterface $job
+    *   Job.
+    *
+    * @return string
+@@ -70,10 +74,10 @@ class GeneralHelper {
+    * @param string $uri
+    *   Uri.
+    *
+-   * @return \Drupal\file\Entity\File
++   * @return File
+    *   file class object.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public static function createFileObject($uri) {
+     $filsystem = \Drupal::service('file_system');
+@@ -93,16 +97,16 @@ class GeneralHelper {
+   /**
+    * Get all jobs for connector config.
+    *
+-   * @param \Drupal\tmgmt\TranslatorInterface $translator
++   * @param TranslatorInterface $translator
+    *   TranslatorInterface.
+    * @param bool $onlyactive
+    *   Only active jobs.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface[]
++   * @return EntityInterface[]
+    *   storage instance.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public static function getAllJobsByTranslator(TranslatorInterface $translator, $onlyactive = FALSE) {
+     $trname = $translator->id();
+@@ -120,9 +124,9 @@ class GeneralHelper {
+   /**
+    * Reset Job and Items to state Active.
+    *
+-   * @param \Drupal\tmgmt\JobInterface $job
++   * @param JobInterface $job
+    *   TranslatorInterface.
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   TranslatorInterface.
+    */
+   public static function resetJobandItemsToActive(JobInterface &$job, FileInterface $file) {
+@@ -146,7 +150,7 @@ class GeneralHelper {
+    *
+    * @param array $translator_settings
+    *   Translator's settings.
+-   * @param \Drupal\tmgmt\JobInterface $job
++   * @param JobInterface $job
+    *   Job to be sent.
+    * @param \Drupal\tmgmt_apostrophgroup_provider\Util\string $path_to_file
+    *   Path to zip file that contains source file.
+diff --git a/tmgmt_apostrophgroup_provider.module b/tmgmt_apostrophgroup_provider.module
+index 2aa2fc5..df86f68 100644
+--- a/tmgmt_apostrophgroup_provider.module
++++ b/tmgmt_apostrophgroup_provider.module
+@@ -1,5 +1,12 @@
+ <?php
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Configuration;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Api\TranslationApi;
++use Drupal\tmgmt_apostrophgroup_provider\Restclient\Model\OrderState;
++use Drupal\file\FileUsage\FileUsageInterface;
++use Drupal\Core\Entity\EntityStorageException;
+ /**
+  * @file
+  * Module file of the Apostroph Translator.
+@@ -60,8 +67,8 @@ function tmgmt_apostrophgroup_provider_import_form_submit(array $form, FormState
+ /**
+  * Download jobs using cron.
+  *
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++ * @throws InvalidPluginDefinitionException
++ * @throws PluginNotFoundException
+  */
+ function tmgmt_apostrophgroup_provider_cron()
+ {
+@@ -90,7 +97,7 @@ function tmgmt_apostrophgroup_provider_cron()
+ /**
+  * Downlaod data by translator.
+  *
+- * @param \Drupal\tmgmt\TranslatorInterface $translator
++ * @param TranslatorInterface $translator
+  *   Tranlator.
+  */
+ function tmgmt_apostrophgroup_provider_downlaod_data_by_translator(TranslatorInterface $translator, $only_finished_remote_jobs = TRUE)
+@@ -98,18 +105,18 @@ function tmgmt_apostrophgroup_provider_downlaod_data_by_translator(TranslatorInt
+   try {
+     $all_local_jobs = GeneralHelper::getAllJobsByTranslator($translator, TRUE);
+     $apostrophsettings = $translator->getSetting('apostroph-settings');
+-    $config = new Restclient\Configuration();
++    $config = new Configuration();
+     $config->setHost($apostrophsettings['url']);
+     $config->setUsername($apostrophsettings['username']);
+     $config->setPassword($apostrophsettings['password']);
+-    $translation_api = new Api\TranslationApi(NULL, $config);
++    $translation_api = new TranslationApi(NULL, $config);
+     $all_remote_status = $translation_api->translations();
+     foreach ($all_local_jobs as $job) {
+       $job_found_remote = FALSE; //array_search($job->getReference(), $all_remote_status);
+       foreach ($all_remote_status as $remote_state) {
+         if ($job->getReference() == $remote_state->getTranslationId()) {
+           $job_found_remote = TRUE;
+-          if ($only_finished_remote_jobs && $remote_state->getState() != Model\OrderState::FINISHED) {
++          if ($only_finished_remote_jobs && $remote_state->getState() != OrderState::FINISHED) {
+             $job_found_remote = FALSE;
+           }
+           break;
+@@ -144,11 +151,11 @@ function tmgmt_apostrophgroup_provider_tmgmt_job_delete(JobInterface $job)
+   try {
+     $translator = $job->getTranslator();
+     $apostrophsettings = $translator->getSetting('apostroph-settings');
+-    $config = new Restclient\Configuration();
++    $config = new Configuration();
+     $config->setHost($apostrophsettings['url']);
+     $config->setUsername($apostrophsettings['username']);
+     $config->setPassword($apostrophsettings['password']);
+-    $translation_api = new Api\TranslationApi(NULL, $config);
++    $translation_api = new TranslationApi(NULL, $config);
+     $translation_api->cancelTranslationWithHttpInfo($job->getReference());
+     $job->addMessage(t("Apostroph Job cancelled:") . $job->getReference());
+     \Drupal::messenger()->addError(t("Apostroph Job cancelled:") . $job->getReference());
+@@ -163,7 +170,7 @@ function tmgmt_apostrophgroup_provider_tmgmt_job_delete(JobInterface $job)
+     $fids = $result->fetchCol();
+     if (!empty($fids)) {
+       // Remove file usage record.
+-      /** @var \Drupal\file\FileUsage\FileUsageInterface $file_usage */
++      /** @var FileUsageInterface $file_usage */
+       $file_usage = \Drupal::service('file.usage');
+       foreach (File::loadMultiple($fids) as $file) {
+         $file_usage->delete($file, 'tmgmt_file', 'tmgmt_job', $job->id());
+@@ -191,7 +198,7 @@ function tmgmt_apostrophgroup_provider_tmgmt_job_delete(JobInterface $job)
+  *
+  * @param array $form
+  *   Form with input data.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   Form_state.
+  */
+ function tmgmt_apostrophgroup_provider_semi_import_form_submit(array $form, FormStateInterface $form_state)
+@@ -214,9 +221,9 @@ function tmgmt_apostrophgroup_provider_semi_import_form_submit(array $form, Form
+ /**
+  * Method to downlaod data.
+  *
+- * @param \Drupal\tmgmt\TranslatorInterface $translator
++ * @param TranslatorInterface $translator
+  *   Translator.
+- * @param \Drupal\tmgmt\JobInterface $job
++ * @param JobInterface $job
+  *   Job.
+  */
+ function tmgmt_apostrophgroup_provider_downlaod_data_by_job(TranslatorInterface $translator, JobInterface $job)
+@@ -228,11 +235,11 @@ function tmgmt_apostrophgroup_provider_downlaod_data_by_job(TranslatorInterface
+     // If code 204 no file available.
+     // if code 200 we get the file.
+     // get response using api.
+-    $config = new Restclient\Configuration();
++    $config = new Configuration();
+     $config->setHost($apostrophsettings['url']);
+     $config->setPassword($apostrophsettings['password']);
+     $config->setUsername($apostrophsettings['username']);
+-    $translation_api = new Api\TranslationApi(NULL, $config);
++    $translation_api = new TranslationApi(NULL, $config);
+     $translation_response = $translation_api->translationbyIDWithHttpInfo($prId);
+     // Check here respose.
+     if ($translation_response[1] == '204') {
+@@ -263,14 +270,14 @@ function tmgmt_apostrophgroup_provider_downlaod_data_by_job(TranslatorInterface
+ /**
+  * Import file into Drupal.
+  *
+- * @param \Drupal\tmgmt\JobInterface $job
++ * @param JobInterface $job
+  *   Job.
+  * @param string $filedatastring
+  *   File content.
+  * @param string $filename
+  *   Name of the file to be imported.
+  *
+- * @throws \Drupal\Core\Entity\EntityStorageException
++ * @throws EntityStorageException
+  */
+ function tmgmt_apostropgroup_provider_import(JobInterface $job, $filedatastring, $filename)
+ {
+@@ -278,7 +285,7 @@ function tmgmt_apostropgroup_provider_import(JobInterface $job, $filedatastring,
+   $path_gz = $job->getSetting('scheme') . '://tmgmt_apostrophgroup/ApostrophReceivedFiles/' . $filename;
+   $dirname = dirname($path_gz);
+   if (\Drupal::service('file_system')->prepareDirectory($dirname, FileSystemInterface::CREATE_DIRECTORY)) {
+-    $file_gz = file_save_data($filedatastring, $path_gz, FileSystemInterface::EXISTS_REPLACE);
++    $file_gz = \Drupal::service('file.repository')->writeData($filedatastring, $path_gz, FileSystemInterface::EXISTS_REPLACE);
+     // $mimetype = $file_gz->getMimeType();
+     $filearray = array();
+     /**
+@@ -381,7 +388,7 @@ function extact_gzip_file($gzip_file, $destination)
+  * @return array
+  *   Array with file object.
+  *
+- * @throws \Drupal\Core\Entity\EntityStorageException
++ * @throws EntityStorageException
+  */
+ function apcreate_file_object_from_stdclass(array $filearray)
+ {

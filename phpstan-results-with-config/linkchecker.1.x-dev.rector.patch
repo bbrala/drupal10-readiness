@@ -1,0 +1,1043 @@
+diff --git a/linkchecker.install b/linkchecker.install
+index 9a88dc0..ab9455e 100644
+--- a/linkchecker.install
++++ b/linkchecker.install
+@@ -55,7 +55,7 @@ function linkchecker_schema() {
+  * Added new functionality to broken links view.
+  */
+ function linkchecker_update_8001() {
+-  $config_path = drupal_get_path('module', 'linkchecker') . '/config/optional';
++  $config_path = \Drupal::service('extension.list.module')->getPath('linkchecker') . '/config/optional';
+   $config_source = new FileStorage($config_path);
+   \Drupal::service('config.installer')->installOptionalConfig($config_source);
+ }
+diff --git a/linkchecker.module b/linkchecker.module
+index 8801223..9013ee5 100644
+--- a/linkchecker.module
++++ b/linkchecker.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\linkchecker\Plugin\LinkExtractorManager;
++use Drupal\linkchecker\LinkExtractorService;
+ /**
+  * @file
+  * This module periodically check links in given node types, blocks etc.
+@@ -74,7 +76,7 @@ function linkchecker_watchdog_log($type, $message, $variables = [], $severity =
+  * Implements hook_form_BASE_FORM_ID_alter().
+  */
+ function linkchecker_form_field_config_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+-  /** @var \Drupal\field\FieldConfigInterface $fieldConfig */
++  /** @var FieldConfigInterface $fieldConfig */
+   $fieldConfig = $form_state->getFormObject()->getEntity();
+ 
+   $form['third_party_settings']['linkchecker'] = [
+@@ -82,7 +84,7 @@ function linkchecker_form_field_config_form_alter(&$form, FormStateInterface $fo
+     '#title' => t('Link checker settings'),
+   ];
+ 
+-  /** @var \Drupal\linkchecker\Plugin\LinkExtractorManager $linkExtractorManager */
++  /** @var LinkExtractorManager $linkExtractorManager */
+   $linkExtractorManager = \Drupal::service('plugin.manager.link_extractor');
+ 
+   $options = [];
+@@ -155,7 +157,7 @@ function linkchecker_entity_insert(EntityInterface $entity) {
+   }
+ 
+   if ($entity instanceof FieldableEntityInterface) {
+-    /** @var \Drupal\linkchecker\LinkExtractorService $extractor */
++    /** @var LinkExtractorService $extractor */
+     $extractor = \Drupal::service('linkchecker.extractor');
+     $links = $extractor->extractFromEntity($entity);
+ 
+@@ -177,7 +179,7 @@ function linkchecker_entity_update(EntityInterface $entity) {
+   }
+ 
+   if ($entity instanceof FieldableEntityInterface) {
+-    /** @var \Drupal\linkchecker\LinkExtractorService $extractor */
++    /** @var LinkExtractorService $extractor */
+     $extractor = \Drupal::service('linkchecker.extractor');
+     $links = $extractor->extractFromEntity($entity);
+ 
+diff --git a/src/Annotation/LinkExtractor.php b/src/Annotation/LinkExtractor.php
+index a3e9903..7019d79 100644
+--- a/src/Annotation/LinkExtractor.php
++++ b/src/Annotation/LinkExtractor.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\linkchecker\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -25,7 +26,7 @@ class LinkExtractor extends Plugin {
+   /**
+    * The label of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Annotation/LinkStatusHandler.php b/src/Annotation/LinkStatusHandler.php
+index c712a17..3949879 100644
+--- a/src/Annotation/LinkStatusHandler.php
++++ b/src/Annotation/LinkStatusHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\linkchecker\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -25,7 +26,7 @@ class LinkStatusHandler extends Plugin {
+   /**
+    * The label of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Commands/LinkCheckerCommands.php b/src/Commands/LinkCheckerCommands.php
+index b74ba9f..990d5ad 100644
+--- a/src/Commands/LinkCheckerCommands.php
++++ b/src/Commands/LinkCheckerCommands.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\linkchecker\Commands;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Drupal\linkchecker\LinkCheckerBatch;
+@@ -20,35 +21,35 @@ class LinkCheckerCommands extends DrushCommands {
+   /**
+    * The linkchecker settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $linkcheckerSetting;
+ 
+   /**
+    * The logger.channel.linkchecker service.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The extractor batch helper.
+    *
+-   * @var \Drupal\linkchecker\LinkExtractorBatch
++   * @var LinkExtractorBatch
+    */
+   protected $extractorBatch;
+ 
+   /**
+    * The checker batch helper.
+    *
+-   * @var \Drupal\linkchecker\LinkCheckerBatch
++   * @var LinkCheckerBatch
+    */
+   protected $checkerBatch;
+ 
+   /**
+    * The link clean up.
+    *
+-   * @var \Drupal\linkchecker\LinkCleanUp
++   * @var LinkCleanUp
+    */
+   protected $linkCleanUp;
+ 
+diff --git a/src/Entity/LinkCheckerLink.php b/src/Entity/LinkCheckerLink.php
+index 714ffad..32f8c00 100644
+--- a/src/Entity/LinkCheckerLink.php
++++ b/src/Entity/LinkCheckerLink.php
+@@ -251,7 +251,7 @@ class LinkCheckerLink extends ContentEntityBase implements LinkCheckerLinkInterf
+    * {@inheritdoc}
+    */
+   public static function baseFieldDefinitions(EntityTypeInterface $entity_type) {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition[] $fields */
++    /** @var BaseFieldDefinition[] $fields */
+     $fields = parent::baseFieldDefinitions($entity_type);
+     $fields += static::publishedBaseFieldDefinitions($entity_type);
+ 
+diff --git a/src/Form/LinkCheckerAdminSettingsForm.php b/src/Form/LinkCheckerAdminSettingsForm.php
+index 73cafcf..853aec6 100644
+--- a/src/Form/LinkCheckerAdminSettingsForm.php
++++ b/src/Form/LinkCheckerAdminSettingsForm.php
+@@ -26,49 +26,49 @@ class LinkCheckerAdminSettingsForm extends ConfigFormBase {
+   /**
+    * The service handle various date.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Manages text processing filters.
+    *
+-   * @var \Drupal\filter\FilterPluginManager
++   * @var FilterPluginManager
+    */
+   protected $filterPluginManager;
+ 
+   /**
+    * The service LinkChecker.
+    *
+-   * @var \Drupal\linkchecker\LinkCheckerService
++   * @var LinkCheckerService
+    */
+   protected $linkCheckerService;
+ 
+   /**
+    * The extractor batch.
+    *
+-   * @var \Drupal\linkchecker\LinkExtractorBatch
++   * @var LinkExtractorBatch
+    */
+   protected $extractorBatch;
+ 
+   /**
+    * The link clean up.
+    *
+-   * @var \Drupal\linkchecker\LinkCleanUp
++   * @var LinkCleanUp
+    */
+   protected $linkCleanUp;
+ 
+   /**
+    * The controller class for users..
+    *
+-   * @var \Drupal\user\UserStorageInterface
++   * @var UserStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The link checker response codes service.
+    *
+-   * @var \Drupal\linkchecker\LinkCheckerResponseCodesInterface
++   * @var LinkCheckerResponseCodesInterface
+    */
+   protected $linkCheckerResponseCodes;
+ 
+diff --git a/src/Form/LinkCheckerLinkForm.php b/src/Form/LinkCheckerLinkForm.php
+index 18c5e9d..7d5fed2 100644
+--- a/src/Form/LinkCheckerLinkForm.php
++++ b/src/Form/LinkCheckerLinkForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\linkchecker\Form;
+ 
++use Drupal\linkchecker\Entity\LinkCheckerLink;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Entity\ContentEntityForm;
+@@ -18,7 +19,7 @@ class LinkCheckerLinkForm extends ContentEntityForm {
+   /**
+    * The date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+@@ -48,7 +49,7 @@ class LinkCheckerLinkForm extends ContentEntityForm {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\linkchecker\Entity\LinkCheckerLink $link */
++    /** @var LinkCheckerLink $link */
+     $link = $this->entity;
+ 
+     if ($link->getLastCheckTime() !== NULL) {
+diff --git a/src/LinkCheckerBatch.php b/src/LinkCheckerBatch.php
+index c6ddf23..9a4d7c7 100644
+--- a/src/LinkCheckerBatch.php
++++ b/src/LinkCheckerBatch.php
+@@ -24,35 +24,35 @@ class LinkCheckerBatch {
+   /**
+    * The link checker.
+    *
+-   * @var \Drupal\linkchecker\LinkCheckerService
++   * @var LinkCheckerService
+    */
+   protected $checker;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The lock.
+    *
+-   * @var \Drupal\Core\Lock\LockBackendInterface
++   * @var LockBackendInterface
+    */
+   protected $lock;
+ 
+   /**
+    * The queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The queue worker manager.
+    *
+-   * @var \Drupal\Core\Queue\QueueWorkerManagerInterface
++   * @var QueueWorkerManagerInterface
+    */
+   protected $queueWorkerManager;
+ 
+diff --git a/src/LinkCheckerLinkAccessControlHandler.php b/src/LinkCheckerLinkAccessControlHandler.php
+index a499ba5..9d9574f 100644
+--- a/src/LinkCheckerLinkAccessControlHandler.php
++++ b/src/LinkCheckerLinkAccessControlHandler.php
+@@ -20,7 +20,7 @@ class LinkCheckerLinkAccessControlHandler extends EntityAccessControlHandler {
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\linkchecker\LinkCheckerLinkInterface $entity */
++    /** @var LinkCheckerLinkInterface $entity */
+     if ($account->hasPermission('administer linkchecker')
+       || $account->hasPermission('edit linkchecker link settings')) {
+ 
+diff --git a/src/LinkCheckerLinkInterface.php b/src/LinkCheckerLinkInterface.php
+index 46656cb..b7c71cc 100644
+--- a/src/LinkCheckerLinkInterface.php
++++ b/src/LinkCheckerLinkInterface.php
+@@ -159,7 +159,7 @@ interface LinkCheckerLinkInterface extends EntityPublishedInterface, ContentEnti
+   /**
+    * Gets entity where the link was found.
+    *
+-   * @return \Drupal\Core\Entity\FieldableEntityInterface
++   * @return FieldableEntityInterface
+    *   Entity.
+    */
+   public function getParentEntity();
+@@ -167,7 +167,7 @@ interface LinkCheckerLinkInterface extends EntityPublishedInterface, ContentEnti
+   /**
+    * Sets a entity where the link was found.
+    *
+-   * @param \Drupal\Core\Entity\FieldableEntityInterface $entity
++   * @param FieldableEntityInterface $entity
+    *   Entity.
+    *
+    * @return $this
+diff --git a/src/LinkCheckerService.php b/src/LinkCheckerService.php
+index 1f1ea33..2d5b5ac 100644
+--- a/src/LinkCheckerService.php
++++ b/src/LinkCheckerService.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\linkchecker;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Queue\QueueInterface;
++use GuzzleHttp\Promise\PromiseInterface;
++use Drupal\linkchecker\Plugin\LinkStatusHandlerInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -25,49 +29,49 @@ class LinkCheckerService {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The Linkchecker settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $linkcheckerSetting;
+ 
+   /**
+    * The http client.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $httpClient;
+ 
+   /**
+    * The report link.
+    *
+-   * @var \Drupal\Core\Link
++   * @var Link
+    */
+   protected $reportLink;
+ 
+   /**
+    * The time.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The queue.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+   /**
+    * The status handler manager.
+    *
+-   * @var \Drupal\linkchecker\Plugin\LinkStatusHandlerManager
++   * @var LinkStatusHandlerManager
+    */
+   protected $statusHandlerManager;
+ 
+@@ -134,10 +138,10 @@ class LinkCheckerService {
+   /**
+    * Check the link.
+    *
+-   * @param \Drupal\linkchecker\LinkCheckerLinkInterface $link
++   * @param LinkCheckerLinkInterface $link
+    *   The link to check.
+    *
+-   * @return \GuzzleHttp\Promise\PromiseInterface
++   * @return PromiseInterface
+    *   Promise of link checking request.
+    */
+   public function check(LinkCheckerLinkInterface $link) {
+@@ -187,10 +191,10 @@ class LinkCheckerService {
+   /**
+    * Status code handling.
+    *
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   An object containing the HTTP request headers, response code, headers,
+    *   data and redirect status.
+-   * @param \Drupal\linkchecker\LinkCheckerLinkInterface $link
++   * @param LinkCheckerLinkInterface $link
+    *   The link.
+    */
+   protected function statusHandling(ResponseInterface $response, LinkCheckerLinkInterface $link) {
+@@ -323,7 +327,7 @@ class LinkCheckerService {
+ 
+     foreach ($this->statusHandlerManager->getDefinitions() as $definition) {
+       if (in_array($statusCode, $definition['status_codes'])) {
+-        /** @var \Drupal\linkchecker\Plugin\LinkStatusHandlerInterface $handler */
++        /** @var LinkStatusHandlerInterface $handler */
+         $handler = $this->statusHandlerManager->createInstance($definition['id']);
+         $handler->queueItems($link, $response);
+       }
+@@ -333,9 +337,9 @@ class LinkCheckerService {
+   /**
+    * Exception handling.
+    *
+-   * @param \GuzzleHttp\Exception\RequestException $e
++   * @param RequestException $e
+    *   An object containing the Exception.
+-   * @param \Drupal\linkchecker\LinkCheckerLinkInterface $link
++   * @param LinkCheckerLinkInterface $link
+    *   The link.
+    */
+   protected function exceptionHandling(RequestException $e, LinkCheckerLinkInterface $link) {
+@@ -375,7 +379,7 @@ class LinkCheckerService {
+     $ids = $query->execute();
+ 
+     foreach ($ids as $id) {
+-      /** @var \Drupal\linkchecker\LinkCheckerLinkInterface $linkToUpdate */
++      /** @var LinkCheckerLinkInterface $linkToUpdate */
+       $linkToUpdate = $storage->load($id);
+ 
+       $linkToUpdate->setRequestMethod($link->getRequestMethod());
+diff --git a/src/LinkCheckerStorage.php b/src/LinkCheckerStorage.php
+index e5749c7..5e59165 100644
+--- a/src/LinkCheckerStorage.php
++++ b/src/LinkCheckerStorage.php
+@@ -13,7 +13,7 @@ class LinkCheckerStorage extends SqlContentEntityStorage {
+   /**
+    * Get existing IDs that matches the URL and entity.
+    *
+-   * @param \Drupal\linkchecker\Entity\LinkCheckerLink $link
++   * @param LinkCheckerLink $link
+    *   The link.
+    *
+    * @return array
+diff --git a/src/LinkCleanUp.php b/src/LinkCleanUp.php
+index 4e6052b..6674a1f 100644
+--- a/src/LinkCleanUp.php
++++ b/src/LinkCleanUp.php
+@@ -21,21 +21,21 @@ class LinkCleanUp {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The link extractor.
+    *
+-   * @var \Drupal\linkchecker\LinkExtractorService
++   * @var LinkExtractorService
+    */
+   protected $extractor;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+@@ -117,7 +117,7 @@ class LinkCleanUp {
+   /**
+    * Removes non-existing links for given entity.
+    *
+-   * @param \Drupal\Core\Entity\FieldableEntityInterface $entity
++   * @param FieldableEntityInterface $entity
+    *   The entity.
+    */
+   public function cleanUpForEntity(FieldableEntityInterface $entity) {
+@@ -128,7 +128,7 @@ class LinkCleanUp {
+       ->load($entity->id());
+ 
+     $extractedIds = [];
+-    /** @var \Drupal\linkchecker\LinkCheckerStorage $storage */
++    /** @var LinkCheckerStorage $storage */
+     $storage = $this->entityTypeManager->getStorage('linkcheckerlink');
+     // If entity is not deleted, gather all links that exists in fields.
+     if (!$isEntityDeleted) {
+diff --git a/src/LinkExtractorBatch.php b/src/LinkExtractorBatch.php
+index 8dafa44..fd74517 100644
+--- a/src/LinkExtractorBatch.php
++++ b/src/LinkExtractorBatch.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\linkchecker;
+ 
++use Drupal\Core\Field\FieldConfigInterface;
++use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Batch\BatchBuilder;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\DependencyInjection\DependencySerializationTrait;
+@@ -22,21 +24,21 @@ class LinkExtractorBatch {
+   /**
+    * The link extractor.
+    *
+-   * @var \Drupal\linkchecker\LinkExtractorService
++   * @var LinkExtractorService
+    */
+   protected $extractor;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+@@ -61,7 +63,7 @@ class LinkExtractorBatch {
+       ->loadMultiple(NULL);
+     $entityTypes = [];
+ 
+-    /** @var \Drupal\Core\Field\FieldConfigInterface $config */
++    /** @var FieldConfigInterface $config */
+     foreach ($fieldConfigs as $config) {
+       $scan = $config->getThirdPartySetting('linkchecker', 'scan', FALSE);
+ 
+@@ -95,7 +97,7 @@ class LinkExtractorBatch {
+     $numberOfProcessedItems = 0;
+ 
+     foreach ($entityTypes as $entityTypeData) {
+-      /** @var \Drupal\Core\Entity\EntityTypeInterface $entityType */
++      /** @var EntityTypeInterface $entityType */
+       $entityType = $entityTypeData['entity_type'];
+       $bundle = $entityTypeData['bundle'];
+ 
+@@ -143,7 +145,7 @@ class LinkExtractorBatch {
+     $total = 0;
+ 
+     foreach ($entityTypes as $entityTypeData) {
+-      /** @var \Drupal\Core\Entity\EntityTypeInterface $entityType */
++      /** @var EntityTypeInterface $entityType */
+       $entityType = $entityTypeData['entity_type'];
+       $bundle = $entityTypeData['bundle'];
+ 
+diff --git a/src/LinkExtractorService.php b/src/LinkExtractorService.php
+index 6a0ee10..3c9c5c1 100644
+--- a/src/LinkExtractorService.php
++++ b/src/LinkExtractorService.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\linkchecker;
+ 
++use Drupal\Core\Config\Config;
++use Symfony\Component\HttpFoundation\Request;
++use Drupal\linkchecker\Plugin\LinkExtractorInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Config\ConfigFactory;
+@@ -22,42 +25,42 @@ class LinkExtractorService {
+   /**
+    * The extractor manager.
+    *
+-   * @var \Drupal\linkchecker\Plugin\LinkExtractorManager
++   * @var LinkExtractorManager
+    */
+   protected $extractorManager;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The Linkchecker settings.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $linkcheckerSetting;
+ 
+   /**
+    * Current request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * The time.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+@@ -83,10 +86,10 @@ class LinkExtractorService {
+   /**
+    * Extracts links from entity fields.
+    *
+-   * @param \Drupal\Core\Entity\FieldableEntityInterface $entity
++   * @param FieldableEntityInterface $entity
+    *   Entity from which to extract.
+    *
+-   * @return \Drupal\linkchecker\LinkCheckerLinkInterface[]
++   * @return LinkCheckerLinkInterface[]
+    *   Array of extracted links.
+    */
+   public function extractFromEntity(FieldableEntityInterface $entity) {
+@@ -110,10 +113,10 @@ class LinkExtractorService {
+   /**
+    * Extracts links from field.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $fieldItemList
++   * @param FieldItemListInterface $fieldItemList
+    *   The field from which to extract.
+    *
+-   * @return \Drupal\linkchecker\LinkCheckerLinkInterface[]
++   * @return LinkCheckerLinkInterface[]
+    *   Array of extracted links.
+    */
+   public function extractFromField(FieldItemListInterface $fieldItemList) {
+@@ -138,7 +141,7 @@ class LinkExtractorService {
+       }
+ 
+       $extractorName = $fieldConfig->getThirdPartySetting('linkchecker', 'extractor', NULL);
+-      /** @var \Drupal\linkchecker\Plugin\LinkExtractorInterface $extractor */
++      /** @var LinkExtractorInterface $extractor */
+       $extractor = $this->extractorManager->createInstance($extractorName);
+       $urls = $extractor->extract($fieldItemList->getValue());
+ 
+@@ -277,7 +280,7 @@ class LinkExtractorService {
+    *
+    * If link becomes blacklisted this method will return false.
+    *
+-   * @param \Drupal\linkchecker\LinkCheckerLinkInterface $link
++   * @param LinkCheckerLinkInterface $link
+    *   Link to check.
+    *
+    * @return bool
+@@ -323,7 +326,7 @@ class LinkExtractorService {
+    *
+    * Saves link if it not a duplicate.
+    *
+-   * @param \Drupal\linkchecker\LinkCheckerLinkInterface[] $links
++   * @param LinkCheckerLinkInterface[] $links
+    *   Array of links to save.
+    *
+    * @todo should we move this method to entity storage?
+@@ -339,7 +342,7 @@ class LinkExtractorService {
+    *
+    * Saves link if it not a duplicate.
+    *
+-   * @param \Drupal\linkchecker\LinkCheckerLinkInterface $link
++   * @param LinkCheckerLinkInterface $link
+    *   Link to save.
+    *
+    * @todo should we move this method to entity storage?
+@@ -367,7 +370,7 @@ class LinkExtractorService {
+    *
+    * This should be run after saving extracted links from given entity.
+    *
+-   * @param \Drupal\Core\Entity\FieldableEntityInterface $entity
++   * @param FieldableEntityInterface $entity
+    *   The entity.
+    */
+   public function updateEntityExtractIndex(FieldableEntityInterface $entity) {
+diff --git a/src/Plugin/LinkExtractorBase.php b/src/Plugin/LinkExtractorBase.php
+index 526fdc2..baeacc9 100644
+--- a/src/Plugin/LinkExtractorBase.php
++++ b/src/Plugin/LinkExtractorBase.php
+@@ -15,7 +15,7 @@ abstract class LinkExtractorBase extends PluginBase implements LinkExtractorInte
+   /**
+    * The Linkchecker settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $linkcheckerSetting;
+ 
+diff --git a/src/Plugin/LinkExtractorManager.php b/src/Plugin/LinkExtractorManager.php
+index 264502e..6c1d7ab 100644
+--- a/src/Plugin/LinkExtractorManager.php
++++ b/src/Plugin/LinkExtractorManager.php
+@@ -17,9 +17,9 @@ class LinkExtractorManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Plugin/LinkStatusHandler/Repair301.php b/src/Plugin/LinkStatusHandler/Repair301.php
+index 0255fe1..7bb715a 100644
+--- a/src/Plugin/LinkStatusHandler/Repair301.php
++++ b/src/Plugin/LinkStatusHandler/Repair301.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\linkchecker\Plugin\LinkStatusHandler;
+ 
++use Symfony\Component\HttpFoundation\Request;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Config\ImmutableConfig;
+@@ -31,7 +32,7 @@ class Repair301 extends LinkStatusHandlerBase {
+   /**
+    * Current request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+diff --git a/src/Plugin/LinkStatusHandlerBase.php b/src/Plugin/LinkStatusHandlerBase.php
+index 83c1894..2ab6e21 100644
+--- a/src/Plugin/LinkStatusHandlerBase.php
++++ b/src/Plugin/LinkStatusHandlerBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\linkchecker\Plugin;
+ 
++use Drupal\Core\Queue\QueueInterface;
++use Drupal\Core\Entity\EntityTypeManager;
+ use Drupal\Component\Plugin\PluginBase;
+ use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -23,28 +25,28 @@ abstract class LinkStatusHandlerBase extends PluginBase implements LinkStatusHan
+   /**
+    * The queue.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManager
++   * @var EntityTypeManager
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The account switcher.
+    *
+-   * @var \Drupal\Core\Session\AccountSwitcherInterface
++   * @var AccountSwitcherInterface
+    */
+   protected $accountSwitcher;
+ 
+   /**
+    * The Linkchecker settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $linkcheckerSetting;
+ 
+@@ -126,11 +128,11 @@ abstract class LinkStatusHandlerBase extends PluginBase implements LinkStatusHan
+   /**
+    * Handles a status code of link.
+    *
+-   * @param \Drupal\linkchecker\LinkCheckerLinkInterface $link
++   * @param LinkCheckerLinkInterface $link
+    *   The link.
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   The response of link checking.
+-   * @param \Drupal\Core\Entity\FieldableEntityInterface $entity
++   * @param FieldableEntityInterface $entity
+    *   The entity with proper translation loaded.
+    */
+   abstract protected function doHandle(LinkCheckerLinkInterface $link, ResponseInterface $response, FieldableEntityInterface $entity);
+@@ -153,9 +155,9 @@ abstract class LinkStatusHandlerBase extends PluginBase implements LinkStatusHan
+    *   ],
+    * ]
+    *
+-   * @param \Drupal\linkchecker\LinkCheckerLinkInterface $link
++   * @param LinkCheckerLinkInterface $link
+    *   The link.
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   The response of link checking.
+    *
+    * @return array
+diff --git a/src/Plugin/LinkStatusHandlerInterface.php b/src/Plugin/LinkStatusHandlerInterface.php
+index 7a40ad5..82e848e 100644
+--- a/src/Plugin/LinkStatusHandlerInterface.php
++++ b/src/Plugin/LinkStatusHandlerInterface.php
+@@ -14,9 +14,9 @@ interface LinkStatusHandlerInterface extends PluginInspectionInterface {
+   /**
+    * Handles a status code of link.
+    *
+-   * @param \Drupal\linkchecker\LinkCheckerLinkInterface $link
++   * @param LinkCheckerLinkInterface $link
+    *   The link.
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   The response of link checking.
+    */
+   public function handle(LinkCheckerLinkInterface $link, ResponseInterface $response);
+@@ -24,9 +24,9 @@ interface LinkStatusHandlerInterface extends PluginInspectionInterface {
+   /**
+    * Creates a queue for handling.
+    *
+-   * @param \Drupal\linkchecker\LinkCheckerLinkInterface $link
++   * @param LinkCheckerLinkInterface $link
+    *   The link.
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   The response of link checking.
+    */
+   public function queueItems(LinkCheckerLinkInterface $link, ResponseInterface $response);
+diff --git a/src/Plugin/LinkStatusHandlerManager.php b/src/Plugin/LinkStatusHandlerManager.php
+index 104ac3f..29a21de 100644
+--- a/src/Plugin/LinkStatusHandlerManager.php
++++ b/src/Plugin/LinkStatusHandlerManager.php
+@@ -17,9 +17,9 @@ class LinkStatusHandlerManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Plugin/QueueWorker/LinkCheck.php b/src/Plugin/QueueWorker/LinkCheck.php
+index 18cb6e9..a9ac588 100644
+--- a/src/Plugin/QueueWorker/LinkCheck.php
++++ b/src/Plugin/QueueWorker/LinkCheck.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\linkchecker\Plugin\QueueWorker;
+ 
++use Drupal\linkchecker\LinkCheckerLinkInterface;
++use function GuzzleHttp\Promise\settle;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+@@ -23,14 +25,14 @@ class LinkCheck extends QueueWorkerBase implements ContainerFactoryPluginInterfa
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The link checker service.
+    *
+-   * @var \Drupal\linkchecker\LinkCheckerService
++   * @var LinkCheckerService
+    */
+   protected $linkChecker;
+ 
+@@ -64,7 +66,7 @@ class LinkCheck extends QueueWorkerBase implements ContainerFactoryPluginInterfa
+ 
+     // Collect all request promises.
+     foreach ($data as $id) {
+-      /** @var \Drupal\linkchecker\LinkCheckerLinkInterface $link */
++      /** @var LinkCheckerLinkInterface $link */
+       $link = $this->entityTypeManager
+         ->getStorage('linkcheckerlink')
+         ->load($id);
+@@ -76,7 +78,7 @@ class LinkCheck extends QueueWorkerBase implements ContainerFactoryPluginInterfa
+ 
+     // Force wait to complete of all requests
+     // to prevent next items of queue to be run.
+-    Promise\settle($promises)->wait();
++    settle($promises)->wait();
+   }
+ 
+ }
+diff --git a/src/Plugin/QueueWorker/LinkStatusHandle.php b/src/Plugin/QueueWorker/LinkStatusHandle.php
+index 3ed2878..8e03725 100644
+--- a/src/Plugin/QueueWorker/LinkStatusHandle.php
++++ b/src/Plugin/QueueWorker/LinkStatusHandle.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\linkchecker\Plugin\QueueWorker;
+ 
++use Drupal\linkchecker\Plugin\LinkStatusHandlerInterface;
++use Drupal\linkchecker\LinkCheckerLinkInterface;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -23,14 +25,14 @@ class LinkStatusHandle extends QueueWorkerBase implements ContainerFactoryPlugin
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The status handler manager.
+    *
+-   * @var \Drupal\linkchecker\Plugin\LinkStatusHandlerManager
++   * @var LinkStatusHandlerManager
+    */
+   protected $statusHandlerManager;
+ 
+@@ -62,7 +64,7 @@ class LinkStatusHandle extends QueueWorkerBase implements ContainerFactoryPlugin
+   public function processItem($data) {
+     $response = $data['response'];
+     try {
+-      /** @var \Drupal\linkchecker\Plugin\LinkStatusHandlerInterface $handler */
++      /** @var LinkStatusHandlerInterface $handler */
+       $handler = $this->statusHandlerManager->createInstance($data['handler']);
+     }
+     catch (PluginNotFoundException $e) {
+@@ -71,7 +73,7 @@ class LinkStatusHandle extends QueueWorkerBase implements ContainerFactoryPlugin
+ 
+     foreach ($data['links'] as $linkId) {
+       try {
+-        /** @var \Drupal\linkchecker\LinkCheckerLinkInterface $link */
++        /** @var LinkCheckerLinkInterface $link */
+         $link = $this->entityTypeManager
+           ->getStorage('linkcheckerlink')
+           ->load($linkId);
+diff --git a/tests/src/Functional/LinkCheckerEditFormTest.php b/tests/src/Functional/LinkCheckerEditFormTest.php
+index 96f2606..14fbc62 100644
+--- a/tests/src/Functional/LinkCheckerEditFormTest.php
++++ b/tests/src/Functional/LinkCheckerEditFormTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\linkchecker\Functional;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\node\NodeInterface;
++use Drupal\linkchecker\Entity\LinkCheckerLink;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Drupal\node\Entity\NodeType;
+ use Drupal\Tests\BrowserTestBase;
+@@ -36,7 +39,7 @@ class LinkCheckerEditFormTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+     // Create Basic page and Article node types.
+     $node_type = NodeType::create([
+@@ -65,9 +68,9 @@ class LinkCheckerEditFormTest extends BrowserTestBase {
+    * @see https://www.drupal.org/project/linkchecker/issues/3118940
+    */
+   public function testEditUrlWorks() {
+-    /** @var \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager */
++    /** @var EntityTypeManagerInterface $entity_type_manager */
+     $entity_type_manager = $this->container->get('entity_type.manager');
+-    /** @var \Drupal\node\NodeInterface $entity */
++    /** @var NodeInterface $entity */
+     $entity = $entity_type_manager->getStorage('node')->create([
+       'type' => self::NODE_TYPE,
+       'title' => 'test node',
+@@ -75,7 +78,7 @@ class LinkCheckerEditFormTest extends BrowserTestBase {
+     $field_item_list = $entity->get('body');
+     $field_item_list->setValue('<a href="https://example.com">test</a>');
+     $entity->save();
+-    /** @var \Drupal\linkchecker\Entity\LinkCheckerLink $link */
++    /** @var LinkCheckerLink $link */
+     $link = $entity_type_manager->getStorage('linkcheckerlink')
+       ->create([
+         'entity_id' => [
+@@ -91,7 +94,7 @@ class LinkCheckerEditFormTest extends BrowserTestBase {
+ 
+     // Now visit edit form for the linkchecker entity.
+     $this->drupalGet($link->toUrl('edit-form')->toString());
+-    $this->assertEqual($this->getSession()->getStatusCode(), 200);
++    $this->assertEquals($this->getSession()->getStatusCode(), 200);
+   }
+ 
+ }

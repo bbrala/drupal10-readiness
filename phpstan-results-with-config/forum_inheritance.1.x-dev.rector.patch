@@ -1,0 +1,306 @@
+diff --git a/forum_inheritance.info.yml b/forum_inheritance.info.yml
+index 30544f6..9625e26 100644
+--- a/forum_inheritance.info.yml
++++ b/forum_inheritance.info.yml
+@@ -1,5 +1,5 @@
+ name: Forum Inheritance
+ description: Inherits changes on (equally machine-named) fields in forums.
+ type: module
+-core_version_requirement: ^8.7.7 || ^9
++core_version_requirement: ^8.7.7 || ^9 || ^10
+ php: 7.0
+diff --git a/forum_inheritance.module b/forum_inheritance.module
+index a88b986..db58b8f 100644
+--- a/forum_inheritance.module
++++ b/forum_inheritance.module
+@@ -12,7 +12,7 @@ use Drupal\forum_inheritance\ForumInheritanceHooks;
+ /**
+  * Implements hook_entity_insert().
+  */
+-function forum_inheritance_entity_insert(Drupal\Core\Entity\EntityInterface $entity) {
++function forum_inheritance_entity_insert(EntityInterface $entity) {
+   ForumInheritanceHooks::hookEntityInsert($entity);
+ }
+ 
+diff --git a/src/FieldConfiguration.php b/src/FieldConfiguration.php
+index 09ed854..7c41365 100644
+--- a/src/FieldConfiguration.php
++++ b/src/FieldConfiguration.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\forum_inheritance;
+ 
++use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\field\FieldConfigInterface;
+ 
+@@ -71,7 +72,7 @@ class FieldConfiguration {
+    */
+   public function getFieldMap() {
+     if (!isset($this->fieldMap)) {
+-      /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $entityFieldManager */
++      /** @var EntityFieldManagerInterface $entityFieldManager */
+       $entityFieldManager = \Drupal::service('entity_field.manager');
+       $termFieldDefinitions = $entityFieldManager->getFieldDefinitions('taxonomy_term', $this->getTermBundle());
+       $nodeFieldDefinitions = $entityFieldManager->getFieldDefinitions('node', $this->getNodeBundle());
+diff --git a/src/FieldInheritor.php b/src/FieldInheritor.php
+index c3a6c2d..aaa5ae0 100644
+--- a/src/FieldInheritor.php
++++ b/src/FieldInheritor.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\forum_inheritance;
+ 
++use Drupal\Core\Entity\FieldableEntityInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Core\TypedData\Exception\ReadOnlyException;
++use Drupal\taxonomy\TermInterface;
+ use Drupal\Component\Utility\DiffArray;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+@@ -11,17 +17,17 @@ class FieldInheritor {
+   /**
+    * Inherit field changes.
+    *
+-   * @param \Drupal\Core\Entity\FieldableEntityInterface[] $sourceEntities
++   * @param FieldableEntityInterface[] $sourceEntities
+    *   The entity.
+-   * @param \Drupal\Core\Entity\FieldableEntityInterface[] $targetEntities
++   * @param FieldableEntityInterface[] $targetEntities
+    *   The target entities.
+    * @param string[] $fieldMap
+    *   The field map. Not existing fields are silently ignored.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
+-   * @throws \Drupal\Core\TypedData\Exception\ReadOnlyException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
++   * @throws ReadOnlyException
+    */
+   public static function inheritFieldChanges($sourceEntities, $targetEntities, $fieldMap) {
+     $targetNeedsSave = self::copyFieldChanges($sourceEntities, $targetEntities, $fieldMap);
+@@ -31,21 +37,21 @@ class FieldInheritor {
+   }
+ 
+   /**
+-   * Copy field changes but do not save them.
+-   *
+-   * @param $sourceEntities
+-   * @param $targetEntities
+-   * @param $fieldMap
+-   *
+-   * @return array
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\TypedData\Exception\ReadOnlyException
+-   */
++     * Copy field changes but do not save them.
++     *
++     * @param $sourceEntities
++     * @param $targetEntities
++     * @param $fieldMap
++     *
++     * @return array
++     * @throws InvalidPluginDefinitionException
++     * @throws PluginNotFoundException
++     * @throws ReadOnlyException
++     */
+     public static function copyFieldChanges($sourceEntities, $targetEntities, $fieldMap) {
+       $targetNeedsSave = [];
+       foreach ($sourceEntities as $sourceEntity) {
+-      /** @var \Drupal\taxonomy\TermInterface $originalSourceEntity */
++      /** @var TermInterface $originalSourceEntity */
+       $originalSourceEntity = $sourceEntity->original ?? static::emptyEntity($sourceEntity);
+       foreach ($targetEntities as $targetIndex => $targetEntity) {
+         foreach ($fieldMap as $sourceFieldName => $targetFieldName) {
+@@ -68,14 +74,14 @@ class FieldInheritor {
+   /**
+    * Inherit one field change.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $originalSourceField
+-   * @param \Drupal\Core\Field\FieldItemListInterface $sourceField
+-   * @param \Drupal\Core\Field\FieldItemListInterface $targetField
++   * @param FieldItemListInterface $originalSourceField
++   * @param FieldItemListInterface $sourceField
++   * @param FieldItemListInterface $targetField
+    *
+    * @return bool
+    *   If the target field has been changed.
+    *
+-   * @throws \Drupal\Core\TypedData\Exception\ReadOnlyException
++   * @throws ReadOnlyException
+    */
+   public static function inheritOneFieldChange(FieldItemListInterface $originalSourceField, FieldItemListInterface $sourceField, FieldItemListInterface $targetField) {
+     if ($sourceField->getFieldDefinition()->getFieldStorageDefinition()->isMultiple()) {
+@@ -89,13 +95,13 @@ class FieldInheritor {
+   /**
+    * Inherit one field change.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $originalSourceField
+-   * @param \Drupal\Core\Field\FieldItemListInterface $sourceField
+-   * @param \Drupal\Core\Field\FieldItemListInterface $targetField
++   * @param FieldItemListInterface $originalSourceField
++   * @param FieldItemListInterface $sourceField
++   * @param FieldItemListInterface $targetField
+    *
+    * @return bool
+    *   If the target field has been changed.
+-   * @throws \Drupal\Core\TypedData\Exception\ReadOnlyException
++   * @throws ReadOnlyException
+    */
+   public static function inheritOneSingleFieldChange(FieldItemListInterface $originalSourceField, FieldItemListInterface $sourceField, FieldItemListInterface $targetField) {
+     if (!$sourceField->equals($originalSourceField)) {
+@@ -112,13 +118,13 @@ class FieldInheritor {
+   /**
+    * Inherit one set field change.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $originalSourceField
+-   * @param \Drupal\Core\Field\FieldItemListInterface $sourceField
+-   * @param \Drupal\Core\Field\FieldItemListInterface $targetField
++   * @param FieldItemListInterface $originalSourceField
++   * @param FieldItemListInterface $sourceField
++   * @param FieldItemListInterface $targetField
+    *
+    * @return bool
+    *   If the target field has been changed.
+-   * @throws \Drupal\Core\TypedData\Exception\ReadOnlyException
++   * @throws ReadOnlyException
+    */
+   public static function inheritOneSetFieldChange(FieldItemListInterface $originalSourceField, FieldItemListInterface $sourceField, FieldItemListInterface $targetField) {
+     $currentValues = FieldItemSetHelper::fieldItemListToArray($sourceField);
+@@ -140,14 +146,14 @@ class FieldInheritor {
+   /**
+    * Create an empty entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $sourceEntity
++   * @param EntityInterface $sourceEntity
+    *   The source entity.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   The empty entity.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   private static function emptyEntity(EntityInterface $sourceEntity) {
+     $entityType = $sourceEntity->getEntityType();
+diff --git a/src/FieldItemSetHelper.php b/src/FieldItemSetHelper.php
+index 3e0fa95..5869860 100644
+--- a/src/FieldItemSetHelper.php
++++ b/src/FieldItemSetHelper.php
+@@ -48,7 +48,7 @@ class FieldItemSetHelper {
+   /**
+    * Get field item normalizer callback.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $fieldDefinition
++   * @param FieldDefinitionInterface $fieldDefinition
+    *   The field definition.
+    *
+    * @return \Closure
+diff --git a/src/ForumInheritanceHooks.php b/src/ForumInheritanceHooks.php
+index 2810d69..3a340c7 100644
+--- a/src/ForumInheritanceHooks.php
++++ b/src/ForumInheritanceHooks.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\forum_inheritance;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Core\TypedData\Exception\ReadOnlyException;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+@@ -15,7 +20,7 @@ use Drupal\taxonomy\TermInterface;
+ class ForumInheritanceHooks {
+ 
+   /**
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    */
+   public static function hookEntityInsert(EntityInterface $entity) {
+     // This moved to ::hookEntityPrepareForm.
+@@ -24,17 +29,17 @@ class ForumInheritanceHooks {
+   /**
+    * Implements hook_entity_update().
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
+-   * @throws \Drupal\Core\TypedData\Exception\ReadOnlyException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
++   * @throws ReadOnlyException
+    */
+   public static function hookEntityUpdate(EntityInterface $entity) {
+     foreach (FieldConfiguration::all() as $fc) {
+       if ($entity instanceof TermInterface && $entity->bundle() === $fc->getTermBundle()) {
+-        /** @var \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager */
++        /** @var EntityTypeManagerInterface $entityTypeManager */
+         $entityTypeManager = \Drupal::service('entity_type.manager');
+ 
+         // Inherit to contained forums.
+@@ -50,7 +55,7 @@ class ForumInheritanceHooks {
+         $nodeStorage = $entityTypeManager->getStorage('node');
+         $query = $nodeStorage->getQuery()
+           ->condition($fc->getTermReference(), $possibleForumTerms);
+-        /** @var \Drupal\taxonomy\TermInterface[] $result */
++        /** @var TermInterface[] $result */
+         $containedForumNodeIds = $query->execute();
+         $containedForumNodes = Node::loadMultiple($containedForumNodeIds);
+         FieldInheritor::inheritFieldChanges([$entity], $containedForumNodes, $fc->getFieldMap());
+@@ -61,13 +66,13 @@ class ForumInheritanceHooks {
+   /**
+    * Prepopulate foum topic form.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    * @param $operation
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\TypedData\Exception\ReadOnlyException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws ReadOnlyException
+    *
+    * @see forum_form_node_form_alter
+    */
+@@ -86,7 +91,7 @@ class ForumInheritanceHooks {
+         if (is_numeric($forumId)) {
+           $forumsField->setValue(['target_id' => $forumId]);
+         }
+-        /** @var \Drupal\taxonomy\TermInterface[] $parentForumTerms */
++        /** @var TermInterface[] $parentForumTerms */
+         $parentForumTerms = $forumsField->referencedEntities();
+         // Whether we or someone else populated $parentForumTerms, inherit the
+         // term fields.
+diff --git a/tests/src/Functional/AdminPageTest.php b/tests/src/Functional/AdminPageTest.php
+index 9b71363..fc7cb8f 100644
+--- a/tests/src/Functional/AdminPageTest.php
++++ b/tests/src/Functional/AdminPageTest.php
+@@ -33,7 +33,7 @@ class AdminPageTest extends BrowserTestBase {
+   public function testAdminPage() {
+     $this->drupalLogin($this->rootUser);
+     $this->drupalGet('admin');
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     // Ensure that the test is not marked as risky because of no assertions.
+     // see https://gitlab.com/weitzman/drupal-test-traits/-/commit/82bf5059908f9073b3468cb7313960da72176d9a

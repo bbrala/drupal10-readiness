@@ -1,0 +1,524 @@
+diff --git a/entity_version.post_update.php b/entity_version.post_update.php
+index 21479d3..30fd44f 100644
+--- a/entity_version.post_update.php
++++ b/entity_version.post_update.php
+@@ -7,12 +7,15 @@
+ 
+ declare(strict_types = 1);
+ 
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\field\FieldConfigInterface;
++
+ /**
+  * Migrate to configuration-based version field settings.
+  */
+ function entity_version_post_update_configure_settings() {
+   // Get entity types and bundles where the entity_version field is present.
+-  /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager */
++  /** @var EntityFieldManagerInterface $entity_field_manager */
+   $entity_field_manager = \Drupal::service('entity_field.manager');
+   $versioned_entity_types = $entity_field_manager->getFieldMapByFieldType('entity_version');
+   $version_settings_storage = \Drupal::entityTypeManager()->getStorage('entity_version_settings');
+@@ -39,7 +42,7 @@ function entity_version_post_update_configure_settings() {
+ 
+       $field_definitions = $entity_field_manager->getFieldDefinitions($entity_type_id, $bundle);
+ 
+-      /** @var \Drupal\field\FieldConfigInterface $field */
++      /** @var FieldConfigInterface $field */
+       foreach ($field_definitions as $field) {
+         if ($field->getType() === 'entity_version') {
+           // Create the entity version setting.
+diff --git a/modules/entity_version_history/entity_version_history.module b/modules/entity_version_history/entity_version_history.module
+index eb2901a..b619907 100644
+--- a/modules/entity_version_history/entity_version_history.module
++++ b/modules/entity_version_history/entity_version_history.module
+@@ -7,11 +7,13 @@
+ 
+ declare(strict_types = 1);
+ 
++use Drupal\Core\Config\ConfigFactory;
++
+ /**
+  * Implements hook_entity_type_alter().
+  */
+ function entity_version_history_entity_type_alter(array &$entity_types) {
+-  /** @var \Drupal\Core\Config\ConfigFactory $config_factory */
++  /** @var ConfigFactory $config_factory */
+   $config_factory = \Drupal::configFactory();
+   // To avoid infinite loop we use config factory to load all configs.
+   $configs = $config_factory->listAll('entity_version.settings');
+diff --git a/modules/entity_version_history/src/Controller/EntityVersionHistoryController.php b/modules/entity_version_history/src/Controller/EntityVersionHistoryController.php
+index cf4a489..bf69abf 100644
+--- a/modules/entity_version_history/src/Controller/EntityVersionHistoryController.php
++++ b/modules/entity_version_history/src/Controller/EntityVersionHistoryController.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_version_history\Controller;
+ 
++use Drupal\Core\Entity\Sql\TableMappingInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Cache\CacheableMetadata;
+@@ -25,32 +26,32 @@ class EntityVersionHistoryController extends ControllerBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * Constructs a EntityVersionHistoryController object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database connection.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, DateFormatterInterface $date_formatter, Connection $database) {
+@@ -73,7 +74,7 @@ class EntityVersionHistoryController extends ControllerBase {
+   /**
+    * Generates an overview version history of older revisions of an entity.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+    *
+    * @return array
+@@ -88,7 +89,7 @@ class EntityVersionHistoryController extends ControllerBase {
+     ];
+     $rows = [];
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = $this->getEntityFromRouteMatch($route_match);
+     $langcode = $entity->language()->getId();
+     $entity_type_id = $entity->getEntityTypeId();
+@@ -103,7 +104,7 @@ class EntityVersionHistoryController extends ControllerBase {
+     $revision_timestamp_field = $this->entityTypeManager->getDefinition($entity_type_id)->getRevisionMetadataKey('revision_created');
+ 
+     foreach ($this->getRevisionIds($entity, $version_field) as $vid) {
+-      /** @var \Drupal\Core\Entity\ContentEntityInterface $revision */
++      /** @var ContentEntityInterface $revision */
+       $revision = $entity_storage->loadRevision($vid);
+       if ($revision->hasTranslation($langcode)) {
+         $revision = $revision->getTranslation($langcode);
+@@ -164,12 +165,12 @@ class EntityVersionHistoryController extends ControllerBase {
+   /**
+    * Checks access to the history route.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account accessing the route.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The actual route match of the route.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function checkAccess(AccountInterface $account, RouteMatchInterface $route_match): AccessResultInterface {
+@@ -203,10 +204,10 @@ class EntityVersionHistoryController extends ControllerBase {
+   /**
+    * Provides a title callback for the history page.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The title for the history page.
+    */
+   public function title(RouteMatchInterface $route_match): TranslatableMarkup {
+@@ -220,10 +221,10 @@ class EntityVersionHistoryController extends ControllerBase {
+   /**
+    * Returns the current entity from a given route match.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+    *
+-   * @return \Drupal\Core\Entity\ContentEntityInterface|null
++   * @return ContentEntityInterface|null
+    *   The entity or NULL if none exists.
+    */
+   protected function getEntityFromRouteMatch(RouteMatchInterface $route_match): ?ContentEntityInterface {
+@@ -238,7 +239,7 @@ class EntityVersionHistoryController extends ControllerBase {
+   /**
+    * Gets a list of revision IDs for a specific entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity.
+    * @param string $version_field
+    *   The name of the field that holds the version.
+@@ -249,7 +250,7 @@ class EntityVersionHistoryController extends ControllerBase {
+   protected function getRevisionIds(ContentEntityInterface $entity, string $version_field): array {
+     // Determine the name of the table that holds the version.
+     $storage_definition = $entity->getFieldDefinition($version_field)->getFieldStorageDefinition();
+-    /** @var \Drupal\Core\Entity\Sql\TableMappingInterface $table_mapping */
++    /** @var TableMappingInterface $table_mapping */
+     $table_mapping = $this->entityTypeManager->getStorage($entity->getEntityTypeId())->getTableMapping();
+     $table_name = $table_mapping->getDedicatedRevisionTableName($storage_definition);
+ 
+diff --git a/modules/entity_version_history/src/Plugin/Derivative/HistoryLocalTask.php b/modules/entity_version_history/src/Plugin/Derivative/HistoryLocalTask.php
+index 1680020..d1f27a3 100755
+--- a/modules/entity_version_history/src/Plugin/Derivative/HistoryLocalTask.php
++++ b/modules/entity_version_history/src/Plugin/Derivative/HistoryLocalTask.php
+@@ -17,7 +17,7 @@ class HistoryLocalTask extends DeriverBase implements ContainerDeriverInterface
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -26,7 +26,7 @@ class HistoryLocalTask extends DeriverBase implements ContainerDeriverInterface
+    *
+    * @param string $base_plugin_id
+    *   The base plugin ID.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+    */
+   public function __construct(string $base_plugin_id, EntityTypeManagerInterface $entityTypeManager) {
+diff --git a/modules/entity_version_history/src/Routing/EntityVersionHistoryRouteSubscriber.php b/modules/entity_version_history/src/Routing/EntityVersionHistoryRouteSubscriber.php
+index 5838858..89fc29f 100755
+--- a/modules/entity_version_history/src/Routing/EntityVersionHistoryRouteSubscriber.php
++++ b/modules/entity_version_history/src/Routing/EntityVersionHistoryRouteSubscriber.php
+@@ -18,14 +18,14 @@ class EntityVersionHistoryRouteSubscriber extends RouteSubscriberBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a EntityVersionHistoryRouteSubscriber object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/modules/entity_version_history/tests/src/FunctionalJavascript/HistoryOverviewTest.php b/modules/entity_version_history/tests/src/FunctionalJavascript/HistoryOverviewTest.php
+index 1455504..48b6bbd 100644
+--- a/modules/entity_version_history/tests/src/FunctionalJavascript/HistoryOverviewTest.php
++++ b/modules/entity_version_history/tests/src/FunctionalJavascript/HistoryOverviewTest.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\entity_version_history\Functional;
+ 
++use Drupal\node\NodeInterface;
++use Drupal\user\UserInterface;
++use Drupal\node\Entity\Node;
+ use Drupal\FunctionalJavascriptTests\WebDriverTestBase;
+ 
+ /**
+@@ -16,14 +19,14 @@ class HistoryOverviewTest extends WebDriverTestBase {
+   /**
+    * An array of node revisions.
+    *
+-   * @var \Drupal\node\NodeInterface[]
++   * @var NodeInterface[]
+    */
+   protected $revisions;
+ 
+   /**
+    * A user with administrative permissions.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+@@ -45,7 +48,7 @@ class HistoryOverviewTest extends WebDriverTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Create user.
+@@ -68,7 +71,7 @@ class HistoryOverviewTest extends WebDriverTestBase {
+       'target_field' => 'field_entity_version',
+     ])->save();
+ 
+-    /** @var \Drupal\node\Entity\Node $node */
++    /** @var Node $node */
+     $node = $entity_type_manager->getStorage('node')->create([
+       'type' => 'first_bundle',
+       'title' => 'My test node',
+diff --git a/modules/entity_version_history/tests/src/Kernel/HistoryTabTest.php b/modules/entity_version_history/tests/src/Kernel/HistoryTabTest.php
+index 10d3a3f..db681ff 100755
+--- a/modules/entity_version_history/tests/src/Kernel/HistoryTabTest.php
++++ b/modules/entity_version_history/tests/src/Kernel/HistoryTabTest.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\entity_version_history\Kernel;
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\Core\Access\AccessManager;
+ use Drupal\entity_test\Entity\EntityTestBundle;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\Tests\user\Traits\UserCreationTrait;
+@@ -38,7 +40,7 @@ class HistoryTabTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installEntitySchema('node');
+@@ -90,7 +92,7 @@ class HistoryTabTest extends KernelTestBase {
+     $route_provider = $this->container->get('router.route_provider');
+     $local_task_manager = $this->container->get('plugin.manager.menu.local_task');
+ 
+-    /** @var \Drupal\Core\Entity\EntityTypeInterface $definition */
++    /** @var EntityTypeInterface $definition */
+     foreach ($this->container->get('entity_type.manager')->getDefinitions() as $definition) {
+       if ($definition->id() === 'node') {
+         $this->assertTrue($definition->hasLinkTemplate('entity-version-history'));
+@@ -141,7 +143,7 @@ class HistoryTabTest extends KernelTestBase {
+     $user_with_permission = $this->createUser(['access entity version history']);
+     $user_without_permission = $this->createUser();
+ 
+-    /** @var \Drupal\Core\Access\AccessManager $access_manager */
++    /** @var AccessManager $access_manager */
+     $access_manager = $this->container->get('access_manager');
+     $cache_contexts = [
+       'route',
+diff --git a/modules/entity_version_workflows/entity_version_workflows.module b/modules/entity_version_workflows/entity_version_workflows.module
+index 8d55d64..3780de1 100644
+--- a/modules/entity_version_workflows/entity_version_workflows.module
++++ b/modules/entity_version_workflows/entity_version_workflows.module
+@@ -6,6 +6,7 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\entity_version_workflows\EntityVersionWorkflowManager;
+ 
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -26,7 +27,7 @@ function entity_version_workflows_form_alter(&$form, FormStateInterface $form_st
+  *
+  * @param object $form
+  *   The form object.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state object.
+  * @param string $form_id
+  *   The ID of the form.
+@@ -79,11 +80,11 @@ function _entity_version_workflows_alter_transition_forms(&$form, FormStateInter
+  *
+  * @param string $entity_type
+  *   The type of the entity.
+- * @param \Drupal\workflows\WorkflowInterface $workflow
++ * @param WorkflowInterface $workflow
+  *   The transition object.
+  * @param object $form
+  *   The form object.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state object.
+  */
+ function entity_version_workflows_form_transition_add_form_builder($entity_type, WorkflowInterface $workflow, &$form, FormStateInterface $form_state): void {
+@@ -129,7 +130,7 @@ function entity_version_workflows_entity_presave(EntityInterface $entity) {
+     return;
+   }
+ 
+-  /** @var \Drupal\entity_version_workflows\EntityVersionWorkflowManager $entity_version_manager */
++  /** @var EntityVersionWorkflowManager $entity_version_manager */
+   $entity_version_handler = \Drupal::service('entity_version_workflows.entity_version_workflow_manager');
+   $entity_version_handler->updateEntityVersion($entity, $version_field);
+ }
+diff --git a/modules/entity_version_workflows/modules/entity_version_workflows_example/src/EventSubscriber/TestCheckEntityChangedSubscriber.php b/modules/entity_version_workflows/modules/entity_version_workflows_example/src/EventSubscriber/TestCheckEntityChangedSubscriber.php
+index 1c694a5..be0ee1b 100644
+--- a/modules/entity_version_workflows/modules/entity_version_workflows_example/src/EventSubscriber/TestCheckEntityChangedSubscriber.php
++++ b/modules/entity_version_workflows/modules/entity_version_workflows_example/src/EventSubscriber/TestCheckEntityChangedSubscriber.php
+@@ -18,14 +18,14 @@ class TestCheckEntityChangedSubscriber implements EventSubscriberInterface {
+   /**
+    * The state.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+   /**
+    * TestCheckEntityChangedSubscriber constructor.
+    *
+-   * @param \Drupal\Core\State\State $state
++   * @param State $state
+    *   The state.
+    */
+   public function __construct(State $state) {
+@@ -44,7 +44,7 @@ class TestCheckEntityChangedSubscriber implements EventSubscriberInterface {
+   /**
+    * Skips the node title from when checking for entity changes.
+    *
+-   * @param \Drupal\entity_version_workflows\Event\CheckEntityChangedEvent $event
++   * @param CheckEntityChangedEvent $event
+    *   The event.
+    */
+   public function skipTitle(CheckEntityChangedEvent $event): void {
+diff --git a/modules/entity_version_workflows/src/EntityVersionWorkflowManager.php b/modules/entity_version_workflows/src/EntityVersionWorkflowManager.php
+index acdabfa..508a936 100644
+--- a/modules/entity_version_workflows/src/EntityVersionWorkflowManager.php
++++ b/modules/entity_version_workflows/src/EntityVersionWorkflowManager.php
+@@ -4,6 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_version_workflows;
+ 
++use Drupal\workflows\WorkflowInterface;
++use Drupal\workflows\WorkflowTypeInterface;
++use Drupal\Core\Entity\RevisionableStorageInterface;
++use Drupal\workflows\TransitionInterface;
+ use Drupal\content_moderation\ModerationInformationInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityChangesDetectionTrait;
+@@ -23,32 +27,32 @@ class EntityVersionWorkflowManager {
+   /**
+    * The symfony event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * The moderation information service.
+    *
+-   * @var \Drupal\content_moderation\ModerationInformationInterface
++   * @var ModerationInformationInterface
+    */
+   protected $moderationInfo;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a new EntityVersionWorkflowHandler.
+    *
+-   * @param \Drupal\content_moderation\ModerationInformationInterface $moderation_info
++   * @param ModerationInformationInterface $moderation_info
+    *   The moderation information service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $eventDispatcher
++   * @param EventDispatcherInterface $eventDispatcher
+    *   The symfony event dispatcher.
+    */
+   public function __construct(ModerationInformationInterface $moderation_info, EntityTypeManagerInterface $entityTypeManager, EventDispatcherInterface $eventDispatcher) {
+@@ -60,7 +64,7 @@ class EntityVersionWorkflowManager {
+   /**
+    * Update the entity version field values of a content entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The content entity.
+    * @param string $field_name
+    *   The name of the entity version field.
+@@ -78,19 +82,19 @@ class EntityVersionWorkflowManager {
+       return;
+     }
+ 
+-    /** @var \Drupal\workflows\WorkflowInterface $workflow */
++    /** @var WorkflowInterface $workflow */
+     $workflow = $this->moderationInfo->getWorkflowForEntity($entity);
+     if (!$workflow) {
+       return;
+     }
+ 
+-    /** @var \Drupal\workflows\WorkflowTypeInterface $workflow_plugin */
++    /** @var WorkflowTypeInterface $workflow_plugin */
+     $workflow_plugin = $workflow->getTypePlugin();
+ 
+     // Compute the transition being used in order to get the version actions
+     // from its config. For this, we need to load the latest revision of the
+     // entity.
+-    /** @var \Drupal\Core\Entity\RevisionableStorageInterface $storage */
++    /** @var RevisionableStorageInterface $storage */
+     $storage = $this->entityTypeManager->getStorage($entity->getEntityTypeId());
+     $latest_revision_id = $storage->getLatestRevisionId($entity->id());
+     $revision = $storage->loadRevision($latest_revision_id);
+@@ -102,7 +106,7 @@ class EntityVersionWorkflowManager {
+ 
+     // Try to get the transition or do nothing.
+     try {
+-      /** @var \Drupal\workflows\TransitionInterface $transition */
++      /** @var TransitionInterface $transition */
+       $transition = $workflow_plugin->getTransitionFromStateToState($current_state, $next_state);
+     }
+     catch (\InvalidArgumentException $e) {
+@@ -137,7 +141,7 @@ class EntityVersionWorkflowManager {
+   /**
+    * Check if the entity has changed.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The content entity object.
+    *
+    * @return bool
+@@ -151,11 +155,11 @@ class EntityVersionWorkflowManager {
+     $field_blacklist = $this->getFieldsToSkipFromEntityChangesCheck($entity);
+     $event = new CheckEntityChangedEvent();
+     $event->setFieldBlacklist($field_blacklist);
+-    $this->eventDispatcher->dispatch(CheckEntityChangedEvent::EVENT, $event);
++    $this->eventDispatcher->dispatch($event, CheckEntityChangedEvent::EVENT);
+     $field_blacklist = $event->getFieldBlacklist();
+ 
+     // We consider the latest revision as original to compare with the entity.
+-    /** @var \Drupal\Core\Entity\RevisionableStorageInterface $storage */
++    /** @var RevisionableStorageInterface $storage */
+     $storage = $this->entityTypeManager->getStorage($entity->getEntityTypeId());
+     $latest_revision_id = $storage->getLatestRevisionId($entity->id());
+     $latestRevision = $storage->loadRevision($latest_revision_id);
+diff --git a/modules/entity_version_workflows/src/Event/CheckEntityChangedEvent.php b/modules/entity_version_workflows/src/Event/CheckEntityChangedEvent.php
+index ab02a08..3ca3d10 100644
+--- a/modules/entity_version_workflows/src/Event/CheckEntityChangedEvent.php
++++ b/modules/entity_version_workflows/src/Event/CheckEntityChangedEvent.php
+@@ -4,7 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_version_workflows\Event;
+ 
+-use Symfony\Component\EventDispatcher\Event;
++use Symfony\Contracts\EventDispatcher\Event;
+ 
+ /**
+  * Dispatched by EntityVersionWorkflowManager::isEntityChanged().

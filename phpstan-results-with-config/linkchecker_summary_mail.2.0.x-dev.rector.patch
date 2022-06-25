@@ -1,0 +1,215 @@
+diff --git a/linkchecker_summary_mail.module b/linkchecker_summary_mail.module
+index ec1d61b..0ddd23f 100644
+--- a/linkchecker_summary_mail.module
++++ b/linkchecker_summary_mail.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\linkchecker_summary_mail\LinkcheckerSummaryMailSummaryBuilder;
++use Drupal\linkchecker\LinkCheckerLinkInterface;
+ /**
+  * @file
+  * Sends link checker summary mails in certain intervals.
+@@ -12,7 +14,7 @@ use Drupal\linkchecker_summary_mail\LinkcheckerSummaryMailInterval;
+  * Implements hook_cron().
+  */
+ function linkchecker_summary_mail_cron() {
+-  /** @var \Drupal\linkchecker_summary_mail\LinkcheckerSummaryMailSummaryBuilder $builder */
++  /** @var LinkcheckerSummaryMailSummaryBuilder $builder */
+   $builder = \Drupal::service('linkchecker_summary_mail.summary_builder');
+   $builder->runCronCheck();
+ }
+@@ -26,7 +28,7 @@ function linkchecker_summary_mail_mail($key, &$message, $params) {
+       '@site' => \Drupal::config('system.site')->get('name'),
+       '@period' => LinkcheckerSummaryMailInterval::periodToString($params['period']),
+     ]);
+-    /** @var \Drupal\linkchecker\LinkCheckerLinkInterface $link */
++    /** @var LinkCheckerLinkInterface $link */
+     foreach ($params['links'] as $link) {
+       $parent_entity = $link->getParentEntity();
+       $message['body'][] = new FormattableMarkup('<p>@title</p>', [
+diff --git a/src/LinkcheckerSummaryMailSummaryBuilder.php b/src/LinkcheckerSummaryMailSummaryBuilder.php
+index 2df4de1..b2a7217 100644
+--- a/src/LinkcheckerSummaryMailSummaryBuilder.php
++++ b/src/LinkcheckerSummaryMailSummaryBuilder.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\linkchecker_summary_mail;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\linkchecker\LinkCheckerLinkInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -18,49 +21,49 @@ class LinkcheckerSummaryMailSummaryBuilder {
+   /**
+    * The linkchecker_summary_mail.settings config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The linkcheckerlink storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $linkcheckerlinkStorage;
+ 
+   /**
+    * The logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The mail manager.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+   protected $mailManager;
+ 
+   /**
+    * The state.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+@@ -164,7 +167,7 @@ class LinkcheckerSummaryMailSummaryBuilder {
+     }
+ 
+     if ($this->config->get('notify_author') === TRUE) {
+-      /** @var \Drupal\linkchecker\LinkCheckerLinkInterface $link */
++      /** @var LinkCheckerLinkInterface $link */
+       foreach ($links as $link) {
+         $params = [
+           'period' => $interval,
+@@ -181,7 +184,7 @@ class LinkcheckerSummaryMailSummaryBuilder {
+     }
+ 
+     if ($this->config->get('notify_latest_editor') === TRUE) {
+-      /** @var \Drupal\linkchecker\LinkCheckerLinkInterface $link */
++      /** @var LinkCheckerLinkInterface $link */
+       foreach ($links as $link) {
+         $params = [
+           'period' => $interval,
+diff --git a/tests/src/Functional/ConfigFormTest.php b/tests/src/Functional/ConfigFormTest.php
+index 387940e..89e2466 100644
+--- a/tests/src/Functional/ConfigFormTest.php
++++ b/tests/src/Functional/ConfigFormTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\linkchecker_summary_mail\Functional;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\Core\Url;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -25,14 +26,14 @@ class ConfigFormTest extends BrowserTestBase {
+   /**
+    * User with the administer linkchecker permission.
+    *
+-   * @var \Drupal\user\Entity\User|false
++   * @var User|false
+    */
+   protected $adminUser;
+ 
+   /**
+    * A regular user.
+    *
+-   * @var \Drupal\user\Entity\User|false
++   * @var User|false
+    */
+   protected $webUser;
+ 
+diff --git a/tests/src/Kernel/LinkcheckerSummaryMailTest.php b/tests/src/Kernel/LinkcheckerSummaryMailTest.php
+index 50dccec..ac87637 100644
+--- a/tests/src/Kernel/LinkcheckerSummaryMailTest.php
++++ b/tests/src/Kernel/LinkcheckerSummaryMailTest.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\Tests\linkchecker_summary_mail\Kernel;
+ 
++use Drupal\Core\State\StateInterface;
++use Drupal\linkchecker_summary_mail\LinkcheckerSummaryMailSummaryBuilder;
++use Drupal\Component\Datetime\TimeInterface;
++use Drupal\user\Entity\User;
++use Drupal\node\NodeInterface;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Core\Test\AssertMailTrait;
+ use Drupal\KernelTests\KernelTestBase;
+@@ -41,35 +47,35 @@ class LinkcheckerSummaryMailTest extends KernelTestBase {
+   /**
+    * The state.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The linkchecker summary mail builder.
+    *
+-   * @var \Drupal\linkchecker_summary_mail\LinkcheckerSummaryMailSummaryBuilder
++   * @var LinkcheckerSummaryMailSummaryBuilder
+    */
+   protected $summaryMailBuilder;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The author of the created nodes.
+    *
+-   * @var \Drupal\user\Entity\User|false
++   * @var User|false
+    */
+   protected $user;
+ 
+   /**
+    * The node.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   protected $node;
+ 
+@@ -316,7 +322,7 @@ class LinkcheckerSummaryMailTest extends KernelTestBase {
+    * @param int|null $last_check
+    *   The last time the link was checked.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   protected function createDummyLink($url = NULL, $status = 404, $last_check = NULL) {
+     LinkCheckerLink::create([

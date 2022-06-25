@@ -1,0 +1,609 @@
+diff --git a/composer.json b/composer.json
+index 32d52e3..65d716c 100644
+--- a/composer.json
++++ b/composer.json
+@@ -5,7 +5,7 @@
+   "license": "GPL-2.0-or-later",
+   "minimum-stability": "dev",
+   "require": {
+-    "drupal/core": "^8.7.7 || ^9",
+-    "drupal/scheduler": "^1.1"
++    "drupal/scheduler": "^1.1",
++    "drupal/core": "^8.7.7 || ^9 || ^10"
+   }
+ }
+diff --git a/scheduler_content_moderation_integration.info.yml b/scheduler_content_moderation_integration.info.yml
+index 1019082..7100734 100644
+--- a/scheduler_content_moderation_integration.info.yml
++++ b/scheduler_content_moderation_integration.info.yml
+@@ -1,7 +1,7 @@
+ name: Scheduler Content Moderation Integration
+ type: module
+ description: 'Scheduler sub-module providing content moderation functionality for publishing/unpublishing.'
+-core_version_requirement: ^8.7.7 || ^9
++core_version_requirement: ^8.7.7 || ^9 || ^10
+ dependencies:
+   - drupal:options
+   - drupal:content_moderation
+diff --git a/scheduler_content_moderation_integration.module b/scheduler_content_moderation_integration.module
+index 04ef1f7..e7ddd23 100644
+--- a/scheduler_content_moderation_integration.module
++++ b/scheduler_content_moderation_integration.module
+@@ -1,5 +1,11 @@
+ <?php
+ 
++use Drupal\content_moderation\ModerationInformationInterface;
++use Drupal\workflows\WorkflowInterface;
++use Drupal\content_moderation\StateTransitionValidation;
++use Drupal\node\NodeTypeInterface;
++use Drupal\content_moderation\Plugin\WorkflowType\ContentModerationInterface;
++use Drupal\content_moderation\ContentModerationState;
+ /**
+  * @file
+  * Scheduler Content Moderation Integration.
+@@ -30,7 +36,7 @@ use Drupal\workflows\Transition;
+  * transitions.
+  */
+ function scheduler_content_moderation_integration_entity_access(EntityInterface $entity, $operation, AccountInterface $account) {
+-  /** @var \Drupal\content_moderation\ModerationInformationInterface $moderation_info */
++  /** @var ModerationInformationInterface $moderation_info */
+   $moderation_info = Drupal::service('content_moderation.moderation_information');
+ 
+   if ($operation === 'update' && $moderation_info->isModeratedEntity($entity) && $entity->moderation_state) {
+@@ -42,10 +48,10 @@ function scheduler_content_moderation_integration_entity_access(EntityInterface
+       $states[] = $entity->unpublish_state;
+     }
+ 
+-    /** @var \Drupal\workflows\WorkflowInterface $workflow */
++    /** @var WorkflowInterface $workflow */
+     $workflow = $moderation_info->getWorkflowForEntity($entity);
+     $current_state = $workflow->getTypePlugin()->getState($entity->moderation_state->value);
+-    /** @var \Drupal\content_moderation\StateTransitionValidation $transition_validation */
++    /** @var StateTransitionValidation $transition_validation */
+     $transition_validation = \Drupal::service('content_moderation.state_transition_validation');
+     foreach ($states as $state) {
+       try {
+@@ -129,7 +135,7 @@ function scheduler_content_moderation_integration_form_node_form_alter(&$form, F
+   // corresponding state selection field. If #access is already set to false
+   // (for example by a third-party module) then do not override that setting.
+   $config = \Drupal::config('scheduler.settings');
+-  /** @var \Drupal\node\NodeTypeInterface $type */
++  /** @var NodeTypeInterface $type */
+   $type = $form_state->getFormObject()->getEntity()->type->entity;
+   $form['publish_state']['#access'] = ($form['publish_state']['#access'] ?? TRUE) && $type->getThirdPartySetting('scheduler', 'publish_enable', $config->get('default_publish_enable'));
+   $form['unpublish_state']['#access'] = ($form['unpublish_state']['#access'] ?? TRUE) && $type->getThirdPartySetting('scheduler', 'unpublish_enable', $config->get('default_unpublish_enable'));
+@@ -159,9 +165,9 @@ function _scheduler_content_moderation_integration_hide_empty_state_options(arra
+  * Helps on generating the options dynamically for the scheduler
+  * moderation widget.
+  *
+- * @param \Drupal\Core\Field\FieldStorageDefinitionInterface $definition
++ * @param FieldStorageDefinitionInterface $definition
+  *   The field storage definition.
+- * @param \Drupal\Core\Entity\FieldableEntityInterface|null $entity
++ * @param FieldableEntityInterface|null $entity
+  *   (optional) The entity context if known, or NULL if the allowed values are
+  *   being collected without the context of a specific entity.
+  * @param bool &$cacheable
+@@ -181,7 +187,7 @@ function _scheduler_content_moderation_integration_states_values(FieldStorageDef
+     $workflow_storage = \Drupal::entityTypeManager()->getStorage('workflow');
+ 
+     foreach ($workflow_storage->loadByProperties(['type' => 'content_moderation']) as $workflow) {
+-      /** @var \Drupal\content_moderation\Plugin\WorkflowType\ContentModerationInterface $workflow_type */
++      /** @var ContentModerationInterface $workflow_type */
+       $workflow_type = $workflow->getTypePlugin();
+ 
+       foreach ($workflow_type->getStates() as $state_id => $state) {
+@@ -192,7 +198,7 @@ function _scheduler_content_moderation_integration_states_values(FieldStorageDef
+     return $options;
+   }
+ 
+-  /** @var \Drupal\content_moderation\ModerationInformationInterface $moderation_information */
++  /** @var ModerationInformationInterface $moderation_information */
+   $moderation_information = \Drupal::service('content_moderation.moderation_information');
+ 
+   // Only add options for moderated entities.
+@@ -200,10 +206,10 @@ function _scheduler_content_moderation_integration_states_values(FieldStorageDef
+     return $options;
+   }
+ 
+-  /** @var \Drupal\workflows\WorkflowInterface $workflow */
++  /** @var WorkflowInterface $workflow */
+   $workflow = $moderation_information->getWorkflowForEntity($entity);
+ 
+-  /** @var \Drupal\content_moderation\Plugin\WorkflowType\ContentModerationInterface $type_plugin */
++  /** @var ContentModerationInterface $type_plugin */
+   $type_plugin = $workflow->getTypePlugin();
+ 
+   $user = \Drupal::currentUser();
+@@ -225,7 +231,7 @@ function _scheduler_content_moderation_integration_states_values(FieldStorageDef
+   $unpublish_state_options['_none'] = '';
+ 
+   foreach ($user_transitions as $transition) {
+-    /** @var \Drupal\content_moderation\ContentModerationState $state */
++    /** @var ContentModerationState $state */
+     $state = $transition->to();
+     // Check that this transition is valid from the current state.
+     $ok_from_current = $current_state->canTransitionTo($state->id());
+@@ -264,7 +270,7 @@ function _scheduler_content_moderation_integration_states_values(FieldStorageDef
+  * the scheduler publish_on field should be hidden.
+  */
+ function scheduler_content_moderation_integration_scheduler_hide_publish_on_field($form, $form_state, $node) {
+-  /** @var \Drupal\content_moderation\ModerationInformationInterface $moderation_information */
++  /** @var ModerationInformationInterface $moderation_information */
+   $moderation_information = \Drupal::service('content_moderation.moderation_information');
+ 
+   $return = FALSE;
+@@ -288,7 +294,7 @@ function scheduler_content_moderation_integration_scheduler_hide_publish_on_fiel
+  * the scheduler unpublish_on field should be hidden.
+  */
+ function scheduler_content_moderation_integration_scheduler_hide_unpublish_on_field($form, $form_state, $node) {
+-  /** @var \Drupal\content_moderation\ModerationInformationInterface $moderation_information */
++  /** @var ModerationInformationInterface $moderation_information */
+   $moderation_information = \Drupal::service('content_moderation.moderation_information');
+ 
+   $return = FALSE;
+@@ -315,7 +321,7 @@ function scheduler_content_moderation_integration_scheduler_hide_unpublish_on_fi
+  * 0  if not moderated, to let Scheduler process the node as normal.
+  */
+ function scheduler_content_moderation_integration_scheduler_publish_action($node) {
+-  /** @var \Drupal\content_moderation\ModerationInformationInterface $moderation_information */
++  /** @var ModerationInformationInterface $moderation_information */
+   $moderation_information = \Drupal::service('content_moderation.moderation_information');
+ 
+   if (!$moderation_information->isModeratedEntity($node)) {
+@@ -325,7 +331,7 @@ function scheduler_content_moderation_integration_scheduler_publish_action($node
+   $state = $node->publish_state->value;
+   $node->publish_state->value = NULL;
+ 
+-  /** @var \Drupal\content_moderation\Plugin\WorkflowType\ContentModerationInterface $type_plugin */
++  /** @var ContentModerationInterface $type_plugin */
+   $type_plugin = $moderation_information->getWorkflowForEntity($node)->getTypePlugin();
+   try {
+     // If transition is not valid, throw exception.
+@@ -349,7 +355,7 @@ function scheduler_content_moderation_integration_scheduler_publish_action($node
+  * 0  if not moderated, to let Scheduler process the node as normal.
+  */
+ function scheduler_content_moderation_integration_scheduler_unpublish_action($node) {
+-  /** @var \Drupal\content_moderation\ModerationInformationInterface $moderation_information */
++  /** @var ModerationInformationInterface $moderation_information */
+   $moderation_information = \Drupal::service('content_moderation.moderation_information');
+ 
+   if (!$moderation_information->isModeratedEntity($node)) {
+@@ -359,7 +365,7 @@ function scheduler_content_moderation_integration_scheduler_unpublish_action($no
+   $state = $node->unpublish_state->value;
+   $node->unpublish_state->value = NULL;
+ 
+-  /** @var \Drupal\content_moderation\Plugin\WorkflowType\ContentModerationInterface $type_plugin */
++  /** @var ContentModerationInterface $type_plugin */
+   $type_plugin = $moderation_information->getWorkflowForEntity($node)->getTypePlugin();
+   try {
+     // If transition is not valid, throw exception.
+diff --git a/src/EventSubscriber/SchedulerEventSubscriber.php b/src/EventSubscriber/SchedulerEventSubscriber.php
+index b6ffe7a..3b470fa 100644
+--- a/src/EventSubscriber/SchedulerEventSubscriber.php
++++ b/src/EventSubscriber/SchedulerEventSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\scheduler_content_moderation_integration\EventSubscriber;
+ 
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\scheduler\SchedulerEvent;
+ use Drupal\scheduler\SchedulerEvents;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+@@ -16,11 +17,11 @@ class SchedulerEventSubscriber implements EventSubscriberInterface {
+    *
+    * This is during the edit process, not via cron.
+    *
+-   * @param \Drupal\scheduler\SchedulerEvent $event
++   * @param SchedulerEvent $event
+    *   The event being acted on.
+    */
+   public function publishImmediately(SchedulerEvent $event) {
+-    /** @var Drupal\Core\Entity\EntityInterface $entity */
++    /** @var EntityInterface $entity */
+     $entity = $event->getNode();
+     $entity->set('moderation_state', $entity->publish_state->getValue());
+     $event->setNode($entity);
+diff --git a/src/Plugin/Field/FieldWidget/SchedulerModerationWidget.php b/src/Plugin/Field/FieldWidget/SchedulerModerationWidget.php
+index eacc77b..cf95757 100644
+--- a/src/Plugin/Field/FieldWidget/SchedulerModerationWidget.php
++++ b/src/Plugin/Field/FieldWidget/SchedulerModerationWidget.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\scheduler_content_moderation_integration\Plugin\Field\FieldWidget;
+ 
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\content_moderation\ModerationInformationInterface;
+ use Drupal\Core\Entity\ContentEntityForm;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+@@ -28,7 +29,7 @@ class SchedulerModerationWidget extends OptionsSelectWidget implements Container
+   /**
+    * The moderation information service.
+    *
+-   * @var \Drupal\content_moderation\ModerationInformationInterface
++   * @var ModerationInformationInterface
+    */
+   protected $moderationInformation;
+ 
+@@ -56,7 +57,7 @@ class SchedulerModerationWidget extends OptionsSelectWidget implements Container
+     // @todo Can this conditional ever be false? There is no test coverage for
+     // that situation (if it exists).
+     if ($form_state->getFormObject() instanceof ContentEntityForm) {
+-      /** @var \Drupal\Core\Entity\EntityInterface $entity */
++      /** @var EntityInterface $entity */
+       $entity = $form_state->getFormObject()->getEntity();
+       if (!$this->moderationInformation->isModeratedEntity($entity)) {
+         $element['#access'] = FALSE;
+diff --git a/src/Plugin/Validation/Constraint/ConstraintValidatorBase.php b/src/Plugin/Validation/Constraint/ConstraintValidatorBase.php
+index 51c29b6..71fabe7 100644
+--- a/src/Plugin/Validation/Constraint/ConstraintValidatorBase.php
++++ b/src/Plugin/Validation/Constraint/ConstraintValidatorBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\scheduler_content_moderation_integration\Plugin\Validation\Constraint;
+ 
++use Drupal\Core\Session\AccountProxyInterface;
++use Drupal\workflows\WorkflowTypeInterface;
+ use Drupal\content_moderation\ModerationInformationInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+@@ -19,23 +21,23 @@ abstract class ConstraintValidatorBase extends ConstraintValidator implements Co
+   /**
+    * The content moderation information service.
+    *
+-   * @var \Drupal\content_moderation\ModerationInformationInterface
++   * @var ModerationInformationInterface
+    */
+   protected $moderationInformation;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $account;
+ 
+   /**
+    * SchedulerModerationConstraintValidator constructor.
+    *
+-   * @param \Drupal\content_moderation\ModerationInformationInterface $moderationInformation
++   * @param ModerationInformationInterface $moderationInformation
+    *   The content moderation information service.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The current user.
+    */
+   public function __construct(
+@@ -59,10 +61,10 @@ abstract class ConstraintValidatorBase extends ConstraintValidator implements Co
+   /**
+    * Gets the workflow type from the supplied entity's configured workflow.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The content entity to get the workflow type for.
+    *
+-   * @return \Drupal\workflows\WorkflowTypeInterface
++   * @return WorkflowTypeInterface
+    *   The workflow type.
+    */
+   protected function getEntityWorkflowType(ContentEntityInterface $entity) {
+@@ -77,7 +79,7 @@ abstract class ConstraintValidatorBase extends ConstraintValidator implements Co
+    * Validate that the transition between the supplied states is a valid
+    * transition for the supplied entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity containing the workflow to check against.
+    * @param string $from_state
+    *   The state to transition from.
+diff --git a/src/Plugin/Validation/Constraint/PublishStateConstraintValidator.php b/src/Plugin/Validation/Constraint/PublishStateConstraintValidator.php
+index 65feb9a..9c24f18 100644
+--- a/src/Plugin/Validation/Constraint/PublishStateConstraintValidator.php
++++ b/src/Plugin/Validation/Constraint/PublishStateConstraintValidator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\scheduler_content_moderation_integration\Plugin\Validation\Constraint;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Symfony\Component\Validator\Constraint;
+ 
+ /**
+@@ -13,7 +14,7 @@ class PublishStateConstraintValidator extends ConstraintValidatorBase {
+    * {@inheritdoc}
+    */
+   public function validate($value, Constraint $constraint) {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = $value->getEntity();
+ 
+     // No need to validate entities that are not moderated.
+diff --git a/src/Plugin/Validation/Constraint/TransitionAccessConstraintValidator.php b/src/Plugin/Validation/Constraint/TransitionAccessConstraintValidator.php
+index baf55f5..11031f9 100644
+--- a/src/Plugin/Validation/Constraint/TransitionAccessConstraintValidator.php
++++ b/src/Plugin/Validation/Constraint/TransitionAccessConstraintValidator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\scheduler_content_moderation_integration\Plugin\Validation\Constraint;
+ 
++use Drupal\Core\Field\FieldItemList;
+ use Symfony\Component\Validator\Constraint;
+ 
+ /**
+@@ -13,7 +14,7 @@ class TransitionAccessConstraintValidator extends ConstraintValidatorBase {
+    * {@inheritdoc}
+    */
+   public function validate($value, Constraint $constraint) {
+-    /** @var \Drupal\Core\Field\FieldItemList $value */
++    /** @var FieldItemList $value */
+     assert($constraint instanceof TransitionAccessConstraint);
+     $entity = $value->getEntity();
+ 
+diff --git a/src/Plugin/Validation/Constraint/UnPublishStateConstraintValidator.php b/src/Plugin/Validation/Constraint/UnPublishStateConstraintValidator.php
+index dbbd0b9..58eb1fe 100644
+--- a/src/Plugin/Validation/Constraint/UnPublishStateConstraintValidator.php
++++ b/src/Plugin/Validation/Constraint/UnPublishStateConstraintValidator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\scheduler_content_moderation_integration\Plugin\Validation\Constraint;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Symfony\Component\Validator\Constraint;
+ 
+ /**
+@@ -14,7 +15,7 @@ class UnPublishStateConstraintValidator extends ConstraintValidatorBase {
+    */
+   public function validate($value, Constraint $constraint) {
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = $value->getEntity();
+ 
+     // No need to validate entities that are not moderated.
+diff --git a/tests/src/Functional/FormsTest.php b/tests/src/Functional/FormsTest.php
+index f9b555b..e5a5ff6 100644
+--- a/tests/src/Functional/FormsTest.php
++++ b/tests/src/Functional/FormsTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\scheduler_content_moderation_integration\Functional;
+ 
++use Drupal\Tests\WebAssert;
+ /**
+  * Test covering manipulation of add and edit entity forms.
+  *
+@@ -17,7 +18,7 @@ class FormsTest extends SchedulerContentModerationBrowserTestBase {
+   public function testFormAlter($entityTypeId, $bundle, $operation) {
+     $this->drupalLogin($this->schedulerUser);
+     $entityType = $this->entityTypeObject($entityTypeId, $bundle);
+-    /** @var \Drupal\Tests\WebAssert $assert */
++    /** @var WebAssert $assert */
+     $assert = $this->assertSession();
+ 
+     if ($operation == 'add') {
+@@ -135,7 +136,7 @@ class FormsTest extends SchedulerContentModerationBrowserTestBase {
+    */
+   public function testFormAlterWithDeniedAccess($entityTypeId, $bundle, $operation) {
+     $this->drupalLogin($this->schedulerUser);
+-    /** @var \Drupal\Tests\WebAssert $assert */
++    /** @var WebAssert $assert */
+     $assert = $this->assertSession();
+ 
+     if ($operation == 'add') {
+@@ -148,7 +149,7 @@ class FormsTest extends SchedulerContentModerationBrowserTestBase {
+ 
+     // Check that both state fields are shown by default.
+     $this->drupalGet($url);
+-    $this->assertResponse(200, "The $operation form is displayed without error");
++    $this->assertSession()->statusCodeEquals(200, "The $operation form is displayed without error");
+     $assert->FieldExists('publish_state[0]');
+     $assert->FieldExists('unpublish_state[0]');
+ 
+@@ -164,7 +165,7 @@ class FormsTest extends SchedulerContentModerationBrowserTestBase {
+ 
+     // Check that both state fields are now hidden.
+     $this->drupalGet($url);
+-    $this->assertResponse(200, "The $operation form is displayed without error");
++    $this->assertSession()->statusCodeEquals(200, "The $operation form is displayed without error");
+     $assert->FieldNotExists('publish_state[0]');
+     $assert->FieldNotExists('unpublish_state[0]');
+   }
+diff --git a/tests/src/Functional/SchedulerContentModerationBrowserTestBase.php b/tests/src/Functional/SchedulerContentModerationBrowserTestBase.php
+index 830306a..909b935 100644
+--- a/tests/src/Functional/SchedulerContentModerationBrowserTestBase.php
++++ b/tests/src/Functional/SchedulerContentModerationBrowserTestBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\scheduler_content_moderation_integration\Functional;
+ 
++use Drupal\workflows\Entity\Workflow;
++use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Tests\BrowserTestBase;
+ use Drupal\Tests\content_moderation\Traits\ContentModerationTestTrait;
+ use Drupal\Tests\scheduler\Traits\SchedulerSetupTrait;
+@@ -32,14 +34,14 @@ abstract class SchedulerContentModerationBrowserTestBase extends BrowserTestBase
+   /**
+    * The moderation workflow.
+    *
+-   * @var \Drupal\workflows\Entity\Workflow
++   * @var Workflow
+    */
+   protected $workflow;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->drupalCreateContentType([
+@@ -91,7 +93,7 @@ abstract class SchedulerContentModerationBrowserTestBase extends BrowserTestBase
+    * @param string $bundle
+    *   The machine name of the bundle, for example 'page' or 'soundtrack'.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeInterface
++   * @return EntityTypeInterface
+    *   The stored entity type object.
+    */
+   public function entityTypeObject(string $entityTypeId, string $bundle) {
+diff --git a/tests/src/Functional/TransitionAccessTest.php b/tests/src/Functional/TransitionAccessTest.php
+index c713148..c8b0e3a 100644
+--- a/tests/src/Functional/TransitionAccessTest.php
++++ b/tests/src/Functional/TransitionAccessTest.php
+@@ -92,7 +92,7 @@ class TransitionAccessTest extends SchedulerContentModerationBrowserTestBase {
+       'publish_state[0]' => 'published',
+     ];
+     $this->drupalGet("$entityTypeId/{$entity->id()}/edit");
+-    $this->assertResponse(200, 'Scheduler user should be able to edit the entity."');
++    $this->assertSession()->statusCodeEquals(200, 'Scheduler user should be able to edit the entity."');
+     $this->submitForm($edit, 'Save');
+ 
+     $this->assertSession()
+@@ -102,7 +102,7 @@ class TransitionAccessTest extends SchedulerContentModerationBrowserTestBase {
+     // editing access should be denied.
+     $this->drupalLogin($restrictedUser);
+     $this->drupalGet("$entityTypeId/{$entity->id()}/edit");
+-    $this->assertResponse(403, 'Restricted user should not be able to edit the entity."');
++    $this->assertSession()->statusCodeEquals(403, 'Restricted user should not be able to edit the entity."');
+ 
+     // Remove scheduling info.
+     $this->drupalLogin($schedulerUser);
+@@ -118,7 +118,7 @@ class TransitionAccessTest extends SchedulerContentModerationBrowserTestBase {
+     // (using 'create_new_draft' transition).
+     $this->drupalLogin($restrictedUser);
+     $this->drupalGet("$entityTypeId/{$entity->id()}/edit");
+-    $this->assertResponse(200, 'Restricted user should be able to edit the entity."');
++    $this->assertSession()->statusCodeEquals(200, 'Restricted user should be able to edit the entity."');
+     $this->submitForm([], 'Save');
+     $this->assertSession()->pageTextContains(sprintf('%s has been updated.', $entity->label()));
+ 
+@@ -131,7 +131,7 @@ class TransitionAccessTest extends SchedulerContentModerationBrowserTestBase {
+       'unpublish_state[0]' => 'archived',
+     ];
+     $this->drupalGet("$entityTypeId/{$entity->id()}/edit");
+-    $this->assertResponse(200, 'Scheduler user should be able to edit the entity."');
++    $this->assertSession()->statusCodeEquals(200, 'Scheduler user should be able to edit the entity."');
+     $this->submitForm($edit, 'Save');
+ 
+     $this->assertSession()
+@@ -141,7 +141,7 @@ class TransitionAccessTest extends SchedulerContentModerationBrowserTestBase {
+     // editing access should be denied.
+     $this->drupalLogin($restrictedUser);
+     $this->drupalGet("$entityTypeId/{$entity->id()}/edit");
+-    $this->assertResponse(403, 'Restricted user should not be able to edit the entity."');
++    $this->assertSession()->statusCodeEquals(403, 'Restricted user should not be able to edit the entity."');
+ 
+     // Remove scheduling info.
+     $this->drupalLogin($schedulerUser);
+@@ -155,7 +155,7 @@ class TransitionAccessTest extends SchedulerContentModerationBrowserTestBase {
+     // Check entity is editable by restricted user when there is no scheduling.
+     $this->drupalLogin($restrictedUser);
+     $this->drupalGet("$entityTypeId/{$entity->id()}/edit");
+-    $this->assertResponse(200, 'Restricted user should be able to edit the entity."');
++    $this->assertSession()->statusCodeEquals(200, 'Restricted user should be able to edit the entity."');
+     $this->submitForm([], 'Save');
+     $this->assertSession()->pageTextContains(sprintf('%s has been updated.', $entity->label()));
+   }
+diff --git a/tests/src/Kernel/HookImplementationTest.php b/tests/src/Kernel/HookImplementationTest.php
+index 1f625c5..47e5cfb 100644
+--- a/tests/src/Kernel/HookImplementationTest.php
++++ b/tests/src/Kernel/HookImplementationTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\scheduler_content_moderation_integration\Kernel;
+ 
++use Drupal\node\NodeInterface;
+ use Drupal\node\Entity\Node;
+ 
+ /**
+@@ -14,21 +15,21 @@ class HookImplementationTest extends SchedulerContentModerationTestBase {
+   /**
+    * A node of a type which is enabled for moderation.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   protected $moderatedNode;
+ 
+   /**
+    * A node of a type which is not enabled for moderation.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   protected $nonModeratedNode;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Create a user which has any permission required.
+diff --git a/tests/src/Kernel/PublishedStateConstraintTest.php b/tests/src/Kernel/PublishedStateConstraintTest.php
+index bfd5984..886020d 100644
+--- a/tests/src/Kernel/PublishedStateConstraintTest.php
++++ b/tests/src/Kernel/PublishedStateConstraintTest.php
+@@ -16,7 +16,7 @@ class PublishedStateConstraintTest extends SchedulerContentModerationTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $user = $this->createMock('Drupal\Core\Session\AccountInterface');
+diff --git a/tests/src/Kernel/SchedulerContentModerationTestBase.php b/tests/src/Kernel/SchedulerContentModerationTestBase.php
+index 8077807..7d70f7a 100644
+--- a/tests/src/Kernel/SchedulerContentModerationTestBase.php
++++ b/tests/src/Kernel/SchedulerContentModerationTestBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\scheduler_content_moderation_integration\Kernel;
+ 
++use Drupal\content_moderation\ModerationInformationInterface;
++use Drupal\workflows\Entity\Workflow;
+ use Drupal\Core\Datetime\Entity\DateFormat;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\node\Entity\NodeType;
+@@ -28,14 +30,14 @@ abstract class SchedulerContentModerationTestBase extends KernelTestBase {
+   /**
+    * Moderation info service.
+    *
+-   * @var \Drupal\content_moderation\ModerationInformationInterface
++   * @var ModerationInformationInterface
+    */
+   protected $moderationInfo;
+ 
+   /**
+    * The moderation workflow.
+    *
+-   * @var \Drupal\workflows\Entity\Workflow
++   * @var Workflow
+    */
+   protected $workflow;
+ 
+@@ -62,7 +64,7 @@ abstract class SchedulerContentModerationTestBase extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installSchema('node', 'node_access');
+diff --git a/tests/src/Kernel/UnPublishedStateConstraintTest.php b/tests/src/Kernel/UnPublishedStateConstraintTest.php
+index 0c53063..caa8650 100644
+--- a/tests/src/Kernel/UnPublishedStateConstraintTest.php
++++ b/tests/src/Kernel/UnPublishedStateConstraintTest.php
+@@ -16,7 +16,7 @@ class UnPublishedStateConstraintTest extends SchedulerContentModerationTestBase
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $user = $this->createMock('Drupal\Core\Session\AccountInterface');

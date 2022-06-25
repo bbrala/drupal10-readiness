@@ -1,0 +1,312 @@
+diff --git a/nodeviewcount.api.php b/nodeviewcount.api.php
+index 30151ca..9d8738f 100644
+--- a/nodeviewcount.api.php
++++ b/nodeviewcount.api.php
+@@ -11,13 +11,12 @@ use Drupal\node\NodeInterface;
+  * @addtogroup hooks
+  * @{
+  */
+-
+ /**
+  * Acts when new nodeviewcount record tries to be inserted into database.
+  *
+  * This hook can return FALSE to prevent insertion of nodeviewcount record.
+  *
+- * @param \Drupal\node\NodeInterface $node
++ * @param NodeInterface $node
+  *   The node object to be recorded in nodeviewcount statistics.
+  * @param string $view_mode
+  *   View mode of the node.
+diff --git a/nodeviewcount.module b/nodeviewcount.module
+index fc6a15a..bccc09b 100644
+--- a/nodeviewcount.module
++++ b/nodeviewcount.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\nodeviewcount\NodeViewCountRecordsManager;
++use Drupal\user\UserInterface;
+ /**
+  * @file
+  * Primarily Drupal hooks for nodeviewcount module.
+@@ -13,9 +15,9 @@ use Drupal\node\NodeInterface;
+  * Implements hook_ENTITY_TYPE_view().
+  */
+ function nodeviewcount_node_view(array &$build, NodeInterface $node, EntityViewDisplayInterface $display, $view_mode) {
+-  /** @var \Drupal\nodeviewcount\NodeViewCountRecordsManager $records_manager */
++  /** @var NodeViewCountRecordsManager $records_manager */
+   $records_manager = Drupal::service('nodeviewcount.records_manager');
+-  /** @var \Drupal\user\UserInterface $user */
++  /** @var UserInterface $user */
+   $user = Drupal::currentUser();
+   $uip = Drupal::request()->getClientIp();
+   if ($records_manager->isRecordableForNodeType($node) && $records_manager->isRecordableForUserRole($user) && $records_manager->isRecordableForViewMode($view_mode)) {
+@@ -36,7 +38,7 @@ function nodeviewcount_node_view(array &$build, NodeInterface $node, EntityViewD
+  * Implements hook_cron().
+  */
+ function nodeviewcount_cron() {
+-  /** @var \Drupal\nodeviewcount\NodeViewCountRecordsManager $records_manager */
++  /** @var NodeViewCountRecordsManager $records_manager */
+   $records_manager = Drupal::service('nodeviewcount.records_manager');
+   $logs_life_time = $records_manager->getLogsLifeTime();
+   if ($logs_life_time > 0) {
+diff --git a/src/Controller/NodeViewCountController.php b/src/Controller/NodeViewCountController.php
+index a01d97e..78e1710 100644
+--- a/src/Controller/NodeViewCountController.php
++++ b/src/Controller/NodeViewCountController.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\nodeviewcount\Controller;
+ 
++use Symfony\Component\HttpFoundation\Response;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\node\NodeTypeInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+@@ -18,32 +22,32 @@ class NodeViewCountController implements ContainerInjectionInterface {
+   /**
+    * Node view count records manager.
+    *
+-   * @var \Drupal\nodeviewcount\NodeViewCountRecordsManager
++   * @var NodeViewCountRecordsManager
+    */
+   protected $recordsManager;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a NodeViewCountController object.
+    *
+-   * @param \Drupal\nodeviewcount\NodeViewCountRecordsManager $records_manager
++   * @param NodeViewCountRecordsManager $records_manager
+    *   Node view count records manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(NodeViewCountRecordsManager $records_manager, ModuleHandlerInterface $module_handler, EntityTypeManagerInterface $entity_type_manager) {
+@@ -66,18 +70,18 @@ class NodeViewCountController implements ContainerInjectionInterface {
+   /**
+    * Ajax request handler for updating node's view count statistics.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   Symfony Request object.
+    *   Request should have next query params:
+    *     - nid : Id of node to update statistics for.
+    *     - uid : Id of user which viewed the node.
+    *     - view_mode : View mode if the node.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Update operation status response.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function updateCounter(Request $request) {
+     $data = ['status' => FALSE];
+@@ -86,7 +90,7 @@ class NodeViewCountController implements ContainerInjectionInterface {
+     $uip = $request->request->filter('uip', FALSE, FILTER_VALIDATE_IP);
+     $view_mode = $request->get('view_mode');
+     if ($nid !== FALSE && $uid !== FALSE) {
+-      /** @var \Drupal\node\NodeTypeInterface[] $node_types */
++      /** @var NodeTypeInterface[] $node_types */
+       $node_storage = $this->entityTypeManager->getStorage('node');
+       $node = $node_storage->load($nid);
+       $result = $this->moduleHandler->invokeAll('nodeviewcount_insert', [$node, $view_mode]);
+diff --git a/src/Form/NodeViewCountSettingsForm.php b/src/Form/NodeViewCountSettingsForm.php
+index ff93c0d..b01ac2c 100644
+--- a/src/Form/NodeViewCountSettingsForm.php
++++ b/src/Form/NodeViewCountSettingsForm.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\nodeviewcount\Form;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\node\NodeTypeInterface;
++use Drupal\user\RoleInterface;
+ use Drupal\Core\Cache\CacheTagsInvalidatorInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+@@ -20,43 +24,43 @@ class NodeViewCountSettingsForm extends ConfigFormBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The cache tags invalidator.
+    *
+-   * @var \Drupal\Core\Cache\CacheTagsInvalidatorInterface
++   * @var CacheTagsInvalidatorInterface
+    */
+   protected $cacheTagsInvalidator;
+ 
+   /**
+    * Constructs a NodeViewCountSettingsForm object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
++   * @param EntityDisplayRepositoryInterface $entity_display_repository
+    *   The entity display repository.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Cache\CacheTagsInvalidatorInterface $cache_tags_invalidator
++   * @param CacheTagsInvalidatorInterface $cache_tags_invalidator
+    *   The cache tags invalidator.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, EntityDisplayRepositoryInterface $entity_display_repository, DateFormatterInterface $date_formatter, CacheTagsInvalidatorInterface $cache_tags_invalidator) {
+@@ -154,12 +158,12 @@ class NodeViewCountSettingsForm extends ConfigFormBase {
+    * @return array
+    *   All possible node type names for nodes.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   private function getNodeTypesOptions() {
+     $node_types_options = [];
+-    /** @var \Drupal\node\NodeTypeInterface[] $node_types */
++    /** @var NodeTypeInterface[] $node_types */
+     $node_types = $this->entityTypeManager->getStorage('node_type')
+       ->loadMultiple();
+     foreach ($node_types as $node_id => $node_type) {
+@@ -200,12 +204,12 @@ class NodeViewCountSettingsForm extends ConfigFormBase {
+    * @return array
+    *   User role names that are not in excluded user roles.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   private function getRoleNamesOptions(array $excluded_user_roles) {
+     $roles_options = [];
+-    /** @var \Drupal\user\RoleInterface[] $roles */
++    /** @var RoleInterface[] $roles */
+     $roles = $this->entityTypeManager->getStorage('user_role')->loadMultiple();
+     foreach ($roles as $role_id => $role) {
+       if (!in_array($role_id, $excluded_user_roles)) {
+diff --git a/src/NodeViewCountRecordsManager.php b/src/NodeViewCountRecordsManager.php
+index f457cb1..3052b5b 100644
+--- a/src/NodeViewCountRecordsManager.php
++++ b/src/NodeViewCountRecordsManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\nodeviewcount;
+ 
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Datetime\DrupalDateTime;
+@@ -19,23 +20,23 @@ class NodeViewCountRecordsManager implements NodeViewCountRecordsManagerInterfac
+   /**
+    * The database connection object.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Nodeviewcount configuration object.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * Constructs a NodeViewCountRecordsManager object.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection object.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Configuration object factory.
+    */
+   public function __construct(Connection $connection, ConfigFactoryInterface $config_factory) {
+diff --git a/src/NodeViewCountRecordsManagerInterface.php b/src/NodeViewCountRecordsManagerInterface.php
+index 1e11ae3..f7b7586 100644
+--- a/src/NodeViewCountRecordsManagerInterface.php
++++ b/src/NodeViewCountRecordsManagerInterface.php
+@@ -26,9 +26,9 @@ interface NodeViewCountRecordsManagerInterface {
+   /**
+    * Return count of node views.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   Node object.
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   Chosen user for counting or NULL for counting node views of all users.
+    * @param bool $distinct_users
+    *   Should same user node view count as 1 view.
+@@ -60,7 +60,7 @@ interface NodeViewCountRecordsManagerInterface {
+   /**
+    * Checks whether node should be counted in statistics for given user role.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   User account object to fetch roles from.
+    *
+    * @return bool
+@@ -71,7 +71,7 @@ interface NodeViewCountRecordsManagerInterface {
+   /**
+    * Checks whether node of given node type should be counted in statistics.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   Node object.
+    *
+    * @return bool

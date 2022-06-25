@@ -1,0 +1,2079 @@
+diff --git a/modules/notification_system_database/notification_system_database.module b/modules/notification_system_database/notification_system_database.module
+index bb96f32..234a117 100644
+--- a/modules/notification_system_database/notification_system_database.module
++++ b/modules/notification_system_database/notification_system_database.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
++use Drupal\user\UserInterface;
+ /**
+  * @file
+  * Provides a notification entity type.
+@@ -85,7 +87,7 @@ function notification_system_database_cron() {
+     while($row = $result->fetchObject()) {
+       $notification = $notificationStorage->load($row->entity_id);
+ 
+-      /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface $items */
++      /** @var EntityReferenceFieldItemListInterface $items */
+       $items = $notification->get('user_id');
+ 
+       for ($i = 0; $i < $items->count(); $i++) {
+@@ -130,7 +132,7 @@ function notification_system_database_cron() {
+ /**
+  * Implements hook_ENTITY_TYPE_delete().
+  */
+-function notification_system_database_user_delete(\Drupal\user\UserInterface $user) {
++function notification_system_database_user_delete(UserInterface $user) {
+   // Delete entity reference to user in notification entities.
+   \Drupal::database()->delete('notification__user_id')
+     ->condition('user_id_target_id', $user->id())
+diff --git a/modules/notification_system_database/src/Annotation/DbNotificationProvider.php b/modules/notification_system_database/src/Annotation/DbNotificationProvider.php
+index 623ebbe..a01a1cd 100644
+--- a/modules/notification_system_database/src/Annotation/DbNotificationProvider.php
++++ b/modules/notification_system_database/src/Annotation/DbNotificationProvider.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\notification_system_database\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -21,7 +22,7 @@ class DbNotificationProvider extends Plugin {
+   /**
+    * The human-readable name of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -30,7 +31,7 @@ class DbNotificationProvider extends Plugin {
+   /**
+    * The description of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/modules/notification_system_database/src/DbNotificationProviderPluginManager.php b/modules/notification_system_database/src/DbNotificationProviderPluginManager.php
+index 28183c7..012ee80 100644
+--- a/modules/notification_system_database/src/DbNotificationProviderPluginManager.php
++++ b/modules/notification_system_database/src/DbNotificationProviderPluginManager.php
+@@ -17,9 +17,9 @@ class DbNotificationProviderPluginManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/modules/notification_system_database/src/Entity/Notification.php b/modules/notification_system_database/src/Entity/Notification.php
+index ef69ab7..bd37207 100644
+--- a/modules/notification_system_database/src/Entity/Notification.php
++++ b/modules/notification_system_database/src/Entity/Notification.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\notification_system_database\Entity;
+ 
++use Drupal\link\LinkItemInterface;
++use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+ use Drupal\Core\Entity\ContentEntityBase;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -313,7 +315,7 @@ class Notification extends ContentEntityBase implements NotificationInterface {
+     }
+ 
+     if (count($this->get('link')) > 0) {
+-      /** @var \Drupal\link\LinkItemInterface $linkItem */
++      /** @var LinkItemInterface $linkItem */
+       $linkItem = $this->get('link')[0];
+       if (!$linkItem->isEmpty()) {
+         $notification->setLink($linkItem->getUrl());
+@@ -344,10 +346,10 @@ class Notification extends ContentEntityBase implements NotificationInterface {
+ 
+       $event = new NewNotificationEvent($notification);
+ 
+-      /** @var \Symfony\Component\EventDispatcher\EventDispatcherInterface $eventDispatcher */
++      /** @var EventDispatcherInterface $eventDispatcher */
+       $eventDispatcher = \Drupal::service('event_dispatcher');
+ 
+-      $eventDispatcher->dispatch(NewNotificationEvent::EVENT_NAME, $event);
++      $eventDispatcher->dispatch($event, NewNotificationEvent::EVENT_NAME);
+     }
+   }
+ 
+diff --git a/modules/notification_system_database/src/Form/NotificationForm.php b/modules/notification_system_database/src/Form/NotificationForm.php
+index 623de16..d3c0e1e 100644
+--- a/modules/notification_system_database/src/Form/NotificationForm.php
++++ b/modules/notification_system_database/src/Form/NotificationForm.php
+@@ -20,7 +20,7 @@ class NotificationForm extends ContentEntityForm {
+     $link = $entity->toLink($this->t('View'))->toRenderable();
+ 
+     $message_arguments = ['%label' => $this->entity->label()];
+-    $logger_arguments = $message_arguments + ['link' => render($link)];
++    $logger_arguments = $message_arguments + ['link' => \Drupal::service('renderer')->render($link)];
+ 
+     if ($result == SAVED_NEW) {
+       $this->messenger()->addStatus($this->t('New notification %label has been created.', $message_arguments));
+diff --git a/modules/notification_system_database/src/NotificationInterface.php b/modules/notification_system_database/src/NotificationInterface.php
+index 6cd313d..6e12015 100644
+--- a/modules/notification_system_database/src/NotificationInterface.php
++++ b/modules/notification_system_database/src/NotificationInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\notification_system_database;
+ 
++use Drupal\notification_system\model\Notification;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ 
+ /**
+@@ -50,7 +51,7 @@ interface NotificationInterface extends ContentEntityInterface {
+   /**
+    * Converts the entity to a notification model.
+    *
+-   * @return \Drupal\notification_system\model\Notification
++   * @return Notification
+    *   The notification model.
+    */
+   public function toNotificationModel();
+diff --git a/modules/notification_system_database/src/NotificationListBuilder.php b/modules/notification_system_database/src/NotificationListBuilder.php
+index fe697bd..411d55c 100644
+--- a/modules/notification_system_database/src/NotificationListBuilder.php
++++ b/modules/notification_system_database/src/NotificationListBuilder.php
+@@ -18,27 +18,27 @@ class NotificationListBuilder extends EntityListBuilder {
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The redirect destination service.
+    *
+-   * @var \Drupal\Core\Routing\RedirectDestinationInterface
++   * @var RedirectDestinationInterface
+    */
+   protected $redirectDestination;
+ 
+   /**
+    * Constructs a new NotificationListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Routing\RedirectDestinationInterface $redirect_destination
++   * @param RedirectDestinationInterface $redirect_destination
+    *   The redirect destination service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, DateFormatterInterface $date_formatter, RedirectDestinationInterface $redirect_destination) {
+diff --git a/modules/notification_system_database/src/Plugin/NotificationProvider/DatabaseNotificationProvider.php b/modules/notification_system_database/src/Plugin/NotificationProvider/DatabaseNotificationProvider.php
+index 0286732..28a16b1 100644
+--- a/modules/notification_system_database/src/Plugin/NotificationProvider/DatabaseNotificationProvider.php
++++ b/modules/notification_system_database/src/Plugin/NotificationProvider/DatabaseNotificationProvider.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\notification_system_database\Plugin\NotificationProvider;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\notification_system\NotificationProviderInterface;
++use Drupal\notification_system_database\Entity\Notification;
++use Drupal\notification_system_database\NotificationInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -24,21 +28,21 @@ class DatabaseNotificationProvider extends NotificationProviderPluginBase implem
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManger;
+ 
+   /**
+    * The notification provider plugin manager.
+    *
+-   * @var \Drupal\notification_system_database\DbNotificationProviderPluginManager
++   * @var DbNotificationProviderPluginManager
+    */
+   protected $dbNotificationProviderPluginManager;
+ 
+   /**
+    * The notification storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $notificationStorage;
+ 
+@@ -50,14 +54,14 @@ class DatabaseNotificationProvider extends NotificationProviderPluginBase implem
+     $this->entityTypeManger = $entityTypeManager;
+     $this->dbNotificationProviderPluginManager = $db_notification_provider_plugin_manager;
+ 
+-    /** @var \Drupal\Core\Entity\EntityStorageInterface $notificationStorage */
++    /** @var EntityStorageInterface $notificationStorage */
+     $this->notificationStorage = $this->entityTypeManger->getStorage('notification');
+   }
+ 
+   /**
+    * Creates an instance of the plugin.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The container to pull out services used in the plugin.
+    * @param array $configuration
+    *   A configuration array containing information about the plugin instance.
+@@ -89,7 +93,7 @@ class DatabaseNotificationProvider extends NotificationProviderPluginBase implem
+ 
+     foreach ($pluginDefinitions as $pluginDefinition) {
+       try {
+-        /** @var \Drupal\notification_system\NotificationProviderInterface $provider */
++        /** @var NotificationProviderInterface $provider */
+         $provider = $this->dbNotificationProviderPluginManager->createInstance($pluginDefinition['id']);
+ 
+         $typesOfProvider = $provider->getTypes();
+@@ -115,7 +119,7 @@ class DatabaseNotificationProvider extends NotificationProviderPluginBase implem
+     $query->condition('user_id', $user->id());
+     $results = $query->execute();
+ 
+-    /** @var \Drupal\notification_system_database\Entity\Notification[] $notificationEntities */
++    /** @var Notification[] $notificationEntities */
+     $notificationEntities = $this->notificationStorage->loadMultiple($results);
+ 
+     $notifications = [];
+@@ -181,7 +185,7 @@ class DatabaseNotificationProvider extends NotificationProviderPluginBase implem
+    * {@inheritdoc}
+    */
+   public function load($notificationId) {
+-    /** @var \Drupal\notification_system_database\NotificationInterface $notificationEntity */
++    /** @var NotificationInterface $notificationEntity */
+     $notificationEntity = $this->notificationStorage->load($notificationId);
+ 
+     if ($notificationEntity) {
+diff --git a/modules/notification_system_database/src/model/DatabaseNotification.php b/modules/notification_system_database/src/model/DatabaseNotification.php
+index 3a88504..f04e45f 100644
+--- a/modules/notification_system_database/src/model/DatabaseNotification.php
++++ b/modules/notification_system_database/src/model/DatabaseNotification.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\notification_system_database\model;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\notification_system\model\Notification;
+ use Drupal\notification_system\model\ReadableNotificationInterface;
+ 
+@@ -61,7 +62,7 @@ class DatabaseNotification extends Notification implements ReadableNotificationI
+       throw new \Exception('Entity ID for this notification was not set. Use ->setEntityId() when creating the notification model!');
+     }
+ 
+-    /** @var \Drupal\Core\Entity\EntityStorageInterface $notificationStorage */
++    /** @var EntityStorageInterface $notificationStorage */
+     $notificationStorage = \Drupal::entityTypeManager()->getStorage('notification');
+     $notification = $notificationStorage->load($this->entityId);
+ 
+diff --git a/modules/notification_system_dispatch/notification_system_dispatch.install b/modules/notification_system_dispatch/notification_system_dispatch.install
+index 3462e90..41c0178 100644
+--- a/modules/notification_system_dispatch/notification_system_dispatch.install
++++ b/modules/notification_system_dispatch/notification_system_dispatch.install
+@@ -1,13 +1,15 @@
+ <?php
+ 
++use Drupal\Core\Config\FileStorage;
++use Drupal\Core\Config\ConfigInstallerInterface;
+ /**
+  * Install new configuration.
+  */
+ function notification_system_dispatch_update_8001(&$sandbox) {
+-  $config_path = drupal_get_path('module', 'notification_system_dispatch') . '/config/install';
+-  $config_source = new \Drupal\Core\Config\FileStorage($config_path);
++  $config_path = \Drupal::service('extension.list.module')->getPath('notification_system_dispatch') . '/config/install';
++  $config_source = new FileStorage($config_path);
+ 
+-  /** @var \Drupal\Core\Config\ConfigInstallerInterface $installer */
++  /** @var ConfigInstallerInterface $installer */
+   $installer = \Drupal::service('config.installer');
+   $installer->installOptionalConfig($config_source);
+ }
+diff --git a/modules/notification_system_dispatch/notification_system_dispatch.module b/modules/notification_system_dispatch/notification_system_dispatch.module
+index ac066a1..05d45c7 100644
+--- a/modules/notification_system_dispatch/notification_system_dispatch.module
++++ b/modules/notification_system_dispatch/notification_system_dispatch.module
+@@ -1,18 +1,21 @@
+ <?php
+ 
++use Drupal\notification_system_dispatch\Service\UserSettingsService;
++use Drupal\notification_system_dispatch\Service\NotificationDispatcherService;
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface;
+ 
+ /**
+  * Implements hook_cron().
+  */
+ function notification_system_dispatch_cron() {
+-  /** @var \Drupal\notification_system_dispatch\Service\UserSettingsService $userSettingsService */
++  /** @var UserSettingsService $userSettingsService */
+   $userSettingsService = \Drupal::service('notification_system_dispatch.user_settings');
+ 
+-  /** @var \Drupal\notification_system_dispatch\Service\NotificationDispatcherService $notificationDispatcherService */
++  /** @var NotificationDispatcherService $notificationDispatcherService */
+   $notificationDispatcherService = \Drupal::service('notification_system_dispatch');
+ 
+-  /** @var \Drupal\Core\Entity\EntityStorageInterface $dispatchBundleStorage */
++  /** @var EntityStorageInterface $dispatchBundleStorage */
+   $dispatchBundleStorage = \Drupal::entityTypeManager()->getStorage('notification_dispatch_bundle');
+ 
+   $dispatchBundles = $dispatchBundleStorage->loadMultiple();
+diff --git a/modules/notification_system_dispatch/src/Annotation/NotificationSystemDispatcher.php b/modules/notification_system_dispatch/src/Annotation/NotificationSystemDispatcher.php
+index b0ec77d..9ee945f 100644
+--- a/modules/notification_system_dispatch/src/Annotation/NotificationSystemDispatcher.php
++++ b/modules/notification_system_dispatch/src/Annotation/NotificationSystemDispatcher.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\notification_system_dispatch\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -21,7 +22,7 @@ class NotificationSystemDispatcher extends Plugin {
+   /**
+    * The human-readable name of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -30,7 +31,7 @@ class NotificationSystemDispatcher extends Plugin {
+   /**
+    * The description of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/modules/notification_system_dispatch/src/EventSubscriber/NotificationSystemDispatchSubscriber.php b/modules/notification_system_dispatch/src/EventSubscriber/NotificationSystemDispatchSubscriber.php
+index 5d97284..904dcc9 100644
+--- a/modules/notification_system_dispatch/src/EventSubscriber/NotificationSystemDispatchSubscriber.php
++++ b/modules/notification_system_dispatch/src/EventSubscriber/NotificationSystemDispatchSubscriber.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\notification_system_dispatch\EventSubscriber;
+ 
++use Drupal\notification_system_dispatch\Service\NotificationDispatcherService;
++use Drupal\notification_system_dispatch\Service\UserSettingsService;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\notification_system\Event\NewNotificationEvent;
+ use Drupal\notification_system_dispatch\Entity\NotificationDispatchBundle;
+ use Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface;
+@@ -23,17 +26,17 @@ class NotificationSystemDispatchSubscriber implements EventSubscriberInterface {
+    *
+    * Adds dispatch jobs to a queue because we are working with heavy loads here.
+    *
+-   * @param \Drupal\notification_system\Event\NewNotificationEvent $event
++   * @param NewNotificationEvent $event
+    *   New notification event.
+    */
+   public function onNewNotification(NewNotificationEvent $event) {
+-    /** @var \Drupal\notification_system_dispatch\Service\NotificationDispatcherService $dispatcherService */
++    /** @var NotificationDispatcherService $dispatcherService */
+     $dispatcherService = \Drupal::service('notification_system_dispatch');
+ 
+-    /** @var \Drupal\notification_system_dispatch\Service\UserSettingsService $userSettingsService */
++    /** @var UserSettingsService $userSettingsService */
+     $userSettingsService = \Drupal::service('notification_system_dispatch.user_settings');
+ 
+-    /** @var \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager */
++    /** @var EntityTypeManagerInterface $entityTypeManager */
+     $entityTypeManager = \Drupal::service('entity_type.manager');
+ 
+     $dispatchBundleStorage = $entityTypeManager->getStorage('notification_dispatch_bundle');
+diff --git a/modules/notification_system_dispatch/src/Form/SettingsForm.php b/modules/notification_system_dispatch/src/Form/SettingsForm.php
+index dad899f..93ee05b 100644
+--- a/modules/notification_system_dispatch/src/Form/SettingsForm.php
++++ b/modules/notification_system_dispatch/src/Form/SettingsForm.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\notification_system_dispatch\Form;
+ 
++use Drupal\Core\State\StateInterface;
++use Drupal\user\UserStorageInterface;
++use Drupal\notification_system_dispatch\NotificationSystemDispatcherPluginManager;
++use Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface;
+ use Drupal;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Form\ConfigFormBase;
+@@ -32,13 +36,13 @@ class SettingsForm extends ConfigFormBase {
+    * {@inheritdoc}
+    */
+   public function buildForm(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\State\StateInterface $state */
++    /** @var StateInterface $state */
+     $state = Drupal::service('state');
+ 
+-    /** @var \Drupal\user\UserStorageInterface $userStorage */
++    /** @var UserStorageInterface $userStorage */
+     $userStorage = Drupal::service('entity_type.manager')->getStorage('user');
+ 
+-    /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
++    /** @var NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
+     $notificationSystemDispatcherPluginManager = Drupal::service('plugin.manager.notification_system_dispatcher');
+ 
+ 
+@@ -113,7 +117,7 @@ class SettingsForm extends ConfigFormBase {
+ 
+     foreach ($dispatcherDefinitions as $dispatcherDefinition) {
+       try {
+-        /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface $dispatcher */
++        /** @var NotificationSystemDispatcherInterface $dispatcher */
+         $dispatcher = $notificationSystemDispatcherPluginManager->createInstance($dispatcherDefinition['id']);
+ 
+         $dispatcherForm = $dispatcher->settingsForm();
+@@ -145,14 +149,14 @@ class SettingsForm extends ConfigFormBase {
+   public function validateForm(array &$form, FormStateInterface $form_state) {
+     parent::validateForm($form, $form_state);
+ 
+-    /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
++    /** @var NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
+     $notificationSystemDispatcherPluginManager = Drupal::service('plugin.manager.notification_system_dispatcher');
+ 
+     $dispatcherDefinitions = $notificationSystemDispatcherPluginManager->getDefinitions();
+ 
+     foreach ($dispatcherDefinitions as $dispatcherDefinition) {
+       try {
+-        /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface $dispatcher */
++        /** @var NotificationSystemDispatcherInterface $dispatcher */
+         $dispatcher = $notificationSystemDispatcherPluginManager->createInstance($dispatcherDefinition['id']);
+ 
+         $dispatcherForm = $dispatcher->settingsForm();
+@@ -171,10 +175,10 @@ class SettingsForm extends ConfigFormBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\State\StateInterface $state */
++    /** @var StateInterface $state */
+     $state = Drupal::service('state');
+ 
+-    /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
++    /** @var NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
+     $notificationSystemDispatcherPluginManager = Drupal::service('plugin.manager.notification_system_dispatcher');
+ 
+     $userIds = [];
+@@ -204,7 +208,7 @@ class SettingsForm extends ConfigFormBase {
+ 
+     foreach ($dispatcherDefinitions as $dispatcherDefinition) {
+       try {
+-        /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface $dispatcher */
++        /** @var NotificationSystemDispatcherInterface $dispatcher */
+         $dispatcher = $notificationSystemDispatcherPluginManager->createInstance($dispatcherDefinition['id']);
+ 
+         $dispatcherForm = $dispatcher->settingsForm();
+diff --git a/modules/notification_system_dispatch/src/Form/UserSettingsForm.php b/modules/notification_system_dispatch/src/Form/UserSettingsForm.php
+index 09edea7..348a4ce 100644
+--- a/modules/notification_system_dispatch/src/Form/UserSettingsForm.php
++++ b/modules/notification_system_dispatch/src/Form/UserSettingsForm.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\notification_system_dispatch\Form;
+ 
++use Drupal\notification_system_dispatch\Service\UserSettingsService;
++use Drupal\notification_system_dispatch\NotificationSystemDispatcherPluginManager;
++use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -23,16 +26,16 @@ class UserSettingsForm extends FormBase {
+    * {@inheritdoc}
+    */
+   public function buildForm(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\notification_system_dispatch\Service\UserSettingsService $userSettingsService */
++    /** @var UserSettingsService $userSettingsService */
+     $userSettingsService = Drupal::service('notification_system_dispatch.user_settings');
+ 
+-    /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
++    /** @var NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
+     $notificationSystemDispatcherPluginManager = Drupal::service('plugin.manager.notification_system_dispatcher');
+ 
+     $pluginDefinitions = $notificationSystemDispatcherPluginManager->getDefinitions();
+ 
+     foreach ($pluginDefinitions as $definition) {
+-      /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface $dispatcher */
++      /** @var NotificationSystemDispatcherInterface $dispatcher */
+       $dispatcher = $notificationSystemDispatcherPluginManager->createInstance($definition['id']);
+ 
+       $form['dispatcher_' . $dispatcher->id()] = [
+@@ -86,17 +89,17 @@ class UserSettingsForm extends FormBase {
+    * Autosave callback for the form.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *
+    * @return string[]
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function autosave(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\notification_system_dispatch\Service\UserSettingsService $userSettingsService */
++    /** @var UserSettingsService $userSettingsService */
+     $userSettingsService = Drupal::service('notification_system_dispatch.user_settings');
+ 
+-    /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
++    /** @var NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
+     $notificationSystemDispatcherPluginManager = Drupal::service('plugin.manager.notification_system_dispatcher');
+ 
+     $triggering_element = $form_state->getTriggeringElement();
+@@ -104,7 +107,7 @@ class UserSettingsForm extends FormBase {
+     if (str_starts_with($triggering_element['#name'], 'dispatcher_')) {
+       $pluginId = str_replace('dispatcher_', '', $triggering_element['#name']);
+ 
+-      /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface $dispatcher */
++      /** @var NotificationSystemDispatcherInterface $dispatcher */
+       $dispatcher = $notificationSystemDispatcherPluginManager->createInstance($pluginId);
+ 
+       $userSettingsService->setDispatcherEnabled($dispatcher->id(), $triggering_element['#value']);
+diff --git a/modules/notification_system_dispatch/src/NotificationSystemDispatcherInterface.php b/modules/notification_system_dispatch/src/NotificationSystemDispatcherInterface.php
+index 917f1ff..0b97563 100644
+--- a/modules/notification_system_dispatch/src/NotificationSystemDispatcherInterface.php
++++ b/modules/notification_system_dispatch/src/NotificationSystemDispatcherInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\notification_system_dispatch;
+ 
++use Drupal\notification_system\model\NotificationInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\user\UserInterface;
+ 
+@@ -51,7 +52,7 @@ interface NotificationSystemDispatcherInterface {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function settingsFormValidate(array &$form, FormStateInterface $form_state);
+@@ -67,9 +68,9 @@ interface NotificationSystemDispatcherInterface {
+   /**
+    * Send out a specific notification to one user.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The recipient.
+-   * @param \Drupal\notification_system\model\NotificationInterface[] $notifications
++   * @param NotificationInterface[] $notifications
+    *   An array with one or more notifications that should be sent.
+    *   If there are more notifications, bundling is enabled, and the user should
+    *   receive only one notification with a summary.
+diff --git a/modules/notification_system_dispatch/src/NotificationSystemDispatcherPluginManager.php b/modules/notification_system_dispatch/src/NotificationSystemDispatcherPluginManager.php
+index 6569ac7..add85ad 100644
+--- a/modules/notification_system_dispatch/src/NotificationSystemDispatcherPluginManager.php
++++ b/modules/notification_system_dispatch/src/NotificationSystemDispatcherPluginManager.php
+@@ -17,9 +17,9 @@ class NotificationSystemDispatcherPluginManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/modules/notification_system_dispatch/src/Plugin/QueueWorker/DispatchQueue.php b/modules/notification_system_dispatch/src/Plugin/QueueWorker/DispatchQueue.php
+index 4eb950c..0c28626 100644
+--- a/modules/notification_system_dispatch/src/Plugin/QueueWorker/DispatchQueue.php
++++ b/modules/notification_system_dispatch/src/Plugin/QueueWorker/DispatchQueue.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\notification_system_dispatch\Plugin\QueueWorker;
+ 
++use Drupal\notification_system\Service\NotificationSystem;
++use Drupal\notification_system_dispatch\NotificationSystemDispatcherPluginManager;
++use Drupal\user\UserStorageInterface;
++use Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface;
++use Drupal\user\UserInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+ 
+ /**
+@@ -19,13 +24,13 @@ class DispatchQueue extends QueueWorkerBase {
+    * {@inheritdoc}
+    */
+   public function processItem($data) {
+-    /** @var \Drupal\notification_system\Service\NotificationSystem $notificationSystem */
++    /** @var NotificationSystem $notificationSystem */
+     $notificationSystem = \Drupal::service('notification_system');
+ 
+-    /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
++    /** @var NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager */
+     $notificationSystemDispatcherPluginManager = \Drupal::service('plugin.manager.notification_system_dispatcher');
+ 
+-    /** @var \Drupal\user\UserStorageInterface $userStorage */
++    /** @var UserStorageInterface $userStorage */
+     $userStorage = \Drupal::entityTypeManager()->getStorage('user');
+ 
+     $dispatcherId = $data->dispatcher;
+@@ -44,10 +49,10 @@ class DispatchQueue extends QueueWorkerBase {
+       }
+     }
+ 
+-    /** @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface $dispatcher */
++    /** @var NotificationSystemDispatcherInterface $dispatcher */
+     $dispatcher = $notificationSystemDispatcherPluginManager->createInstance($dispatcherId);
+ 
+-    /** @var \Drupal\user\UserInterface $user */
++    /** @var UserInterface $user */
+     $user = $userStorage->load($userId);
+ 
+     if ($dispatcher && $user && count($notifications) > 0) {
+diff --git a/modules/notification_system_dispatch/src/Service/NotificationDispatcherService.php b/modules/notification_system_dispatch/src/Service/NotificationDispatcherService.php
+index ceb4fd2..76f0758 100644
+--- a/modules/notification_system_dispatch/src/Service/NotificationDispatcherService.php
++++ b/modules/notification_system_dispatch/src/Service/NotificationDispatcherService.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\notification_system_dispatch\Service;
+ 
++use Drupal\Core\Queue\QueueInterface;
++use Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface;
++use Drupal\notification_system\model\NotificationInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Queue\QueueFactory;
+@@ -16,50 +19,50 @@ class NotificationDispatcherService {
+   /**
+    * The user settings service.
+    *
+-   * @var \Drupal\notification_system_dispatch\Service\UserSettingsService
++   * @var UserSettingsService
+    */
+   protected $userSettingsService;
+ 
+   /**
+    * The state service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The queue which holds the dispatch jobs.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+   /**
+    * A list of all available dispatchers.
+    *
+-   * @var \Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface[]
++   * @var NotificationSystemDispatcherInterface[]
+    */
+   protected ?array $dispatchers;
+ 
+   /**
+    * The dispatcher module settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected ImmutableConfig $config;
+ 
+   /**
+    * Constructs a NotificationDispatcherService instance.
+    *
+-   * @param \Drupal\notification_system_dispatch\Service\UserSettingsService $userSettingsService
++   * @param UserSettingsService $userSettingsService
+    *   The user settings service.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state service.
+-   * @param \Drupal\Core\Queue\QueueFactory $queueFactory
++   * @param QueueFactory $queueFactory
+    *   The QueueFactory service.
+-   * @param \Drupal\notification_system_dispatch\NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager
++   * @param NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager
+    *   The NotificationSystemDispatcherPluginManager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    */
+   public function __construct(UserSettingsService $userSettingsService, StateInterface $state, QueueFactory $queueFactory, NotificationSystemDispatcherPluginManager $notificationSystemDispatcherPluginManager, ConfigFactoryInterface $config_factory) {
+@@ -77,7 +80,7 @@ class NotificationDispatcherService {
+    * One item in the queue for each dispatcher that the user has enabled.
+    * Also checks if a user is whitelisted.
+    *
+-   * @param \Drupal\notification_system\model\NotificationInterface[] $notifications
++   * @param NotificationInterface[] $notifications
+    *   The notifications that should be dispatched.
+    * @param int $userId
+    *   The id of the user.
+diff --git a/modules/notification_system_dispatch/src/Service/UserSettingsService.php b/modules/notification_system_dispatch/src/Service/UserSettingsService.php
+index 6fd021c..47a9964 100644
+--- a/modules/notification_system_dispatch/src/Service/UserSettingsService.php
++++ b/modules/notification_system_dispatch/src/Service/UserSettingsService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\notification_system_dispatch\Service;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\notification_system_dispatch\NotificationSystemDispatcherInterface;
+@@ -15,30 +16,30 @@ class UserSettingsService {
+   /**
+    * The UserData service.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The modules settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Constructs a UserSettingsService instance.
+    *
+-   * @param \Drupal\user\UserDataInterface $userData
++   * @param UserDataInterface $userData
+    *   The UserData service.
+-   * @param \Drupal\Core\Session\AccountInterface $currentUser
++   * @param AccountInterface $currentUser
+    *   The current user.
+    */
+   public function __construct(UserDataInterface $userData, AccountInterface $currentUser, ConfigFactoryInterface $configFactory) {
+diff --git a/modules/notification_system_dispatch_mail/notification_system_dispatch_mail.module b/modules/notification_system_dispatch_mail/notification_system_dispatch_mail.module
+index af2aaec..e510d26 100644
+--- a/modules/notification_system_dispatch_mail/notification_system_dispatch_mail.module
++++ b/modules/notification_system_dispatch_mail/notification_system_dispatch_mail.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\Core\Extension\ModuleHandlerInterface;
++use Drupal\Core\Template\TwigEnvironment;
++use Drupal\Core\Render\Markup;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Core\Datetime\DateFormatter;
+ 
+@@ -7,13 +10,13 @@ use Drupal\Core\Datetime\DateFormatter;
+  * Implements hook_mail().
+  */
+ function notification_system_dispatch_mail_mail($key, &$message, $params) {
+-  /** @var \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler */
++  /** @var ModuleHandlerInterface $moduleHandler */
+   $moduleHandler = \Drupal::service('module_handler');
+ 
+   /** @var DateFormatter $dateFormatter */
+   $dateFormatter = \Drupal::service('date.formatter');
+ 
+-  /** @var \Drupal\Core\Template\TwigEnvironment $twig */
++  /** @var TwigEnvironment $twig */
+   $twig = \Drupal::service('twig');
+ 
+   $langcode = $message['langcode'];
+@@ -40,7 +43,7 @@ function notification_system_dispatch_mail_mail($key, &$message, $params) {
+ 
+         $notificationVariables = [
+           'title' => $notification->getTitle(),
+-          'body' => \Drupal\Core\Render\Markup::create($notification->getBody()),
++          'body' => Markup::create($notification->getBody()),
+           'timestamp' => $dateFormatter->format($notification->getTimestamp(), 'medium', '', NULL, $langcode),
+           'link' => 'http://example.com',
+           'direct_link' => $direct_link,
+diff --git a/modules/notification_system_dispatch_mail/src/Plugin/NotificationSystemDispatcher/MailDispatcher.php b/modules/notification_system_dispatch_mail/src/Plugin/NotificationSystemDispatcher/MailDispatcher.php
+index 488f913..0a76d5f 100644
+--- a/modules/notification_system_dispatch_mail/src/Plugin/NotificationSystemDispatcher/MailDispatcher.php
++++ b/modules/notification_system_dispatch_mail/src/Plugin/NotificationSystemDispatcher/MailDispatcher.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\notification_system_dispatch_mail\Plugin\NotificationSystemDispatcher;
+ 
++use Psr\Log\LoggerInterface;
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+ use Drupal\Core\Mail\MailManagerInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -26,21 +28,21 @@ class MailDispatcher extends NotificationSystemDispatcherPluginBase implements C
+   /**
+    * The mail manager.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+   protected $mailManager;
+ 
+   /**
+    * The logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The configuration for this module.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+diff --git a/modules/notification_system_dispatch_webpush/notification_system_dispatch_webpush.module b/modules/notification_system_dispatch_webpush/notification_system_dispatch_webpush.module
+index 4ccc63d..ba130a2 100644
+--- a/modules/notification_system_dispatch_webpush/notification_system_dispatch_webpush.module
++++ b/modules/notification_system_dispatch_webpush/notification_system_dispatch_webpush.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Core\Database\Connection;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Language\LanguageInterface;
+ use Drupal\Core\Url;
+@@ -69,9 +71,9 @@ function notification_system_dispatch_webpush_theme($existing, $type, $theme, $p
+ /**
+  * Implements hook_ENTITY_TYPE_delete().
+  */
+-function notification_system_dispatch_webpush_user_delete(Drupal\Core\Entity\EntityInterface $entity) {
++function notification_system_dispatch_webpush_user_delete(EntityInterface $entity) {
+   // Delete user tokens when a user is deleted.
+-  /** @var \Drupal\Core\Database\Connection $database */
++  /** @var Connection $database */
+   $database = \Drupal::service('database');
+   $database->delete('notification_system_dispatch_webpush_apple_user_tokens')
+     ->condition('uid', $entity->id())
+diff --git a/modules/notification_system_dispatch_webpush/src/ApplePush/MyPackageGenerator.php b/modules/notification_system_dispatch_webpush/src/ApplePush/MyPackageGenerator.php
+index 734e8bd..cbf39b1 100644
+--- a/modules/notification_system_dispatch_webpush/src/ApplePush/MyPackageGenerator.php
++++ b/modules/notification_system_dispatch_webpush/src/ApplePush/MyPackageGenerator.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\notification_system_dispatch_webpush\ApplePush;
+ 
++use Drupal\Core\Image\ImageFactory;
++use Drupal\image\ImageEffectManager;
++use Drupal\image\ImageEffectInterface;
+ use Drupal\Core\StreamWrapper\StreamWrapperManager;
+ use Drupal\Core\Url;
+ use JWage\APNS\Certificate;
+@@ -59,7 +62,7 @@ class MyPackageGenerator extends PackageGenerator {
+    *
+    * Also the parameter basePushPackagePath was removed.
+    *
+-   * @param \JWage\APNS\Certificate $certificate
++   * @param Certificate $certificate
+    *   The certificate from apple.
+    * @param string $host
+    *   The host of the website that is allowed.
+@@ -85,7 +88,7 @@ class MyPackageGenerator extends PackageGenerator {
+    *
+    * Does not really copy something, instead it generates it.
+    *
+-   * @param \JWage\APNS\Safari\Package $package
++   * @param Package $package
+    *   The package information.
+    */
+   protected function copyPackageFiles(Package $package) {
+@@ -101,7 +104,7 @@ class MyPackageGenerator extends PackageGenerator {
+   /**
+    * Generates the contents of the website.json file.
+    *
+-   * @param \JWage\APNS\Safari\Package $package
++   * @param Package $package
+    *   The package information.
+    *
+    * @return false|string
+@@ -128,13 +131,13 @@ class MyPackageGenerator extends PackageGenerator {
+     $packageDir = $package->getPackageDir();
+     mkdir($packageDir . '/icon.iconset');
+ 
+-    /** @var \Drupal\Core\Image\ImageFactory $imageFactory */
++    /** @var ImageFactory $imageFactory */
+     $imageFactory = \Drupal::service('image.factory');
+ 
+-    /** @var \Drupal\image\ImageEffectManager $imageEffectManager */
++    /** @var ImageEffectManager $imageEffectManager */
+     $imageEffectManager = \Drupal::service('plugin.manager.image.effect');
+ 
+-    /** @var \Drupal\image\ImageEffectInterface $convertEffect */
++    /** @var ImageEffectInterface $convertEffect */
+     $convertEffect = $imageEffectManager->createInstance('image_convert', [
+       'data' => [
+         'extension' => 'png',
+@@ -144,7 +147,7 @@ class MyPackageGenerator extends PackageGenerator {
+     foreach (self::$imageSizes as $size => $filenames) {
+       $image = $imageFactory->get($this->getIconPath());
+ 
+-      /** @var \Drupal\image\ImageEffectInterface $scaleAndCropEffect */
++      /** @var ImageEffectInterface $scaleAndCropEffect */
+       $scaleAndCropEffect = $imageEffectManager->createInstance('image_scale_and_crop', [
+         'data' => [
+           'width' => $size,
+diff --git a/modules/notification_system_dispatch_webpush/src/AppleWebPushClient.php b/modules/notification_system_dispatch_webpush/src/AppleWebPushClient.php
+index 57d834d..3d9d022 100644
+--- a/modules/notification_system_dispatch_webpush/src/AppleWebPushClient.php
++++ b/modules/notification_system_dispatch_webpush/src/AppleWebPushClient.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\notification_system_dispatch_webpush;
+ 
++use Drupal\Component\Uuid\UuidInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\notification_system_dispatch_webpush\Entity\AppleRegistrationInterface;
++use Drupal\notification_system_dispatch_webpush\Entity\AppleRegistration;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Database\Connection;
+@@ -23,57 +28,57 @@ class AppleWebPushClient {
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The dispatcher Configuration.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected ImmutableConfig $config;
+ 
+   /**
+    * The logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected LoggerChannelInterface $loggerChannel;
+ 
+   /**
+    * The file system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected FileSystemInterface $fileSystem;
+ 
+   /**
+    * The database.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected Connection $database;
+ 
+   /**
+    * Constructs an AppleWebPushClient object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger channel factory.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   The file system.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, LoggerChannelFactoryInterface $logger_factory, FileSystemInterface $file_system, Connection $database) {
+@@ -237,7 +242,7 @@ class AppleWebPushClient {
+    * @throws \Exception
+    */
+   protected function generateUserToken(int $userId): string {
+-    /** @var \Drupal\Component\Uuid\UuidInterface $uuid */
++    /** @var UuidInterface $uuid */
+     $uuid = \Drupal::service('uuid');
+ 
+     $token = $uuid->generate();
+@@ -261,8 +266,8 @@ class AppleWebPushClient {
+    * @param string|null $link
+    *   The link of the notification.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    * @throws \Exception
+    */
+   public function sendToUser(int $uid, string $title, string $body, string $link = NULL) {
+@@ -302,11 +307,11 @@ class AppleWebPushClient {
+    * @param int $uid
+    *   The user id.
+    *
+-   * @return \Drupal\notification_system_dispatch_webpush\Entity\AppleRegistrationInterface[]
++   * @return AppleRegistrationInterface[]
+    *   A list of registrations.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getRegistrationsByUser(int $uid): array {
+     $storage = $this->entityTypeManager->getStorage('apple_registration');
+@@ -314,7 +319,7 @@ class AppleWebPushClient {
+       ->condition('uid', $uid)
+       ->execute();
+ 
+-    /** @var \Drupal\notification_system_dispatch_webpush\Entity\AppleRegistration[] $registrations */
++    /** @var AppleRegistration[] $registrations */
+     $registrations = $storage->loadMultiple($result);
+ 
+     return $registrations;
+diff --git a/modules/notification_system_dispatch_webpush/src/Controller/AppleController.php b/modules/notification_system_dispatch_webpush/src/Controller/AppleController.php
+index 445ebab..c969858 100644
+--- a/modules/notification_system_dispatch_webpush/src/Controller/AppleController.php
++++ b/modules/notification_system_dispatch_webpush/src/Controller/AppleController.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\notification_system_dispatch_webpush\Controller;
+ 
++use Drupal\Core\Access\AccessResultInterface;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Routing\TrustedRedirectResponse;
+ use Symfony\Component\HttpFoundation\Request;
+ use Drupal\Core\Access\AccessResultAllowed;
+@@ -28,14 +32,14 @@ class AppleController extends ControllerBase {
+   /**
+    * The AppleWebPushClient.
+    *
+-   * @var \Drupal\notification_system_dispatch_webpush\AppleWebPushClient
++   * @var AppleWebPushClient
+    */
+   protected AppleWebPushClient $appleWebPushClient;
+ 
+   /**
+    * AppleController constructor.
+    *
+-   * @param \Drupal\notification_system_dispatch_webpush\AppleWebPushClient $apple_web_push_client
++   * @param AppleWebPushClient $apple_web_push_client
+    *   The AppleWebPushClient.
+    */
+   public function __construct(AppleWebPushClient $apple_web_push_client) {
+@@ -54,10 +58,10 @@ class AppleController extends ControllerBase {
+   /**
+    * Checks if apple support is enabled.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Run access checks for this account.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function access(AccountInterface $account) {
+@@ -67,7 +71,7 @@ class AppleController extends ControllerBase {
+   /**
+    * Return the apple user_token for the currently signed in user.
+    *
+-   * @return \Drupal\Core\Cache\CacheableJsonResponse
++   * @return CacheableJsonResponse
+    *   A json string containing the property 'user_token'.
+    *
+    * @throws \Exception
+@@ -92,10 +96,10 @@ class AppleController extends ControllerBase {
+   /**
+    * Redirect a user to a url given via GET parameter.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The http request.
+    *
+-   * @return \Drupal\Core\Routing\TrustedRedirectResponse
++   * @return TrustedRedirectResponse
+    *   A redirect response.
+    */
+   public function redirectNotification(Request $request) {
+@@ -112,7 +116,7 @@ class AppleController extends ControllerBase {
+    * @param string $websitePushId
+    *   The website push id.
+    *
+-   * @return \Symfony\Component\HttpFoundation\BinaryFileResponse
++   * @return BinaryFileResponse
+    *   The generated zip file.
+    *
+    * @throws \Exception
+@@ -178,10 +182,10 @@ class AppleController extends ControllerBase {
+    * @param string $websitePushId
+    *   The website push id.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   A 200 OK if it was saved.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function registration(string $version, string $deviceToken, string $websitePushId): Response {
+     if ($websitePushId !== $this->appleWebPushClient->getWebsitePushId()) {
+@@ -219,12 +223,12 @@ class AppleController extends ControllerBase {
+    * @param string $websitePushId
+    *   The website push id.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   200 OK if it was deleted.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function delete(string $version, string $deviceToken, string $websitePushId): Response {
+     if ($websitePushId !== $this->appleWebPushClient->getWebsitePushId()) {
+@@ -259,7 +263,7 @@ class AppleController extends ControllerBase {
+    * @param string $version
+    *   The api version.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   200 OK if it was logged.
+    */
+   public function log(string $version): Response {
+diff --git a/modules/notification_system_dispatch_webpush/src/Controller/WebpushController.php b/modules/notification_system_dispatch_webpush/src/Controller/WebpushController.php
+index a8aadb6..ffac7cf 100644
+--- a/modules/notification_system_dispatch_webpush/src/Controller/WebpushController.php
++++ b/modules/notification_system_dispatch_webpush/src/Controller/WebpushController.php
+@@ -17,23 +17,23 @@ class WebpushController extends ControllerBase {
+   /**
+    * The file system service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * The module extension list.
+    *
+-   * @var \Drupal\Core\Extension\ModuleExtensionList
++   * @var ModuleExtensionList
+    */
+   protected $extensionListModule;
+ 
+   /**
+    * The controller constructor.
+    *
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   The file system service.
+-   * @param \Drupal\Core\Extension\ModuleExtensionList $extension_list_module
++   * @param ModuleExtensionList $extension_list_module
+    *   The module extension list.
+    */
+   public function __construct(FileSystemInterface $file_system, ModuleExtensionList $extension_list_module) {
+diff --git a/modules/notification_system_dispatch_webpush/src/Entity/AppleRegistrationInterface.php b/modules/notification_system_dispatch_webpush/src/Entity/AppleRegistrationInterface.php
+index 68662e1..23fd186 100644
+--- a/modules/notification_system_dispatch_webpush/src/Entity/AppleRegistrationInterface.php
++++ b/modules/notification_system_dispatch_webpush/src/Entity/AppleRegistrationInterface.php
+@@ -16,11 +16,10 @@ interface AppleRegistrationInterface extends ContentEntityInterface, EntityChang
+   /**
+    * Add get/set methods for your configuration properties here.
+    */
+-
+   /**
+    * Get the user.
+    *
+-   * @return \Drupal\user\UserInterface
++   * @return UserInterface
+    *   The user of the Apple registration.
+    */
+   public function getUser();
+@@ -28,7 +27,7 @@ interface AppleRegistrationInterface extends ContentEntityInterface, EntityChang
+   /**
+    * Set the user.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user of the Apple registration.
+    *
+    * @return \Drupal\notification_system_dispatch_webpush\Entity\AppleRegistrationInterface
+diff --git a/modules/notification_system_dispatch_webpush/src/Plugin/Block/PopupBlock.php b/modules/notification_system_dispatch_webpush/src/Plugin/Block/PopupBlock.php
+index de0e5bd..85318a0 100644
+--- a/modules/notification_system_dispatch_webpush/src/Plugin/Block/PopupBlock.php
++++ b/modules/notification_system_dispatch_webpush/src/Plugin/Block/PopupBlock.php
+@@ -24,7 +24,7 @@ class PopupBlock extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * The UserSettingsService.
+    *
+-   * @var \Drupal\notification_system_dispatch\Service\UserSettingsService
++   * @var UserSettingsService
+    */
+   protected UserSettingsService $userSettingsService;
+ 
+diff --git a/modules/notification_system_dispatch_webpush/src/Plugin/NotificationSystemDispatcher/WebpushDispatcher.php b/modules/notification_system_dispatch_webpush/src/Plugin/NotificationSystemDispatcher/WebpushDispatcher.php
+index aca1a9a..7ebc0d0 100644
+--- a/modules/notification_system_dispatch_webpush/src/Plugin/NotificationSystemDispatcher/WebpushDispatcher.php
++++ b/modules/notification_system_dispatch_webpush/src/Plugin/NotificationSystemDispatcher/WebpushDispatcher.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\notification_system_dispatch_webpush\Plugin\NotificationSystemDispatcher;
+ 
++use Drupal\notification_system\model\NotificationInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\notification_system\model\Notification;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Core\Asset\LibraryDiscoveryInterface;
+ use Drupal\Core\Config\Config;
+@@ -43,7 +47,7 @@ class WebpushDispatcher extends NotificationSystemDispatcherPluginBase implement
+   /**
+    * The TwigEnvironment.
+    *
+-   * @var \Drupal\Core\Template\TwigEnvironment
++   * @var TwigEnvironment
+    */
+   protected TwigEnvironment $twig;
+ 
+@@ -51,56 +55,56 @@ class WebpushDispatcher extends NotificationSystemDispatcherPluginBase implement
+   /**
+    * The DateFormatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   private DateFormatterInterface $dateFormatter;
+ 
+   /**
+    * The WebPushClient.
+    *
+-   * @var \Drupal\notification_system_dispatch_webpush\WebPushClient
++   * @var WebPushClient
+    */
+   protected WebPushClient $webPushClient;
+ 
+   /**
+    * The FileSystem.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected FileSystemInterface $fileSystem;
+ 
+   /**
+    * The LibraryDiscovery.
+    *
+-   * @var \Drupal\Core\Asset\LibraryDiscoveryInterface
++   * @var LibraryDiscoveryInterface
+    */
+   protected LibraryDiscoveryInterface $libraryDiscovery;
+ 
+   /**
+    * The ElementInfoManager.
+    *
+-   * @var \Drupal\Core\Render\ElementInfoManagerInterface
++   * @var ElementInfoManagerInterface
+    */
+   protected ElementInfoManagerInterface $elementInfoManager;
+ 
+   /**
+    * The logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected LoggerInterface $logger;
+ 
+   /**
+    * The configuration for this module.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected Config $config;
+ 
+   /**
+    * The AppleWebPushClient.
+    *
+-   * @var \Drupal\notification_system_dispatch_webpush\AppleWebPushClient
++   * @var AppleWebPushClient
+    */
+   protected AppleWebPushClient $appleWebPushClient;
+ 
+@@ -108,15 +112,15 @@ class WebpushDispatcher extends NotificationSystemDispatcherPluginBase implement
+    * @param array $configuration
+    * @param $plugin_id
+    * @param $plugin_definition
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
+-   * @param \Drupal\Core\Template\TwigEnvironment $twig
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
+-   * @param \Drupal\notification_system_dispatch_webpush\WebPushClient $web_push_client
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
+-   * @param \Drupal\Core\Asset\LibraryDiscoveryInterface $library_discovery
+-   * @param \Drupal\Core\Render\ElementInfoManagerInterface $element_info_manager
+-   * @param \Drupal\notification_system_dispatch_webpush\AppleWebPushClient $apple_web_push_client
++   * @param LoggerChannelFactoryInterface $logger_factory
++   * @param ConfigFactoryInterface $config_factory
++   * @param TwigEnvironment $twig
++   * @param DateFormatterInterface $date_formatter
++   * @param WebPushClient $web_push_client
++   * @param FileSystemInterface $file_system
++   * @param LibraryDiscoveryInterface $library_discovery
++   * @param ElementInfoManagerInterface $element_info_manager
++   * @param AppleWebPushClient $apple_web_push_client
+    */
+   public function __construct(array $configuration,
+                               $plugin_id,
+@@ -448,9 +452,9 @@ openssl ec -in private.pem -outform DER|tail -c +8|head -c 32|base64|tr -d '=' |
+   /**
+    * Send out notifications via Web Push.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The recipient.
+-   * @param \Drupal\notification_system\model\NotificationInterface[] $notifications
++   * @param NotificationInterface[] $notifications
+    *   An array with one or more notifications that should be sent.
+    *   If there are more notifications, bundling is enabled, and the user should
+    *   receive only one notification with a summary.
+@@ -528,9 +532,9 @@ openssl ec -in private.pem -outform DER|tail -c +8|head -c 32|base64|tr -d '=' |
+   /**
+    * Send out notifications via Safari Web Push if enabled.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The recipient.
+-   * @param \Drupal\notification_system\model\NotificationInterface[] $notifications
++   * @param NotificationInterface[] $notifications
+    *   An array with one or more notifications that should be sent.
+    *   If there are more notifications, bundling is enabled, and the user should
+    *   receive only one notification with a summary.
+@@ -539,8 +543,8 @@ openssl ec -in private.pem -outform DER|tail -c +8|head -c 32|base64|tr -d '=' |
+    *   - subject: The title of the notification
+    *   - body: The body of the notification.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    * @throws \Exception
+    */
+   protected function sendAppleWebPush(UserInterface $user, array $notifications, array $vars) {
+@@ -576,9 +580,9 @@ openssl ec -in private.pem -outform DER|tail -c +8|head -c 32|base64|tr -d '=' |
+   /**
+    * Generates the subject and body of the notification.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user who this notification is for.
+-   * @param \Drupal\notification_system\model\Notification[] $notifications
++   * @param Notification[] $notifications
+    *   An array of notifications to send.
+    *
+    * @return array
+diff --git a/modules/notification_system_dispatch_webpush/src/WebPushClient.php b/modules/notification_system_dispatch_webpush/src/WebPushClient.php
+index 6979cb0..95041f9 100644
+--- a/modules/notification_system_dispatch_webpush/src/WebPushClient.php
++++ b/modules/notification_system_dispatch_webpush/src/WebPushClient.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\notification_system_dispatch_webpush;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\web_push_api\Entity\WebPushSubscription;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Logger\LoggerChannelInterface;
+@@ -23,39 +26,39 @@ class WebPushClient {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+   /**
+    * The logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected LoggerChannelInterface $loggerChannel;
+ 
+   /**
+    * The Push API VAPID authorization.
+    *
+-   * @var \Drupal\web_push_api\Component\WebPushAuthVapid
++   * @var WebPushAuthVapid
+    */
+   protected WebPushAuthVapid $webPushAuth;
+ 
+   /**
+    * The module configuration.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Constructs a WebPushClient object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger channel factory.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factoy.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, LoggerChannelFactoryInterface $logger_factory, ConfigFactoryInterface $config_factory) {
+@@ -70,9 +73,9 @@ class WebPushClient {
+   /**
+    * Sends the notification to given subscriptions.
+    *
+-   * @param \Drupal\web_push_api\Component\WebPush $webpush
++   * @param WebPush $webpush
+    *   The dispatcher.
+-   * @param \Drupal\web_push_api\Entity\WebPushSubscription[] $subscriptions
++   * @param WebPushSubscription[] $subscriptions
+    *   The list of subscriptions.
+    * @param string $notification
+    *   The notification to send.
+@@ -109,7 +112,7 @@ class WebPushClient {
+   /**
+    * Sends the notification to all subscriptions.
+    *
+-   * @param \Drupal\web_push_api\Component\WebPushNotification $notification
++   * @param WebPushNotification $notification
+    *   The notification to send.
+    *
+    * @throws \ErrorException
+@@ -140,7 +143,7 @@ class WebPushClient {
+    *
+    * @param int $uid
+    *   The ID of a Drupal user.
+-   * @param \Drupal\web_push_api\Component\WebPushNotification $notification
++   * @param WebPushNotification $notification
+    *   The notification to send.
+    *
+    * @throws \ErrorException
+diff --git a/src/Annotation/NotificationProvider.php b/src/Annotation/NotificationProvider.php
+index 9bc7f12..ebfc0e3 100644
+--- a/src/Annotation/NotificationProvider.php
++++ b/src/Annotation/NotificationProvider.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\notification_system\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -21,7 +22,7 @@ class NotificationProvider extends Plugin {
+   /**
+    * The human-readable name of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -30,7 +31,7 @@ class NotificationProvider extends Plugin {
+   /**
+    * The description of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Controller/NotificationSystemController.php b/src/Controller/NotificationSystemController.php
+index 99af0dc..5177be1 100644
+--- a/src/Controller/NotificationSystemController.php
++++ b/src/Controller/NotificationSystemController.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\notification_system\Controller;
+ 
++use Symfony\Component\HttpFoundation\Request;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\notification_system\Entity\NotificationGroupInterface;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\notification_system\model\NotificationInterface;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Link;
+@@ -22,36 +28,36 @@ class NotificationSystemController extends ControllerBase {
+   /**
+    * The notification system.
+    *
+-   * @var \Drupal\notification_system\Service\NotificationSystem
++   * @var NotificationSystem
+    */
+   protected $notificationSystem;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The current http request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * The controller constructor.
+    *
+-   * @param \Drupal\notification_system\Service\NotificationSystem $notification_system
++   * @param NotificationSystem $notification_system
+    *   The notification system service.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   The current user service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The current http request.
+    */
+   public function __construct(NotificationSystem $notification_system, RendererInterface $renderer, EntityTypeManagerInterface $entity_type_manager, AccountProxyInterface $current_user, RequestStack $request_stack) {
+@@ -129,11 +135,11 @@ class NotificationSystemController extends ControllerBase {
+    * @param string $display_mode
+    *   If it should output bundled html or not.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Outputs only the needed html. Will cache the output for 20 seconds.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function getNotifications($display_mode) {
+     $build = [];
+@@ -145,7 +151,7 @@ class NotificationSystemController extends ControllerBase {
+     if ($display_mode == 'bundled') {
+       $groupManager = $this->entityTypeManager->getStorage('notification_group');
+ 
+-      /** @var \Drupal\notification_system\Entity\NotificationGroupInterface[] $groups */
++      /** @var NotificationGroupInterface[] $groups */
+       $groups = $groupManager->loadMultiple();
+ 
+       foreach ($groups as $group) {
+@@ -192,7 +198,7 @@ class NotificationSystemController extends ControllerBase {
+    * @return \Zend\Diactoros\Response\JsonResponse
+    *   A JSON Response containing the status.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function markAsRead(string $providerId, string $notificationId) {
+     $status = $this->notificationSystem->markAsRead($this->currentUser(), $providerId, $notificationId);
+@@ -223,7 +229,7 @@ class NotificationSystemController extends ControllerBase {
+   /**
+    * Builds a render array for a list of notifications.
+    *
+-   * @param \Drupal\notification_system\model\NotificationInterface[] $notifications
++   * @param NotificationInterface[] $notifications
+    *   The notifications to build.
+    *
+    * @return array
+diff --git a/src/Event/NewNotificationEvent.php b/src/Event/NewNotificationEvent.php
+index 1f4430a..73d943a 100644
+--- a/src/Event/NewNotificationEvent.php
++++ b/src/Event/NewNotificationEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\notification_system\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\notification_system\model\NotificationInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Event that is fired when a new notification was added.
+@@ -16,14 +16,14 @@ class NewNotificationEvent extends Event {
+   /**
+    * The new notification.
+    *
+-   * @var \Drupal\notification_system\model\NotificationInterface
++   * @var NotificationInterface
+    */
+   public $notification;
+ 
+   /**
+    * NewNotificationEvent constructor.
+    *
+-   * @param \Drupal\notification_system\model\NotificationInterface $notification
++   * @param NotificationInterface $notification
+    *   The new notification.
+    */
+   public function __construct(NotificationInterface $notification) {
+diff --git a/src/Form/GroupMappingForm.php b/src/Form/GroupMappingForm.php
+index 201d69f..dc038fb 100644
+--- a/src/Form/GroupMappingForm.php
++++ b/src/Form/GroupMappingForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\notification_system\Form;
+ 
++use Drupal\Core\Config\Entity\ConfigEntityStorageInterface;
++use Drupal\notification_system\Entity\NotificationGroupInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+@@ -17,25 +19,25 @@ class GroupMappingForm extends ConfigFormBase {
+   /**
+    * The notification system service.
+    *
+-   * @var \Drupal\notification_system\Service\NotificationSystem
++   * @var NotificationSystem
+    */
+   protected $notificationSystem;
+ 
+   /**
+    * The EntityTypeManager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Creates a GroupMappingForm.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\notification_system\Service\NotificationSystem $notificationSystem
++   * @param NotificationSystem $notificationSystem
+    *   The notification system.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The EntityTypeManager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, NotificationSystem $notificationSystem, EntityTypeManagerInterface $entityTypeManager) {
+@@ -84,9 +86,9 @@ class GroupMappingForm extends ConfigFormBase {
+       '' => t('- None -'),
+     ];
+ 
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityStorageInterface $notificationGroupStorage */
++    /** @var ConfigEntityStorageInterface $notificationGroupStorage */
+     $notificationGroupStorage = $this->entityTypeManager->getStorage('notification_group');
+-    /** @var \Drupal\notification_system\Entity\NotificationGroupInterface[] $notificationGroups */
++    /** @var NotificationGroupInterface[] $notificationGroups */
+     $notificationGroups = $notificationGroupStorage->loadMultiple();
+ 
+     foreach ($notificationGroups as $notificationGroup) {
+diff --git a/src/NotificationProviderInterface.php b/src/NotificationProviderInterface.php
+index 28c8a27..9887389 100644
+--- a/src/NotificationProviderInterface.php
++++ b/src/NotificationProviderInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\notification_system;
+ 
++use Drupal\notification_system\model\NotificationInterface;
+ use Drupal\Core\Session\AccountInterface;
+ 
+ /**
+@@ -36,12 +37,12 @@ interface NotificationProviderInterface {
+   /**
+    * Load all unread notifications for a given user.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $user
++   * @param AccountInterface $user
+    *   The user which to get the notifications for.
+    * @param bool $includeReadNotifications
+    *   When true, read notifications will also be returned.
+    *
+-   * @return \Drupal\notification_system\model\NotificationInterface[]
++   * @return NotificationInterface[]
+    *   A list of notifications.
+    */
+   public function getNotifications(AccountInterface $user, $includeReadNotifications = FALSE);
+@@ -49,7 +50,7 @@ interface NotificationProviderInterface {
+   /**
+    * Mark a notification as read.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $user
++   * @param AccountInterface $user
+    *   The account of the user who has read the notification.
+    * @param string $notificationId
+    *   The id of the notification.
+@@ -65,7 +66,7 @@ interface NotificationProviderInterface {
+    * @param string $notificationId
+    *   The provider specific id of the notification.
+    *
+-   * @return \Drupal\notification_system\model\NotificationInterface|bool
++   * @return NotificationInterface|bool
+    *   Return the notification or FALSE if provider doesn't support loading.
+    */
+   public function load($notificationId);
+diff --git a/src/NotificationProviderPluginManager.php b/src/NotificationProviderPluginManager.php
+index c70109c..59ae31a 100644
+--- a/src/NotificationProviderPluginManager.php
++++ b/src/NotificationProviderPluginManager.php
+@@ -18,9 +18,9 @@ class NotificationProviderPluginManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Plugin/Block/NotificationsBlock.php b/src/Plugin/Block/NotificationsBlock.php
+index 8d4fd79..966ec88 100644
+--- a/src/Plugin/Block/NotificationsBlock.php
++++ b/src/Plugin/Block/NotificationsBlock.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\notification_system\Plugin\Block;
+ 
++use Drupal\notification_system\Entity\NotificationGroupInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Block\BlockBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -118,7 +119,7 @@ class NotificationsBlock extends BlockBase {
+ 
+       $groupManager = \Drupal::entityTypeManager()->getStorage('notification_group');
+ 
+-      /** @var \Drupal\notification_system\Entity\NotificationGroupInterface[] $groups */
++      /** @var NotificationGroupInterface[] $groups */
+       $groups = $groupManager->loadMultiple();
+ 
+       foreach ($groups as $group) {
+diff --git a/src/Plugin/Field/FieldFormatter/NotificationReference.php b/src/Plugin/Field/FieldFormatter/NotificationReference.php
+index 5d8cf78..892cb65 100644
+--- a/src/Plugin/Field/FieldFormatter/NotificationReference.php
++++ b/src/Plugin/Field/FieldFormatter/NotificationReference.php
+@@ -36,7 +36,7 @@ class NotificationReference extends FormatterBase {
+   /**
+    * Generate the output appropriate for one field item.
+    *
+-   * @param \Drupal\Core\Field\FieldItemInterface $item
++   * @param FieldItemInterface $item
+    *   One field item.
+    *
+    * @return string
+diff --git a/src/Plugin/Field/FieldType/NotificationReference.php b/src/Plugin/Field/FieldType/NotificationReference.php
+index 25a20a8..133ca6c 100644
+--- a/src/Plugin/Field/FieldType/NotificationReference.php
++++ b/src/Plugin/Field/FieldType/NotificationReference.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\notification_system\Plugin\Field\FieldType;
+ 
++use Drupal\notification_system\model\NotificationInterface;
++use Drupal\notification_system\NotificationProviderPluginManager;
++use Drupal\notification_system\NotificationProviderInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Component\Utility\Random;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+@@ -78,18 +81,18 @@ class NotificationReference extends FieldItemBase {
+   /**
+    * Load the notification from the provider.
+    *
+-   * @return bool|\Drupal\notification_system\model\NotificationInterface
++   * @return bool|NotificationInterface
+    *   A notification model or FALSE if the notification could not be loaded.
+    */
+   public function loadNotification() {
+-    /** @var \Drupal\notification_system\NotificationProviderPluginManager $notificationProviderPluginManager */
++    /** @var NotificationProviderPluginManager $notificationProviderPluginManager */
+     $notificationProviderPluginManager = \Drupal::service('plugin.manager.notification_provider');
+ 
+     try {
+       $providerId = $this->get('provider')->getValue();
+       $notificationId = $this->get('notification_id')->getValue();
+ 
+-      /** @var \Drupal\notification_system\NotificationProviderInterface $provider */
++      /** @var NotificationProviderInterface $provider */
+       $provider = $notificationProviderPluginManager->createInstance($providerId);
+ 
+       return $provider->load($notificationId);
+diff --git a/src/Plugin/Field/FieldWidget/NotificationReference.php b/src/Plugin/Field/FieldWidget/NotificationReference.php
+index 2e65d26..1ccbcde 100644
+--- a/src/Plugin/Field/FieldWidget/NotificationReference.php
++++ b/src/Plugin/Field/FieldWidget/NotificationReference.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\notification_system\Plugin\Field\FieldWidget;
+ 
++use Drupal\notification_system\Service\NotificationSystem;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Field\WidgetBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -28,7 +29,7 @@ class NotificationReference extends WidgetBase {
+       '#type' => 'fieldset',
+     ];
+ 
+-    /** @var \Drupal\notification_system\Service\NotificationSystem $notificationSystem */
++    /** @var NotificationSystem $notificationSystem */
+     $notificationSystem = \Drupal::service('notification_system');
+     $providers = $notificationSystem->getProviders();
+ 
+diff --git a/src/Service/NotificationSystem.php b/src/Service/NotificationSystem.php
+index 31f579e..730040b 100644
+--- a/src/Service/NotificationSystem.php
++++ b/src/Service/NotificationSystem.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\notification_system\Service;
+ 
++use Drupal\notification_system\NotificationProviderInterface;
++use Drupal\notification_system\model\Notification;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -20,28 +22,28 @@ class NotificationSystem {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The notification provider plugin manager.
+    *
+-   * @var \Drupal\notification_system\NotificationProviderPluginManager
++   * @var NotificationProviderPluginManager
+    */
+   protected $notificationProviderPluginManager;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+@@ -49,13 +51,13 @@ class NotificationSystem {
+   /**
+    * Constructs a NotificationSystem object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\notification_system\NotificationProviderPluginManager $notificationProviderPluginManager
++   * @param NotificationProviderPluginManager $notificationProviderPluginManager
+    *   The notification provider plugin manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The config factory.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, NotificationProviderPluginManager $notificationProviderPluginManager, ConfigFactoryInterface $configFactory, MessengerInterface $messenger) {
+@@ -68,7 +70,7 @@ class NotificationSystem {
+   /**
+    * Gets all available notification providers.
+    *
+-   * @return \Drupal\notification_system\NotificationProviderInterface[]
++   * @return NotificationProviderInterface[]
+    *   An array of notification providers.
+    */
+   public function getProviders() {
+@@ -78,7 +80,7 @@ class NotificationSystem {
+ 
+     foreach ($pluginDefinitions as $pluginDefinition) {
+       try {
+-        /** @var \Drupal\notification_system\NotificationProviderInterface $provider */
++        /** @var NotificationProviderInterface $provider */
+         $provider = $this->notificationProviderPluginManager->createInstance($pluginDefinition['id']);
+         $providers[] = $provider;
+       }
+@@ -95,18 +97,18 @@ class NotificationSystem {
+   /**
+    * Get a list of unread notifications for a given user from all providers.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $user
++   * @param AccountInterface $user
+    *   The user to get the notifications for.
+    * @param bool $bundled
+    *   Indicates if the notifications should be bundled by NotificationGroup.
+    * @param bool $includeReadNotifications
+    *   Include read notifications.
+    *
+-   * @return array|\Drupal\notification_system\model\NotificationInterface[]
++   * @return array|NotificationInterface[]
+    *   A list of notifications.
+    */
+   public function getNotifications(AccountInterface $user, $bundled = FALSE, $includeReadNotifications = FALSE) {
+-    /** @var \Drupal\notification_system\model\NotificationInterface[] $notifications */
++    /** @var NotificationInterface[] $notifications */
+     $notifications = [];
+ 
+     $providers = $this->getProviders();
+@@ -199,7 +201,7 @@ class NotificationSystem {
+   /**
+    * Marks a notification as read.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $user
++   * @param AccountInterface $user
+    *   The user who has read the notification.
+    * @param string $notificationProviderId
+    *   The id of the notification provider, that holds the notification.
+@@ -209,10 +211,10 @@ class NotificationSystem {
+    * @return bool|string
+    *   Returns true if it was successful. If not, returns a error message.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function markAsRead(AccountInterface $user, string $notificationProviderId, string $notificationId) {
+-    /** @var \Drupal\notification_system\NotificationProviderInterface $provider */
++    /** @var NotificationProviderInterface $provider */
+     try {
+       $provider = $this->notificationProviderPluginManager->createInstance($notificationProviderId);
+       return $provider->markAsRead($user, $notificationId);
+@@ -225,7 +227,7 @@ class NotificationSystem {
+   /**
+    * Bundles notifications by the NotificationGroup they belong to.
+    *
+-   * @param \Drupal\notification_system\model\Notification[] $notifications
++   * @param Notification[] $notifications
+    *   A list of notifications to bundle.
+    *
+    * @return array
+@@ -263,12 +265,12 @@ class NotificationSystem {
+    * @param string $notificationId
+    *   The provider specific id of the notification.
+    *
+-   * @return \Drupal\notification_system\model\NotificationInterface|bool
++   * @return NotificationInterface|bool
+    *   Returns the notification of FALSE if not found.
+    */
+   public function loadNotification($providerId, $notificationId) {
+     try {
+-      /** @var \Drupal\notification_system\NotificationProviderInterface $provider */
++      /** @var NotificationProviderInterface $provider */
+       $provider = $this->notificationProviderPluginManager->createInstance($providerId);
+       return $provider->load($notificationId);
+     }
+diff --git a/src/model/Notification.php b/src/model/Notification.php
+index d8b8eb2..1f3702e 100644
+--- a/src/model/Notification.php
++++ b/src/model/Notification.php
+@@ -63,7 +63,7 @@ class Notification implements NotificationInterface {
+   /**
+    * A link that provides more information about the notification.
+    *
+-   * @var \Drupal\Core\Url|null
++   * @var Url|null
+    */
+   protected ?Url $link;
+ 
+diff --git a/src/model/NotificationInterface.php b/src/model/NotificationInterface.php
+index 70b1643..d68be61 100644
+--- a/src/model/NotificationInterface.php
++++ b/src/model/NotificationInterface.php
+@@ -32,7 +32,7 @@ interface NotificationInterface {
+    *   The title of the notification.
+    * @param string|null $body
+    *   Additional text of the notification.
+-   * @param \Drupal\Core\Url|null $link
++   * @param Url|null $link
+    *   A link that provides more information about the notification.
+    * @param bool $sticky
+    *   Indicates if the notification can be marked as read.
+@@ -104,7 +104,7 @@ interface NotificationInterface {
+   /**
+    * Get the link of the notification.
+    *
+-   * @return \Drupal\Core\Url|null
++   * @return Url|null
+    *   The link.
+    */
+   public function getLink();
+@@ -209,7 +209,7 @@ interface NotificationInterface {
+   /**
+    * Set the link of the notification.
+    *
+-   * @param \Drupal\Core\Url $link
++   * @param Url $link
+    *   A link that provides more information about the notification.
+    */
+   public function setLink(Url $link);

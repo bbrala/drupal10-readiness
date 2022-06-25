@@ -1,0 +1,965 @@
+diff --git a/migrate_tools.module b/migrate_tools.module
+index 6b9557d..eed8e24 100644
+--- a/migrate_tools.module
++++ b/migrate_tools.module
+@@ -1,6 +1,7 @@
+ <?php
+ 
+ declare(strict_types = 1);
++use Drupal\Core\Config\Entity\ConfigEntityType;
+ 
+ /**
+  * @file
+@@ -22,7 +23,7 @@ use Drupal\migrate_tools\Form\MigrationGroupEditForm;
+ function migrate_tools_entity_type_build(array &$entity_types): void {
+   // Inject our UI into the general migration and migration group config
+   // entities.
+-  /** @var \Drupal\Core\Config\Entity\ConfigEntityType[] $entity_types */
++  /** @var ConfigEntityType[] $entity_types */
+   if (array_key_exists('migration', $entity_types)) {
+     $entity_types['migration']
+       ->set('admin_permission', 'administer migrations')
+diff --git a/src/Commands/MigrateToolsCommands.php b/src/Commands/MigrateToolsCommands.php
+index ce6fe9c..ba3b6e6 100644
+--- a/src/Commands/MigrateToolsCommands.php
++++ b/src/Commands/MigrateToolsCommands.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\migrate_tools\Commands;
+ 
++use Drupal\migrate\Plugin\MigrateIdMapInterface;
++use Drupal\migrate\Plugin\Migration;
+ use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
+ use Drupal\Component\Graph\Graph;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+@@ -53,13 +55,13 @@ class MigrateToolsCommands extends DrushCommands {
+   /**
+    * MigrateToolsCommands constructor.
+    *
+-   * @param \Drupal\migrate\Plugin\MigrationPluginManager $migrationPluginManager
++   * @param MigrationPluginManager $migrationPluginManager
+    *   Migration Plugin Manager service.
+-   * @param \Drupal\Core\Datetime\DateFormatter $dateFormatter
++   * @param DateFormatter $dateFormatter
+    *   Date formatter service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity type manager service.
+-   * @param \Drupal\Core\KeyValueStore\KeyValueFactoryInterface $keyValue
++   * @param KeyValueFactoryInterface $keyValue
+    *   Key-value store service.
+    */
+   public function __construct(MigrationPluginManager $migrationPluginManager, DateFormatter $dateFormatter, EntityTypeManagerInterface $entityTypeManager, KeyValueFactoryInterface $keyValue) {
+@@ -530,7 +532,7 @@ class MigrateToolsCommands extends DrushCommands {
+    * @aliases mst, migrate-stop
+    */
+   public function stop($migration_id): void {
+-    /** @var \Drupal\migrate\Plugin\MigrationInterface $migration */
++    /** @var MigrationInterface $migration */
+     $migration = $this->migrationPluginManager->createInstance(
+       $migration_id
+     );
+@@ -582,7 +584,7 @@ class MigrateToolsCommands extends DrushCommands {
+    * @aliases mrs, migrate-reset-status
+    */
+   public function resetStatus($migration_id = ''): void {
+-    /** @var \Drupal\migrate\Plugin\MigrationInterface $migration */
++    /** @var MigrationInterface $migration */
+     $migration = $this->migrationPluginManager->createInstance(
+       $migration_id
+     );
+@@ -645,7 +647,7 @@ class MigrateToolsCommands extends DrushCommands {
+     'idlist' => self::REQ,
+     'idlist-delimiter' => MigrateTools::DEFAULT_ID_LIST_DELIMITER,
+   ]): ?RowsOfFields {
+-    /** @var \Drupal\migrate\Plugin\MigrationInterface $migration */
++    /** @var MigrationInterface $migration */
+     $migration = $this->migrationPluginManager->createInstance(
+       $migration_id
+     );
+@@ -655,7 +657,7 @@ class MigrateToolsCommands extends DrushCommands {
+       throw new \Exception($error);
+     }
+     $id_list = MigrateTools::buildIdList($options);
+-    /** @var \Drupal\migrate\Plugin\MigrateIdMapInterface|\Drupal\migrate_tools\IdMapFilter $map */
++    /** @var MigrateIdMapInterface|IdMapFilter $map */
+     $map = new IdMapFilter($migration->getIdMap(), $id_list);
+     $source_id_keys = $this->getSourceIdKeys($map);
+     if ($source_id_keys === NULL) {
+@@ -704,7 +706,7 @@ class MigrateToolsCommands extends DrushCommands {
+   /**
+    * Get the source ID keys.
+    *
+-   * @param \Drupal\migrate_tools\IdMapFilter $map
++   * @param IdMapFilter $map
+    *   The migration ID map.
+    *
+    *   The source ID keys.
+@@ -739,11 +741,11 @@ class MigrateToolsCommands extends DrushCommands {
+    *   description: Description
+    * @default-fields machine_name,description
+    *
+-   * @return \Consolidation\OutputFormatters\StructuredData\RowsOfFields
++   * @return RowsOfFields
+    *   Source fields of the given migration formatted as a table.
+    */
+   public function fieldsSource($migration_id): RowsOfFields {
+-    /** @var \Drupal\migrate\Plugin\MigrationInterface $migration */
++    /** @var MigrationInterface $migration */
+     $migration = $this->migrationPluginManager->createInstance(
+       $migration_id
+     );
+@@ -776,7 +778,7 @@ class MigrateToolsCommands extends DrushCommands {
+    *
+    * @default $options []
+    *
+-   * @return \Drupal\migrate\Plugin\MigrationInterface[][]
++   * @return MigrationInterface[][]
+    *   An array keyed by migration group, each value containing an array of
+    *   migrations or an empty array if no migrations match the input criteria.
+    */
+@@ -819,7 +821,7 @@ class MigrateToolsCommands extends DrushCommands {
+     }
+ 
+     // Do not return any migrations which fail to meet requirements.
+-    /** @var \Drupal\migrate\Plugin\Migration $migration */
++    /** @var Migration $migration */
+     foreach ($matched_migrations as $id => $migration) {
+       try {
+         if ($migration->getSourcePlugin() instanceof RequirementsInterface) {
+@@ -885,7 +887,7 @@ class MigrateToolsCommands extends DrushCommands {
+    * If the --execute-dependencies option was given,
+    * the migration's dependencies will also be executed first.
+    *
+-   * @param \Drupal\migrate\Plugin\MigrationInterface $migration
++   * @param MigrationInterface $migration
+    *   The migration to execute.
+    * @param string $migration_id
+    *   The migration ID (not used, just an artifact of array_walk()).
+diff --git a/src/Controller/MessageController.php b/src/Controller/MessageController.php
+index 8b240bb..7080135 100644
+--- a/src/Controller/MessageController.php
++++ b/src/Controller/MessageController.php
+@@ -28,9 +28,9 @@ class MessageController extends ControllerBase {
+   /**
+    * Constructs a MessageController object.
+    *
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   A database connection.
+-   * @param \Drupal\migrate\Plugin\MigrationPluginManagerInterface $migration_plugin_manager
++   * @param MigrationPluginManagerInterface $migration_plugin_manager
+    *   The migration plugin manager.
+    */
+   public function __construct(Connection $database, MigrationPluginManagerInterface $migration_plugin_manager) {
+@@ -164,7 +164,7 @@ class MessageController extends ControllerBase {
+    * @param \Drupal\migrate_plus\Entity\MigrationInterface $migration
+    *   The $migration.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The translated title.
+    */
+   public function title(MigrationGroupInterface $migration_group, MigratePlusMigrationInterface $migration): TranslatableMarkup {
+diff --git a/src/Controller/MigrationController.php b/src/Controller/MigrationController.php
+index d74d4c1..a9191ef 100644
+--- a/src/Controller/MigrationController.php
++++ b/src/Controller/MigrationController.php
+@@ -29,9 +29,9 @@ class MigrationController extends ControllerBase implements ContainerInjectionIn
+   /**
+    * Constructs a new MigrationController object.
+    *
+-   * @param \Drupal\migrate\Plugin\MigrationPluginManagerInterface $migration_plugin_manager
++   * @param MigrationPluginManagerInterface $migration_plugin_manager
+    *   The plugin manager for config entity-based migrations.
+-   * @param \Drupal\Core\Routing\CurrentRouteMatch $currentRouteMatch
++   * @param CurrentRouteMatch $currentRouteMatch
+    *   The current route match.
+    */
+   public function __construct(MigrationPluginManagerInterface $migration_plugin_manager, CurrentRouteMatch $currentRouteMatch) {
+@@ -155,7 +155,7 @@ class MigrationController extends ControllerBase implements ContainerInjectionIn
+    * @param \Drupal\migrate_plus\Entity\MigrationInterface $migration
+    *   The $migration.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse|null
++   * @return RedirectResponse|null
+    *   A redirect response if the batch is progressive. Else no return value.
+    */
+   public function run(MigrationGroupInterface $migration_group, MigrationInterface $migration): ?RedirectResponse {
+diff --git a/src/Controller/MigrationGroupListBuilder.php b/src/Controller/MigrationGroupListBuilder.php
+index aa84d81..cb760d8 100644
+--- a/src/Controller/MigrationGroupListBuilder.php
++++ b/src/Controller/MigrationGroupListBuilder.php
+@@ -37,7 +37,7 @@ class MigrationGroupListBuilder extends ConfigEntityListBuilder {
+   /**
+    * Builds a row for an entity in the entity listing.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity for which to build the row.
+    *
+    * @return array
+diff --git a/src/Controller/MigrationListBuilder.php b/src/Controller/MigrationListBuilder.php
+index 73b3c50..3fc9e03 100644
+--- a/src/Controller/MigrationListBuilder.php
++++ b/src/Controller/MigrationListBuilder.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\migrate_tools\Controller;
+ 
++use Drupal\Core\Datetime\DateFormatter;
+ use Drupal\Core\Config\Entity\ConfigEntityListBuilder;
+ use Drupal\Core\Entity\EntityHandlerInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -33,15 +34,15 @@ class MigrationListBuilder extends ConfigEntityListBuilder implements EntityHand
+   /**
+    * Constructs a new EntityListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Routing\CurrentRouteMatch $current_route_match
++   * @param CurrentRouteMatch $current_route_match
+    *   The current route match service.
+-   * @param \Drupal\migrate\Plugin\MigrationPluginManagerInterface $migration_plugin_manager
++   * @param MigrationPluginManagerInterface $migration_plugin_manager
+    *   The plugin manager for config entity-based migrations.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, CurrentRouteMatch $current_route_match, MigrationPluginManagerInterface $migration_plugin_manager, LoggerInterface $logger) {
+@@ -117,7 +118,7 @@ class MigrationListBuilder extends ConfigEntityListBuilder implements EntityHand
+   /**
+    * Builds a row for a migration plugin.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The migration plugin for which to build the row.
+    *
+    * @return array
+@@ -183,7 +184,7 @@ class MigrationListBuilder extends ConfigEntityListBuilder implements EntityHand
+       $migrate_last_imported_store = \Drupal::keyValue('migrate_last_imported');
+       $last_imported = $migrate_last_imported_store->get($migration->id(), FALSE);
+       if ($last_imported) {
+-        /** @var \Drupal\Core\Datetime\DateFormatter $date_formatter */
++        /** @var DateFormatter $date_formatter */
+         $date_formatter = \Drupal::service('date.formatter');
+         $row['last_imported'] = $date_formatter->format((int) ($last_imported / 1000),
+           'custom', 'Y-m-d H:i:s');
+@@ -231,7 +232,7 @@ class MigrationListBuilder extends ConfigEntityListBuilder implements EntityHand
+   /**
+    * Add group route parameter.
+    *
+-   * @param \Drupal\Core\Url $url
++   * @param Url $url
+    *   The URL associated with an operation.
+    * @param string $migration_group
+    *   The migration's parent group.
+diff --git a/src/EventSubscriber/MigrationDrushCommandProgress.php b/src/EventSubscriber/MigrationDrushCommandProgress.php
+index 2222209..43378e0 100644
+--- a/src/EventSubscriber/MigrationDrushCommandProgress.php
++++ b/src/EventSubscriber/MigrationDrushCommandProgress.php
+@@ -22,7 +22,7 @@ class MigrationDrushCommandProgress implements EventSubscriberInterface {
+   /**
+    * MigrationDrushCommandProgress constructor.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger service.
+    */
+   public function __construct(LoggerInterface $logger) {
+@@ -46,9 +46,9 @@ class MigrationDrushCommandProgress implements EventSubscriberInterface {
+    *
+    * This must be called before the progress bar can be used.
+    *
+-   * @param \Symfony\Component\Console\Output\OutputInterface $output
++   * @param OutputInterface $output
+    *   The output.
+-   * @param \Drupal\migrate\Plugin\MigrationInterface $migration
++   * @param MigrationInterface $migration
+    *   The migration.
+    * @param array $options
+    *   Additional options of the command.
+diff --git a/src/EventSubscriber/MigrationImportSync.php b/src/EventSubscriber/MigrationImportSync.php
+index 2316b4d..c5ea094 100644
+--- a/src/EventSubscriber/MigrationImportSync.php
++++ b/src/EventSubscriber/MigrationImportSync.php
+@@ -23,7 +23,7 @@ class MigrationImportSync implements EventSubscriberInterface {
+   /**
+    * MigrationImportSync constructor.
+    *
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $dispatcher
++   * @param EventDispatcherInterface $dispatcher
+    *   The event dispatcher.
+    */
+   public function __construct(EventDispatcherInterface $dispatcher) {
+@@ -42,7 +42,7 @@ class MigrationImportSync implements EventSubscriberInterface {
+   /**
+    * Event callback to sync source and destination.
+    *
+-   * @param \Drupal\migrate\Event\MigrateImportEvent $event
++   * @param MigrateImportEvent $event
+    *   The migration import event.
+    */
+   public function sync(MigrateImportEvent $event): void {
+@@ -83,7 +83,7 @@ class MigrationImportSync implements EventSubscriberInterface {
+    *
+    * @param string $event_name
+    *   The event name to dispatch.
+-   * @param \Drupal\migrate\Plugin\MigrationInterface $migration
++   * @param MigrationInterface $migration
+    *   The active migration.
+    * @param array $destination_ids
+    *   The destination identifier values of the record.
+diff --git a/src/Form/MigrationAddForm.php b/src/Form/MigrationAddForm.php
+index 4721634..0f88983 100644
+--- a/src/Form/MigrationAddForm.php
++++ b/src/Form/MigrationAddForm.php
+@@ -24,7 +24,7 @@ class MigrationAddForm extends MigrationFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/MigrationDeleteForm.php b/src/Form/MigrationDeleteForm.php
+index 8cfe405..9b39a49 100644
+--- a/src/Form/MigrationDeleteForm.php
++++ b/src/Form/MigrationDeleteForm.php
+@@ -43,7 +43,7 @@ class MigrationDeleteForm extends EntityConfirmFormBase {
+   /**
+    * Gets the cancel URL.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   The URL to go to if the user cancels the deletion.
+    */
+   public function getCancelUrl(): Url {
+@@ -55,7 +55,7 @@ class MigrationDeleteForm extends EntityConfirmFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state): void {
+diff --git a/src/Form/MigrationEditForm.php b/src/Form/MigrationEditForm.php
+index 4bd24a5..0dd272f 100644
+--- a/src/Form/MigrationEditForm.php
++++ b/src/Form/MigrationEditForm.php
+@@ -23,7 +23,7 @@ class MigrationEditForm extends MigrationFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    *
+    * @return array
+@@ -39,7 +39,7 @@ class MigrationEditForm extends MigrationFormBase {
+   /**
+    * Add group route parameter.
+    *
+-   * @param \Drupal\Core\Url $url
++   * @param Url $url
+    *   The URL associated with an operation.
+    * @param string $migration_group
+    *   The migration's parent group.
+diff --git a/src/Form/MigrationExecuteForm.php b/src/Form/MigrationExecuteForm.php
+index 6f94409..84fa3e3 100644
+--- a/src/Form/MigrationExecuteForm.php
++++ b/src/Form/MigrationExecuteForm.php
+@@ -26,9 +26,9 @@ class MigrationExecuteForm extends FormBase {
+   /**
+    * Constructs a new MigrationExecuteForm object.
+    *
+-   * @param \Drupal\migrate\Plugin\MigrationPluginManagerInterface $migration_plugin_manager
++   * @param MigrationPluginManagerInterface $migration_plugin_manager
+    *   The plugin manager for config entity-based migrations.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+    */
+   public function __construct(MigrationPluginManagerInterface $migration_plugin_manager, RouteMatchInterface $route_match) {
+@@ -79,7 +79,7 @@ class MigrationExecuteForm extends FormBase {
+    *
+    * @param array $form
+    *   The execution form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -123,7 +123,7 @@ class MigrationExecuteForm extends FormBase {
+    *
+    * @param array $form
+    *   The execution form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -188,7 +188,7 @@ class MigrationExecuteForm extends FormBase {
+     $migration = $this->getRouteMatch()->getParameter('migration');
+     if ($migration) {
+       $migration_id = $migration->id();
+-      /** @var \Drupal\migrate\Plugin\MigrationInterface $migration_plugin */
++      /** @var MigrationInterface $migration_plugin */
+       $migration_plugin = $this->migrationPluginManager->createInstance($migration_id, $migration->toArray());
+       $migrateMessage = new MigrateMessage();
+ 
+diff --git a/src/Form/MigrationFormBase.php b/src/Form/MigrationFormBase.php
+index 5db13be..200cc07 100644
+--- a/src/Form/MigrationFormBase.php
++++ b/src/Form/MigrationFormBase.php
+@@ -25,7 +25,7 @@ class MigrationFormBase extends EntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    *
+    * @return array
+@@ -92,7 +92,7 @@ class MigrationFormBase extends EntityForm {
+    *   The entity ID.
+    * @param array $element
+    *   The form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return bool
+@@ -116,7 +116,7 @@ class MigrationFormBase extends EntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/MigrationGroupAddForm.php b/src/Form/MigrationGroupAddForm.php
+index 279ceef..28633bd 100644
+--- a/src/Form/MigrationGroupAddForm.php
++++ b/src/Form/MigrationGroupAddForm.php
+@@ -24,7 +24,7 @@ class MigrationGroupAddForm extends MigrationGroupFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/MigrationGroupDeleteForm.php b/src/Form/MigrationGroupDeleteForm.php
+index d71dff8..99327c7 100644
+--- a/src/Form/MigrationGroupDeleteForm.php
++++ b/src/Form/MigrationGroupDeleteForm.php
+@@ -43,7 +43,7 @@ class MigrationGroupDeleteForm extends EntityConfirmFormBase {
+   /**
+    * Gets the cancel URL.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   The URL to go to if the user cancels the deletion.
+    */
+   public function getCancelUrl(): Url {
+@@ -55,7 +55,7 @@ class MigrationGroupDeleteForm extends EntityConfirmFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state): void {
+diff --git a/src/Form/MigrationGroupEditForm.php b/src/Form/MigrationGroupEditForm.php
+index 30d2ff9..bc740c2 100644
+--- a/src/Form/MigrationGroupEditForm.php
++++ b/src/Form/MigrationGroupEditForm.php
+@@ -22,7 +22,7 @@ class MigrationGroupEditForm extends MigrationGroupFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/MigrationGroupFormBase.php b/src/Form/MigrationGroupFormBase.php
+index 43c2603..1d545b5 100644
+--- a/src/Form/MigrationGroupFormBase.php
++++ b/src/Form/MigrationGroupFormBase.php
+@@ -23,7 +23,7 @@ class MigrationGroupFormBase extends EntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    *
+    * @return array
+@@ -80,7 +80,7 @@ class MigrationGroupFormBase extends EntityForm {
+    *   The entity ID.
+    * @param array $element
+    *   The form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return bool
+@@ -104,7 +104,7 @@ class MigrationGroupFormBase extends EntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    *
+    * @return array
+diff --git a/src/IdMapFilter.php b/src/IdMapFilter.php
+index f5f300d..f00b219 100644
+--- a/src/IdMapFilter.php
++++ b/src/IdMapFilter.php
+@@ -22,7 +22,7 @@ class IdMapFilter extends \FilterIterator implements MigrateIdMapInterface {
+   /**
+    * IdMapFilter constructor.
+    *
+-   * @param \Drupal\migrate\Plugin\MigrateIdMapInterface $id_map
++   * @param MigrateIdMapInterface $id_map
+    *   The ID map.
+    * @param array $id_list
+    *   The id list to use in the filter.
+diff --git a/src/MigrateBatchExecutable.php b/src/MigrateBatchExecutable.php
+index 7f9803f..26a8a94 100644
+--- a/src/MigrateBatchExecutable.php
++++ b/src/MigrateBatchExecutable.php
+@@ -115,7 +115,7 @@ class MigrateBatchExecutable extends MigrateExecutable {
+   /**
+    * Helper to generate the batch operations for importing migrations.
+    *
+-   * @param \Drupal\migrate\Plugin\MigrationInterface[] $migrations
++   * @param MigrationInterface[] $migrations
+    *   The migrations.
+    * @param string $operation
+    *   The batch operation to perform.
+@@ -181,7 +181,7 @@ class MigrateBatchExecutable extends MigrateExecutable {
+ 
+     // Prepare the migration executable.
+     $message = new MigrateMessage();
+-    /** @var \Drupal\migrate\Plugin\MigrationInterface $migration */
++    /** @var MigrationInterface $migration */
+     $migration = \Drupal::getContainer()->get('plugin.manager.migration')->createInstance($migration_id, $options['configuration'] ?? []);
+     unset($options['configuration']);
+ 
+diff --git a/src/MigrateExecutable.php b/src/MigrateExecutable.php
+index 50f9d43..6bfaebc 100755
+--- a/src/MigrateExecutable.php
++++ b/src/MigrateExecutable.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\migrate_tools;
+ 
++use Drupal\migrate\MigrateSkipRowException;
+ use Drupal\migrate\Event\MigrateEvents;
+ use Drupal\migrate\Event\MigrateImportEvent;
+ use Drupal\migrate\Event\MigrateMapDeleteEvent;
+@@ -142,7 +143,7 @@ class MigrateExecutable extends MigrateExecutableBase {
+   /**
+    * Count up any map save events.
+    *
+-   * @param \Drupal\migrate\Event\MigrateMapSaveEvent $event
++   * @param MigrateMapSaveEvent $event
+    *   The map event.
+    */
+   public function onMapSave(MigrateMapSaveEvent $event) {
+@@ -165,7 +166,7 @@ class MigrateExecutable extends MigrateExecutableBase {
+   /**
+    * Count up any rollback events.
+    *
+-   * @param \Drupal\migrate\Event\MigrateMapDeleteEvent $event
++   * @param MigrateMapDeleteEvent $event
+    *   The map event.
+    */
+   public function onMapDelete(MigrateMapDeleteEvent $event) {
+@@ -251,7 +252,7 @@ class MigrateExecutable extends MigrateExecutableBase {
+   /**
+    * React to migration completion.
+    *
+-   * @param \Drupal\migrate\Event\MigrateImportEvent $event
++   * @param MigrateImportEvent $event
+    *   The map event.
+    */
+   public function onPostImport(MigrateImportEvent $event) {
+@@ -334,7 +335,7 @@ class MigrateExecutable extends MigrateExecutableBase {
+   /**
+    * React to rollback completion.
+    *
+-   * @param \Drupal\migrate\Event\MigrateRollbackEvent $event
++   * @param MigrateRollbackEvent $event
+    *   The map event.
+    */
+   public function onPostRollback(MigrateRollbackEvent $event) {
+@@ -385,7 +386,7 @@ class MigrateExecutable extends MigrateExecutableBase {
+   /**
+    * React to an item about to be imported.
+    *
+-   * @param \Drupal\migrate\Event\MigratePreRowSaveEvent $event
++   * @param MigratePreRowSaveEvent $event
+    *   The pre-save event.
+    */
+   public function onPreRowSave(MigratePreRowSaveEvent $event) {
+@@ -401,7 +402,7 @@ class MigrateExecutable extends MigrateExecutableBase {
+   /**
+    * React to item rollback.
+    *
+-   * @param \Drupal\migrate\Event\MigrateRowDeleteEvent $event
++   * @param MigrateRowDeleteEvent $event
+    *   The post-save event.
+    */
+   public function onPostRowDelete(MigrateRowDeleteEvent $event) {
+@@ -417,7 +418,7 @@ class MigrateExecutable extends MigrateExecutableBase {
+    * @param \Drupal\migrate_plus\Event\MigratePrepareRowEvent $event
+    *   The prepare-row event.
+    *
+-   * @throws \Drupal\migrate\MigrateSkipRowException
++   * @throws MigrateSkipRowException
+    */
+   public function onPrepareRow(MigratePrepareRowEvent $event) {
+     if ($this->feedback && $this->counter && $this->counter % $this->feedback == 0) {
+diff --git a/src/SourceFilter.php b/src/SourceFilter.php
+index 100be92..58272c6 100644
+--- a/src/SourceFilter.php
++++ b/src/SourceFilter.php
+@@ -29,7 +29,7 @@ class SourceFilter extends \FilterIterator implements MigrateSourceInterface {
+   /**
+    * SourceFilter constructor.
+    *
+-   * @param \Drupal\migrate\Plugin\MigrateSourceInterface $source
++   * @param MigrateSourceInterface $source
+    *   The ID map.
+    * @param array $id_list
+    *   The id list to use in the filter.
+diff --git a/tests/modules/migrate_tools_test/src/Commands/MigrateToolsTestCommands.php b/tests/modules/migrate_tools_test/src/Commands/MigrateToolsTestCommands.php
+index 7a4d7bb..f68ee3f 100644
+--- a/tests/modules/migrate_tools_test/src/Commands/MigrateToolsTestCommands.php
++++ b/tests/modules/migrate_tools_test/src/Commands/MigrateToolsTestCommands.php
+@@ -19,7 +19,7 @@ final class MigrateToolsTestCommands extends DrushCommands {
+   /**
+    * MigrateToolsTestCommands constructor.
+    *
+-   * @param \Drupal\migrate\Plugin\MigrationPluginManager $migrationPluginManager
++   * @param MigrationPluginManager $migrationPluginManager
+    *   The Migration Plugin Manager.
+    */
+   public function __construct(MigrationPluginManager $migrationPluginManager) {
+diff --git a/tests/src/Functional/DrushCommandsGeneratorTest.php b/tests/src/Functional/DrushCommandsGeneratorTest.php
+index b2b5419..3cb74f7 100644
+--- a/tests/src/Functional/DrushCommandsGeneratorTest.php
++++ b/tests/src/Functional/DrushCommandsGeneratorTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\migrate_tools\Functional;
+ 
++use Drupal\migrate\Plugin\MigrateIdMapInterface;
+ use Drupal\Core\StreamWrapper\PublicStream;
+ use Drupal\Core\StreamWrapper\StreamWrapperInterface;
+ use Drupal\Tests\BrowserTestBase;
+@@ -94,7 +95,7 @@ EOD;
+     drupal_flush_all_caches();
+     $this->assertEmpty(\Drupal::entityTypeManager()->getStorage('taxonomy_vocabulary')->load('genre'));
+ 
+-    /** @var \Drupal\migrate\Plugin\MigrateIdMapInterface $id_map */
++    /** @var MigrateIdMapInterface $id_map */
+     $id_map = $this->container->get('plugin.manager.migration')->createInstance('csv_source_test')->getIdMap();
+     $this->assertCount(4, $id_map);
+   }
+diff --git a/tests/src/Functional/DrushCommandsTest.php b/tests/src/Functional/DrushCommandsTest.php
+index 9783a0e..19da238 100644
+--- a/tests/src/Functional/DrushCommandsTest.php
++++ b/tests/src/Functional/DrushCommandsTest.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\migrate_tools\Functional;
+ 
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\migrate\Plugin\MigrateIdMapInterface;
+ use Drupal\Tests\BrowserTestBase;
+ use Drush\TestTraits\DrushTestTrait;
+ 
+@@ -36,7 +38,7 @@ final class DrushCommandsTest extends BrowserTestBase {
+   /**
+    * Tests migrate:import with feedback.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function testFeedback(): void {
+     $this->drush('mim', ['fruit_terms'], ['feedback' => 2]);
+@@ -161,7 +163,7 @@ final class DrushCommandsTest extends BrowserTestBase {
+     $this->drush('mim', ['fruit_terms']);
+     $this->drush('mmsg', ['fruit_terms']);
+     $this->assertErrorOutputEquals('[notice] No messages for this migration');
+-    /** @var \Drupal\migrate\Plugin\MigrateIdMapInterface $id_map */
++    /** @var MigrateIdMapInterface $id_map */
+     $id_map = $this->container->get('plugin.manager.migration')->createInstance('fruit_terms')->getIdMap();
+     $id_map->saveMessage(['name' => 'Apple'], 'You picked a bad one.');
+     $this->drush('mmsg', ['fruit_terms'], ['format' => 'json']);
+@@ -208,7 +210,7 @@ EOT;
+     $this->assertEquals(3, \Drupal::entityTypeManager()->getStorage('taxonomy_term')->getQuery()->accessCheck(TRUE)->count()->execute());
+     $this->assertEmpty(\Drupal::entityTypeManager()->getStorage('taxonomy_term')->load(2));
+ 
+-    /** @var \Drupal\migrate\Plugin\MigrateIdMapInterface $id_map */
++    /** @var MigrateIdMapInterface $id_map */
+     $id_map = $this->container->get('plugin.manager.migration')->createInstance('fruit_terms')->getIdMap();
+     $this->assertCount(3, $id_map);
+   }
+diff --git a/tests/src/Functional/MigrateExecutionFormTest.php b/tests/src/Functional/MigrateExecutionFormTest.php
+index 2621dac..6d2ba42 100644
+--- a/tests/src/Functional/MigrateExecutionFormTest.php
++++ b/tests/src/Functional/MigrateExecutionFormTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\migrate_tools\Functional;
+ 
++use Behat\Mink\Exception\ExpectationException;
+ use Drupal\Core\Entity\Query\QueryInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Drupal\taxonomy\Entity\Vocabulary;
+@@ -62,7 +63,7 @@ final class MigrateExecutionFormTest extends BrowserTestBase {
+   /**
+    * Tests execution of import and rollback of a migration.
+    *
+-   * @throws \Behat\Mink\Exception\ExpectationException
++   * @throws ExpectationException
+    */
+   public function testExecution(): void {
+     $group = 'default';
+@@ -106,7 +107,7 @@ final class MigrateExecutionFormTest extends BrowserTestBase {
+    *   An array of settings to change from the defaults.
+    *   Example: 'vid' => 'foo'.
+    *
+-   * @return \Drupal\taxonomy\VocabularyInterface
++   * @return VocabularyInterface
+    *   Created vocabulary.
+    */
+   protected function createVocabulary(array $values = []): VocabularyInterface {
+diff --git a/tests/src/Functional/SourceUrlFormTest.php b/tests/src/Functional/SourceUrlFormTest.php
+index 1dca7df..534c345 100644
+--- a/tests/src/Functional/SourceUrlFormTest.php
++++ b/tests/src/Functional/SourceUrlFormTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\migrate_tools\Functional;
+ 
++use Behat\Mink\Exception\ExpectationException;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -61,7 +62,7 @@ final class SourceUrlFormTest extends BrowserTestBase {
+   /**
+    * Tests the form ensure graceful 404 handling.
+    *
+-   * @throws \Behat\Mink\Exception\ExpectationException
++   * @throws ExpectationException
+    */
+   public function testSourceUrl404Form(): void {
+     // Assert the test migration is listed.
+diff --git a/tests/src/Kernel/DrushTest.php b/tests/src/Kernel/DrushTest.php
+index c7f7c03..0982e65 100644
+--- a/tests/src/Kernel/DrushTest.php
++++ b/tests/src/Kernel/DrushTest.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\migrate_tools\Kernel {
+ 
++  use Prophecy\PhpUnit\ProphecyTrait;
++  use Drupal\Component\Plugin\Exception\PluginException;
++  use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
+   use Drupal\migrate\Plugin\MigrationInterface;
+   use Drupal\migrate\Plugin\MigrationPluginManagerInterface;
+   use Drupal\migrate_tools\Commands\MigrateToolsCommands;
+@@ -19,6 +22,7 @@ namespace Drupal\Tests\migrate_tools\Kernel {
+    */
+   final class DrushTest extends MigrateTestBase {
+ 
++    use ProphecyTrait;
+     /**
+      * {@inheritdoc}
+      */
+@@ -119,10 +123,10 @@ namespace Drupal\Tests\migrate_tools\Kernel {
+     /**
+      * Tests drush mim.
+      *
+-     * @throws \Drupal\Component\Plugin\Exception\PluginException
++     * @throws PluginException
+      */
+     public function testImport(): void {
+-      /** @var \Drupal\migrate\Plugin\MigrationInterface $migration */
++      /** @var MigrationInterface $migration */
+       $migration = $this->migrationPluginManager->createInstance('fruit_terms');
+       $id_map = $migration->getIdMap();
+       $this->commands->import('fruit_terms', array_merge($this->importBaseOptions, ['idlist' => 'Apple']));
+@@ -148,16 +152,16 @@ namespace Drupal\Tests\migrate_tools\Kernel {
+     /**
+      * Tests drush mmsg.
+      *
+-     * @throws \Drupal\Component\Plugin\Exception\PluginException
++     * @throws PluginException
+      */
+     public function testMessages(): void {
+       $this->executeMigration('fruit_terms');
+       $message = $this->getRandomGenerator()->string(16);
+-      /** @var \Drupal\migrate\Plugin\MigrationInterface $migration */
++      /** @var MigrationInterface $migration */
+       $migration = $this->migrationPluginManager->createInstance('fruit_terms');
+       $id_map = $migration->getIdMap();
+       $id_map->saveMessage(['name' => 'Apple'], $message);
+-      /** @var \Consolidation\OutputFormatters\StructuredData\RowsOfFields $result */
++      /** @var RowsOfFields $result */
+       $result = $this->commands->messages('fruit_terms', [
+         'csv' => FALSE,
+         'idlist' => NULL,
+@@ -185,7 +189,7 @@ namespace Drupal\Tests\migrate_tools\Kernel {
+      */
+     public function testRollback(): void {
+       $this->executeMigration('fruit_terms');
+-      /** @var \Drupal\migrate\Plugin\MigrationInterface $migration */
++      /** @var MigrationInterface $migration */
+       $migration = $this->migrationPluginManager->createInstance('fruit_terms');
+       $id_map = $migration->getIdMap();
+       $this->assertSame(3, $id_map->importedCount());
+@@ -199,7 +203,7 @@ namespace Drupal\Tests\migrate_tools\Kernel {
+     public function testFailingRollbackThrowsException(): void {
+       $this->expectException(\Exception::class);
+       $this->expectExceptionMessage('source_exception migration failed');
+-      /** @var \Drupal\migrate\Plugin\MigrationInterface $migration */
++      /** @var MigrationInterface $migration */
+       $migration = $this->migrationPluginManager->createInstance('source_exception');
+       $migration->setStatus(MigrationInterface::STATUS_IMPORTING);
+       $this->commands->rollback('source_exception', $this->importBaseOptions);
+@@ -208,10 +212,10 @@ namespace Drupal\Tests\migrate_tools\Kernel {
+     /**
+      * Tests drush mrs.
+      *
+-     * @throws \Drupal\Component\Plugin\Exception\PluginException
++     * @throws PluginException
+      */
+     public function testReset(): void {
+-      /** @var \Drupal\migrate\Plugin\MigrationInterface $migration */
++      /** @var MigrationInterface $migration */
+       $migration = $this->migrationPluginManager->createInstance('fruit_terms');
+       $migration->setStatus(MigrationInterface::STATUS_IMPORTING);
+       $status = $this->commands->status('fruit_terms', [
+@@ -237,10 +241,10 @@ namespace Drupal\Tests\migrate_tools\Kernel {
+     /**
+      * Tests drush mst.
+      *
+-     * @throws \Drupal\Component\Plugin\Exception\PluginException
++     * @throws PluginException
+      */
+     public function testStop(): void {
+-      /** @var \Drupal\migrate\Plugin\MigrationInterface $migration */
++      /** @var MigrationInterface $migration */
+       $migration = $this->migrationPluginManager->createInstance('fruit_terms');
+       $migration->setStatus(MigrationInterface::STATUS_IMPORTING);
+       $this->commands->stop('fruit_terms');
+@@ -260,7 +264,7 @@ namespace Drupal\Tests\migrate_tools\Kernel {
+      * Tests drush mfs.
+      */
+     public function testFieldsSource(): void {
+-      /** @var \Consolidation\OutputFormatters\StructuredData\RowsOfFields $result */
++      /** @var RowsOfFields $result */
+       $result = $this->commands->fieldsSource('fruit_terms');
+       $rows = $result->getArrayCopy();
+       $this->assertCount(1, $rows);
+diff --git a/tests/src/Kernel/MigrateImportTest.php b/tests/src/Kernel/MigrateImportTest.php
+index 942d11a..c49cdd8 100644
+--- a/tests/src/Kernel/MigrateImportTest.php
++++ b/tests/src/Kernel/MigrateImportTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\migrate_tools\Kernel;
+ 
++use Drupal\migrate\Plugin\MigrationInterface;
+ use Drupal\migrate_tools\MigrateExecutable;
+ use Drupal\taxonomy\Entity\Vocabulary;
+ use Drupal\taxonomy\VocabularyInterface;
+@@ -68,7 +69,7 @@ final class MigrateImportTest extends MigrateTestBase {
+       'destination' => ['plugin' => 'entity:taxonomy_vocabulary'],
+     ];
+ 
+-    /** @var \Drupal\migrate\Plugin\MigrationInterface $vocabulary_migration */
++    /** @var MigrationInterface $vocabulary_migration */
+     $vocabulary_migration = \Drupal::service('plugin.manager.migration')->createStubMigration($definition);
+     $vocabulary_id_map = $vocabulary_migration->getIdMap();
+ 
+@@ -76,12 +77,12 @@ final class MigrateImportTest extends MigrateTestBase {
+     $executable = new MigrateExecutable($vocabulary_migration, $this, ['idlist' => 2]);
+     $executable->import();
+ 
+-    /** @var \Drupal\taxonomy\Entity\Vocabulary $vocabulary */
++    /** @var Vocabulary $vocabulary */
+     $vocabulary = Vocabulary::load(1);
+     $this->assertEmpty($vocabulary);
+     $map_row = $vocabulary_id_map->getRowBySource(['id' => 1]);
+     $this->assertEmpty($map_row);
+-    /** @var \Drupal\taxonomy\Entity\Vocabulary $vocabulary */
++    /** @var Vocabulary $vocabulary */
+     $vocabulary = Vocabulary::load(2);
+     $this->assertInstanceOf(VocabularyInterface::class, $vocabulary);
+     $map_row = $vocabulary_id_map->getRowBySource(['id' => 2]);
+diff --git a/tests/src/Kernel/MigrateRollbackTest.php b/tests/src/Kernel/MigrateRollbackTest.php
+index 59b4fc7..fae2003 100644
+--- a/tests/src/Kernel/MigrateRollbackTest.php
++++ b/tests/src/Kernel/MigrateRollbackTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\migrate_tools\Kernel;
+ 
++use Drupal\migrate\Plugin\MigrationInterface;
+ use Drupal\migrate_tools\MigrateExecutable;
+ use Drupal\taxonomy\Entity\Vocabulary;
+ use Drupal\taxonomy\VocabularyInterface;
+@@ -67,7 +68,7 @@ final class MigrateRollbackTest extends MigrateTestBase {
+       'destination' => ['plugin' => 'entity:taxonomy_vocabulary'],
+     ];
+ 
+-    /** @var \Drupal\migrate\Plugin\MigrationInterface $vocabulary_migration */
++    /** @var MigrationInterface $vocabulary_migration */
+     $vocabulary_migration = \Drupal::service('plugin.manager.migration')->createStubMigration($definition);
+     $vocabulary_id_map = $vocabulary_migration->getIdMap();
+ 
+@@ -75,7 +76,7 @@ final class MigrateRollbackTest extends MigrateTestBase {
+     $executable = new MigrateExecutable($vocabulary_migration, $this, []);
+     $executable->import();
+     foreach ($vocabulary_data_rows as $row) {
+-      /** @var \Drupal\taxonomy\Entity\Vocabulary $vocabulary */
++      /** @var Vocabulary $vocabulary */
+       $vocabulary = Vocabulary::load($row['id']);
+       $this->assertInstanceOf(VocabularyInterface::class, $vocabulary);
+       $map_row = $vocabulary_id_map->getRowBySource(['id' => $row['id']]);
+@@ -85,13 +86,13 @@ final class MigrateRollbackTest extends MigrateTestBase {
+     // Test id list rollback.
+     $rollback_executable = new MigrateExecutable($vocabulary_migration, $this, ['idlist' => 1]);
+     $rollback_executable->rollback();
+-    /** @var \Drupal\taxonomy\Entity\Vocabulary $vocabulary */
++    /** @var Vocabulary $vocabulary */
+     $vocabulary = Vocabulary::load(1);
+     $this->assertEmpty($vocabulary);
+     $map_row = $vocabulary_id_map->getRowBySource(['id' => 1]);
+     $this->assertEmpty($map_row);
+ 
+-    /** @var \Drupal\taxonomy\Entity\Vocabulary $vocabulary */
++    /** @var Vocabulary $vocabulary */
+     $vocabulary = Vocabulary::load(2);
+     $this->assertInstanceOf(VocabularyInterface::class, $vocabulary);
+     $map_row = $vocabulary_id_map->getRowBySource(['id' => 2]);

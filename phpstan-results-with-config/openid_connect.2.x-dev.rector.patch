@@ -1,0 +1,1592 @@
+diff --git a/openid_connect.api.php b/openid_connect.api.php
+index bae32ee..0581720 100644
+--- a/openid_connect.api.php
++++ b/openid_connect.api.php
+@@ -129,7 +129,7 @@ function hook_openid_connect_userinfo_alter(array &$userinfo, array $context) {
+  * be authorized, or checking certain constraints before authorization and
+  * distinctively allowing/denying authorization for the given account.
+  *
+- * @param \Drupal\user\UserInterface|bool $account
++ * @param UserInterface|bool $account
+  *   User account identified using the "sub" provided by the identity provider,
+  *   or FALSE, if no such account exists.
+  * @param array $context
+@@ -140,7 +140,7 @@ function hook_openid_connect_userinfo_alter(array &$userinfo, array $context) {
+  *   - plugin_id:      The plugin identifier.
+  *   - sub:            The remote user identifier.
+  *
+- * @return \Drupal\user\UserInterface|false
++ * @return UserInterface|false
+  *   A user account for a certain user to authorize, FALSE, if the user shall
+  *   not be logged in, or TRUE for successful hook execution.
+  *
+@@ -170,7 +170,7 @@ function hook_openid_connect_pre_authorize($account, array $context) {
+  * provider related information to the user's Drupal session (private temp
+  * store).
+  *
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   User account object of the authorized user.
+  * @param array $context
+  *   An associative array with context information:
+@@ -234,7 +234,7 @@ function hook_openid_connect_userinfo_claim_alter(&$claim_value, array $context)
+  * user roles or other complex claims provided by the identity provider, that
+  * the OpenID Connect module has no mapping mechanisms for.
+  *
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   A user account object.
+  * @param array $context
+  *   An associative array with context information:
+diff --git a/openid_connect.install b/openid_connect.install
+index 51cb8c5..bd67e8b 100644
+--- a/openid_connect.install
++++ b/openid_connect.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\openid_connect\OpenIDConnectClientEntityInterface;
+ /**
+  * @file
+  * Install, update and uninstall functions for the OpenID Connect module.
+@@ -207,7 +208,7 @@ function openid_connect_update_8200() {
+  * Update the active config for installations using generic client.
+  */
+ function openid_connect_update_8201() {
+-  /** @var \Drupal\openid_connect\OpenIDConnectClientEntityInterface[] $clients */
++  /** @var OpenIDConnectClientEntityInterface[] $clients */
+   $clients = \Drupal::entityTypeManager()->getStorage('openid_connect_client')->loadByProperties(['plugin' => 'generic']);
+ 
+   foreach ($clients as $client) {
+diff --git a/openid_connect.module b/openid_connect.module
+index 6ec8f0f..eb7f960 100644
+--- a/openid_connect.module
++++ b/openid_connect.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\externalauth\AuthmapInterface;
+ /**
+  * @file
+  * Hook implementations of the OpenID Connect module.
+@@ -62,7 +63,7 @@ function openid_connect_entity_property_info_alter(&$info) {
+  * Implements hook_user_cancel().
+  */
+ function openid_connect_user_cancel($edit, $account, $method) {
+-  /** @var \Drupal\externalauth\AuthmapInterface $authmap */
++  /** @var AuthmapInterface $authmap */
+   $authmap = \Drupal::service('externalauth.authmap');
+   $authmap->delete($account->id());
+ }
+@@ -132,7 +133,7 @@ function openid_connect_form_user_pass_alter(array &$form, FormStateInterface &$
+  *
+  * @param array $form
+  *   An associative array containing the structure of the form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The current state of the form.
+  */
+ function _openid_connect_user_pass_form_validate(array &$form, FormStateInterface $form_state) {
+diff --git a/src/Annotation/OpenIDConnectClient.php b/src/Annotation/OpenIDConnectClient.php
+index ede4881..d3c6260 100644
+--- a/src/Annotation/OpenIDConnectClient.php
++++ b/src/Annotation/OpenIDConnectClient.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\openid_connect\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -24,7 +25,7 @@ class OpenIDConnectClient extends Plugin {
+   /**
+    * The human-readable name of the OpenID Connect Client plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Controller/OpenIDConnectClientController.php b/src/Controller/OpenIDConnectClientController.php
+index e6f23bd..bca0bff 100644
+--- a/src/Controller/OpenIDConnectClientController.php
++++ b/src/Controller/OpenIDConnectClientController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\openid_connect\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\openid_connect\OpenIDConnectClientEntityInterface;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+@@ -20,8 +23,8 @@ class OpenIDConnectClientController extends ControllerBase {
+    * @return array
+    *   The OpenID Connect client add form.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function add(string $plugin_id): array {
+     // Create an OpenID Connect client entity.
+@@ -33,13 +36,13 @@ class OpenIDConnectClientController extends ControllerBase {
+   /**
+    * Enable an OpenID Connect client.
+    *
+-   * @param \Drupal\openid_connect\OpenIDConnectClientEntityInterface $openid_connect_client
++   * @param OpenIDConnectClientEntityInterface $openid_connect_client
+    *   The OpenID Connect client entity to enable.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirect back to the client list page.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function enable(OpenIDConnectClientEntityInterface $openid_connect_client): RedirectResponse {
+     $openid_connect_client->enable()->save();
+@@ -52,13 +55,13 @@ class OpenIDConnectClientController extends ControllerBase {
+   /**
+    * Disable an OpenID Connect client.
+    *
+-   * @param \Drupal\openid_connect\OpenIDConnectClientEntityInterface $openid_connect_client
++   * @param OpenIDConnectClientEntityInterface $openid_connect_client
+    *   The OpenID Connect client entity to disable.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirect back to the client list page.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function disable(OpenIDConnectClientEntityInterface $openid_connect_client): RedirectResponse {
+     $openid_connect_client->disable()->save();
+diff --git a/src/Controller/OpenIDConnectClientListBuilder.php b/src/Controller/OpenIDConnectClientListBuilder.php
+index d180be4..6a4f879 100644
+--- a/src/Controller/OpenIDConnectClientListBuilder.php
++++ b/src/Controller/OpenIDConnectClientListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\openid_connect\Controller;
+ 
++use Drupal\openid_connect\OpenIDConnectClientEntityInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityListBuilder;
+ use Drupal\Core\Entity\EntityInterface;
+ 
+@@ -37,7 +38,7 @@ class OpenIDConnectClientListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) : array {
+-    /** @var \Drupal\openid_connect\OpenIDConnectClientEntityInterface $entity */
++    /** @var OpenIDConnectClientEntityInterface $entity */
+     $plugin = $entity->getPlugin();
+ 
+     $row['label'] = $entity->label();
+diff --git a/src/Controller/OpenIDConnectRedirectController.php b/src/Controller/OpenIDConnectRedirectController.php
+index 74d389d..7ff2cd6 100644
+--- a/src/Controller/OpenIDConnectRedirectController.php
++++ b/src/Controller/OpenIDConnectRedirectController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\openid_connect\Controller;
+ 
++use Drupal\openid_connect\Entity\OpenIDConnectClientEntity;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -41,95 +42,95 @@ class OpenIDConnectRedirectController implements ContainerInjectionInterface, Ac
+   /**
+    * The OpenID state token service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectStateTokenInterface
++   * @var OpenIDConnectStateTokenInterface
+    */
+   protected $stateToken;
+ 
+   /**
+    * The request stack used to access request globals.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The OpenID Connect service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnect
++   * @var OpenIDConnect
+    */
+   protected $openIDConnect;
+ 
+   /**
+    * The OpenID Connect session service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectSessionInterface
++   * @var OpenIDConnectSessionInterface
+    */
+   protected $session;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The external authmap service.
+    *
+-   * @var \Drupal\externalauth\AuthmapInterface
++   * @var AuthmapInterface
+    */
+   protected $authmap;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The constructor.
+    *
+-   * @param \Drupal\openid_connect\OpenIDConnect $openid_connect
++   * @param OpenIDConnect $openid_connect
+    *   The OpenID Connect service.
+-   * @param \Drupal\openid_connect\OpenIDConnectStateTokenInterface $state_token
++   * @param OpenIDConnectStateTokenInterface $state_token
+    *   The OpenID state token service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\openid_connect\OpenIDConnectSessionInterface $session
++   * @param OpenIDConnectSessionInterface $session
+    *   The OpenID Connect session service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\externalauth\AuthmapInterface $authmap
++   * @param AuthmapInterface $authmap
+    *   The external authmap service.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   Account proxy for the currently logged-in user.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(OpenIDConnect $openid_connect, OpenIDConnectStateTokenInterface $state_token, RequestStack $request_stack, OpenIDConnectSessionInterface $session, ConfigFactoryInterface $config_factory, AuthmapInterface $authmap, AccountProxyInterface $current_user, ModuleHandlerInterface $module_handler, LanguageManagerInterface $language_manager, EntityTypeManagerInterface $entity_type_manager) {
+@@ -166,7 +167,7 @@ class OpenIDConnectRedirectController implements ContainerInjectionInterface, Ac
+   /**
+    * Access callback: Redirect page.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   Whether the state token matches the previously created one that is stored
+    *   in the session.
+    */
+@@ -184,10 +185,10 @@ class OpenIDConnectRedirectController implements ContainerInjectionInterface, Ac
+   /**
+    * Redirect.
+    *
+-   * @param \Drupal\openid_connect\OpenIDConnectClientEntityInterface $openid_connect_client
++   * @param OpenIDConnectClientEntityInterface $openid_connect_client
+    *   The client.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   The redirect response starting the authentication request.
+    *
+    * @throws \Exception
+@@ -295,7 +296,7 @@ class OpenIDConnectRedirectController implements ContainerInjectionInterface, Ac
+ 
+         // Perform log out.
+         if (!empty($client_name)) {
+-          /** @var \Drupal\openid_connect\Entity\OpenIDConnectClientEntity $entity */
++          /** @var OpenIDConnectClientEntity $entity */
+           $entity = current($this->entityTypeManager->getStorage('openid_connect_client')->loadByProperties(['id' => $client_name]));
+           if ($entity) {
+             $endpoints = $entity->getPlugin()->getEndpoints();
+diff --git a/src/Entity/OpenIDConnectClientEntity.php b/src/Entity/OpenIDConnectClientEntity.php
+index 5f7bc1f..826dcb2 100644
+--- a/src/Entity/OpenIDConnectClientEntity.php
++++ b/src/Entity/OpenIDConnectClientEntity.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\openid_connect\Entity;
+ 
++use Drupal\openid_connect\Plugin\OpenIDConnectClientManager;
++use Drupal\externalauth\AuthmapInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+ use Drupal\openid_connect\OpenIDConnectClientEntityInterface;
+ use Drupal\openid_connect\Plugin\OpenIDConnectClientInterface;
+@@ -76,21 +78,21 @@ class OpenIDConnectClientEntity extends ConfigEntityBase implements OpenIDConnec
+   /**
+    * The OpenID Connect plugin manager.
+    *
+-   * @var \Drupal\openid_connect\Plugin\OpenIDConnectClientManager
++   * @var OpenIDConnectClientManager
+    */
+   protected $pluginManager;
+ 
+   /**
+    * The external authmap service.
+    *
+-   * @var \Drupal\externalauth\AuthmapInterface
++   * @var AuthmapInterface
+    */
+   protected $authmap;
+ 
+   /**
+    * The plugin collection that holds the openid_connect_client for this entity.
+    *
+-   * @var \Drupal\openid_connect\Plugin\OpenIDConnectClientCollection
++   * @var OpenIDConnectClientCollection
+    */
+   protected $pluginCollection;
+ 
+@@ -120,7 +122,7 @@ class OpenIDConnectClientEntity extends ConfigEntityBase implements OpenIDConnec
+   /**
+    * Encapsulates creation of the OpenID Connect client's LazyPluginCollection.
+    *
+-   * @return \Drupal\openid_connect\Plugin\OpenIDConnectClientCollection
++   * @return OpenIDConnectClientCollection
+    *   The OpenID Connect client plugin collection.
+    */
+   protected function getPluginCollection(): OpenIDConnectClientCollection {
+diff --git a/src/Form/OpenIDConnectAccountsForm.php b/src/Form/OpenIDConnectAccountsForm.php
+index d48cb04..df7c4bf 100644
+--- a/src/Form/OpenIDConnectAccountsForm.php
++++ b/src/Form/OpenIDConnectAccountsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\openid_connect\Form;
+ 
++use Drupal\openid_connect\OpenIDConnectClientEntityInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Config\ConfigFactory;
+@@ -25,52 +26,52 @@ class OpenIDConnectAccountsForm extends FormBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Drupal\Core\Session\AccountProxyInterface definition.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The OpenID Connect session service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectSessionInterface
++   * @var OpenIDConnectSessionInterface
+    */
+   protected $session;
+ 
+   /**
+    * The OpenID Connect authmap service.
+    *
+-   * @var \Drupal\externalauth\AuthmapInterface
++   * @var AuthmapInterface
+    */
+   protected $authmap;
+ 
+   /**
+    * The OpenID Connect claims service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectClaims
++   * @var OpenIDConnectClaims
+    */
+   protected $claims;
+ 
+   /**
+    * The constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   The current user account.
+-   * @param \Drupal\externalauth\AuthmapInterface $authmap
++   * @param AuthmapInterface $authmap
+    *   The authmap storage.
+-   * @param \Drupal\openid_connect\OpenIDConnectClaims $claims
++   * @param OpenIDConnectClaims $claims
+    *   The OpenID Connect claims.
+-   * @param \Drupal\openid_connect\OpenIDConnectSessionInterface $session
++   * @param OpenIDConnectSessionInterface $session
+    *   The OpenID Connect session service.
+    */
+   public function __construct(ConfigFactory $config_factory, EntityTypeManagerInterface $entity_type_manager, AccountProxyInterface $current_user, AuthmapInterface $authmap, OpenIDConnectClaims $claims, OpenIDConnectSessionInterface $session) {
+@@ -109,7 +110,7 @@ class OpenIDConnectAccountsForm extends FormBase {
+   public function buildForm(array $form, FormStateInterface $form_state, AccountInterface $user = NULL): array {
+     $form_state->set('account', $user);
+ 
+-    /** @var \Drupal\openid_connect\OpenIDConnectClientEntityInterface[] $clients */
++    /** @var OpenIDConnectClientEntityInterface[] $clients */
+     $clients = $this->entityTypeManager->getStorage('openid_connect_client')->loadByProperties(['status' => TRUE]);
+ 
+     $form['help'] = [
+@@ -174,7 +175,7 @@ class OpenIDConnectAccountsForm extends FormBase {
+     }
+ 
+     list($op, $client_name) = explode('__', $form_state->getTriggeringElement()['#name'], 2);
+-    /** @var \Drupal\openid_connect\OpenIDConnectClientEntityInterface $client */
++    /** @var OpenIDConnectClientEntityInterface $client */
+     $client = $this->entityTypeManager->getStorage('openid_connect_client')->loadByProperties(['id' => $client_name])[$client_name];
+ 
+     switch ($op) {
+@@ -198,10 +199,10 @@ class OpenIDConnectAccountsForm extends FormBase {
+   /**
+    * Checks access for the OpenID-Connect accounts form.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $user
++   * @param AccountInterface $user
+    *   The user having accounts.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function access(AccountInterface $user): AccessResultInterface {
+diff --git a/src/Form/OpenIDConnectClientFormBase.php b/src/Form/OpenIDConnectClientFormBase.php
+index 3ec3a29..fd81f45 100644
+--- a/src/Form/OpenIDConnectClientFormBase.php
++++ b/src/Form/OpenIDConnectClientFormBase.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\openid_connect\Form;
+ 
++use Drupal\openid_connect\Entity\OpenIDConnectClientEntity;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\openid_connect\OpenIDConnectClientEntityInterface;
+ use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -24,23 +27,23 @@ abstract class OpenIDConnectClientFormBase extends EntityForm {
+   /**
+    * The plugin form manager.
+    *
+-   * @var \Drupal\Core\Plugin\PluginFormFactoryInterface
++   * @var PluginFormFactoryInterface
+    */
+   protected $pluginFormFactory;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs an OpenIDConnectClientFormBase object.
+    *
+-   * @param \Drupal\Core\Plugin\PluginFormFactoryInterface $plugin_form_manager
++   * @param PluginFormFactoryInterface $plugin_form_manager
+    *   The plugin form manager.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(PluginFormFactoryInterface $plugin_form_manager, LanguageManagerInterface $language_manager) {
+@@ -64,7 +67,7 @@ abstract class OpenIDConnectClientFormBase extends EntityForm {
+   public function buildForm(array $form, FormStateInterface $form_state) : array {
+     $form = parent::buildForm($form, $form_state);
+ 
+-    /** @var \Drupal\openid_connect\Entity\OpenIDConnectClientEntity $entity */
++    /** @var OpenIDConnectClientEntity $entity */
+     $entity = $this->entity;
+ 
+     $form['#tree'] = TRUE;
+@@ -120,14 +123,14 @@ abstract class OpenIDConnectClientFormBase extends EntityForm {
+    *   The entity ID.
+    * @param array $element
+    *   The form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return bool
+    *   TRUE if this format already exists, FALSE otherwise.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function exists($entity_id, array $element, FormStateInterface $form_state): bool {
+     $result = $this->entityTypeManager->getStorage('openid_connect_client')->getQuery()
+@@ -142,7 +145,7 @@ abstract class OpenIDConnectClientFormBase extends EntityForm {
+   public function validateForm(array &$form, FormStateInterface $form_state) {
+     // Get validation status from the plugins.
+     try {
+-      /** @var \Drupal\openid_connect\OpenIDConnectClientEntityInterface $entity */
++      /** @var OpenIDConnectClientEntityInterface $entity */
+       $entity = $this->entity;
+       $subform_state = SubformState::createForSubform($form['settings'], $form, $form_state);
+       $this->getPluginForm($entity->getPlugin())
+@@ -164,7 +167,7 @@ abstract class OpenIDConnectClientFormBase extends EntityForm {
+ 
+     // Call the plugin submit handler.
+     try {
+-      /** @var \Drupal\openid_connect\OpenIDConnectClientEntityInterface $entity */
++      /** @var OpenIDConnectClientEntityInterface $entity */
+       $entity = $this->entity;
+       $subform_state = SubformState::createForSubform($form['settings'], $form, $form_state);
+       $this->getPluginForm($entity->getPlugin())
+@@ -180,7 +183,7 @@ abstract class OpenIDConnectClientFormBase extends EntityForm {
+   public function save(array $form, FormStateInterface $form_state): int {
+     $status = parent::save($form, $form_state);
+ 
+-    /** @var \Drupal\openid_connect\OpenIDConnectClientEntityInterface $entity */
++    /** @var OpenIDConnectClientEntityInterface $entity */
+     $entity = $this->entity;
+ 
+     // Create an edit link.
+@@ -208,13 +211,13 @@ abstract class OpenIDConnectClientFormBase extends EntityForm {
+   /**
+    * Retrieves the plugin form for a given OpenID connect client.
+    *
+-   * @param \Drupal\openid_connect\Plugin\OpenIDConnectClientInterface $openid_client
++   * @param OpenIDConnectClientInterface $openid_client
+    *   The OpenID Connect client plugin.
+    *
+-   * @return \Drupal\Core\Plugin\PluginFormInterface
++   * @return PluginFormInterface
+    *   The plugin form for the OpenID Connect client.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   protected function getPluginForm(OpenIDConnectClientInterface $openid_client): ?PluginFormInterface {
+     if ($openid_client instanceof PluginWithFormsInterface) {
+@@ -248,7 +251,7 @@ abstract class OpenIDConnectClientFormBase extends EntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/OpenIDConnectLoginForm.php b/src/Form/OpenIDConnectLoginForm.php
+index 2000409..f3dbb19 100644
+--- a/src/Form/OpenIDConnectLoginForm.php
++++ b/src/Form/OpenIDConnectLoginForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\openid_connect\Form;
+ 
++use Drupal\openid_connect\OpenIDConnectClientEntityInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -19,32 +20,32 @@ class OpenIDConnectLoginForm extends FormBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The OpenID Connect claims.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectClaims
++   * @var OpenIDConnectClaims
+    */
+   protected $claims;
+ 
+   /**
+    * The OpenID Connect session service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectSessionInterface
++   * @var OpenIDConnectSessionInterface
+    */
+   protected $session;
+ 
+   /**
+    * The constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\openid_connect\OpenIDConnectClaims $claims
++   * @param OpenIDConnectClaims $claims
+    *   The OpenID Connect claims.
+-   * @param \Drupal\openid_connect\OpenIDConnectSessionInterface $session
++   * @param OpenIDConnectSessionInterface $session
+    *   The OpenID Connect session service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, OpenIDConnectClaims $claims, OpenIDConnectSessionInterface $session) {
+@@ -77,7 +78,7 @@ class OpenIDConnectLoginForm extends FormBase {
+   public function buildForm(array $form, FormStateInterface $form_state): array {
+     $clients = $this->entityTypeManager->getStorage('openid_connect_client')->loadByProperties(['status' => TRUE]);
+     foreach ($clients as $client_id => $client) {
+-      /** @var \Drupal\openid_connect\OpenIDConnectClientEntityInterface $client */
++      /** @var OpenIDConnectClientEntityInterface $client */
+       $form['openid_connect_client_' . $client_id . '_login'] = [
+         '#type' => 'submit',
+         '#value' => $this->t('Log in with @client_title', [
+@@ -98,7 +99,7 @@ class OpenIDConnectLoginForm extends FormBase {
+     $this->session->saveDestination();
+     $client_name = $form_state->getTriggeringElement()['#name'];
+ 
+-    /** @var \Drupal\openid_connect\OpenIDConnectClientEntityInterface $client */
++    /** @var OpenIDConnectClientEntityInterface $client */
+     $client = $this->entityTypeManager->getStorage('openid_connect_client')->loadByProperties(['id' => $client_name])[$client_name];
+     $plugin = $client->getPlugin();
+     $scopes = $this->claims->getScopes($plugin);
+diff --git a/src/Form/OpenIDConnectSettingsForm.php b/src/Form/OpenIDConnectSettingsForm.php
+index 5ed08cc..fd70783 100644
+--- a/src/Form/OpenIDConnectSettingsForm.php
++++ b/src/Form/OpenIDConnectSettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\openid_connect\Form;
+ 
++use Drupal\user\Entity\Role;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -21,43 +22,43 @@ class OpenIDConnectSettingsForm extends ConfigFormBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The OpenID Connect service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnect
++   * @var OpenIDConnect
+    */
+   protected $openIDConnect;
+ 
+   /**
+    * The OpenID Connect claims service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectClaims
++   * @var OpenIDConnectClaims
+    */
+   protected $claims;
+ 
+   /**
+    * The constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\openid_connect\OpenIDConnect $openid_connect
++   * @param OpenIDConnect $openid_connect
+    *   The OpenID Connect service.
+-   * @param \Drupal\openid_connect\OpenIDConnectClaims $claims
++   * @param OpenIDConnectClaims $claims
+    *   The claims.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, OpenIDConnect $openid_connect, OpenIDConnectClaims $claims) {
+@@ -181,7 +182,7 @@ class OpenIDConnectSettingsForm extends ConfigFormBase {
+       ];
+     }
+ 
+-    /** @var \Drupal\user\Entity\Role[] $roles */
++    /** @var Role[] $roles */
+     $roles = $this->entityTypeManager->getStorage('user_role')->loadMultiple();
+     unset($roles['anonymous']);
+     unset($roles['authenticated']);
+diff --git a/src/OpenIDConnect.php b/src/OpenIDConnect.php
+index 5ea0c12..14415f1 100644
+--- a/src/OpenIDConnect.php
++++ b/src/OpenIDConnect.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\openid_connect;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Component\Utility\EmailValidatorInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -29,126 +33,126 @@ class OpenIDConnect {
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The external authmap service.
+    *
+-   * @var \Drupal\externalauth\AuthmapInterface
++   * @var AuthmapInterface
+    */
+   protected $authmap;
+ 
+   /**
+    * The external auth.
+    *
+-   * @var \Drupal\externalauth\ExternalAuthInterface
++   * @var ExternalAuthInterface
+    */
+   protected $externalAuth;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The user data service.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * The User entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The Messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The email validator service.
+    *
+-   * @var \Drupal\Component\Utility\EmailValidatorInterface
++   * @var EmailValidatorInterface
+    */
+   protected $emailValidator;
+ 
+   /**
+    * The OpenID Connect logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * File system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   private $fileSystem;
+ 
+   /**
+    * The OpenID Connect session service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectSessionInterface
++   * @var OpenIDConnectSessionInterface
+    */
+   protected $session;
+ 
+   /**
+    * Construct an instance of the OpenID Connect service.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\externalauth\AuthmapInterface $authmap
++   * @param AuthmapInterface $authmap
+    *   The external authmap service.
+-   * @param \Drupal\externalauth\ExternalAuthInterface $external_auth
++   * @param ExternalAuthInterface $external_auth
+    *   The external auth service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity manager.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   Account proxy for the currently logged-in user.
+-   * @param \Drupal\user\UserDataInterface $user_data
++   * @param UserDataInterface $user_data
+    *   The user data service.
+-   * @param \Drupal\Component\Utility\EmailValidatorInterface $email_validator
++   * @param EmailValidatorInterface $email_validator
+    *   The email validator service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger
++   * @param LoggerChannelFactoryInterface $logger
+    *   A logger channel factory instance.
+-   * @param \Drupal\Core\File\FileSystemInterface $fileSystem
++   * @param FileSystemInterface $fileSystem
+    *   The file system service.
+-   * @param \Drupal\openid_connect\OpenIDConnectSessionInterface $session
++   * @param OpenIDConnectSessionInterface $session
+    *   The OpenID Connect session service.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(
+     ConfigFactoryInterface $config_factory,
+@@ -219,7 +223,7 @@ class OpenIDConnect {
+   /**
+    * Fill the context array.
+    *
+-   * @param \Drupal\openid_connect\OpenIDConnectClientEntityInterface $client
++   * @param OpenIDConnectClientEntityInterface $client
+    *   The client.
+    * @param array $tokens
+    *   The tokens as returned by OpenIDConnectClientInterface::retrieveTokens().
+@@ -278,7 +282,7 @@ class OpenIDConnect {
+       return FALSE;
+     }
+ 
+-    /** @var \Drupal\user\UserInterface|bool $account */
++    /** @var UserInterface|bool $account */
+     $account = $this->externalAuth->load($sub, 'openid_connect.' . $provider);
+     $context = [
+       'tokens' => $tokens,
+@@ -313,7 +317,7 @@ class OpenIDConnect {
+   /**
+    * Complete the authorization after tokens have been retrieved.
+    *
+-   * @param \Drupal\openid_connect\OpenIDConnectClientEntityInterface $client
++   * @param OpenIDConnectClientEntityInterface $client
+    *   The client.
+    * @param array $tokens
+    *   The tokens as returned by OpenIDConnectClientInterface::retrieveTokens().
+@@ -355,7 +359,7 @@ class OpenIDConnect {
+         'mail' => $email,
+       ]);
+       if ($accounts) {
+-        /** @var \Drupal\user\UserInterface|bool $account */
++        /** @var UserInterface|bool $account */
+         $account = reset($accounts);
+         $connect_existing_users = $this->configFactory->get('openid_connect.settings')->get('connect_existing_users');
+         if ($connect_existing_users) {
+@@ -429,7 +433,7 @@ class OpenIDConnect {
+   /**
+    * Connect the current user's account to an external provider.
+    *
+-   * @param \Drupal\openid_connect\OpenIDConnectClientEntityInterface $client
++   * @param OpenIDConnectClientEntityInterface $client
+    *   The client.
+    * @param array $tokens
+    *   The tokens as returned by OpenIDConnectClientInterface::retrieveTokens().
+@@ -456,7 +460,7 @@ class OpenIDConnect {
+     }
+ 
+     if (!($account instanceof UserInterface)) {
+-      /** @var \Drupal\user\UserInterface $account */
++      /** @var UserInterface $account */
+       $account = $this->userStorage->load($this->currentUser->id());
+       if ($account) {
+         $this->externalAuth->linkExistingAccount($context['sub'], 'openid_connect.' . $client->id(), $account);
+@@ -481,7 +485,7 @@ class OpenIDConnect {
+   /**
+    * Find whether a user is allowed to change the own password.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface|null $account
++   * @param AccountInterface|null $account
+    *   Optional: Account to check the access for.
+    *   Defaults to the currently logged-in user.
+    *
+@@ -514,7 +518,7 @@ class OpenIDConnect {
+    * @param int $status
+    *   The initial user status.
+    *
+-   * @return \Drupal\user\UserInterface|null
++   * @return UserInterface|null
+    *   The user object or null on failure.
+    */
+   public function createUser(string $sub, array $userinfo, string $client_name, int $status = 1): ?UserInterface {
+@@ -579,7 +583,7 @@ class OpenIDConnect {
+   /**
+    * Save user profile information into a user account.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   An user account object.
+    * @param array $context
+    *   An associative array with context information:
+@@ -641,7 +645,7 @@ class OpenIDConnect {
+                 $basename = explode('?', $this->fileSystem->basename($claim_value))[0];
+                 $data = file_get_contents($claim_value);
+ 
+-                $file = file_save_data($data, 'public://user-picture-' . $account->id() . '-' . $basename, FileSystemInterface::EXISTS_RENAME);
++                $file = \Drupal::service('file.repository')->writeData($data, 'public://user-picture-' . $account->id() . '-' . $basename, FileSystemInterface::EXISTS_RENAME);
+ 
+                 // Cleanup the old file.
+                 if ($file) {
+diff --git a/src/OpenIDConnectAutoDiscover.php b/src/OpenIDConnectAutoDiscover.php
+index 6cbed69..e61b98c 100644
+--- a/src/OpenIDConnectAutoDiscover.php
++++ b/src/OpenIDConnectAutoDiscover.php
+@@ -15,23 +15,23 @@ class OpenIDConnectAutoDiscover {
+   /**
+    * The Guzzle client object.
+    *
+-   * @var \Drupal\Core\Http\ClientFactory
++   * @var ClientFactory
+    */
+   protected $client;
+ 
+   /**
+    * The logger factory.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Constructs an OpenIDConnectAutoDiscover object.
+    *
+-   * @param \Drupal\Core\Http\ClientFactory $http_client_factory
++   * @param ClientFactory $http_client_factory
+    *   A Guzzle client object.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger factory service.
+    */
+   public function __construct(ClientFactory $http_client_factory, LoggerChannelFactoryInterface $logger_factory) {
+diff --git a/src/OpenIDConnectClaims.php b/src/OpenIDConnectClaims.php
+index 0dc45d1..4036654 100644
+--- a/src/OpenIDConnectClaims.php
++++ b/src/OpenIDConnectClaims.php
+@@ -20,14 +20,14 @@ class OpenIDConnectClaims implements ContainerInjectionInterface {
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -48,9 +48,9 @@ class OpenIDConnectClaims implements ContainerInjectionInterface {
+   /**
+    * Constructs an OpenID Connect claims service instance.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, ModuleHandlerInterface $module_handler) {
+@@ -105,7 +105,7 @@ class OpenIDConnectClaims implements ContainerInjectionInterface {
+   /**
+    * Returns scopes that have to be requested based on the configured claims.
+    *
+-   * @param \Drupal\openid_connect\Plugin\OpenIDConnectClientInterface|null $client
++   * @param OpenIDConnectClientInterface|null $client
+    *   An optional client. If one is provided, it will be asked for scopes.
+    *
+    * @return string
+diff --git a/src/OpenIDConnectClientEntityInterface.php b/src/OpenIDConnectClientEntityInterface.php
+index 55afa28..f1bbc0b 100644
+--- a/src/OpenIDConnectClientEntityInterface.php
++++ b/src/OpenIDConnectClientEntityInterface.php
+@@ -14,7 +14,7 @@ interface OpenIDConnectClientEntityInterface extends ConfigEntityInterface, Enti
+   /**
+    * Returns the plugin instance.
+    *
+-   * @return \Drupal\openid_connect\Plugin\OpenIDConnectClientInterface
++   * @return OpenIDConnectClientInterface
+    *   The plugin instance for this OpenID Connect client.
+    */
+   public function getPlugin(): OpenIDConnectClientInterface;
+diff --git a/src/OpenIDConnectSession.php b/src/OpenIDConnectSession.php
+index 9ee7848..44d584e 100644
+--- a/src/OpenIDConnectSession.php
++++ b/src/OpenIDConnectSession.php
+@@ -17,41 +17,41 @@ class OpenIDConnectSession implements OpenIDConnectSessionInterface {
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The redirect destination service.
+    *
+-   * @var \Drupal\Core\Routing\RedirectDestinationInterface
++   * @var RedirectDestinationInterface
+    */
+   protected $redirectDestination;
+ 
+   /**
+    * The session object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Session\SessionInterface
++   * @var SessionInterface
+    */
+   protected $session;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Construct an instance of the OpenID Connect session service.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Routing\RedirectDestinationInterface $redirect_destination
++   * @param RedirectDestinationInterface $redirect_destination
+    *   The redirect destination service.
+-   * @param \Symfony\Component\HttpFoundation\Session\SessionInterface $session
++   * @param SessionInterface $session
+    *   The session object.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, RedirectDestinationInterface $redirect_destination, SessionInterface $session, LanguageManagerInterface $language_manager) {
+diff --git a/src/OpenIDConnectStateToken.php b/src/OpenIDConnectStateToken.php
+index 0dc3dd4..50a451a 100644
+--- a/src/OpenIDConnectStateToken.php
++++ b/src/OpenIDConnectStateToken.php
+@@ -16,14 +16,14 @@ class OpenIDConnectStateToken implements OpenIDConnectStateTokenInterface, Conta
+   /**
+    * The OpenID Connect session service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectSessionInterface
++   * @var OpenIDConnectSessionInterface
+    */
+   protected $session;
+ 
+   /**
+    * Construct an instance of the OpenID Connect state token service.
+    *
+-   * @param \Drupal\openid_connect\OpenIDConnectSessionInterface $session
++   * @param OpenIDConnectSessionInterface $session
+    *   The OpenID Connect session service.
+    */
+   public function __construct(OpenIDConnectSessionInterface $session) {
+diff --git a/src/Plugin/Block/OpenIDConnectLoginBlock.php b/src/Plugin/Block/OpenIDConnectLoginBlock.php
+index b9baa4e..1180b18 100644
+--- a/src/Plugin/Block/OpenIDConnectLoginBlock.php
++++ b/src/Plugin/Block/OpenIDConnectLoginBlock.php
+@@ -22,7 +22,7 @@ class OpenIDConnectLoginBlock extends BlockBase implements ContainerFactoryPlugi
+   /**
+    * The form builder.
+    *
+-   * @var \Drupal\Core\Form\FormBuilder
++   * @var FormBuilder
+    */
+   protected $formBuilder;
+ 
+@@ -35,7 +35,7 @@ class OpenIDConnectLoginBlock extends BlockBase implements ContainerFactoryPlugi
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Form\FormBuilder $form_builder
++   * @param FormBuilder $form_builder
+    *   The form builder.
+    */
+   public function __construct(array $configuration, string $plugin_id, $plugin_definition, FormBuilder $form_builder) {
+diff --git a/src/Plugin/Derivative/OpenIDConnectAddLinks.php b/src/Plugin/Derivative/OpenIDConnectAddLinks.php
+index 07bb500..de6f0e6 100644
+--- a/src/Plugin/Derivative/OpenIDConnectAddLinks.php
++++ b/src/Plugin/Derivative/OpenIDConnectAddLinks.php
+@@ -15,14 +15,14 @@ class OpenIDConnectAddLinks extends DeriverBase implements ContainerDeriverInter
+   /**
+    * The plugin manager.
+    *
+-   * @var \Drupal\Component\Plugin\PluginManagerInterface
++   * @var PluginManagerInterface
+    */
+   protected $pluginManager;
+ 
+   /**
+    * Constructs a new OpenIDConnectAddLinks.
+    *
+-   * @param \Drupal\Component\Plugin\PluginManagerInterface $plugin_manager
++   * @param PluginManagerInterface $plugin_manager
+    *   The plugin manager.
+    */
+   public function __construct(PluginManagerInterface $plugin_manager) {
+diff --git a/src/Plugin/OpenIDConnectClient/OpenIDConnectFacebookClient.php b/src/Plugin/OpenIDConnectClient/OpenIDConnectFacebookClient.php
+index 04b654f..b1ff959 100644
+--- a/src/Plugin/OpenIDConnectClient/OpenIDConnectFacebookClient.php
++++ b/src/Plugin/OpenIDConnectClient/OpenIDConnectFacebookClient.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\openid_connect\Plugin\OpenIDConnectClient;
+ 
++use GuzzleHttp\Client;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\openid_connect\Plugin\OpenIDConnectClientBase;
+@@ -100,7 +101,7 @@ class OpenIDConnectFacebookClient extends OpenIDConnectClientBase {
+     ];
+     $endpoints = $this->getEndpoints();
+ 
+-    /** @var \GuzzleHttp\Client $client */
++    /** @var Client $client */
+     $client = $this->httpClient;
+     try {
+       $response = $client->get($endpoints['userinfo'], $request_options);
+diff --git a/src/Plugin/OpenIDConnectClientBase.php b/src/Plugin/OpenIDConnectClientBase.php
+index d5e59ff..f6c5a96 100644
+--- a/src/Plugin/OpenIDConnectClientBase.php
++++ b/src/Plugin/OpenIDConnectClientBase.php
+@@ -34,56 +34,56 @@ abstract class OpenIDConnectClientBase extends PluginBase implements OpenIDConne
+   /**
+    * The request stack used to access request globals.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The HTTP client to fetch the feed data with.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * The logger factory used for logging.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * The datetime.time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $dateTime;
+ 
+   /**
+    * Page cache kill switch.
+    *
+-   * @var \Drupal\Core\PageCache\ResponsePolicy\KillSwitch
++   * @var KillSwitch
+    */
+   protected $pageCacheKillSwitch;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The OpenID state token service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectStateTokenInterface
++   * @var OpenIDConnectStateTokenInterface
+    */
+   protected $stateToken;
+ 
+   /**
+    * The OpenID well-known discovery service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectAutoDiscover
++   * @var OpenIDConnectAutoDiscover
+    */
+   protected $autoDiscover;
+ 
+@@ -103,21 +103,21 @@ abstract class OpenIDConnectClientBase extends PluginBase implements OpenIDConne
+    *   The plugin identifier.
+    * @param mixed $plugin_definition
+    *   The plugin definition.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \GuzzleHttp\ClientInterface $http_client
++   * @param ClientInterface $http_client
+    *   The http client.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger factory.
+-   * @param \Drupal\Component\Datetime\TimeInterface $datetime_time
++   * @param TimeInterface $datetime_time
+    *   The datetime.time service.
+-   * @param \Drupal\Core\PageCache\ResponsePolicy\KillSwitch $page_cache_kill_switch
++   * @param KillSwitch $page_cache_kill_switch
+    *   Policy evaluating to static::DENY when the kill switch was triggered.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\openid_connect\OpenIDConnectStateTokenInterface $state_token
++   * @param OpenIDConnectStateTokenInterface $state_token
+    *   The OpenID state token service.
+-   * @param \Drupal\openid_connect\OpenIDConnectAutoDiscover $auto_discover
++   * @param OpenIDConnectAutoDiscover $auto_discover
+    *   The OpenID well-known discovery service.
+    */
+   public function __construct(array $configuration, string $plugin_id, $plugin_definition, RequestStack $request_stack, ClientInterface $http_client, LoggerChannelFactoryInterface $logger_factory, TimeInterface $datetime_time, KillSwitch $page_cache_kill_switch, LanguageManagerInterface $language_manager, OpenIDConnectStateTokenInterface $state_token, OpenIDConnectAutoDiscover $auto_discover) {
+@@ -289,7 +289,7 @@ abstract class OpenIDConnectClientBase extends PluginBase implements OpenIDConne
+    *
+    * @param string $scope
+    *   A string of scopes.
+-   * @param \Drupal\Core\GeneratedUrl $redirect_uri
++   * @param GeneratedUrl $redirect_uri
+    *   URI to redirect for authorization.
+    *
+    * @return array
+@@ -428,7 +428,7 @@ abstract class OpenIDConnectClientBase extends PluginBase implements OpenIDConne
+    * @param array $options
+    *   See \Drupal\Core\Url::fromRoute() for details.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   A new Url object for a routed (internal to Drupal) URL.
+    *
+    * @see \Drupal\Core\Url::fromRoute()
+diff --git a/src/Plugin/OpenIDConnectClientCollection.php b/src/Plugin/OpenIDConnectClientCollection.php
+index 7b978f3..5e9b9b0 100644
+--- a/src/Plugin/OpenIDConnectClientCollection.php
++++ b/src/Plugin/OpenIDConnectClientCollection.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\openid_connect\Plugin;
+ 
++use Drupal\openid_connect\OpenIDConnectClientEntityInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Component\Plugin\PluginManagerInterface;
+ use Drupal\Core\Plugin\DefaultSingleLazyPluginCollection;
+@@ -14,14 +15,14 @@ class OpenIDConnectClientCollection extends DefaultSingleLazyPluginCollection {
+   /**
+    * The OpenID Connect client ID this plugin collection belongs to.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectClientEntityInterface
++   * @var OpenIDConnectClientEntityInterface
+    */
+   protected $clientId;
+ 
+   /**
+    * Constructs a new OpenIDConnectClientCollection.
+    *
+-   * @param \Drupal\Component\Plugin\PluginManagerInterface $manager
++   * @param PluginManagerInterface $manager
+    *   The manager to be used for instantiating plugins.
+    * @param string $instance_id
+    *   The ID of the plugin instance.
+@@ -48,7 +49,7 @@ class OpenIDConnectClientCollection extends DefaultSingleLazyPluginCollection {
+     try {
+       parent::initializePlugin($instance_id);
+       if (isset($this->clientId)) {
+-        /** @var \Drupal\openid_connect\Plugin\OpenIDConnectClientInterface $plugin */
++        /** @var OpenIDConnectClientInterface $plugin */
+         $plugin = $this->get($instance_id);
+         $plugin->setParentEntityId($this->clientId);
+       }
+diff --git a/src/Plugin/OpenIDConnectClientInterface.php b/src/Plugin/OpenIDConnectClientInterface.php
+index 0147fb6..8b8d347 100644
+--- a/src/Plugin/OpenIDConnectClientInterface.php
++++ b/src/Plugin/OpenIDConnectClientInterface.php
+@@ -46,7 +46,7 @@ interface OpenIDConnectClientInterface extends ConfigurableInterface, DependentP
+    *   Name of scope(s) that with user consent will provide access to otherwise
+    *   restricted user data. Defaults to "openid email".
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   A response object.
+    */
+   public function authorize(string $scope = 'openid email'): Response;
+diff --git a/src/Plugin/OpenIDConnectClientManager.php b/src/Plugin/OpenIDConnectClientManager.php
+index cd2d52d..59c16cc 100644
+--- a/src/Plugin/OpenIDConnectClientManager.php
++++ b/src/Plugin/OpenIDConnectClientManager.php
+@@ -17,9 +17,9 @@ class OpenIDConnectClientManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/tests/src/Unit/OpenIDConnectStateTokenTest.php b/tests/src/Unit/OpenIDConnectStateTokenTest.php
+index 4c78a93..3e62a22 100644
+--- a/tests/src/Unit/OpenIDConnectStateTokenTest.php
++++ b/tests/src/Unit/OpenIDConnectStateTokenTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\openid_connect\Unit;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\openid_connect\OpenIDConnectSessionInterface;
+ use Drupal\Tests\UnitTestCase;
+ use Drupal\openid_connect\OpenIDConnectStateToken;
+@@ -19,14 +20,14 @@ class OpenIDConnectStateTokenTest extends UnitTestCase {
+   /**
+    * Mock of the openid_connect.state_token service.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectStateToken
++   * @var OpenIDConnectStateToken
+    */
+   protected $stateTokenService;
+ 
+   /**
+    * A mock of the openid_connect.session service.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject
++   * @var MockObject
+    */
+   protected $session;
+ 
+diff --git a/tests/src/Unit/OpenIDConnectTest.php b/tests/src/Unit/OpenIDConnectTest.php
+index 2f81eab..23d6537 100644
+--- a/tests/src/Unit/OpenIDConnectTest.php
++++ b/tests/src/Unit/OpenIDConnectTest.php
+@@ -121,7 +121,7 @@ class OpenIDConnectTest extends UnitTestCase {
+   /**
+    * The OpenIDConnect class being tested.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnect
++   * @var OpenIDConnect
+    */
+   protected $openIdConnect;
+ 
+diff --git a/tests/src/Unit/OpenIdConnectClaimsTest.php b/tests/src/Unit/OpenIdConnectClaimsTest.php
+index 112d8f8..2d1feaa 100644
+--- a/tests/src/Unit/OpenIdConnectClaimsTest.php
++++ b/tests/src/Unit/OpenIdConnectClaimsTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\openid_connect\Unit;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+@@ -35,28 +36,28 @@ class OpenIdConnectClaimsTest extends UnitTestCase {
+   /**
+    * A mock of the config.factory service.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject
++   * @var MockObject
+    */
+   protected $configFactory;
+ 
+   /**
+    * A mock of the module_handler service.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject
++   * @var MockObject
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The OpenIdConnectClaims class being tested.
+    *
+-   * @var \Drupal\openid_connect\OpenIDConnectClaims
++   * @var OpenIDConnectClaims
+    */
+   protected $openIdConnectClaims;
+ 
+   /**
+    * Mock of the container for service calls.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+diff --git a/tests/src/Unit/OpenIdConnectSessionTest.php b/tests/src/Unit/OpenIdConnectSessionTest.php
+index da048dc..5a670ea 100644
+--- a/tests/src/Unit/OpenIdConnectSessionTest.php
++++ b/tests/src/Unit/OpenIdConnectSessionTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\openid_connect\Unit;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+@@ -39,28 +40,28 @@ class OpenIdConnectSessionTest extends UnitTestCase {
+   /**
+    * A mock of the config.factory service.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject
++   * @var MockObject
+    */
+   protected $configFactory;
+ 
+   /**
+    * A mock of the redirect.destination service.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject
++   * @var MockObject
+    */
+   protected $redirectDestination;
+ 
+   /**
+    * A mock of the session service.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject
++   * @var MockObject
+    */
+   protected $session;
+ 
+   /**
+    * A mock of the language manager service.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject
++   * @var MockObject
+    */
+   protected $languageManager;
+ 
+diff --git a/tests/src/Unit/UserPasswordFixture.php b/tests/src/Unit/UserPasswordFixture.php
+index f694b6f..5ac050d 100644
+--- a/tests/src/Unit/UserPasswordFixture.php
++++ b/tests/src/Unit/UserPasswordFixture.php
+@@ -22,7 +22,7 @@ function user_password(): string {
+ /**
+  * Override the user_login_finalize function.
+  *
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   The user account.
+  */
+ function user_login_finalize(UserInterface $account) {
+@@ -38,7 +38,7 @@ function user_login_finalize(UserInterface $account) {
+  * @param int $replace
+  *   Whether to replace the file or not.
+  *
+- * @return \PHPUnit\Framework\MockObject\MockObject
++ * @return MockObject
+  *   Return a mock object that mimics the file_save_data.
+  */
+ function file_save_data(string $data, ?string $destination = NULL, int $replace = FileSystemInterface::EXISTS_RENAME): MockObject {

@@ -1,0 +1,694 @@
+diff --git a/minisite.install b/minisite.install
+index 6c7c1e2..ffc9142 100644
+--- a/minisite.install
++++ b/minisite.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\file\Entity\File;
+ /**
+  * @file
+  * Contains install and update functions for Minisite.
+@@ -256,7 +257,7 @@ function minisite_update_8002(&$sandbox) {
+     // the archive file is available in this environment and do our best effort
+     // to fetch files from origin location (works only on the environments with
+     // stage_file_proxy enabled).
+-    /** @var \Drupal\file\Entity\File $archive_file */
++    /** @var File $archive_file */
+     $archive_file = $field_item_list->entity;
+     $archive_file_uri = $archive_file->getFileUri();
+     $archive_file_absolute_url = $archive_file->createFileUrl(FALSE);
+diff --git a/minisite.module b/minisite.module
+index cd51254..5ab655d 100644
+--- a/minisite.module
++++ b/minisite.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\field\FieldStorageConfigInterface;
++use Drupal\Core\Entity\EntityFieldManagerInterface;
+ /**
+  * @file
+  * Main functions of the Minisite module.
+@@ -74,7 +76,7 @@ function minisite_help($route_name, RouteMatchInterface $route_match) {
+ /**
+  * Validation callback.
+  *
+- * @param \Drupal\file\FileInterface $file
++ * @param FileInterface $file
+  *   The file to validate.
+  * @param string $content_extensions
+  *   String list of the allowed archive content extensions.
+@@ -159,7 +161,7 @@ function minisite_get_info_all($flatten = FALSE, $flatten_delimiter = '__') {
+   }
+ 
+   foreach ($minisite_field_ids as $minisite_field_id) {
+-    /** @var \Drupal\field\FieldStorageConfigInterface $field_storage */
++    /** @var FieldStorageConfigInterface $field_storage */
+     $field_storage = FieldStorageConfig::load($minisite_field_id);
+ 
+     $entity_type_id = $field_storage->getTargetEntityTypeId();
+@@ -193,7 +195,7 @@ function minisite_get_info_all($flatten = FALSE, $flatten_delimiter = '__') {
+ /**
+  * Get Minisite fields from the entity.
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  *   Entity to get fields from.
+  *
+  * @return array
+@@ -204,10 +206,10 @@ function _minisite_get_fields(EntityInterface $entity) {
+     return [];
+   }
+ 
+-  /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager */
++  /** @var EntityFieldManagerInterface $entity_field_manager */
+   $entity_field_manager = Drupal::service('entity_field.manager');
+ 
+-  /** @var \Drupal\Core\Field\FieldDefinitionInterface[] $minisite_fields */
++  /** @var FieldDefinitionInterface[] $minisite_fields */
+   return array_filter($entity_field_manager->getFieldDefinitions($entity->getEntityTypeId(), $entity->bundle()), function (FieldDefinitionInterface $field_definition) {
+     return $field_definition->getType() == 'minisite';
+   });
+@@ -219,7 +221,7 @@ function _minisite_get_fields(EntityInterface $entity) {
+  * @param string $path
+  *   Source path to find the entity.
+  *
+- * @return \Drupal\Core\Entity\FieldableEntityInterface|null
++ * @return FieldableEntityInterface|null
+  *   Found entity or NULL if the entity was not found.
+  */
+ function _minisite_get_entity_from_path($path) {
+diff --git a/minisite.theme.inc b/minisite.theme.inc
+index b7d7564..0e917b7 100644
+--- a/minisite.theme.inc
++++ b/minisite.theme.inc
+@@ -97,7 +97,7 @@ function template_preprocess_minisite_link(array &$variables) {
+   if (isset($variables['asset_path'])) {
+     // Asset path is a file.
+     if (LegacyWrapper::isValidUri($variables['asset_path'])) {
+-      $url = file_create_url($variables['asset_path']);
++      $url = \Drupal::service('file_url_generator')->generateAbsoluteString($variables['asset_path']);
+     }
+     // Asset path is an alias to a path.
+     else {
+@@ -111,7 +111,7 @@ function template_preprocess_minisite_link(array &$variables) {
+   }
+   // Falling back to the archive file.
+   else {
+-    $url = file_create_url($file_entity->getFileUri());
++    $url = \Drupal::service('file_url_generator')->generateAbsoluteString($file_entity->getFileUri());
+ 
+     $mime_type = $file->getMimeType();
+     // Set options as per anchor format described at
+diff --git a/src/ArchiveValidator.php b/src/ArchiveValidator.php
+index 881138e..bdc1352 100644
+--- a/src/ArchiveValidator.php
++++ b/src/ArchiveValidator.php
+@@ -21,7 +21,7 @@ class ArchiveValidator {
+    * @param string $extensions
+    *   String list of allowed extensions to validate against.
+    *
+-   * @throws \Drupal\minisite\Exception\InvalidContentArchiveException
++   * @throws InvalidContentArchiveException
+    *   When there is one or more validation errors.
+    */
+   public static function validate(array $files, $extensions) {
+diff --git a/src/Asset.php b/src/Asset.php
+index 9f7f754..9c8e9e0 100644
+--- a/src/Asset.php
++++ b/src/Asset.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\minisite;
+ 
++use Drupal\Core\File\FileSystem;
+ use Drupal\Component\Utility\Unicode;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Database\Database;
+@@ -84,7 +85,7 @@ class Asset implements AssetInterface {
+   /**
+    * A bag of all possible URLs data relevant to this asset.
+    *
+-   * @var \Drupal\minisite\UrlBag
++   * @var UrlBag
+    */
+   protected $urlBag;
+ 
+@@ -303,7 +304,7 @@ class Asset implements AssetInterface {
+       $this->id = NULL;
+     }
+ 
+-    /** @var \Drupal\Core\File\FileSystem $fs */
++    /** @var FileSystem $fs */
+     $fs = \Drupal::service('file_system');
+ 
+     $fs->deleteRecursive($this->urlBag->getUri());
+diff --git a/src/AssetContainer.php b/src/AssetContainer.php
+index 8de1508..47b75ad 100644
+--- a/src/AssetContainer.php
++++ b/src/AssetContainer.php
+@@ -73,7 +73,7 @@ class AssetContainer {
+   /**
+    * Get index asset.
+    *
+-   * @return \Drupal\minisite\Asset|null
++   * @return Asset|null
+    *   Instance of the index asset or NULL if no index asset is found.
+    */
+   public function getIndexAsset() {
+diff --git a/src/AssetInterface.php b/src/AssetInterface.php
+index 3a093eb..d097add 100644
+--- a/src/AssetInterface.php
++++ b/src/AssetInterface.php
+@@ -23,7 +23,7 @@ interface AssetInterface {
+    * @param array $values
+    *   Array of values to instantiate the field.
+    *
+-   * @return \Drupal\minisite\Asset
++   * @return Asset
+    *   An instance of the class.
+    */
+   public static function fromValues(array $values);
+@@ -34,7 +34,7 @@ interface AssetInterface {
+    * @param int $id
+    *   Asset id.
+    *
+-   * @return \Drupal\minisite\Asset|null
++   * @return Asset|null
+    *   Class instance or NULL if asset cannot be loaded.
+    */
+   public static function load($id);
+@@ -48,7 +48,7 @@ interface AssetInterface {
+    * @param string $uri
+    *   URI of the asset to load by.
+    *
+-   * @return \Drupal\minisite\Asset|null
++   * @return Asset|null
+    *   Class instance or NULL if asset cannot be loaded.
+    */
+   public static function loadByUri($uri);
+@@ -59,7 +59,7 @@ interface AssetInterface {
+    * @param string $alias
+    *   Alias of the asset to load by.
+    *
+-   * @return \Drupal\minisite\Asset|null
++   * @return Asset|null
+    *   Class instance or NULL if asset cannot be loaded.
+    */
+   public static function loadByAlias($alias);
+@@ -67,7 +67,7 @@ interface AssetInterface {
+   /**
+    * Load all assets.
+    *
+-   * @return \Drupal\minisite\Asset[]
++   * @return Asset[]
+    *   Array of all available assets.
+    */
+   public static function loadAll();
+diff --git a/src/Controller/AliasController.php b/src/Controller/AliasController.php
+index 0c78256..db16968 100644
+--- a/src/Controller/AliasController.php
++++ b/src/Controller/AliasController.php
+@@ -27,7 +27,7 @@ class AliasController implements ContainerAwareInterface {
+    * @param int $asset_id
+    *   Minisite asset id.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   The response object.
+    */
+   public function deliverAsset($asset_id) {
+@@ -53,9 +53,9 @@ class AliasController implements ContainerAwareInterface {
+   /**
+    * Add headers to the response object.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Response $response
++   * @param Response $response
+    *   The response object.
+-   * @param \Drupal\minisite\Asset $asset
++   * @param Asset $asset
+    *   The loaded asset to be used for contextual data.
+    */
+   protected function addResponseHeaders(Response $response, Asset $asset) {
+diff --git a/src/EventSubscriber/AliasSubscriber.php b/src/EventSubscriber/AliasSubscriber.php
+index 97ca5cb..3cf1a3d 100644
+--- a/src/EventSubscriber/AliasSubscriber.php
++++ b/src/EventSubscriber/AliasSubscriber.php
+@@ -2,10 +2,10 @@
+ 
+ namespace Drupal\minisite\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\minisite\Asset;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -20,10 +20,10 @@ class AliasSubscriber implements EventSubscriberInterface {
+   /**
+    * Set Minisite delivery controller if request URI matches asset alias.
+    *
+-   * @param Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   Event that is created to create a response for a request.
+    */
+-  public function onRequestSetController(GetResponseEvent $event) {
++  public function onRequestSetController(RequestEvent $event) {
+     // Do not alter non-master request (this is a case when an exception is
+     // thrown in controller).
+     if (!$event->isMasterRequest()) {
+diff --git a/src/FileValidator.php b/src/FileValidator.php
+index f762060..b772027 100644
+--- a/src/FileValidator.php
++++ b/src/FileValidator.php
+@@ -21,7 +21,7 @@ class FileValidator {
+    * @param array $extensions
+    *   Array of extensions to validate.
+    *
+-   * @throws \Drupal\minisite\Exception\InvalidExtensionValidatorException
++   * @throws InvalidExtensionValidatorException
+    *   If filename does not have a valid extension from provided list.
+    */
+   public static function validateFileExtension($filename, array $extensions) {
+@@ -46,7 +46,7 @@ class FileValidator {
+    * @param string $path
+    *   The file path to validate.
+    *
+-   * @throws \Drupal\minisite\Exception\InvalidPathLengthValidatorException
++   * @throws InvalidPathLengthValidatorException
+    *   If file path length is above the allowed limit.
+    */
+   public static function validateFilePathLength($path) {
+diff --git a/src/LegacyWrapper.php b/src/LegacyWrapper.php
+index 3b19f2b..67eb514 100644
+--- a/src/LegacyWrapper.php
++++ b/src/LegacyWrapper.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\minisite;
+ 
++use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Core\File\FileSystem;
+ use Drupal\Core\StreamWrapper\StreamWrapperManager;
+ 
+@@ -24,14 +25,14 @@ class LegacyWrapper {
+    */
+   public static function scanDirectory($dir, $mask, array $options = []) {
+     if (method_exists(FileSystem::class, 'scanDirectory')) {
+-      /** @var \Drupal\Core\File\FileSystemInterface $fs */
++      /** @var FileSystemInterface $fs */
+       $fs = \Drupal::service('file_system');
+ 
+       return $fs->scanDirectory($dir, $mask, $options);
+     }
+ 
+     if (function_exists('file_scan_directory')) {
+-      return file_scan_directory($dir, $mask, $options);
++      return \Drupal::service('file_system')->scanDirectory($dir, $mask, $options);
+     }
+ 
+     throw new \RuntimeException('Unable to find compatible function');
+@@ -69,7 +70,7 @@ class LegacyWrapper {
+     }
+ 
+     if (function_exists('entity_get_display')) {
+-      return entity_get_display($entity_type, $bundle, $view_mode);
++      return \Drupal::service('entity_display.repository')->getViewDisplay($entity_type, $bundle, $view_mode);
+     }
+ 
+     throw new \RuntimeException('Unable to find compatible function');
+@@ -89,7 +90,7 @@ class LegacyWrapper {
+     }
+ 
+     if (function_exists('entity_get_display')) {
+-      return entity_get_form_display($entity_type, $bundle, $form_mode);
++      return \Drupal::service('entity_display.repository')->getFormDisplay($entity_type, $bundle, $form_mode);
+     }
+ 
+     throw new \RuntimeException('Unable to find compatible function');
+@@ -112,7 +113,7 @@ class LegacyWrapper {
+     }
+ 
+     if (function_exists('file_uri_target')) {
+-      return file_uri_target($uri);
++      return \Drupal::service('stream_wrapper_manager')->getTarget($uri);
+     }
+ 
+     throw new \RuntimeException('Unable to find compatible function');
+diff --git a/src/Minisite.php b/src/Minisite.php
+index 0960cb5..6fd20be 100644
+--- a/src/Minisite.php
++++ b/src/Minisite.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\minisite;
+ 
++use Drupal\Core\Archiver\ArchiverInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\File\FileSystemInterface;
+@@ -24,7 +25,7 @@ class Minisite implements MinisiteInterface {
+   /**
+    * The archive file for this minisite.
+    *
+-   * @var \Drupal\file\FileInterface
++   * @var FileInterface
+    */
+   protected $archiveFile;
+ 
+@@ -80,7 +81,7 @@ class Minisite implements MinisiteInterface {
+   /**
+    * Assets container.
+    *
+-   * @var \Drupal\minisite\AssetContainer
++   * @var AssetContainer
+    */
+   protected $assetContainer;
+ 
+@@ -94,11 +95,11 @@ class Minisite implements MinisiteInterface {
+   /**
+    * Minisite constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Parent entity where the minisite field is located.
+    * @param string $field_name
+    *   The minisite field name.
+-   * @param \Drupal\file\FileInterface $archive_file
++   * @param FileInterface $archive_file
+    *   The archive managed file.
+    * @param string $allowed_extensions
+    *   Allowed extensions of files in archive as a space-separated string.
+@@ -357,7 +358,7 @@ class Minisite implements MinisiteInterface {
+   /**
+    * Get the path alias set on the parent entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The parent entity on which the field is set.
+    *
+    * @return string
+@@ -380,11 +381,11 @@ class Minisite implements MinisiteInterface {
+    * @return string
+    *   Prepared asset directory.
+    *
+-   * @throws \Drupal\minisite\Exception\AssetException
++   * @throws AssetException
+    *   When unable to prepare asset.
+    */
+   protected function prepareAssetDirectory() {
+-    /** @var \Drupal\Core\File\FileSystemInterface $fs */
++    /** @var FileSystemInterface $fs */
+     $fs = \Drupal::service('file_system');
+ 
+     $dir = $this->getAssetDirectory();
+@@ -415,7 +416,7 @@ class Minisite implements MinisiteInterface {
+    *   (optional) File name to pass to the archiver manager. if not provided,
+    *   the filename will be extracted from the $uri.
+    *
+-   * @return \Drupal\Core\Archiver\ArchiverInterface
++   * @return ArchiverInterface
+    *   The archiver instance.
+    */
+   protected static function getArchiver($uri, $filename = NULL) {
+@@ -424,7 +425,7 @@ class Minisite implements MinisiteInterface {
+     $filename = $filename ? $filename : $fs->basename($uri);
+ 
+     try {
+-      /** @var \Drupal\Core\Archiver\ArchiverInterface $archiver */
++      /** @var ArchiverInterface $archiver */
+       $archiver = \Drupal::getContainer()->get('plugin.manager.minisite_archiver')->getInstance([
+         'filepath' => $filename_real,
+         'filename' => $filename,
+diff --git a/src/MinisiteInterface.php b/src/MinisiteInterface.php
+index a4f4f8c..ce66409 100644
+--- a/src/MinisiteInterface.php
++++ b/src/MinisiteInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\minisite;
+ 
++use Drupal\minisite\Exception\ArchiveException;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\file\FileInterface;
+ 
+@@ -40,10 +41,10 @@ interface MinisiteInterface {
+   /**
+    * Create an instance of this class from the field items.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $items
++   * @param FieldItemListInterface $items
+    *   The existing field items.
+    *
+-   * @return \Drupal\minisite\Minisite
++   * @return Minisite
+    *   An instance of this class.
+    */
+   public static function createInstance(FieldItemListInterface $items);
+@@ -51,7 +52,7 @@ interface MinisiteInterface {
+   /**
+    * Get archive file.
+    *
+-   * @return \Drupal\file\FileInterface
++   * @return FileInterface
+    *   Archive file used to instantiate this minisite.
+    */
+   public function getArchiveFile();
+@@ -59,7 +60,7 @@ interface MinisiteInterface {
+   /**
+    * Set archive file.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   Already uploaded archive file object to set.
+    */
+   public function setArchiveFile(FileInterface $file);
+@@ -118,12 +119,12 @@ interface MinisiteInterface {
+    * Can be used at early stages before Minisite instance is created (i.e. when
+    * uploading a file) to validate the archive.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   The archive file to validate.
+    * @param string $content_extensions
+    *   Space-separated string list of allowed file extensions in the archive.
+    *
+-   * @throws \Drupal\minisite\Exception\ArchiveException
++   * @throws ArchiveException
+    *   Throws one of the descendants of this exception based on validation
+    *   failures.
+    */
+diff --git a/src/PageProcessor.php b/src/PageProcessor.php
+index bef8705..d2aa66a 100644
+--- a/src/PageProcessor.php
++++ b/src/PageProcessor.php
+@@ -24,7 +24,7 @@ class PageProcessor implements PageProcessorInterface {
+   /**
+    * A container of URLs used for link replacements while processing document.
+    *
+-   * @var \Drupal\minisite\UrlBag
++   * @var UrlBag
+    */
+   protected $urlBag;
+ 
+@@ -33,11 +33,11 @@ class PageProcessor implements PageProcessorInterface {
+    *
+    * @param string $content
+    *   Content to process.
+-   * @param \Drupal\minisite\UrlBag $url_bag
++   * @param UrlBag $url_bag
+    *   A container for all URL used for the replacement of links. Usually,
+    *   based on current path where document is accessed from.
+    *
+-   * @throws \Drupal\minisite\Exception\PageProcessorException
++   * @throws PageProcessorException
+    *   If the provided content cannot be parsed into \DOMDocument.
+    */
+   public function __construct($content, UrlBag $url_bag) {
+@@ -91,7 +91,7 @@ class PageProcessor implements PageProcessorInterface {
+   /**
+    * Process <base> tag.
+    *
+-   * @throws \Drupal\minisite\Exception\PageProcessorException
++   * @throws PageProcessorException
+    *   If 'head' element is missing.
+    */
+   protected function processTagBase() {
+@@ -260,7 +260,7 @@ class PageProcessor implements PageProcessorInterface {
+    * @return \DOMDocument
+    *   DOM Document object with loaded content.
+    *
+-   * @throws \Drupal\minisite\Exception\PageProcessorException
++   * @throws PageProcessorException
+    *   If provided content is not valid HTML or empty.
+    */
+   protected function loadDocument($content) {
+diff --git a/src/Plugin/Field/FieldType/MinisiteItem.php b/src/Plugin/Field/FieldType/MinisiteItem.php
+index de32a1d..4a17f80 100644
+--- a/src/Plugin/Field/FieldType/MinisiteItem.php
++++ b/src/Plugin/Field/FieldType/MinisiteItem.php
+@@ -193,7 +193,7 @@ class MinisiteItem extends FileItem {
+    * {@inheritdoc}
+    */
+   public function postSave($update) {
+-    /** @var \Drupal\Core\Field\FieldItemList $item_list */
++    /** @var FieldItemList $item_list */
+     $item_list = $this->getParent();
+     if (!$item_list->isEmpty()) {
+       $this->createMinisite($item_list);
+@@ -207,7 +207,7 @@ class MinisiteItem extends FileItem {
+    */
+   public function delete() {
+     // This will fire once the parent entity is removed.
+-    /** @var \Drupal\Core\Field\FieldItemList $item_list */
++    /** @var FieldItemList $item_list */
+     $item_list = $this->getParent();
+     if (!$item_list->isEmpty()) {
+       $this->deleteMinisite($item_list);
+@@ -226,7 +226,7 @@ class MinisiteItem extends FileItem {
+   /**
+    * Create Minisite instance from field values and save it.
+    *
+-   * @param \Drupal\Core\Field\FieldItemList $item_list
++   * @param FieldItemList $item_list
+    *   The item list.
+    */
+   protected function createMinisite(FieldItemList $item_list) {
+@@ -242,7 +242,7 @@ class MinisiteItem extends FileItem {
+   /**
+    * Delete Minisite instance created from field values.
+    *
+-   * @param \Drupal\Core\Field\FieldItemList $item_list
++   * @param FieldItemList $item_list
+    *   The item list.
+    */
+   protected function deleteMinisite(FieldItemList $item_list) {
+diff --git a/src/Plugin/Field/FieldType/MinisiteItemList.php b/src/Plugin/Field/FieldType/MinisiteItemList.php
+index b6a6e68..bbf905b 100644
+--- a/src/Plugin/Field/FieldType/MinisiteItemList.php
++++ b/src/Plugin/Field/FieldType/MinisiteItemList.php
+@@ -50,7 +50,7 @@ class MinisiteItemList extends FileFieldItemList {
+   /**
+    * Get original item list for the current instance.
+    *
+-   * @return null|\Drupal\Core\Field\FieldItemList
++   * @return null|FieldItemList
+    *   The original item list for the same language as the current item list
+    *   or NULL if the item list for the same language does not exist.
+    */
+@@ -78,7 +78,7 @@ class MinisiteItemList extends FileFieldItemList {
+    *
+    * @param string $method
+    *   The method name to call for each item in the list.
+-   * @param \Drupal\Core\Field\FieldItemList $item_list
++   * @param FieldItemList $item_list
+    *   The items list to traverse.
+    *
+    * @return array
+diff --git a/src/UrlBag.php b/src/UrlBag.php
+index 1aeb3c7..4fe6d51 100644
+--- a/src/UrlBag.php
++++ b/src/UrlBag.php
+@@ -84,7 +84,7 @@ class UrlBag {
+    * Get URL as a relative path.
+    */
+   public function getUrl() {
+-    return file_url_transform_relative(file_create_url($this->uri));
++    return \Drupal::service('file_url_generator')->generateString($this->uri);
+   }
+ 
+   /**
+@@ -126,7 +126,7 @@ class UrlBag {
+    * @param string $alias
+    *   An alias to set.
+    *
+-   * @throws \Drupal\minisite\Exception\UrlBagException
++   * @throws UrlBagException
+    *   If provided alias does not contain correct URI set in this bag.
+    */
+   public function setAlias($alias) {
+@@ -220,7 +220,7 @@ class UrlBag {
+    * @return string
+    *   Converted URl as relative url.
+    *
+-   * @throws \Drupal\minisite\Exception\UrlBagException
++   * @throws UrlBagException
+    *   If provided url is not within domain or does not contain a path.
+    */
+   protected static function toLocal($url, $base_url) {
+@@ -278,7 +278,7 @@ class UrlBag {
+     if (!empty($parsed['scheme'])) {
+       if (in_array($parsed['scheme'], static::getLocalWrapperSchemas())) {
+         // Files never get their URLs aliased, so return as-is.
+-        return file_create_url($url);
++        return \Drupal::service('file_url_generator')->generateAbsoluteString($url);
+       }
+     }
+ 
+@@ -309,7 +309,7 @@ class UrlBag {
+    * @return string
+    *   URI part.
+    *
+-   * @throws \Drupal\minisite\Exception\UrlBagException
++   * @throws UrlBagException
+    *   If incorrectly formatted URI provided.
+    */
+   protected static function getUriPart($uri, $part_name) {
+diff --git a/src/UrlValidator.php b/src/UrlValidator.php
+index 238f556..e479a37 100644
+--- a/src/UrlValidator.php
++++ b/src/UrlValidator.php
+@@ -91,7 +91,7 @@ class UrlValidator {
+     // path.
+     $url = str_replace('../', '', $url);
+     $url = rtrim($parent, '/') . '/' . ltrim($url, '/');
+-    $url = LegacyWrapper::isValidUri($url) ? file_url_transform_relative(file_create_url($url)) : $url;
++    $url = LegacyWrapper::isValidUri($url) ? \Drupal::service('file_url_generator')->generateString($url) : $url;
+     // Decode URL encoded in file_create_url().
+     $url = rawurldecode($url);
+     $url = '/' . ltrim($url, '/');
+diff --git a/tests/src/Functional/AssetTest.php b/tests/src/Functional/AssetTest.php
+index 1ca56e1..8303f73 100644
+--- a/tests/src/Functional/AssetTest.php
++++ b/tests/src/Functional/AssetTest.php
+@@ -32,14 +32,14 @@ class AssetTest extends MinisiteTestBase {
+     );
+ 
+     // Assert getters without alias set.
+-    $this->assertEqual('public://minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUri());
+-    $this->assertContains('minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUrl());
++    $this->assertEquals('public://minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUri());
++    $this->assertStringContainsString('minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUrl());
+ 
+     // Assert getters with alias set.
+     $asset->setAliasPrefix('some/alias');
+-    $this->assertEqual('public://minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUri());
+-    $this->assertContains('/some/alias/rootpath/subpath/page1.html', $asset->getUrl());
+-    $this->assertNotContains('minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5', $asset->getUrl());
++    $this->assertEquals('public://minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUri());
++    $this->assertStringContainsString('/some/alias/rootpath/subpath/page1.html', $asset->getUrl());
++    $this->assertStringNotContainsString('minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5', $asset->getUrl());
+ 
+     // Assert other getters.
+     $this->assertEquals(Language::LANGCODE_DEFAULT, $asset->getLanguage());
+@@ -170,7 +170,7 @@ class AssetTest extends MinisiteTestBase {
+       $path
+     );
+ 
+-    $this->assertEqual($instance->isIndex(), $is_index);
++    $this->assertEquals($instance->isIndex(), $is_index);
+   }
+ 
+   /**
+@@ -225,7 +225,7 @@ class AssetTest extends MinisiteTestBase {
+     $alias_prefix = '/' . $randomizer->name(2048 - (strlen($file_path)) - 2);
+     $full_alias = $alias_prefix . '/' . $dir_path . $file_path;
+     $asset->setAliasPrefix($alias_prefix);
+-    $this->assertEqual($asset->getUrl(), $full_alias);
++    $this->assertEquals($asset->getUrl(), $full_alias);
+ 
+     $asset->save();
+ 

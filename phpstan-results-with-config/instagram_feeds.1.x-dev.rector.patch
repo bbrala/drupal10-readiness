@@ -1,0 +1,795 @@
+diff --git a/instagram_feeds.info.yml b/instagram_feeds.info.yml
+index c3e0586..60a6315 100644
+--- a/instagram_feeds.info.yml
++++ b/instagram_feeds.info.yml
+@@ -3,11 +3,10 @@ description: 'Allows to import Instagram posts to your site.'
+ package: Media
+ 
+ type: module
+-core: 8.x
+ configure: instagram_feeds.settings
+ 
+ php: 7.2
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ 
+ # Dependencies
+ dependencies:
+diff --git a/instagram_feeds.module b/instagram_feeds.module
+index 4720205..7e11489 100644
+--- a/instagram_feeds.module
++++ b/instagram_feeds.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\instagram_feeds\CronHandler;
+ /**
+  * @file
+  * Hooks and custom functions for instagram_feeds module.
+@@ -27,7 +28,7 @@ function instagram_feeds_help($route_name, RouteMatchInterface $route_match) {
+  * Implements hook_cron().
+  */
+ function instagram_feeds_cron() {
+-  /** @var Drupal\instagram_feeds\CronHandler $cron_handler */
++  /** @var CronHandler $cron_handler */
+   $cron_handler = Drupal::service('instagram_feeds.cron_handler');
+   $cron_handler->refreshTokens()->importInstagramPosts();
+ }
+diff --git a/instagram_feeds.tokens.inc b/instagram_feeds.tokens.inc
+index dd14204..3dff817 100644
+--- a/instagram_feeds.tokens.inc
++++ b/instagram_feeds.tokens.inc
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Datetime\DateFormatterInterface;
+ /**
+  * @file
+  * Provides Token integration for Instagram Feeds.
+@@ -128,7 +129,7 @@ function _instagram_feeds_account_tokens(Token $token_service, $tokens, Instagra
+ function _instagram_feeds_post_tokens(Token $token_service, $tokens, array $post, array $options, BubbleableMetadata $bubbleable_metadata) {
+   $replacements = [];
+ 
+-  /** @var Drupal\Core\Datetime\DateFormatterInterface $date_formatter_service */
++  /** @var DateFormatterInterface $date_formatter_service */
+   $date_formatter_service = \Drupal::service('date.formatter');
+ 
+   foreach ($tokens as $name => $original) {
+diff --git a/src/CronHandler.php b/src/CronHandler.php
+index 0caae2b..6763524 100644
+--- a/src/CronHandler.php
++++ b/src/CronHandler.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\instagram_feeds;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\taxonomy\TermStorageInterface;
++use Drupal\taxonomy\TermInterface;
++use Drupal\media\MediaTypeInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -27,42 +32,42 @@ class CronHandler {
+ 
+   /**
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Instance of Media storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $mediaStorage;
+ 
+   /**
+    * The event dispatcher service.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Entity Type Manager Service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity field manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The list of published active accounts.
+    *
+-   * @var \Drupal\instagram_feeds\Entity\InstagramAccountInterface[]
++   * @var InstagramAccountInterface[]
+    */
+   protected $instagramAccounts;
+ 
+@@ -104,13 +109,13 @@ class CronHandler {
+   /**
+    * Gets active Instagram account entities.
+    *
+-   * @return \Drupal\instagram_feeds\Entity\InstagramAccountInterface[]
++   * @return InstagramAccountInterface[]
+    */
+   protected function getInstagramAccounts() : array {
+     if (!isset($this->instagramAccounts)) {
+       $this->instagramAccounts = [];
+       $instagram_accounts = $this->entityTypeManager->getStorage('instagram_account')->loadMultiple();
+-      /** @var \Drupal\instagram_feeds\Entity\InstagramAccountInterface $account */
++      /** @var InstagramAccountInterface $account */
+       foreach ($instagram_accounts as $account) {
+         // Skip if entity is unpublished or token is invalid.
+         if ($account->isPublished() && $account->tokenIsValid()) {
+@@ -136,7 +141,7 @@ class CronHandler {
+   /**
+    * Gets 25 recent posts created by Instagram user.
+    *
+-   * @param \Drupal\instagram_feeds\Entity\InstagramAccountInterface $account
++   * @param InstagramAccountInterface $account
+    *   Instagram account.
+    *
+    * @return array
+@@ -158,7 +163,7 @@ class CronHandler {
+     }
+     // Dispatch the event.
+     $event = new InstagramPostsObtainedEvent($this->config, $account, $result ?? []);
+-    $this->eventDispatcher->dispatch(InstagramPostsObtainedEvent::getEventName(), $event);
++    $this->eventDispatcher->dispatch($event, InstagramPostsObtainedEvent::getEventName());
+     return $event->posts;
+   }
+ 
+@@ -178,7 +183,7 @@ class CronHandler {
+   /**
+    * Instagram posts import processor for the given account.
+    *
+-   * @param \Drupal\instagram_feeds\Entity\InstagramAccountInterface $account
++   * @param InstagramAccountInterface $account
+    *   Instagram Feed configuration Entity.
+    */
+   protected function processAccount(InstagramAccountInterface $account) {
+@@ -211,7 +216,7 @@ class CronHandler {
+    *
+    * @param array $post
+    *   Instagram post data array.
+-   * @param \Drupal\instagram_feeds\Entity\InstagramAccountInterface $account
++   * @param InstagramAccountInterface $account
+    *   Instagram Feed configuration Entity.
+    */
+   protected function createMediaEntity(array $post, InstagramAccountInterface $account) {
+@@ -244,7 +249,7 @@ class CronHandler {
+         $entity_array['name'] = trim($entity_array['name']);
+       }
+       elseif ($post_field_name == 'tags' && $post[$post_field_name]) {
+-        /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $field_manager */
++        /** @var EntityFieldManagerInterface $field_manager */
+         $fields = $this->entityFieldManager->getFieldDefinitions('media', $media_type);
+         $field_definition = $fields[$entity_field_name];
+         $entity_array[$entity_field_name] = 'entity_reference' == $field_definition->getType()
+@@ -259,7 +264,7 @@ class CronHandler {
+     $media_entity = $this->mediaStorage->create($entity_array);
+     // Dispatch an event, so other modules can modify media entity before save.
+     $event = new MediaEntityInstantiatedEvent($this->config, $account, $media_entity, $post);
+-    $this->eventDispatcher->dispatch(MediaEntityInstantiatedEvent::getEventName(), $event);
++    $this->eventDispatcher->dispatch($event, MediaEntityInstantiatedEvent::getEventName());
+ 
+     $event->mediaEntity->save();
+   }
+@@ -267,7 +272,7 @@ class CronHandler {
+   /**
+    * Gets IDs of existing ones or creates new taxonomy terms based on hashtags.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The array of field definitions for the bundle, keyed by field name.
+    * @param string[] $tags
+    *  Instagram hash tags.
+@@ -278,7 +283,7 @@ class CronHandler {
+   protected function getTerms(FieldDefinitionInterface $field_definition, $tags) {
+     $result = [];
+     $settings = $field_definition->getSetting('handler_settings');
+-    /** @var \Drupal\taxonomy\TermStorageInterface $term_storage */
++    /** @var TermStorageInterface $term_storage */
+     $term_storage = $this->entityTypeManager->getStorage('taxonomy_term');
+     $vocabulary = $settings['auto_create_bundle'] ?: reset($settings['target_bundles']);
+     $terms = $term_storage->loadByProperties([
+@@ -292,7 +297,7 @@ class CronHandler {
+     }
+     $create_tags = $settings['auto_create'] ? array_diff($tags, $existing_tags) : [];
+     foreach ($create_tags as $tag) {
+-      /** @var \Drupal\taxonomy\TermInterface $term */
++      /** @var TermInterface $term */
+       $term = $term_storage->create([
+         'name' => $tag,
+         'vid' => $vocabulary,
+@@ -314,7 +319,7 @@ class CronHandler {
+    */
+   protected function getInstagramSourceField($media_type_name): string {
+     if (!isset($this->mediaTypeSources[$media_type_name])) {
+-      /** @var \Drupal\media\MediaTypeInterface $mediaType */
++      /** @var MediaTypeInterface $mediaType */
+       $mediaType = $this->entityTypeManager->getStorage('media_type')->load($media_type_name);
+       $this->mediaTypeSources[$media_type_name] = $mediaType->getSource()->getSourceFieldDefinition($mediaType)->getName();
+     }
+@@ -332,7 +337,7 @@ class CronHandler {
+    */
+   protected function getInstagramSourcePluginID($media_type_name): string {
+     if (!isset($this->mediaTypeSourceIDs[$media_type_name])) {
+-      /** @var \Drupal\media\MediaTypeInterface $mediaType */
++      /** @var MediaTypeInterface $mediaType */
+       $mediaType = $this->entityTypeManager->getStorage('media_type')->load($media_type_name);
+       $this->mediaTypeSourceIDs[$media_type_name] = $mediaType->getSource()->getPluginId();
+     }
+@@ -348,7 +353,7 @@ class CronHandler {
+     $current_time = \Drupal::time()->getRequestTime();
+     $frequency = $this->config->get('refresh_frequency');
+ 
+-    /** @var \Drupal\instagram_feeds\Entity\InstagramAccountInterface $account */
++    /** @var InstagramAccountInterface $account */
+     foreach ($this->getInstagramAccounts() as $account) {
+       // Long-lived tokens are valid 60 days, so token_expiration - 60 days
+       // (5184000 sec) will be the date, when token was generated/refreshed
+diff --git a/src/Entity/InstagramAccount.php b/src/Entity/InstagramAccount.php
+index c7554cd..05cb2cd 100644
+--- a/src/Entity/InstagramAccount.php
++++ b/src/Entity/InstagramAccount.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\instagram_feeds\Entity;
+ 
++use Drupal\media\MediaTypeInterface;
++use GuzzleHttp\Psr7\Response;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Entity\ContentEntityBase;
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -122,7 +124,7 @@ class InstagramAccount extends ContentEntityBase implements InstagramAccountInte
+       ->setDefaultValueCallback(self::class . '::getCurrentUserId');
+ 
+     $weight = -1 - count($fields) * 5;
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition $field */
++    /** @var BaseFieldDefinition $field */
+     foreach ($fields as $id => $field) {
+       $view_settings = $form_settings = ['weight' => $weight];
+       if ($id == 'uid') {
+@@ -174,7 +176,7 @@ class InstagramAccount extends ContentEntityBase implements InstagramAccountInte
+     $options = [];
+     $media_types = \Drupal::entityTypeManager()->getStorage('media_type')->loadMultiple();
+     foreach ($media_types as $media_type) {
+-      /** @var \Drupal\media\MediaTypeInterface $media_type */
++      /** @var MediaTypeInterface $media_type */
+       if (in_array($media_type->getSource()->getPluginId(), ['instagram', 'image'])) {
+         $options[$media_type->id()] = $media_type->label();
+       }
+@@ -256,7 +258,7 @@ class InstagramAccount extends ContentEntityBase implements InstagramAccountInte
+   /**
+    * Extracts Instagram data from Guzzle response.
+    *
+-   * @param \GuzzleHttp\Psr7\Response $response
++   * @param Response $response
+    *   Guzzle response.
+    *
+    * @return array
+diff --git a/src/Entity/InstagramAccountInterface.php b/src/Entity/InstagramAccountInterface.php
+index 38bd270..84bd30d 100644
+--- a/src/Entity/InstagramAccountInterface.php
++++ b/src/Entity/InstagramAccountInterface.php
+@@ -44,7 +44,7 @@ interface InstagramAccountInterface extends ContentEntityInterface, EntityPublis
+   /**
+    * Tries to refresh long-lived Instagram access token.
+    *
+-   * @param \GuzzleHttp\Client $http_client
++   * @param Client $http_client
+    *   Guzzle HTTP Client.
+    * @param bool $save
+    *   Save entity or not after token has been refreshed successfully.
+@@ -67,7 +67,7 @@ interface InstagramAccountInterface extends ContentEntityInterface, EntityPublis
+   /**
+    * Gets URL to Instagram Auth form.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   Url to Instagram Auth form.
+    */
+   public function getOauthUrl($client_id): Url;
+diff --git a/src/Event/InstagramFeedsEventBase.php b/src/Event/InstagramFeedsEventBase.php
+index 8740a51..c556fe0 100644
+--- a/src/Event/InstagramFeedsEventBase.php
++++ b/src/Event/InstagramFeedsEventBase.php
+@@ -2,9 +2,9 @@
+ 
+ namespace Drupal\instagram_feeds\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\instagram_feeds\Entity\InstagramAccountInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * En event occurs when instagram_feeds creates a new media entity.
+@@ -18,23 +18,23 @@ abstract class InstagramFeedsEventBase extends Event {
+   /**
+    * Instagram Feeds Config bucket.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   private $config;
+ 
+   /**
+    * Instagram account.
+    *
+-   * @var \Drupal\instagram_feeds\Entity\InstagramAccountInterface $account
++   * @var InstagramAccountInterface $account
+    */
+   private $account;
+ 
+   /**
+    * Constructs the object.
+    *
+-   * @param \Drupal\Core\Config\ImmutableConfig $configuration
++   * @param ImmutableConfig $configuration
+    *   The Instagram feeds module settings.
+-   * @param \Drupal\instagram_feeds\Entity\InstagramAccountInterface $account
++   * @param InstagramAccountInterface $account
+    *   The Instagram account.
+    */
+   public function __construct(ImmutableConfig $configuration, InstagramAccountInterface $account) {
+@@ -64,7 +64,7 @@ abstract class InstagramFeedsEventBase extends Event {
+   /**
+    * Gets related Instagram Account.
+    *
+-   * @return \Drupal\instagram_feeds\Entity\InstagramAccountInterface
++   * @return InstagramAccountInterface
+    *   Currently processed Instagram account.
+    */
+   public function getAccount() : InstagramAccountInterface {
+diff --git a/src/Event/InstagramPostsObtainedEvent.php b/src/Event/InstagramPostsObtainedEvent.php
+index f17722e..17ab617 100644
+--- a/src/Event/InstagramPostsObtainedEvent.php
++++ b/src/Event/InstagramPostsObtainedEvent.php
+@@ -20,9 +20,9 @@ class InstagramPostsObtainedEvent extends InstagramFeedsEventBase {
+   /**
+    * Constructs the object.
+    *
+-   * @param \Drupal\Core\Config\ImmutableConfig $configuration
++   * @param ImmutableConfig $configuration
+    *   The Instagram feeds module settings.
+-   * @param \Drupal\instagram_feeds\Entity\InstagramAccountInterface $account
++   * @param InstagramAccountInterface $account
+    *   The Instagram account.
+    * @param array $posts
+    *   The list of Instagram posts to modify.
+diff --git a/src/Event/MediaEntityInstantiatedEvent.php b/src/Event/MediaEntityInstantiatedEvent.php
+index 3cbb119..338c22c 100644
+--- a/src/Event/MediaEntityInstantiatedEvent.php
++++ b/src/Event/MediaEntityInstantiatedEvent.php
+@@ -18,7 +18,7 @@ class MediaEntityInstantiatedEvent extends InstagramFeedsEventBase {
+   /**
+    * Just created media entity.
+    *
+-   * @var \Drupal\media\MediaInterface
++   * @var MediaInterface
+    */
+   public $mediaEntity;
+ 
+@@ -32,11 +32,11 @@ class MediaEntityInstantiatedEvent extends InstagramFeedsEventBase {
+   /**
+    * Constructs the object.
+    *
+-   * @param \Drupal\Core\Config\ImmutableConfig $configuration
++   * @param ImmutableConfig $configuration
+    *   The Instagram feeds module settings.
+-   * @param \Drupal\instagram_feeds\Entity\InstagramAccountInterface $account
++   * @param InstagramAccountInterface $account
+    *   The Instagram account.
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   The media entity just created (not saved yet).
+    * @param array $post
+    *   Instagram single post data.
+diff --git a/src/EventSubscriber/InstagramPostsObtainedSubscriber.php b/src/EventSubscriber/InstagramPostsObtainedSubscriber.php
+index c673e27..0e09dc7 100644
+--- a/src/EventSubscriber/InstagramPostsObtainedSubscriber.php
++++ b/src/EventSubscriber/InstagramPostsObtainedSubscriber.php
+@@ -30,11 +30,11 @@ class InstagramPostsObtainedSubscriber implements EventSubscriberInterface {
+   /**
+    * Constructs a new PageManagerRoutes.
+    *
+-   * @param \GuzzleHttp\Client $http_client
++   * @param Client $http_client
+    *   The instance of Guzzle HTTP Client.
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   The token service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The Logger factory service.
+    */
+   public function __construct(Client $http_client, Token $token, LoggerChannelFactoryInterface $logger_factory) {
+@@ -42,7 +42,7 @@ class InstagramPostsObtainedSubscriber implements EventSubscriberInterface {
+     // Added for compatibility with Drupal < 8.7.0.
+     $this->file_exists_replace = defined('\Drupal\Core\File\FileSystemInterface::EXISTS_REPLACE')
+       ? FileSystemInterface::EXISTS_REPLACE
+-      : FILE_EXISTS_REPLACE;
++      : FileSystemInterface::EXISTS_REPLACE;
+   }
+ 
+   /**
+@@ -60,7 +60,7 @@ class InstagramPostsObtainedSubscriber implements EventSubscriberInterface {
+   /**
+    * Reacts on posts obtained event.
+    *
+-   * @param \Drupal\instagram_feeds\Event\InstagramPostsObtainedEvent $event
++   * @param InstagramPostsObtainedEvent $event
+    *   Instance of InstagramPostsObtainedEvent.
+    */
+   public function onInstagramPostsObtained(InstagramPostsObtainedEvent $event) {
+@@ -82,7 +82,7 @@ class InstagramPostsObtainedSubscriber implements EventSubscriberInterface {
+   /**
+    * Scrape the Instagram post owner avatar URL using permalink URL.
+    *
+-   * @param \Drupal\instagram_feeds\Event\InstagramPostsObtainedEvent $event
++   * @param InstagramPostsObtainedEvent $event
+    *   Instance of InstagramPostsObtainedEvent.
+    *
+    * @return string[]
+@@ -106,7 +106,7 @@ class InstagramPostsObtainedSubscriber implements EventSubscriberInterface {
+         $full_name = $owner['full_name'] ?? 'Instagram Avatar';
+         $avatar_file_extension = pathinfo(parse_url($owner['profile_pic_url'], PHP_URL_PATH), PATHINFO_EXTENSION);
+         $file_uri_destination = $avatar_dir . '/' . $account->id() . '.' . $avatar_file_extension;
+-        $file = file_save_data($file_data, $file_uri_destination, $this->file_exists_replace);
++        $file = \Drupal::service('file.repository')->writeData($file_data, $file_uri_destination, $this->file_exists_replace);
+       }
+ 
+     }
+@@ -131,7 +131,7 @@ class InstagramPostsObtainedSubscriber implements EventSubscriberInterface {
+       return \Drupal::service('file_system')->prepareDirectory($directory, FileSystemInterface::CREATE_DIRECTORY);
+     }
+     else {
+-      return file_prepare_directory($directory, FILE_CREATE_DIRECTORY);
++      return \Drupal::service('file_system')->prepareDirectory($directory, FileSystemInterface::CREATE_DIRECTORY);
+     }
+   }
+ 
+diff --git a/src/Form/InstagramAccountForm.php b/src/Form/InstagramAccountForm.php
+index eaec309..4abbd41 100644
+--- a/src/Form/InstagramAccountForm.php
++++ b/src/Form/InstagramAccountForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\instagram_feeds\Form;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\instagram_feeds\Entity\InstagramAccountInterface;
+ use Drupal\Core\Entity\ContentEntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Url;
+@@ -14,7 +16,7 @@ class InstagramAccountForm extends ContentEntityForm {
+   /**
+    * The instagram_feeds.settings configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $instagram_feeds_config;
+ 
+@@ -52,7 +54,7 @@ class InstagramAccountForm extends ContentEntityForm {
+       ];
+     }
+ 
+-    /** @var \Drupal\instagram_feeds\Entity\InstagramAccountInterface $i_account */
++    /** @var InstagramAccountInterface $i_account */
+     $i_account = $this->getEntity();
+ 
+ //    if ($i_account->isNew() && $i_account->get('token')->isEmpty()) {
+@@ -73,7 +75,7 @@ class InstagramAccountForm extends ContentEntityForm {
+     if (empty($this->getConfig('client_id')) || empty($this->getConfig('client_secret'))) {
+       return $form;
+     }
+-    /** @var \Drupal\instagram_feeds\Entity\InstagramAccountInterface $i_account */
++    /** @var InstagramAccountInterface $i_account */
+     $i_account = $this->getEntity();
+     if ($this->operation == 'edit') {
+       $form['#title'] = $this->t('<em>Edit @type</em> @title', [
+@@ -94,7 +96,7 @@ class InstagramAccountForm extends ContentEntityForm {
+   protected function prepareEntity() {
+     parent::prepareEntity();
+ 
+-    /** @var \Drupal\instagram_feeds\Entity\InstagramAccountInterface $i_account */
++    /** @var InstagramAccountInterface $i_account */
+     $i_account = $this->getEntity();
+     // Obtain Instagram short-lived and exchange to long-lived token.
+     $code = $this->getRequest()->query->get('code');
+@@ -115,7 +117,7 @@ class InstagramAccountForm extends ContentEntityForm {
+    *   Form link element renderable array.
+    */
+   protected function getAuthWindowButton(): array {
+-    /** @var \Drupal\instagram_feeds\Entity\InstagramAccountInterface $i_account */
++    /** @var InstagramAccountInterface $i_account */
+     $i_account = $this->getEntity();
+     return [
+       'auth' => [
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 3f1d78b..0b1e975 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\instagram_feeds\Form;
+ 
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\media\MediaTypeInterface;
++use Drupal\Core\Field\FieldDefinitionInterface;
++use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\StreamWrapper\StreamWrapperInterface;
+@@ -89,7 +93,7 @@ class SettingsForm extends ConfigFormBase {
+    *
+    * @param array $form
+    *   Form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state object.
+    * @param string $field_name
+    *   Parent field name to build the form tree.
+@@ -107,9 +111,9 @@ class SettingsForm extends ConfigFormBase {
+       '#tree' => TRUE,
+     ];
+     $media_types = $this->getInstagramMediaTypes();
+-    /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager */
++    /** @var EntityFieldManagerInterface $entity_field_manager */
+     $entity_field_manager = \Drupal::service('entity_field.manager');
+-    /** @var \Drupal\media\MediaTypeInterface $media_type */
++    /** @var MediaTypeInterface $media_type */
+     foreach ($media_types as $media_type_id => $media_type) {
+       $element[$media_type_id] = [
+         '#type' => 'details',
+@@ -223,7 +227,7 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Checks if media entity field can be mapped with Instagram data.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   Media entity field definition.
+    *
+    * @return bool
+@@ -295,14 +299,14 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Gets Media types with Instagram source.
+    *
+-   * @return \Drupal\media\MediaTypeInterface[]
++   * @return MediaTypeInterface[]
+    *   Media Types options for Select form element.
+    */
+   protected function getInstagramMediaTypes(): array {
+     $options = [];
+     $media_types = \Drupal::entityTypeManager()->getStorage('media_type')->loadMultiple();
+     foreach ($media_types as $media_type) {
+-      /** @var \Drupal\media\MediaTypeInterface $media_type */
++      /** @var MediaTypeInterface $media_type */
+       if (in_array($media_type->getSource()->getPluginId(), ['instagram', 'image'])) {
+         $options[$media_type->id()] = $media_type;
+       }
+@@ -318,7 +322,7 @@ class SettingsForm extends ConfigFormBase {
+    */
+   protected function getRefreshFrequencyOptions() {
+     $days = [2, 5, 7, 10, 14, 30, 45, 59];
+-    /** @var \Drupal\Core\Datetime\DateFormatterInterface $date_formatter */
++    /** @var DateFormatterInterface $date_formatter */
+     $date_formatter = \Drupal::service('date.formatter');
+     $period = array_map(function($val) {
+       return $val * 86400;
+diff --git a/src/InstagramAccountListBuilder.php b/src/InstagramAccountListBuilder.php
+index fbe7498..e3ac0d0 100644
+--- a/src/InstagramAccountListBuilder.php
++++ b/src/InstagramAccountListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\instagram_feeds;
+ 
++use Drupal\instagram_feeds\Entity\InstagramAccountInterface;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+@@ -15,7 +16,7 @@ class InstagramAccountListBuilder extends EntityListBuilder {
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatterService;
+ 
+@@ -60,7 +61,7 @@ class InstagramAccountListBuilder extends EntityListBuilder {
+   /**
+    * Gets date formatter service.
+    *
+-   * @return \Drupal\Core\Datetime\DateFormatterInterface
++   * @return DateFormatterInterface
+    *   The date formatter service.
+    */
+   protected function dateFormatter(): DateFormatterInterface {
+@@ -74,7 +75,7 @@ class InstagramAccountListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\instagram_feeds\Entity\InstagramAccountInterface $entity */
++    /** @var InstagramAccountInterface $entity */
+     $row = [];
+     foreach (array_keys($this->getColumns()) as $field) {
+       $value = $entity->get($field)->first()->getValue();
+diff --git a/src/InstagramApiTrait.php b/src/InstagramApiTrait.php
+index bc13ca4..cf0d5a4 100644
+--- a/src/InstagramApiTrait.php
++++ b/src/InstagramApiTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\instagram_feeds;
+ 
++use Psr\Http\Message\ResponseInterface;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+ use Drupal\Core\Utility\Token;
+@@ -16,21 +17,21 @@ trait InstagramApiTrait {
+   /**
+    * Guzzle HTTP Client instance.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   private $httpClient;
+ 
+   /**
+    * The token service.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   private $token;
+ 
+   /**
+    * The Instagram Feeds Logger channel.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   private $logger;
+ 
+@@ -49,7 +50,7 @@ trait InstagramApiTrait {
+    */
+   protected function getInstagramResponceContents($url, $is_json_expected = FALSE) {
+     try {
+-      /** @var \Psr\Http\Message\ResponseInterface $response */
++      /** @var ResponseInterface $response */
+       $response = $this->httpClient()->get($url);
+       if ($response->getStatusCode() !== 200) {
+         throw new \Exception(t('Invalid responce code @code from Instagram.', [
+@@ -68,7 +69,7 @@ trait InstagramApiTrait {
+   /**
+    * Returns a channel logger object.
+    *
+-   * @return \Psr\Log\LoggerInterface
++   * @return LoggerInterface
+    *   The logger for instagram_feeds channel.
+    */
+   protected function logger(): LoggerInterface {
+@@ -81,7 +82,7 @@ trait InstagramApiTrait {
+   /**
+    * Returns the Guzzle HTTP Client.
+    *
+-   * @return \GuzzleHttp\Client
++   * @return Client
+    */
+   protected function httpClient(): Client {
+     if (!isset($this->httpClient)) {
+@@ -93,7 +94,7 @@ trait InstagramApiTrait {
+   /**
+    * Returns the token service.
+    *
+-   * @return \Drupal\Core\Utility\Token
++   * @return Token
+    *   The token service.
+    */
+   protected function token(): Token {
+@@ -106,7 +107,7 @@ trait InstagramApiTrait {
+   /**
+    * Sets logger for instagram_feeds channel.
+    *
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The Logger factory service.
+    *
+    * @return $this
+@@ -119,7 +120,7 @@ trait InstagramApiTrait {
+   /**
+    * Sets Guzzle HTTP client.
+    *
+-   * @param \GuzzleHttp\Client $client
++   * @param Client $client
+    *  Guzzle HTTP client.
+    *
+    * @return $this
+@@ -132,7 +133,7 @@ trait InstagramApiTrait {
+   /**
+    * Sets the token service.
+    *
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   The token service.
+    *
+    * @return $this
+diff --git a/src/Plugin/Action/RefreshInstagramTokenAction.php b/src/Plugin/Action/RefreshInstagramTokenAction.php
+index 8efe8fd..2c3b2b2 100644
+--- a/src/Plugin/Action/RefreshInstagramTokenAction.php
++++ b/src/Plugin/Action/RefreshInstagramTokenAction.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\instagram_feeds\Plugin\Action;
+ 
++use Drupal\instagram_feeds\Entity\InstagramAccountInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Action\Plugin\Action\EntityActionBase;
+ use Drupal\Component\Datetime\TimeInterface;
+@@ -24,14 +25,14 @@ final class RefreshInstagramTokenAction extends EntityActionBase {
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * GuzzleHttp\ClientInterface definition.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+@@ -44,9 +45,9 @@ final class RefreshInstagramTokenAction extends EntityActionBase {
+    *   The plugin ID for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+    */
+   public function __construct(
+@@ -80,7 +81,7 @@ final class RefreshInstagramTokenAction extends EntityActionBase {
+    * {@inheritdoc}
+    */
+   public function execute($entity = NULL) {
+-    /** @var \Drupal\instagram_feeds\Entity\InstagramAccountInterface $entity */
++    /** @var InstagramAccountInterface $entity */
+     $entity->refreshToken($this->httpClient, TRUE);
+   }
+ 
+@@ -88,7 +89,7 @@ final class RefreshInstagramTokenAction extends EntityActionBase {
+    * {@inheritdoc}
+    */
+   public function access($object, AccountInterface $account = NULL, $return_as_object = FALSE) {
+-    /** @var \Drupal\instagram_feeds\Entity\InstagramAccountInterface $object */
++    /** @var InstagramAccountInterface $object */
+     if (!$account) {
+       $account = \Drupal::currentUser();
+     }

@@ -1,0 +1,1547 @@
+diff --git a/epub_reader_framework.api.php b/epub_reader_framework.api.php
+index 590ebb9..276dc6c 100644
+--- a/epub_reader_framework.api.php
++++ b/epub_reader_framework.api.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\TypedData\Exception\MissingDataException;
+ /**
+  * @file
+  * EPUB Reader Framework API documentation.
+@@ -12,10 +13,10 @@ use \Drupal\node\NodeInterface;
+ /**
+  * Perform alterations on the current node used to determine previous and next.
+  *
+- * @param \Drupal\node\NodeInterface $node
++ * @param NodeInterface $node
+  *   The current node used to determine previous and next elements.
+  *
+- * @throws \Drupal\Core\TypedData\Exception\MissingDataException
++ * @throws MissingDataException
+  */
+ function hook_epub_reader_framework_current_node_alter(NodeInterface &$node) {
+   if ($node->bundle() == 'reader_publication') {
+@@ -39,7 +40,7 @@ function hook_epub_reader_framework_current_node_alter(NodeInterface &$node) {
+  *
+  * @param string $chapter_label
+  *   The reader chapter label.
+- * @param \Drupal\node\NodeInterface $chapter
++ * @param NodeInterface $chapter
+  *   The reader chapter node id.
+  */
+ function hook_epub_reader_framework_navigation_chapter_label_alter($chapter_label, NodeInterface $chapter) {
+@@ -53,7 +54,7 @@ function hook_epub_reader_framework_navigation_chapter_label_alter($chapter_labe
+  *
+  * This can result in any render array.
+  *
+- * @param \Drupal\Core\Entity\ContentEntityInterface $reader_chapter_heading
++ * @param ContentEntityInterface $reader_chapter_heading
+  *   The reader chapter heading entity.
+  * @param int $reader_chapter_id
+  *   The reader chapter node id.
+diff --git a/epub_reader_framework.install b/epub_reader_framework.install
+index 561ffe4..5002281 100644
+--- a/epub_reader_framework.install
++++ b/epub_reader_framework.install
+@@ -1,16 +1,16 @@
+ <?php
+ 
++use Drupal\Core\StreamWrapper\StreamWrapperManager;
+ /**
+  * @file
+  * EPUB Reader Framework install file.
+  */
+-
+ /**
+  * Implements hook_requirements().
+  */
+ function epub_reader_framework_requirements($phase) {
+   if ($phase == 'runtime') {
+-    /** @var \Drupal\Core\StreamWrapper\StreamWrapperManager $stream_wrapper_manager */
++    /** @var StreamWrapperManager $stream_wrapper_manager */
+     $stream_wrapper_manager = \Drupal::service('stream_wrapper_manager');
+     $stream_wrappers = $stream_wrapper_manager->getWrappers();
+     if (isset($stream_wrappers['private'])) {
+diff --git a/epub_reader_framework.module b/epub_reader_framework.module
+index 8daa9cf..77d519d 100644
+--- a/epub_reader_framework.module
++++ b/epub_reader_framework.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Block\BlockManagerInterface;
++use Drupal\Core\Access\AccessResultInterface;
+ /**
+  * @file
+  * Contains epub_reader_framework.module.
+@@ -98,13 +100,13 @@ function epub_reader_framework_preprocess_node(&$variables) {
+     \Drupal::moduleHandler()->alter('epub_reader_framework_previous_next_block_id', $previous_next_block_id);
+ 
+     if ($navigation_block_id || $previous_next_block_id) {
+-      /** @var \Drupal\Core\Block\BlockManagerInterface $block_manager */
++      /** @var BlockManagerInterface $block_manager */
+       $block_manager = \Drupal::service('plugin.manager.block');
+ 
+       // Add the reader navigation block.
+       if ($navigation_block_id) {
+         $plugin_block = $block_manager->createInstance($navigation_block_id, []);
+-        /** @var \Drupal\Core\Access\AccessResultInterface $access_result */
++        /** @var AccessResultInterface $access_result */
+         $access_result = $plugin_block->access(\Drupal::currentUser());
+         if (!is_object($access_result) || !$access_result->isAllowed()) {
+           $variables['reader_navigation'] = $plugin_block->build();
+@@ -114,7 +116,7 @@ function epub_reader_framework_preprocess_node(&$variables) {
+       // Add the reader previous next block.
+       if ($previous_next_block_id) {
+         $plugin_block = $block_manager->createInstance($previous_next_block_id, []);
+-        /** @var \Drupal\Core\Access\AccessResultInterface $access_result */
++        /** @var AccessResultInterface $access_result */
+         $access_result = $plugin_block->access(\Drupal::currentUser());
+         if (!is_object($access_result) || !$access_result->isAllowed()) {
+           $variables['reader_previous_next'] = $plugin_block->build();
+diff --git a/src/Batch/ReaderChapterExtractorBatchProcessor.php b/src/Batch/ReaderChapterExtractorBatchProcessor.php
+index 4589dc7..0b343b3 100644
+--- a/src/Batch/ReaderChapterExtractorBatchProcessor.php
++++ b/src/Batch/ReaderChapterExtractorBatchProcessor.php
+@@ -2,6 +2,14 @@
+ 
+ namespace Drupal\epub_reader_framework\Batch;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Archiver\ArchiverException;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\epub_reader_framework\Epub\ReaderEpubXhtmlConverter;
++use Drupal\epub_reader_framework\Epub\ReaderEpubCompletedCleanup;
++use Drupal\epub_reader_framework\Entity\ReaderEntityCrossReference;
++use Drupal\epub_reader_framework\Epub\ReaderEpubZipExtractor;
+ use Drupal\Core\Url;
+ use Drupal\node\Entity\Node;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+@@ -21,10 +29,10 @@ class ReaderChapterExtractorBatchProcessor {
+    * @param array $context
+    *   Batch context.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Archiver\ArchiverException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws ArchiverException
++   * @throws EntityStorageException
+    */
+   public static function operationCallback($reader_publication_id, array &$context) {
+     if (empty($context['sandbox'])) {
+@@ -44,7 +52,7 @@ class ReaderChapterExtractorBatchProcessor {
+         if (isset($chapter['uri'])) {
+           if ($reader_publication = Node::load($context['sandbox']['reader_publication_id'])) {
+             /** @var \Drupal\node\NodeInterface $reader_publication */
+-            /** @var \Drupal\epub_reader_framework\Epub\ReaderEpubXhtmlConverter $epub_xhtml_converter */
++            /** @var ReaderEpubXhtmlConverter $epub_xhtml_converter */
+             $epub_xhtml_converter = \Drupal::service('epub_reader_framework.reader_epub_xhtml_converter');
+ 
+             try {
+@@ -82,14 +90,14 @@ class ReaderChapterExtractorBatchProcessor {
+     if ($context['sandbox']['progress'] == $context['sandbox']['max']) {
+       if ($context['results']['chapters'] && $reader_publication = Node::load($context['sandbox']['reader_publication_id'])) {
+         /** @var \Drupal\node\NodeInterface $reader_publication */
+-        /** @var \Drupal\epub_reader_framework\Epub\ReaderEpubCompletedCleanup $epub_xhtml_converter */
++        /** @var ReaderEpubCompletedCleanup $epub_xhtml_converter */
+         $epub_xhtml_converter = \Drupal::service('epub_reader_framework.reader_epub_completed_cleanup');
+         $epub_xhtml_converter->cleanupChapters($reader_publication,
+           $context['results']['chapters']);
+ 
+         if ($context['sandbox']['chapter_nids']) {
+ 
+-          /** @var \Drupal\epub_reader_framework\Entity\ReaderEntityCrossReference $reader_entity_cross_reference */
++          /** @var ReaderEntityCrossReference $reader_entity_cross_reference */
+           $reader_entity_cross_reference = \Drupal::service('epub_reader_framework.reader_entity_cross_reference');
+           $reader_entity_cross_reference->crossReferenceChaptersFromPublicationExtraction(
+             $reader_publication,
+@@ -115,7 +123,7 @@ class ReaderChapterExtractorBatchProcessor {
+    * @param array $context
+    *   Batch context.
+    *
+-   * @throws \Drupal\Core\Archiver\ArchiverException
++   * @throws ArchiverException
+    */
+   protected static function initialiseSandbox(
+     $reader_publication_id,
+@@ -141,13 +149,13 @@ class ReaderChapterExtractorBatchProcessor {
+    * @param array $context
+    *   The batch processing context.
+    *
+-   * @throws \Drupal\Core\Archiver\ArchiverException
++   * @throws ArchiverException
+    */
+   protected static function extractEpub(array &$context) {
+     if (isset($context['sandbox']['reader_publication_id']) && $context['sandbox']['reader_publication_id']) {
+       if ($reader_publication = Node::load($context['sandbox']['reader_publication_id'])) {
+         /** @var \Drupal\node\NodeInterface $reader_publication */
+-        /** @var \Drupal\epub_reader_framework\Epub\ReaderEpubZipExtractor $epub_zip_extractor */
++        /** @var ReaderEpubZipExtractor $epub_zip_extractor */
+         $epub_zip_extractor = \Drupal::service('epub_reader_framework.reader_epub_zip_extractor');
+         $epub_zip_extractor->extractEpubFiles($reader_publication);
+         $context['sandbox']['extracted_files'] = $epub_zip_extractor->getExtractedFiles($reader_publication);
+diff --git a/src/Controller/ReaderNodeAjaxController.php b/src/Controller/ReaderNodeAjaxController.php
+index 8a3487e..51a6fb5 100644
+--- a/src/Controller/ReaderNodeAjaxController.php
++++ b/src/Controller/ReaderNodeAjaxController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\epub_reader_framework\Controller;
+ 
++use Drupal\Core\Entity\EntityMalformedException;
++use Drupal\Core\Cache\CacheableAjaxResponse;
+ use Drupal\Core\Ajax\AjaxResponse;
+ use Drupal\Core\Ajax\ReplaceCommand;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -19,25 +21,25 @@ use Symfony\Component\HttpFoundation\RedirectResponse;
+ class ReaderNodeAjaxController extends ControllerBase {
+ 
+   /**
+-   * Ajax callback to render the reader chapter.
+-   *
+-   * Takes different logic paths based on whether Javascript was enabled.
+-   * If $type == 'ajax', it tells this function that ajax.js has rewritten
+-   * the URL and thus we are doing an AJAX and can return an array of commands.
+-   *
+-   * @param \Drupal\node\NodeInterface $node
+-   *   The node to render.
+-   * @param string $nojs
+-   *   Either 'ajax' or 'nojs`.
+-   * @param string|int $back
+-   *   Either '' or '1`. If 1, indicates, the ajax call is via the back button
+-   *   and adding to the history again should be avoided.
+-   *
+-   * @return \Drupal\Core\Ajax\AjaxResponse|\Symfony\Component\HttpFoundation\RedirectResponse;
+-   *   Ajax response if ajax, otherwise redirect.
+-   *
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
+-   */
++  * Ajax callback to render the reader chapter.
++  *
++  * Takes different logic paths based on whether Javascript was enabled.
++  * If $type == 'ajax', it tells this function that ajax.js has rewritten
++  * the URL and thus we are doing an AJAX and can return an array of commands.
++  *
++   * @param NodeInterface $node
++  *   The node to render.
++  * @param string $nojs
++  *   Either 'ajax' or 'nojs`.
++  * @param string|int $back
++  *   Either '' or '1`. If 1, indicates, the ajax call is via the back button
++  *   and adding to the history again should be avoided.
++  *
++   * @return AjaxResponse|RedirectResponse ;
++    Ajax response if ajax, otherwise redirect.
++  *
++   * @throws EntityMalformedException
++  */
+   public function nodeAjaxView(NodeInterface $node, $nojs = 'nojs', $back = '') {
+ 
+     // Determine whether the request is coming from AJAX or not.
+@@ -55,7 +57,7 @@ class ReaderNodeAjaxController extends ControllerBase {
+         if (class_exists('\Drupal\Core\Cache\CacheableAjaxResponse')) {
+           // Cannot use 'Use' statement as we are unsure if this will exist.
+           // @see https://www.drupal.org/project/drupal/issues/2701085.
+-          $response = new \Drupal\Core\Cache\CacheableAjaxResponse();
++          $response = new CacheableAjaxResponse();
+         }
+         else {
+           $response = new AjaxResponse();
+diff --git a/src/Entity/ReaderEntityChapterHeadingsSave.php b/src/Entity/ReaderEntityChapterHeadingsSave.php
+index aab096e..8789b05 100644
+--- a/src/Entity/ReaderEntityChapterHeadingsSave.php
++++ b/src/Entity/ReaderEntityChapterHeadingsSave.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\epub_reader_framework\Entity;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Core\Theme\MissingThemeDependencyException;
++use Drupal\Core\Render\Renderer;
++use Drupal\Core\Theme\ThemeInitialization;
+ use Drupal\Component\Render\MarkupInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\node\NodeInterface;
+@@ -16,7 +22,7 @@ class ReaderEntityChapterHeadingsSave {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -37,7 +43,7 @@ class ReaderEntityChapterHeadingsSave {
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -56,15 +62,15 @@ class ReaderEntityChapterHeadingsSave {
+   /**
+    * Save all h2s into the reader chapter heading storage.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication node.
+-   * @param \Drupal\node\NodeInterface $reader_chapter
++   * @param NodeInterface $reader_chapter
+    *   The reader chapter node.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
+-   * @throws \Drupal\Core\Theme\MissingThemeDependencyException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
++   * @throws MissingThemeDependencyException
+    */
+   public function saveHeadings(
+     NodeInterface $reader_publication,
+@@ -80,21 +86,21 @@ class ReaderEntityChapterHeadingsSave {
+   /**
+    * Get the rendered markup for the chapter.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_chapter
++   * @param NodeInterface $reader_chapter
+    *   The reader chapter node.
+    *
+    * @return string
+    *   The markup of the rendered node.
+    *
+-   * @throws \Drupal\Core\Theme\MissingThemeDependencyException
++   * @throws MissingThemeDependencyException
+    */
+   protected function getRenderedNodeOutput(NodeInterface $reader_chapter) {
+     $render = \Drupal::entityTypeManager()->getViewBuilder('node')->view($reader_chapter, 'full');
+-    /** @var \Drupal\Core\Render\Renderer $renderer */
++    /** @var Renderer $renderer */
+     $renderer = \Drupal::service('renderer');
+ 
+     // Set the active theme to the default theme.
+-    /** @var \Drupal\Core\Theme\ThemeInitialization $theme_initialization */
++    /** @var ThemeInitialization $theme_initialization */
+     $theme_initialization = \Drupal::service('theme.initialization');
+     $default_theme = \Drupal::config('system.theme')->get('default');
+     $original_active_theme = \Drupal::theme()->getActiveTheme();
+@@ -116,7 +122,7 @@ class ReaderEntityChapterHeadingsSave {
+    *
+    * @param string $output
+    *   The rendered markup of the chapter.
+-   * @param \Drupal\node\NodeInterface $reader_chapter
++   * @param NodeInterface $reader_chapter
+    *   The reader chapter node.
+    */
+   public function determineHeadings($output, NodeInterface $reader_chapter) {
+@@ -140,14 +146,14 @@ class ReaderEntityChapterHeadingsSave {
+   /**
+    * Delete existing reader chapter headings for this chapter.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication node.
+-   * @param \Drupal\node\NodeInterface $reader_chapter
++   * @param NodeInterface $reader_chapter
+    *   The reader chapter node.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function deleteExistingHeadings(
+     NodeInterface $reader_publication,
+@@ -169,14 +175,14 @@ class ReaderEntityChapterHeadingsSave {
+   /**
+    * Save the new h2s into the reader chapter heading storage.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication node.
+-   * @param \Drupal\node\NodeInterface $reader_chapter
++   * @param NodeInterface $reader_chapter
+    *   The reader chapter node.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function saveNewHeadings(
+     NodeInterface $reader_publication,
+diff --git a/src/Entity/ReaderEntityCrossReference.php b/src/Entity/ReaderEntityCrossReference.php
+index 8598fe4..30aac20 100644
+--- a/src/Entity/ReaderEntityCrossReference.php
++++ b/src/Entity/ReaderEntityCrossReference.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\epub_reader_framework\Entity;
+ 
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\node\NodeInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -14,14 +18,14 @@ class ReaderEntityCrossReference {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -40,12 +44,12 @@ class ReaderEntityCrossReference {
+   /**
+    * Cross reference the chapters from the publication.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication node.
+-   * @param \Drupal\node\NodeInterface $reader_chapter
++   * @param NodeInterface $reader_chapter
+    *   The reader chapter node.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function ensureChapterIsCrossReferencedInPublication(
+     NodeInterface $reader_publication,
+@@ -63,14 +67,14 @@ class ReaderEntityCrossReference {
+   /**
+    * Cross reference the chapters from the publication.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication node.
+    * @param array $imported_chapter_nids
+    *   An array of chapter nids that below to the publication.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function crossReferenceChaptersFromPublicationExtraction(
+     NodeInterface $reader_publication,
+@@ -116,7 +120,7 @@ class ReaderEntityCrossReference {
+   /**
+    * Get existing cross references.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication node.
+    *
+    * @return array
+@@ -130,7 +134,7 @@ class ReaderEntityCrossReference {
+     if ($chapter_references->count()) {
+       foreach ($chapter_references as $chapter_reference) {
+         if ($entity = $chapter_reference->entity) {
+-          /** @var \Drupal\Core\Entity\EntityInterface $entity */
++          /** @var EntityInterface $entity */
+           $node_ids[] = $entity->id();
+         }
+       }
+@@ -142,12 +146,12 @@ class ReaderEntityCrossReference {
+   /**
+    * Save cross references to the node entity.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication node.
+    * @param array $chapter_node_ids
+    *   An array of chapter node ids.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   protected function saveCrossReferences(
+     NodeInterface $reader_publication,
+diff --git a/src/Entity/ReaderEntityPostsave.php b/src/Entity/ReaderEntityPostsave.php
+index 62024e6..a7da4dc 100644
+--- a/src/Entity/ReaderEntityPostsave.php
++++ b/src/Entity/ReaderEntityPostsave.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\epub_reader_framework\Entity;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\node\NodeInterface;
+ use Drupal\Core\Batch\BatchBuilder;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+@@ -20,23 +24,23 @@ class ReaderEntityPostsave {
+   /**
+    * The render entity cross reference service.
+    *
+-   * @var \Drupal\epub_reader_framework\Entity\ReaderEntityCrossReference
++   * @var ReaderEntityCrossReference
+    */
+   protected $readerEntityCrossReference;
+ 
+   /**
+    * The render entity cross reference service.
+    *
+-   * @var \Drupal\epub_reader_framework\Entity\ReaderEntityChapterHeadingsSave
++   * @var ReaderEntityChapterHeadingsSave
+    */
+   protected $readerEntityChapterHeadingsSave;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\epub_reader_framework\Entity\ReaderEntityCrossReference $reader_entity_cross_reference
++   * @param ReaderEntityCrossReference $reader_entity_cross_reference
+    *   The reader entity cross reference service.
+-   * @param \Drupal\epub_reader_framework\Entity\ReaderEntityChapterHeadingsSave $reader_entity_chapter_headings_save
++   * @param ReaderEntityChapterHeadingsSave $reader_entity_chapter_headings_save
+    *   The reader entity chapter headings save service.
+    */
+   public function __construct(
+@@ -60,12 +64,12 @@ class ReaderEntityPostsave {
+   /**
+    * Callback implementation of insert and update entity hooks.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being inserted or updated.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function entityPostsave(EntityInterface $entity) {
+ 
+@@ -97,7 +101,7 @@ class ReaderEntityPostsave {
+   /**
+    * Maybe trigger the batch.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being inserted or updated.
+    */
+   protected function batchTrigger(EntityInterface $entity) {
+@@ -129,17 +133,17 @@ class ReaderEntityPostsave {
+   /**
+    * Maybe add a chapter cross-reference.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being inserted or updated.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   protected function chapterCrossReference(EntityInterface $entity) {
+     /** @var \Drupal\node\NodeInterface $entity */
+-    /** @var \Drupal\node\NodeInterface $reader_publication */
++    /** @var NodeInterface $reader_publication */
+     $reader_publication = $entity->field_reader_publication->entity;
+ 
+-    /** @var \Drupal\epub_reader_framework\Entity\ReaderEntityCrossReference $reader_entity_cross_reference */
++    /** @var ReaderEntityCrossReference $reader_entity_cross_reference */
+     $reader_entity_cross_reference = $this->readerEntityCrossReference;
+     $reader_entity_cross_reference->ensureChapterIsCrossReferencedInPublication(
+       $reader_publication,
+@@ -150,19 +154,19 @@ class ReaderEntityPostsave {
+   /**
+    * Save chapter headings.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being inserted or updated.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   protected function chapterHeadingsSave(EntityInterface $entity) {
+     /** @var \Drupal\node\NodeInterface $entity */
+-    /** @var \Drupal\node\NodeInterface $reader_publication */
++    /** @var NodeInterface $reader_publication */
+     $reader_publication = $entity->field_reader_publication->entity;
+ 
+-    /** @var \Drupal\epub_reader_framework\Entity\ReaderEntityChapterHeadingsSave $reader_entity_chapter_headings_save */
++    /** @var ReaderEntityChapterHeadingsSave $reader_entity_chapter_headings_save */
+     $reader_entity_chapter_headings_save = $this->readerEntityChapterHeadingsSave;
+     $reader_entity_chapter_headings_save->saveHeadings(
+       $reader_publication,
+@@ -173,12 +177,12 @@ class ReaderEntityPostsave {
+   /**
+    * Redirect to the publication.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being inserted or updated.
+    */
+   protected function redirectToPublication(EntityInterface $entity) {
+     /** @var \Drupal\node\NodeInterface $entity */
+-    /** @var \Drupal\node\NodeInterface $reader_publication */
++    /** @var NodeInterface $reader_publication */
+     $reader_publication_id = $entity->field_reader_publication->target_id;
+ 
+     // Redirect to adding a publication.
+diff --git a/src/Entity/ReaderEntityPresave.php b/src/Entity/ReaderEntityPresave.php
+index 87f0252..eff55f7 100644
+--- a/src/Entity/ReaderEntityPresave.php
++++ b/src/Entity/ReaderEntityPresave.php
+@@ -12,7 +12,7 @@ class ReaderEntityPresave {
+   /**
+    * Callback implementation of hook_entity_presave() for reader publication.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being saved.
+    */
+   public function entityPresave(EntityInterface $entity) {
+@@ -26,7 +26,7 @@ class ReaderEntityPresave {
+   /**
+    * Check if we need to trigger a reimport of the publication EPUB.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being saved.
+    */
+   protected function batchTriggerCheck(EntityInterface $entity) {
+diff --git a/src/Epub/ReaderEpubCompletedCleanup.php b/src/Epub/ReaderEpubCompletedCleanup.php
+index 1ce4d13..4fd7347 100644
+--- a/src/Epub/ReaderEpubCompletedCleanup.php
++++ b/src/Epub/ReaderEpubCompletedCleanup.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\epub_reader_framework\Epub;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\node\NodeInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -14,14 +17,14 @@ class ReaderEpubCompletedCleanup {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -40,14 +43,14 @@ class ReaderEpubCompletedCleanup {
+   /**
+    * Clean up automated chapters that no longer exist.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication node.
+    * @param array $chapter_ids
+    *   An array of chapter IDs from the EPUB spine.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function cleanupChapters(
+     NodeInterface $reader_publication,
+diff --git a/src/Epub/ReaderEpubXhtmlConverter.php b/src/Epub/ReaderEpubXhtmlConverter.php
+index 55182c3..1b792af 100644
+--- a/src/Epub/ReaderEpubXhtmlConverter.php
++++ b/src/Epub/ReaderEpubXhtmlConverter.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\epub_reader_framework\Epub;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\node\Entity\Node;
+ use Drupal\node\NodeInterface;
+ use Drupal\epub_reader_framework\Event\ReaderEpubXhmlConverterEvent;
+@@ -18,23 +21,23 @@ class ReaderEpubXhtmlConverter {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher definition.
+    *
+-   * @var \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher
++   * @var ContainerAwareEventDispatcher
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher $eventDispatcher
++   * @param ContainerAwareEventDispatcher $eventDispatcher
+    *   The event dispatcher.
+    */
+   public function __construct(
+@@ -58,19 +61,19 @@ class ReaderEpubXhtmlConverter {
+   /**
+    * Convert the XML into chapters.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication node.
+    * @param string $chapter_xhtml_uri
+    *   The path to the xhtml file.
+    * @param string $chapter_id
+    *   The chapter ID from the EPUB spine.
+    *
+-   * @return bool|\Drupal\node\NodeInterface
++   * @return bool|NodeInterface
+    *   The chapter node.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function convertXhtmlToChapter(
+     NodeInterface $reader_publication,
+@@ -112,7 +115,7 @@ class ReaderEpubXhtmlConverter {
+         // Get the event_dispatcher service and dispatch the event.
+         $event_name = ReaderEpubXhmlConverterEvent::EVENT_NAME;
+         $event_dispatcher = $this->eventDispatcher;
+-        $event_dispatcher->dispatch($event_name, $event);
++        $event_dispatcher->dispatch($event, $event_name);
+       }
+     }
+ 
+@@ -122,16 +125,16 @@ class ReaderEpubXhtmlConverter {
+   /**
+    * Create a new node.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The publication.
+    * @param string $chapter_id
+    *   The chapter ID from the EPUB.
+    *
+-   * @return \Drupal\node\NodeInterface|bool
++   * @return NodeInterface|bool
+    *   The existing node or false.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getExistingNodeByPublicationAndChapterId(
+     NodeInterface $reader_publication,
+@@ -146,7 +149,7 @@ class ReaderEpubXhtmlConverter {
+     if ($existing_chapter_ids) {
+       $existing_chapter_id = reset($existing_chapter_ids);
+ 
+-      /** @var \Drupal\node\NodeInterface $node */
++      /** @var NodeInterface $node */
+       $node = $this->entityTypeManager->getStorage('node')
+         ->load($existing_chapter_id);
+       return $node;
+@@ -157,24 +160,24 @@ class ReaderEpubXhtmlConverter {
+   /**
+    * Create a new node.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The publication.
+    * @param string $chapter_id
+    *   The chapter ID from the EPUB.
+    * @param string $title
+    *   The title of the chapter.
+    *
+-   * @return \Drupal\node\NodeInterface
++   * @return NodeInterface
+    *   The new node.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   protected function createNewNode(
+     NodeInterface $reader_publication,
+     $chapter_id,
+     $title
+   ) {
+-    /** @var \Drupal\node\NodeInterface $node */
++    /** @var NodeInterface $node */
+     $node = Node::create([
+       'type' => 'reader_chapter',
+       'title' => $title,
+diff --git a/src/Epub/ReaderEpubZipExtractor.php b/src/Epub/ReaderEpubZipExtractor.php
+index 7990ed5..e060c1b 100644
+--- a/src/Epub/ReaderEpubZipExtractor.php
++++ b/src/Epub/ReaderEpubZipExtractor.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\epub_reader_framework\Epub;
+ 
++use Drupal\Core\Archiver\ArchiverException;
++use Drupal\media\MediaInterface;
+ use Drupal\Core\Archiver\Zip;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\epub_reader_framework\EpubReaderFrameworkHelpers;
+@@ -19,7 +21,7 @@ class ReaderEpubZipExtractor {
+   /**
+    * The file system service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+@@ -33,25 +35,25 @@ class ReaderEpubZipExtractor {
+   /**
+    * The stream wrapper.
+    *
+-   * @var Drupal\Core\StreamWrapper\StreamWrapperManager
++   * @var StreamWrapperManager
+    */
+   protected $streamWrapper;
+ 
+   /**
+    * The serializer.
+    *
+-   * @var Symfony\Component\Serializer\SerializerInterface
++   * @var SerializerInterface
+    */
+   protected $serializer;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   The file handler.
+-   * @param \Drupal\Core\StreamWrapper\StreamWrapperManager $stream_wrapper
++   * @param StreamWrapperManager $stream_wrapper
+    *   The stream wrapper.
+-   * @param \Symfony\Component\Serializer\SerializerInterface $serializer
++   * @param SerializerInterface $serializer
+    *   The serializer.
+    */
+   public function __construct(
+@@ -78,16 +80,16 @@ class ReaderEpubZipExtractor {
+   /**
+    * Callback implementation of hook_form_FORM_ID_alter().
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication node.
+    *
+-   * @throws \Drupal\Core\Archiver\ArchiverException
++   * @throws ArchiverException
+    */
+   public function extractEpubFiles(NodeInterface $reader_publication) {
+     if ($reader_publication->hasField('field_reader_file') && $media_file = $reader_publication->field_reader_file->entity) {
+-      /** @var \Drupal\media\MediaInterface $media_file */
++      /** @var MediaInterface $media_file */
+       if ($media_file->hasField('field_media_file') && $file = $media_file->field_media_file->entity) {
+-        /** @var \Drupal\file\FileInterface $file */
++        /** @var FileInterface $file */
+         $real_path = $this->fileSystem->realpath($file->getFileUri());
+         $zip = new Zip($real_path);
+ 
+@@ -111,9 +113,9 @@ class ReaderEpubZipExtractor {
+   /**
+    * Get extracted files.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication node.
+-   * @param bool|\Drupal\file\FileInterface $file
++   * @param bool|FileInterface $file
+    *   The epub file or false.
+    *
+    * @return array|bool
+@@ -129,10 +131,10 @@ class ReaderEpubZipExtractor {
+ 
+     if (!$file) {
+       if ($reader_publication->hasField('field_reader_file') && $media_file = $reader_publication->field_reader_file->entity) {
+-        /** @var \Drupal\media\MediaInterface $media_file */
++        /** @var MediaInterface $media_file */
+         if ($media_file->hasField('field_media_file')) {
+ 
+-          /** @var \Drupal\file\FileInterface $file */
++          /** @var FileInterface $file */
+           $file = $media_file->field_media_file->entity;
+         }
+       }
+@@ -155,9 +157,9 @@ class ReaderEpubZipExtractor {
+   /**
+    * Get extracted files by type.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The publication reader.
+-   * @param bool|\Drupal\file\FileInterface $file
++   * @param bool|FileInterface $file
+    *   The epub file or false.
+    * @param array $types
+    *   An array of extensions.
+@@ -186,9 +188,9 @@ class ReaderEpubZipExtractor {
+   /**
+    * Get extracted files by type.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The publication reader.
+-   * @param bool|\Drupal\file\FileInterface $file
++   * @param bool|FileInterface $file
+    *   The epub file or false.
+    *
+    * @return array
+@@ -207,7 +209,7 @@ class ReaderEpubZipExtractor {
+       $opf = reset($files);
+       $data = file_get_contents($opf->uri);
+ 
+-      /** @var \Symfony\Component\Serializer\SerializerInterface $xml_encoder */
++      /** @var SerializerInterface $xml_encoder */
+       $xml_encoder = $this->serializer;
+       $opf_data = $xml_encoder->decode($data, 'xml');
+       if ($opf_data && isset($opf_data['spine']['itemref'])) {
+@@ -250,7 +252,7 @@ class ReaderEpubZipExtractor {
+   /**
+    * Get the file details by filename.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The publication reader.
+    * @param string $filename
+    *   The filename.
+diff --git a/src/EpubReaderFrameworkHelpers.php b/src/EpubReaderFrameworkHelpers.php
+index e15b9f2..e3aa43f 100644
+--- a/src/EpubReaderFrameworkHelpers.php
++++ b/src/EpubReaderFrameworkHelpers.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\epub_reader_framework;
+ 
++use Drupal\media\MediaInterface;
++use Drupal\Core\StreamWrapper\StreamWrapperManager;
+ use Drupal\file\FileInterface;
+ use Drupal\node\NodeInterface;
+ 
+@@ -13,17 +15,17 @@ class EpubReaderFrameworkHelpers {
+   /**
+    * Get the EPUB file for a publication.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication.
+    *
+-   * @return bool|\Drupal\file\FileInterface
++   * @return bool|FileInterface
+    *   The EPUB file or false.
+    */
+   public static function getEpubFile(NodeInterface $reader_publication) {
+     if ($reader_publication->hasField('field_reader_file') && $media_file = $reader_publication->field_reader_file->entity) {
+-      /** @var \Drupal\media\MediaInterface $media_file */
++      /** @var MediaInterface $media_file */
+       if ($media_file->hasField('field_media_file') && $file = $media_file->field_media_file->entity) {
+-        /** @var \Drupal\file\FileInterface $file */
++        /** @var FileInterface $file */
+         return $file;
+       }
+     }
+@@ -33,9 +35,9 @@ class EpubReaderFrameworkHelpers {
+   /**
+    * Get the EPUB file path for a publication.
+    *
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The reader publication.
+-   * @param bool|\Drupal\file\FileInterface $file
++   * @param bool|FileInterface $file
+    *   The EPUB file or FALSE to attempt to automatically determine it.
+    *
+    * @return bool|string
+@@ -48,7 +50,7 @@ class EpubReaderFrameworkHelpers {
+     if ($file && $file instanceof FileInterface) {
+ 
+       // Determine storage location.
+-      /** @var \Drupal\Core\StreamWrapper\StreamWrapperManager $stream_wrapper_manager */
++      /** @var StreamWrapperManager $stream_wrapper_manager */
+       $stream_wrapper_manager = \Drupal::service('stream_wrapper_manager');
+       $stream_wrappers = $stream_wrapper_manager->getWrappers();
+       if (isset($stream_wrappers['private']) && $stream_wrappers['private']) {
+diff --git a/src/Event/ReaderEpubXhmlConverterEvent.php b/src/Event/ReaderEpubXhmlConverterEvent.php
+index 5047c3c..07856cb 100644
+--- a/src/Event/ReaderEpubXhmlConverterEvent.php
++++ b/src/Event/ReaderEpubXhmlConverterEvent.php
+@@ -2,9 +2,9 @@
+ 
+ namespace Drupal\epub_reader_framework\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\node\NodeInterface;
+ use Wa72\HtmlPageDom\HtmlPageCrawler;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Event that is fired when the batch is processing a particular chapter.
+@@ -16,32 +16,32 @@ class ReaderEpubXhmlConverterEvent extends Event {
+   /**
+    * The symfony domcrawler.
+    *
+-   * @var \Wa72\HtmlPageDom\HtmlPageCrawler
++   * @var HtmlPageCrawler
+    */
+   public $crawler;
+ 
+   /**
+    * The reader publication.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   public $readerPublication;
+ 
+   /**
+    * The reader chapter.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   public $readerChapter;
+ 
+   /**
+    * Constructs the object.
+    *
+-   * @param \Wa72\HtmlPageDom\HtmlPageCrawler $crawler
++   * @param HtmlPageCrawler $crawler
+    *   The symfony domcrawler.
+-   * @param \Drupal\node\NodeInterface $reader_publication
++   * @param NodeInterface $reader_publication
+    *   The publication.
+-   * @param \Drupal\node\NodeInterface $reader_chapter
++   * @param NodeInterface $reader_chapter
+    *   The chapter.
+    */
+   public function __construct(HtmlPageCrawler $crawler, NodeInterface $reader_publication, NodeInterface $reader_chapter) {
+diff --git a/src/Event/ReaderNodeAjaxControllerResponseEvent.php b/src/Event/ReaderNodeAjaxControllerResponseEvent.php
+index 7efdc89..baaf248 100644
+--- a/src/Event/ReaderNodeAjaxControllerResponseEvent.php
++++ b/src/Event/ReaderNodeAjaxControllerResponseEvent.php
+@@ -2,9 +2,9 @@
+ 
+ namespace Drupal\epub_reader_framework\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\Core\Ajax\AjaxResponse;
+ use Drupal\node\NodeInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Event that is fired before the ajax response is returned.
+@@ -16,23 +16,23 @@ class ReaderNodeAjaxControllerResponseEvent extends Event {
+   /**
+    * The reader publication or chapter.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   public $node;
+ 
+   /**
+    * The ajax response.
+    *
+-   * @var \Drupal\Core\Ajax\AjaxResponse
++   * @var AjaxResponse
+    */
+   public $response;
+ 
+   /**
+    * Constructs the object.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The publication or chapter.
+-   * @param \Drupal\Core\Ajax\AjaxResponse $response
++   * @param AjaxResponse $response
+    *   The ajax response.
+    */
+   public function __construct(NodeInterface $node, AjaxResponse $response) {
+diff --git a/src/Form/ReaderChapterFormAlter.php b/src/Form/ReaderChapterFormAlter.php
+index 3cac579..5c5b945 100644
+--- a/src/Form/ReaderChapterFormAlter.php
++++ b/src/Form/ReaderChapterFormAlter.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\epub_reader_framework\Form;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Messenger\MessengerInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+@@ -20,23 +22,23 @@ class ReaderChapterFormAlter {
+   /**
+    * The Messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(
+@@ -62,13 +64,13 @@ class ReaderChapterFormAlter {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    * @param string $form_id
+    *   The form ID.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function formAlter(array &$form, FormStateInterface $form_state, $form_id) {
+     if (isset($form['field_reader_components'])) {
+diff --git a/src/Form/ReaderPublicationFormAlter.php b/src/Form/ReaderPublicationFormAlter.php
+index a280e11..23f3e72 100644
+--- a/src/Form/ReaderPublicationFormAlter.php
++++ b/src/Form/ReaderPublicationFormAlter.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\epub_reader_framework\Form;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Entity\EntityFormInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -24,41 +27,41 @@ class ReaderPublicationFormAlter {
+   /**
+    * The access manager service.
+    *
+-   * @var \Drupal\Core\Routing\CurrentRouteMatch
++   * @var CurrentRouteMatch
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The node access service.
+    *
+-   * @var \Drupal\node\Access\NodeAddAccessCheck
++   * @var NodeAddAccessCheck
+    */
+   protected $nodeAddAccessCheck;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a new ReaderPublicationFormAlter object.
+    *
+-   * @param \Drupal\Core\Routing\CurrentRouteMatch $route_match
++   * @param CurrentRouteMatch $route_match
+    *   The route match service.
+-   * @param \Drupal\node\Access\NodeAddAccessCheck $node_access
++   * @param NodeAddAccessCheck $node_access
+    *   The node access check.
+-   * @param \Drupal\Core\Session\AccountProxyInterface $current_user
++   * @param AccountProxyInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(
+@@ -90,13 +93,13 @@ class ReaderPublicationFormAlter {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    * @param string $form_id
+    *   The form ID.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function formAlter(array &$form, FormStateInterface $form_state, $form_id) {
+ 
+@@ -120,7 +123,7 @@ class ReaderPublicationFormAlter {
+             unset($form['field_reader_chapters']['widget'][$key]);
+           }
+           elseif ($item['target_id']['#default_value'] instanceof NodeInterface) {
+-            /** @var \Drupal\node\NodeInterface $target_node */
++            /** @var NodeInterface $target_node */
+             $target_node = $item['target_id']['#default_value'];
+             $item['target_id']['#access'] = FALSE;
+ 
+@@ -135,9 +138,9 @@ class ReaderPublicationFormAlter {
+       }
+ 
+       // Add an "Add new chapter" button.
+-      /** @var \Drupal\Core\Session\AccountProxyInterface $user */
++      /** @var AccountProxyInterface $user */
+       $user = $this->currentUser;
+-      /** @var \Drupal\node\Access\NodeAddAccessCheck $access_check */
++      /** @var NodeAddAccessCheck $access_check */
+       $access_check = $this->nodeAddAccessCheck;
+       $reader_chapter_type = $this->entityTypeManager
+         ->getStorage('node_type')
+@@ -147,7 +150,7 @@ class ReaderPublicationFormAlter {
+         if ($url->access($user)) {
+ 
+           // If we have a node ID (ie, editing existing), append the ID.
+-          /** @var \Drupal\Core\Entity\EntityForm $form_object */
++          /** @var EntityForm $form_object */
+           $form_object = $form_state->getFormObject();
+           if ($form_object instanceof EntityFormInterface && $entity = $form_object->getEntity()) {
+             if (!$entity->isNew()) {
+diff --git a/src/Plugin/Block/ReaderNavigationBlock.php b/src/Plugin/Block/ReaderNavigationBlock.php
+index e8a195f..cc5e9e9 100644
+--- a/src/Plugin/Block/ReaderNavigationBlock.php
++++ b/src/Plugin/Block/ReaderNavigationBlock.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\epub_reader_framework\Plugin\Block;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Block\BlockBase;
+ use Drupal\Core\Link;
+@@ -32,7 +34,7 @@ class ReaderNavigationBlock extends BlockBase {
+         $reader_publication = $node;
+       }
+       elseif ($node->bundle() == 'reader_chapter') {
+-        /** @var \Drupal\node\NodeInterface $reader_publication */
++        /** @var NodeInterface $reader_publication */
+         $reader_publication = $node->field_reader_publication->entity;
+       }
+ 
+@@ -48,11 +50,11 @@ class ReaderNavigationBlock extends BlockBase {
+   }
+ 
+   /**
+-   * @param \Drupal\node\NodeInterface $publication
++   * @param NodeInterface $publication
+    *
+    * @return array
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function buildChaptersList(NodeInterface $publication) {
+ 
+@@ -85,7 +87,7 @@ class ReaderNavigationBlock extends BlockBase {
+   /**
+    * Build the chapter menu item.
+    *
+-   * @param \Drupal\node\NodeInterface $chapter
++   * @param NodeInterface $chapter
+    *   The reader chapter.
+    * @param array $chapter_children
+    *   The chapter children render array.
+@@ -162,8 +164,8 @@ class ReaderNavigationBlock extends BlockBase {
+    * @return array
+    *   An array to store children keyed by chapter ID.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function loadChapterChildren(NodeInterface $publication) {
+     $chapter_children = [];
+diff --git a/src/Plugin/Block/ReaderPreviousNextBlock.php b/src/Plugin/Block/ReaderPreviousNextBlock.php
+index fafdaf0..76db0ec 100644
+--- a/src/Plugin/Block/ReaderPreviousNextBlock.php
++++ b/src/Plugin/Block/ReaderPreviousNextBlock.php
+@@ -34,7 +34,7 @@ class ReaderPreviousNextBlock extends BlockBase {
+       elseif ($node->bundle() == 'reader_chapter') {
+         $current_id = $node->id();
+ 
+-        /** @var \Drupal\node\NodeInterface $reader_publication */
++        /** @var NodeInterface $reader_publication */
+         $reader_publication = $node->field_reader_publication->entity;
+       }
+ 
+diff --git a/tests/src/Functional/ReaderChapterNavigationTest.php b/tests/src/Functional/ReaderChapterNavigationTest.php
+index 7b7edf5..3b65740 100644
+--- a/tests/src/Functional/ReaderChapterNavigationTest.php
++++ b/tests/src/Functional/ReaderChapterNavigationTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\epub_reader_framework\Functional;
+ 
++use Behat\Mink\Exception\ResponseTextException;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -39,7 +40,7 @@ class ReaderChapterNavigationTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $admin_user = $this->drupalCreateUser([], NULL, TRUE);
+     $this->drupalLogin($admin_user);
+@@ -48,13 +49,13 @@ class ReaderChapterNavigationTest extends BrowserTestBase {
+   /**
+    * Tests the add widget button with modal form.
+    *
+-   * @throws \Behat\Mink\Exception\ResponseTextException
++   * @throws ResponseTextException
+    */
+   public function testChapterNavigation() {
+ 
+     // Create the reader publication.
+     $this->drupalGet('node/add/reader_publication');
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => 'Test EPUB',
+     ], t('Save'));
+ 
+@@ -66,7 +67,7 @@ class ReaderChapterNavigationTest extends BrowserTestBase {
+     $this->assertSession()->pageTextContains('Create Reader chapter');
+ 
+     // Create a chapter.
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => 'Chapter One',
+     ], t('Save'));
+ 
+@@ -74,7 +75,7 @@ class ReaderChapterNavigationTest extends BrowserTestBase {
+     $this->clickLink(t('Add Chapter'));
+ 
+     // Create a chapter.
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => 'Chapter Two',
+     ], t('Save'));
+ 
+diff --git a/tests/src/Functional/ReaderPreviousNextTest.php b/tests/src/Functional/ReaderPreviousNextTest.php
+index 6ee9803..3a5f994 100644
+--- a/tests/src/Functional/ReaderPreviousNextTest.php
++++ b/tests/src/Functional/ReaderPreviousNextTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\epub_reader_framework\Functional;
+ 
++use Behat\Mink\Exception\ResponseTextException;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -39,7 +40,7 @@ class ReaderPreviousNextTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $admin_user = $this->drupalCreateUser([], NULL, TRUE);
+     $this->drupalLogin($admin_user);
+@@ -48,13 +49,13 @@ class ReaderPreviousNextTest extends BrowserTestBase {
+   /**
+    * Tests the add widget button with modal form.
+    *
+-   * @throws \Behat\Mink\Exception\ResponseTextException
++   * @throws ResponseTextException
+    */
+   public function testChapterNavigation() {
+ 
+     // Create the reader publication.
+     $this->drupalGet('node/add/reader_publication');
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => 'Test EPUB',
+     ], t('Save'));
+ 
+@@ -66,7 +67,7 @@ class ReaderPreviousNextTest extends BrowserTestBase {
+     $this->assertSession()->pageTextContains('Create Reader chapter');
+ 
+     // Create a chapter.
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => 'Chapter One',
+     ], t('Save'));
+ 
+@@ -74,7 +75,7 @@ class ReaderPreviousNextTest extends BrowserTestBase {
+     $this->clickLink(t('Add Chapter'));
+ 
+     // Create a chapter.
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => 'Chapter Two',
+     ], t('Save'));
+ 
+diff --git a/tests/src/Functional/ReaderSubchapterHeadingsTest.php b/tests/src/Functional/ReaderSubchapterHeadingsTest.php
+index f0091da..210e0ac 100644
+--- a/tests/src/Functional/ReaderSubchapterHeadingsTest.php
++++ b/tests/src/Functional/ReaderSubchapterHeadingsTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\epub_reader_framework\Functional;
+ 
++use Behat\Mink\Exception\ResponseTextException;
+ use Drupal\node\Entity\NodeType;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -40,7 +41,7 @@ class ReaderSubchapterHeadingsTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $admin_user = $this->drupalCreateUser([], NULL, TRUE);
+     $this->drupalLogin($admin_user);
+@@ -49,7 +50,7 @@ class ReaderSubchapterHeadingsTest extends BrowserTestBase {
+   /**
+    * Tests the add widget button with modal form.
+    *
+-   * @throws \Behat\Mink\Exception\ResponseTextException
++   * @throws ResponseTextException
+    */
+   public function testChapterSubheadings() {
+ 
+@@ -59,7 +60,7 @@ class ReaderSubchapterHeadingsTest extends BrowserTestBase {
+ 
+     // Create the reader publication.
+     $this->drupalGet('node/add/reader_publication');
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => 'Test EPUB',
+     ], t('Save'));
+ 
+@@ -68,7 +69,7 @@ class ReaderSubchapterHeadingsTest extends BrowserTestBase {
+     $this->clickLink(t('Add Chapter'));
+ 
+     // Create a chapter.
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => 'Chapter One',
+       'body[0][value]' => '
+         <h2>Chapter One Subheading One</h2>
+diff --git a/tests/src/FunctionalJavascript/ReaderUploadEpubTest.php b/tests/src/FunctionalJavascript/ReaderUploadEpubTest.php
+index 8da5d64..da36d12 100644
+--- a/tests/src/FunctionalJavascript/ReaderUploadEpubTest.php
++++ b/tests/src/FunctionalJavascript/ReaderUploadEpubTest.php
+@@ -45,7 +45,7 @@ class ReaderUploadEpubTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $admin_user = $this->drupalCreateUser([], NULL, TRUE);
+     $this->drupalLogin($admin_user);
+@@ -60,14 +60,14 @@ class ReaderUploadEpubTest extends BrowserTestBase {
+     $this->drupalGet('media/add/epub');
+ 
+     // Add an EPUB file.
+-    $filepath = drupal_get_path('module', 'epub_reader_framework');
++    $filepath = \Drupal::service('extension.list.module')->getPath('epub_reader_framework');
+     $filepath .= '/tests/fixtures/epubs/trees.epub';
+     $this->getSession()->getPage()->attachFileToField('files[field_media_file_0]', $filepath);
+-    $this->drupalPostForm(NULL, [], t('Save'));
++    $this->submitForm([], t('Save'));
+ 
+     // Create the reader publication.
+     $this->drupalGet('node/add/reader_publication');
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => 'Test EPUB',
+       'field_reader_file[0][target_id]' => 'trees.epub (1)',
+     ], t('Save'));

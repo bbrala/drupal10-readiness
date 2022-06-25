@@ -1,0 +1,1494 @@
+diff --git a/access_records.api.php b/access_records.api.php
+index e77714f..ae1c5df 100644
+--- a/access_records.api.php
++++ b/access_records.api.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\access_records\AccessRecordInterface;
+ /**
+  * @file
+  * Hooks specific to the Access Records module.
+@@ -29,7 +30,7 @@ function hook_access_record_operations_alter(array &$operations) {
+  * In case the hook implementation returns an empty string, a fallback value
+  * will be generated, or another module might generate the value.
+  *
+- * @param \Drupal\access_records\AccessRecordInterface $access_record
++ * @param AccessRecordInterface $access_record
+  *   The access record.
+  * @param string $string
+  *   The current value of the string representation.
+@@ -39,7 +40,7 @@ function hook_access_record_operations_alter(array &$operations) {
+  *
+  * @see \Drupal\access_records\AccessRecordInterface::getStringRepresentation()
+  */
+-function hook_access_record_get_string_representation(\Drupal\access_records\AccessRecordInterface $access_record, $string) {
++function hook_access_record_get_string_representation(AccessRecordInterface $access_record, $string) {
+   if ($access_record->isNew()) {
+     return 'NEW - ' . $access_record->get('my_custom_field')->value;
+   }
+diff --git a/access_records.module b/access_records.module
+index 35c76d0..7be56de 100755
+--- a/access_records.module
++++ b/access_records.module
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\access_records\AccessRecordInterface;
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\user\UserInterface;
++use Drupal\Core\Session\AccountSwitcherInterface;
+ /**
+  * @file
+  * The Access Records module file.
+@@ -50,7 +54,7 @@ function template_preprocess_access_record(array &$variables) {
+  */
+ function access_records_theme_suggestions_access_record(array $variables) {
+   $suggestions = [];
+-  /** @var \Drupal\access_records\AccessRecordInterface $access_record */
++  /** @var AccessRecordInterface $access_record */
+   $access_record = $variables['elements']['#access_record'];
+   $sanitized_view_mode = strtr($variables['elements']['#view_mode'], '.', '_');
+ 
+@@ -66,7 +70,7 @@ function access_records_theme_suggestions_access_record(array $variables) {
+  */
+ function access_records_inline_entity_form_entity_form_alter(array &$entity_form, FormStateInterface &$form_state) {
+   if (isset($entity_form['#entity_type']) && $entity_form['#entity_type'] === 'access_record') {
+-    /** @var \Drupal\access_records\AccessRecordInterface $access_record */
++    /** @var AccessRecordInterface $access_record */
+     $access_record = $entity_form['#entity'];
+     $form_class = $access_record->getEntityType()->getFormClass('default');
+     $entity_form['#entity_builders']['apply_label_pattern'] = [
+@@ -83,7 +87,7 @@ function access_records_entity_type_build(array &$entity_types) {
+   if (!isset($entity_types['access_record'])) {
+     return;
+   }
+-  /** @var \Drupal\Core\Entity\EntityTypeInterface $entity_type */
++  /** @var EntityTypeInterface $entity_type */
+   $entity_type = $entity_types['access_record'];
+   $module_handler = \Drupal::moduleHandler();
+ 
+@@ -138,7 +142,7 @@ function access_records_entity_access(EntityInterface $entity, $operation, Accou
+   $target_type = $target->getEntityType();
+   $cacheability = new CacheableMetadata();
+ 
+-  /** @var \Drupal\user\UserInterface $subject */
++  /** @var UserInterface $subject */
+   if (!($subject = $etm->getStorage('user')->load($account->id()))) {
+     // When the subject has no stored entity, one is created on runtime here,
+     // and then lookup whether an access record type exists for the target type.
+@@ -163,7 +167,7 @@ function access_records_entity_access(EntityInterface $entity, $operation, Accou
+     $count = 0;
+     $account_switched = FALSE;
+     if ((string) \Drupal::currentUser()->id() !== (string) $subject->id()) {
+-      /** @var \Drupal\Core\Session\AccountSwitcherInterface $account_switcher */
++      /** @var AccountSwitcherInterface $account_switcher */
+       $account_switcher = \Drupal::service('account_switcher');
+       $account_switcher->switchTo($subject);
+       $account_switched = TRUE;
+diff --git a/access_records.views.inc b/access_records.views.inc
+index 2c09a0b..9ee771c 100644
+--- a/access_records.views.inc
++++ b/access_records.views.inc
+@@ -1,10 +1,10 @@
+ <?php
+ 
++use Drupal\access_records\AccessRecordTypeInterface;
+ /**
+  * @file
+  * Provides views data for access records.
+  */
+-
+ /**
+  * Implements hook_views_data_alter().
+  */
+@@ -38,7 +38,7 @@ function access_records_views_data_alter(&$data) {
+   ];
+ 
+   $entity_types_included = [];
+-  /** @var \Drupal\access_records\AccessRecordTypeInterface $type */
++  /** @var AccessRecordTypeInterface $type */
+   foreach ($type_storage->loadMultiple() as $type) {
+     if (!$type->status()) {
+       continue;
+diff --git a/src/Access/AccessRecordRevisionAccessCheck.php b/src/Access/AccessRecordRevisionAccessCheck.php
+index e3ebcb7..ecd6d5f 100644
+--- a/src/Access/AccessRecordRevisionAccessCheck.php
++++ b/src/Access/AccessRecordRevisionAccessCheck.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\access_records\Access;
+ 
++use Drupal\Core\Entity\ContentEntityStorageInterface;
++use Drupal\Core\Entity\EntityAccessControlHandlerInterface;
++use Drupal\Core\Access\AccessResultInterface;
++use Drupal\access_records\AccessRecordTypeInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Routing\Access\AccessInterface;
+@@ -19,14 +23,14 @@ class AccessRecordRevisionAccessCheck implements AccessInterface {
+   /**
+    * The access record storage.
+    *
+-   * @var \Drupal\Core\Entity\ContentEntityStorageInterface
++   * @var ContentEntityStorageInterface
+    */
+   protected $accessRecordStorage;
+ 
+   /**
+    * The access record access control handler.
+    *
+-   * @var \Drupal\Core\Entity\EntityAccessControlHandlerInterface
++   * @var EntityAccessControlHandlerInterface
+    */
+   protected $accessRecordAccess;
+ 
+@@ -40,7 +44,7 @@ class AccessRecordRevisionAccessCheck implements AccessInterface {
+   /**
+    * Constructs a new AccessRecordRevisionAccessCheck.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -51,21 +55,21 @@ class AccessRecordRevisionAccessCheck implements AccessInterface {
+   /**
+    * Checks routing access for the access record item revision.
+    *
+-   * @param \Symfony\Component\Routing\Route $route
++   * @param Route $route
+    *   The route to check against.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The currently logged in account.
+    * @param int $access_record_revision
+    *   (Optional) The item revision ID. If not specified, but $access_record is,
+    *   access is checked for that object's revision.
+-   * @param \Drupal\access_records\AccessRecordInterface $access_record
++   * @param AccessRecordInterface $access_record
+    *   (Optional) An access record item. Used for checking access to an item's
+    *   default revision when $access_record_revision is unspecified. Ignored
+    *   when $access_record_revision is specified. If neither
+    *   $access_record_revision nor $access_record are specified, then access is
+    *   denied.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function access(Route $route, AccountInterface $account, $access_record_revision = NULL, AccessRecordInterface $access_record = NULL) {
+@@ -79,9 +83,9 @@ class AccessRecordRevisionAccessCheck implements AccessInterface {
+   /**
+    * Checks access record item revision access.
+    *
+-   * @param \Drupal\access_records\AccessRecordInterface $access_record
++   * @param AccessRecordInterface $access_record
+    *   The access record item to check.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   A user object representing the user for whom the operation is to be
+    *   performed.
+    * @param string $op
+@@ -122,7 +126,7 @@ class AccessRecordRevisionAccessCheck implements AccessInterface {
+       }
+       // If the revisions checkbox is selected for the access record config,
+       // display the revisions tab.
+-      /** @var \Drupal\access_records\AccessRecordTypeInterface $access_record_type */
++      /** @var AccessRecordTypeInterface $access_record_type */
+       $access_record_type = \Drupal::entityTypeManager()->getStorage('access_record_type')->load($type_id);
+       if ($access_record_type->shouldCreateNewRevision() && $op === 'view') {
+         $this->access[$cid] = TRUE;
+@@ -154,7 +158,7 @@ class AccessRecordRevisionAccessCheck implements AccessInterface {
+   /**
+    * Counts the number of revisions in the default language.
+    *
+-   * @param \Drupal\access_records\AccessRecordInterface $access_record
++   * @param AccessRecordInterface $access_record
+    *   The access record item for which to count the revisions.
+    *
+    * @return int
+diff --git a/src/AccessRecordAccessControlHandler.php b/src/AccessRecordAccessControlHandler.php
+index 3410179..bf0da22 100644
+--- a/src/AccessRecordAccessControlHandler.php
++++ b/src/AccessRecordAccessControlHandler.php
+@@ -23,7 +23,7 @@ class AccessRecordAccessControlHandler extends EntityAccessControlHandler {
+       return AccessResult::allowed()->cachePerPermissions();
+     }
+ 
+-    /** @var \Drupal\access_records\AccessRecordInterface $access_record */
++    /** @var AccessRecordInterface $access_record */
+     $access_record = $entity;
+     $config_id = $access_record->bundle();
+     $is_owner = ($account->id() && $account->id() === $access_record->getOwnerId());
+diff --git a/src/AccessRecordFieldBuilder.php b/src/AccessRecordFieldBuilder.php
+index 7e9f510..58b9db5 100644
+--- a/src/AccessRecordFieldBuilder.php
++++ b/src/AccessRecordFieldBuilder.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\access_records;
+ 
++use Drupal\Core\Field\BaseFieldDefinition;
++use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\field\Entity\FieldConfig;
+@@ -15,7 +17,7 @@ class AccessRecordFieldBuilder {
+   /**
+    * Adds a set of default fields to all access records of the given type.
+    *
+-   * @param \Drupal\access_records\AccessRecordTypeInterface $ar_type
++   * @param AccessRecordTypeInterface $ar_type
+    *   The type of all access records the fields should be attached to.
+    */
+   public function addDefaultFields(AccessRecordTypeInterface $ar_type): void {
+@@ -42,7 +44,7 @@ class AccessRecordFieldBuilder {
+       if ($target_type->hasKey('published')) {
+         $published_key = $target_type->getKey('published');
+         if (isset($base_fields[$published_key])) {
+-          /** @var \Drupal\Core\Field\BaseFieldDefinition $base_field */
++          /** @var BaseFieldDefinition $base_field */
+           $base_field = $base_fields[$published_key];
+           $label = $base_field->getLabel() . ' targets';
+           $this->addBooleanField($ar_type, 'target_' . $published_key, $label);
+@@ -52,7 +54,7 @@ class AccessRecordFieldBuilder {
+         // Add a field that matches subject ID to target's owner ID.
+         $owner_key = $target_type->getKey('owner');
+         if (isset($base_fields[$owner_key])) {
+-          /** @var \Drupal\Core\Field\BaseFieldDefinition $base_field */
++          /** @var BaseFieldDefinition $base_field */
+           $base_field = $base_fields[$owner_key];
+           $label = 'Targets ' . strtolower($base_field->getLabel());
+           $this->addEntityReferenceField($ar_type, $subject_type->id(), 'subject_' . $subject_type->getKey('id') . '__target_' . $owner_key, $label);
+@@ -64,12 +66,12 @@ class AccessRecordFieldBuilder {
+   /**
+    * Adds a field holding a reference to subjects (mostly users).
+    *
+-   * @param \Drupal\access_records\AccessRecordTypeInterface $ar_type
++   * @param AccessRecordTypeInterface $ar_type
+    *   The type of access records the field should be attached to.
+    * @param string|null $label
+    *   (optional) The label for the reference field.
+    *
+-   * @return \Drupal\field\Entity\FieldConfig|null
++   * @return FieldConfig|null
+    *   An entity reference field object or NULL if not available.
+    */
+   public function addSubjectReferenceField(AccessRecordTypeInterface $ar_type, ?string $label = NULL): ?FieldConfig {
+@@ -90,12 +92,12 @@ class AccessRecordFieldBuilder {
+   /**
+    * Adds a field holding a reference to targets.
+    *
+-   * @param \Drupal\access_records\AccessRecordTypeInterface $ar_type
++   * @param AccessRecordTypeInterface $ar_type
+    *   The type of access records the field should be attached to.
+    * @param string|null $label
+    *   (optional) The label for the reference field.
+    *
+-   * @return \Drupal\field\Entity\FieldConfig|null
++   * @return FieldConfig|null
+    *   An entity reference field object or NULL if not available.
+    */
+   public function addTargetReferenceField(AccessRecordTypeInterface $ar_type, ?string $label = NULL): ?FieldConfig {
+@@ -116,7 +118,7 @@ class AccessRecordFieldBuilder {
+   /**
+    * Adds an entity reference field to all records of the given type.
+    *
+-   * @param \Drupal\access_records\AccessRecordTypeInterface $ar_type
++   * @param AccessRecordTypeInterface $ar_type
+    *   The type of access records the field should be attached to.
+    * @param string $entity_type_id
+    *   (optional) The entity type ID.
+@@ -125,7 +127,7 @@ class AccessRecordFieldBuilder {
+    * @param string $label
+    *   (optional) The human-readable label for the reference field.
+    *
+-   * @return \Drupal\field\Entity\FieldConfig|null
++   * @return FieldConfig|null
+    *   An entity reference field object or NULL if not available.
+    */
+   public function addEntityReferenceField(AccessRecordTypeInterface $ar_type, string $entity_type_id, string $field_name, string $label): ?FieldConfig {
+@@ -159,7 +161,7 @@ class AccessRecordFieldBuilder {
+       ]);
+       $field->save();
+ 
+-      /** @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface $display_repository */
++      /** @var EntityDisplayRepositoryInterface $display_repository */
+       $display_repository = \Drupal::service('entity_display.repository');
+ 
+       // Assign widget settings for the default form mode.
+@@ -206,14 +208,14 @@ class AccessRecordFieldBuilder {
+   /**
+    * Adds an boolean field to all records of the given type.
+    *
+-   * @param \Drupal\access_records\AccessRecordTypeInterface $ar_type
++   * @param AccessRecordTypeInterface $ar_type
+    *   The type of access records the field should be attached to.
+    * @param string $field_name
+    *   (optional) The machine name of the field.
+    * @param string $label
+    *   (optional) The human-readable label for the field.
+    *
+-   * @return \Drupal\field\Entity\FieldConfig|null
++   * @return FieldConfig|null
+    *   A field config object or NULL if not available.
+    */
+   public function addBooleanField(AccessRecordTypeInterface $ar_type, string $field_name, string $label): ?FieldConfig {
+@@ -240,7 +242,7 @@ class AccessRecordFieldBuilder {
+       ]);
+       $field->save();
+ 
+-      /** @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface $display_repository */
++      /** @var EntityDisplayRepositoryInterface $display_repository */
+       $display_repository = \Drupal::service('entity_display.repository');
+ 
+       // Assign widget settings for the default form mode.
+diff --git a/src/AccessRecordInterface.php b/src/AccessRecordInterface.php
+index 5b93ec3..a08aa8d 100755
+--- a/src/AccessRecordInterface.php
++++ b/src/AccessRecordInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\access_records;
+ 
++use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\user\EntityOwnerInterface;
+ use Drupal\Core\Entity\EntityChangedInterface;
+@@ -73,7 +74,7 @@ interface AccessRecordInterface extends ContentEntityInterface, EntityOwnerInter
+   /**
+    * Get the according access record type (i.e. the bundle as object).
+    *
+-   * @return \Drupal\access_records\AccessRecordTypeInterface
++   * @return AccessRecordTypeInterface
+    *   The access record type as object.
+    */
+   public function getType(): AccessRecordTypeInterface;
+@@ -81,7 +82,7 @@ interface AccessRecordInterface extends ContentEntityInterface, EntityOwnerInter
+   /**
+    * Get all attached fields that refer to the subject.
+    *
+-   * @return \Drupal\Core\Field\FieldItemListInterface[]
++   * @return FieldItemListInterface[]
+    *   An array of field item lists,
+    *   keyed by field name as found within the subject.
+    */
+@@ -90,7 +91,7 @@ interface AccessRecordInterface extends ContentEntityInterface, EntityOwnerInter
+   /**
+    * Get all attached fields that refer to the target.
+    *
+-   * @return \Drupal\Core\Field\FieldItemListInterface[]
++   * @return FieldItemListInterface[]
+    *   An array of field item lists,
+    *   keyed by field name as found within the target.
+    */
+@@ -99,7 +100,7 @@ interface AccessRecordInterface extends ContentEntityInterface, EntityOwnerInter
+   /**
+    * Get the user who last changed this access record.
+    *
+-   * @return \Drupal\user\UserInterface|null
++   * @return UserInterface|null
+    *   The user who last changed this record, or NULL if not available.
+    */
+   public function getChangedBy(): ?UserInterface;
+diff --git a/src/AccessRecordListBuilder.php b/src/AccessRecordListBuilder.php
+index 721d391..7c1577e 100755
+--- a/src/AccessRecordListBuilder.php
++++ b/src/AccessRecordListBuilder.php
+@@ -18,27 +18,27 @@ class AccessRecordListBuilder extends EntityListBuilder {
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The redirect destination service.
+    *
+-   * @var \Drupal\Core\Routing\RedirectDestinationInterface
++   * @var RedirectDestinationInterface
+    */
+   protected $redirectDestination;
+ 
+   /**
+    * Constructs a new AccessRecordListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Routing\RedirectDestinationInterface $redirect_destination
++   * @param RedirectDestinationInterface $redirect_destination
+    *   The redirect destination service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, DateFormatterInterface $date_formatter, RedirectDestinationInterface $redirect_destination) {
+@@ -96,7 +96,7 @@ class AccessRecordListBuilder extends EntityListBuilder {
+     $label = $entity->label();
+     $rel = $entity->hasLinkTemplate('canonical') ? 'canonical' : 'edit-form';
+     $op = $rel === 'canonical' ? 'view' : 'update';
+-    /** @var \Drupal\access_records\AccessRecordInterface $entity */
++    /** @var AccessRecordInterface $entity */
+     $row['ar_id'] = $entity->access($op) ? $entity->toLink($entity->id(), $rel) : $entity->id();
+     $row['ar_label'] = $label !== '' && $entity->access($op) ? $entity->toLink($label, $rel) : $label;
+     $row['ar_uid']['data'] = [
+diff --git a/src/AccessRecordPermissions.php b/src/AccessRecordPermissions.php
+index 7177efc..2b5c8d0 100644
+--- a/src/AccessRecordPermissions.php
++++ b/src/AccessRecordPermissions.php
+@@ -17,14 +17,14 @@ class AccessRecordPermissions implements ContainerInjectionInterface {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * AccessRecordPermissions constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -60,7 +60,7 @@ class AccessRecordPermissions implements ContainerInjectionInterface {
+   /**
+    * Returns a list of permissions for a given access record config.
+    *
+-   * @param \Drupal\access_records\AccessRecordTypeInterface $type
++   * @param AccessRecordTypeInterface $type
+    *   The access record type.
+    *
+    * @return array
+diff --git a/src/AccessRecordQueryBuilder.php b/src/AccessRecordQueryBuilder.php
+index 4425df9..19d4b87 100644
+--- a/src/AccessRecordQueryBuilder.php
++++ b/src/AccessRecordQueryBuilder.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\access_records;
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\Core\Field\FieldStorageDefinitionInterface;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Core\Entity\Sql\DefaultTableMapping;
++use Drupal\Core\Entity\Query\ConditionInterface;
+ use Drupal\Core\Database\Query\SelectInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -16,23 +21,23 @@ class AccessRecordQueryBuilder {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected EntityFieldManagerInterface $entityFieldManager;
+ 
+   /**
+    * The AccessRecordQueryBuilder constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $etm
++   * @param EntityTypeManagerInterface $etm
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $efm
++   * @param EntityFieldManagerInterface $efm
+    *   The entity field manager.
+    */
+   public function __construct(EntityTypeManagerInterface $etm, EntityFieldManagerInterface $efm) {
+@@ -65,7 +70,7 @@ class AccessRecordQueryBuilder {
+    * take care on your own that the according user is only seeing what is
+    * allowed to be seen.
+    *
+-   * @param \Drupal\access_records\AccessRecordTypeInterface $ar_type
++   * @param AccessRecordTypeInterface $ar_type
+    *   The access record type.
+    * @param int|null $subject_id
+    *   (optional) The entity ID of the subject, so that the query is
+@@ -83,7 +88,7 @@ class AccessRecordQueryBuilder {
+    *     be performed. Default is TRUE. When set to FALSE, no 'target_id' is
+    *     available in the list of SELECTed fields.
+    *
+-   * @return \Drupal\Core\Database\Query\SelectInterface|null
++   * @return SelectInterface|null
+    *   The select query as object, or NULL when the type configuration is
+    *   incomplete or invalid.
+    */
+@@ -103,7 +108,7 @@ class AccessRecordQueryBuilder {
+     $all_fields = ['ar' => [], 'subject' => [], 'target' => []];
+ 
+     $ar_entity_type_id = $ar_type->getEntityType()->getBundleOf();
+-    /** @var \Drupal\Core\Entity\EntityTypeInterface[] $types */
++    /** @var EntityTypeInterface[] $types */
+     $types = [
+       'ar' => $this->entityTypeManager->getDefinition($ar_entity_type_id),
+       'subject' => $ar_type->getSubjectType(),
+@@ -115,7 +120,7 @@ class AccessRecordQueryBuilder {
+       'join_targets' => TRUE,
+     ];
+ 
+-    /** @var \Drupal\Core\Field\FieldStorageDefinitionInterface[][] $field_storage_definitions */
++    /** @var FieldStorageDefinitionInterface[][] $field_storage_definitions */
+     $field_storage_definitions = [
+       'subject' => $this->entityFieldManager->getFieldStorageDefinitions($types['subject']->id()),
+       'target' => $this->entityFieldManager->getFieldStorageDefinitions($types['target']->id()),
+@@ -125,18 +130,18 @@ class AccessRecordQueryBuilder {
+       $field_storage_definitions['ar'][$field_name] = $ar_field_defintion->getFieldStorageDefinition();
+     }
+ 
+-    /** @var \Drupal\Core\Entity\EntityStorageInterface[] $storages */
++    /** @var EntityStorageInterface[] $storages */
+     $storages = [];
+-    /** @var \Drupal\Core\Entity\Query\Sql\Query[] $queries */
++    /** @var Query[] $queries */
+     $queries = [];
+     // Get all table mapping instances, as we need to check whether a field
+     // is stored in a shared table amongst other fields. If so, we won't use
+     // the column definitions of the field as it would otherwise break, because
+     // entity queries automatically join further tables once column names are
+     // explicitly used.
+-    /** @var \Drupal\Core\Entity\Sql\DefaultTableMapping[] $table_mappings */
++    /** @var DefaultTableMapping[] $table_mappings */
+     $table_mappings = [];
+-    /** @var \Drupal\Core\Entity\Query\ConditionInterface[] $ors */
++    /** @var ConditionInterface[] $ors */
+     $ors = [];
+     foreach ($types as $key => $type) {
+       $storage = $this->entityTypeManager->getStorage($type->id());
+@@ -239,9 +244,9 @@ class AccessRecordQueryBuilder {
+     // queries, and need the underlying select query as an object, for being
+     // able to pass it as an accepted subquery for the condition being built.
+     // Therefore, a closure is created that returns the underlying query object.
+-    /** @var \Drupal\Core\Database\Query\SelectInterface[] $queries */
++    /** @var SelectInterface[] $queries */
+     $closure = \Closure::fromCallable(function () {
+-      /** @var \Drupal\Core\Entity\Query\Sql\Query $this */
++      /** @var Query $this */
+       $this->prepare()
+         ->compile()
+         ->addSort()
+@@ -253,7 +258,7 @@ class AccessRecordQueryBuilder {
+     }
+ 
+     foreach ($selections as $scope => $scope_selections) {
+-      /** @var \Drupal\Core\Database\Query\SelectInterface $query */
++      /** @var SelectInterface $query */
+       $query = $queries[$scope];
+       $q_fields = &$query->getFields();
+       $q_fields = [];
+diff --git a/src/AccessRecordTypeInterface.php b/src/AccessRecordTypeInterface.php
+index b31f64e..dde07d2 100644
+--- a/src/AccessRecordTypeInterface.php
++++ b/src/AccessRecordTypeInterface.php
+@@ -51,7 +51,7 @@ interface AccessRecordTypeInterface extends ConfigEntityInterface, RevisionableE
+   /**
+    * Get the entity type of the subject.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeInterface
++   * @return EntityTypeInterface
+    *   The subject entity type, or NULL if not defined.
+    */
+   public function getSubjectType(): ?EntityTypeInterface;
+@@ -77,7 +77,7 @@ interface AccessRecordTypeInterface extends ConfigEntityInterface, RevisionableE
+   /**
+    * Get the entity type of the target.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeInterface
++   * @return EntityTypeInterface
+    *   The target entity type, or NULL if not defined.
+    */
+   public function getTargetType(): ?EntityTypeInterface;
+diff --git a/src/Controller/AccessRecordRevisionController.php b/src/Controller/AccessRecordRevisionController.php
+index 5b80cb9..0f31f33 100644
+--- a/src/Controller/AccessRecordRevisionController.php
++++ b/src/Controller/AccessRecordRevisionController.php
+@@ -22,32 +22,32 @@ class AccessRecordRevisionController extends ControllerBase implements Container
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The renderer service.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The entity repository service.
+    *
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+   /**
+    * Constructs a AccessRecordRevisionController object.
+    *
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer service.
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository.
+    */
+   public function __construct(DateFormatterInterface $date_formatter, RendererInterface $renderer, EntityRepositoryInterface $entity_repository) {
+@@ -70,7 +70,7 @@ class AccessRecordRevisionController extends ControllerBase implements Container
+   /**
+    * Generates an overview table of older revisions of a access record.
+    *
+-   * @param \Drupal\access_records\AccessRecordInterface $access_record
++   * @param AccessRecordInterface $access_record
+    *   An access record.
+    *
+    * @return array
+@@ -96,7 +96,7 @@ class AccessRecordRevisionController extends ControllerBase implements Container
+     $current_revision_displayed = FALSE;
+ 
+     foreach ($this->getRevisionIds($access_record, $access_record_storage) as $vid) {
+-      /** @var \Drupal\access_records\AccessRecordInterface $revision */
++      /** @var AccessRecordInterface $revision */
+       $revision = $access_record_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+@@ -194,9 +194,9 @@ class AccessRecordRevisionController extends ControllerBase implements Container
+   /**
+    * Gets a list of access record revision IDs for a specific item.
+    *
+-   * @param \Drupal\access_records\AccessRecordInterface $access_record
++   * @param AccessRecordInterface $access_record
+    *   The access record item.
+-   * @param \Drupal\Core\Entity\ContentEntityStorageInterface $access_record_storage
++   * @param ContentEntityStorageInterface $access_record_storage
+    *   The access record storage handler.
+    *
+    * @return int[]
+diff --git a/src/Controller/AccessRecordTranslationController.php b/src/Controller/AccessRecordTranslationController.php
+index 8ec46b4..88c3f5f 100644
+--- a/src/Controller/AccessRecordTranslationController.php
++++ b/src/Controller/AccessRecordTranslationController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\access_records\Controller;
+ 
++use Drupal\access_records\AccessRecordInterface;
+ use Drupal\content_translation\Controller\ContentTranslationController;
+ use Drupal\Core\Routing\RouteMatchInterface;
+ 
+@@ -15,7 +16,7 @@ class AccessRecordTranslationController extends ContentTranslationController {
+    */
+   public function overview(RouteMatchInterface $route_match, $entity_type_id = NULL) {
+     $build = parent::overview($route_match, $entity_type_id);
+-    /** @var \Drupal\access_records\AccessRecordInterface $entity */
++    /** @var AccessRecordInterface $entity */
+     $entity = $build['#entity'];
+     $build['#title'] = $this->t('Translations of access record %label with ID %id', [
+       '%label' => $entity->label(),
+diff --git a/src/Entity/AccessRecord.php b/src/Entity/AccessRecord.php
+index 8e41bbf..603fe7d 100755
+--- a/src/Entity/AccessRecord.php
++++ b/src/Entity/AccessRecord.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\access_records\Entity;
+ 
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
++use Drupal\Core\Field\FieldItemInterface;
+ use Drupal\Core\Entity\EditorialContentEntityBase;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -107,7 +110,7 @@ class AccessRecord extends EditorialContentEntityBase implements AccessRecordInt
+       // Disable the label pattern when a label is already there.
+       $values['label_pattern'] = '';
+     }
+-    /** @var \Drupal\access_records\AccessRecordTypeInterface $access_record_type */
++    /** @var AccessRecordTypeInterface $access_record_type */
+     $access_record_type = isset($values['ar_type']) ? \Drupal::entityTypeManager()->getStorage('access_record_type')->load($values['ar_type']) : NULL;
+     if ($access_record_type) {
+       if (!isset($values['ar_subject_type'])) {
+@@ -269,7 +272,7 @@ class AccessRecord extends EditorialContentEntityBase implements AccessRecordInt
+       $label_pattern = $this->hasField('label_pattern') ? $this->get('label_pattern')->getString() : $this->label_pattern;
+     }
+     elseif ($type_id = $this->bundle()) {
+-      /** @var \Drupal\access_records\AccessRecordTypeInterface $type */
++      /** @var AccessRecordTypeInterface $type */
+       if ($type = \Drupal::entityTypeManager()->getStorage('access_record_type')->load($type_id)) {
+         $label_pattern = $type->getLabelPattern();
+       }
+@@ -403,7 +406,7 @@ class AccessRecord extends EditorialContentEntityBase implements AccessRecordInt
+ 
+     $access_record_type = $this->getType();
+     $etm = \Drupal::entityTypeManager();
+-    /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $efm */
++    /** @var EntityFieldManagerInterface $efm */
+     $efm = \Drupal::service('entity_field.manager');
+ 
+     $subject_type = $etm->getDefinition($this->ar_subject_type->value);
+@@ -455,13 +458,13 @@ class AccessRecord extends EditorialContentEntityBase implements AccessRecordInt
+         foreach ($property_names as $property) {
+           $values = [];
+           if ($is_config_entity && $property === $main_property) {
+-            /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface $items */
++            /** @var EntityReferenceFieldItemListInterface $items */
+             foreach ($items->referencedEntities() as $config) {
+               $values[] = $config->label() ?: $config->id();
+             }
+           }
+           else {
+-            /** @var \Drupal\Core\Field\FieldItemInterface $item */
++            /** @var FieldItemInterface $item */
+             foreach ($items as $item) {
+               if ($item instanceof BooleanItem) {
+                 $values[] = $item->getPossibleOptions()[$item->value];
+diff --git a/src/Entity/AccessRecordType.php b/src/Entity/AccessRecordType.php
+index 57154ff..a89c322 100755
+--- a/src/Entity/AccessRecordType.php
++++ b/src/Entity/AccessRecordType.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\access_records\Entity;
+ 
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\user\RoleInterface;
+ use Drupal\access_records\AccessRecordTypeInterface;
+ use Drupal\Core\Cache\CacheableMetadata;
+ use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
+@@ -321,7 +323,7 @@ class AccessRecordType extends ConfigEntityBundleBase implements AccessRecordTyp
+     }
+ 
+     $field_names = [];
+-    /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $efm */
++    /** @var EntityFieldManagerInterface $efm */
+     $efm = \Drupal::service('entity_field.manager');
+     $fields = $efm->getFieldStorageDefinitions($entity_type_id);
+     foreach ($efm->getFieldDefinitions('access_record', $this->id()) as $ar_field_name => $field_definition) {
+@@ -360,19 +362,19 @@ class AccessRecordType extends ConfigEntityBundleBase implements AccessRecordTyp
+    *
+    * Additionally adds cacheability metadata to the given metadata object.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $subject
++   * @param EntityInterface $subject
+    *   The subject, which is mostly a user entity.
+    * @param string $target_type_id
+    *   The entity type ID of the target.
+    * @param string $operation
+    *   The requested entity operation.
+-   * @param \Drupal\Core\Cache\RefinableCacheableDependencyInterface|null $metadata
++   * @param RefinableCacheableDependencyInterface|null $metadata
+    *   (optional) The object that holds collected cacheability metadata.
+    * @param bool $quick_check
+    *   (optional) By default, a quick check is performed to see whether it
+    *   makes sense to even look for access record types.
+    *
+-   * @return \Drupal\access_records\AccessRecordTypeInterface[]
++   * @return AccessRecordTypeInterface[]
+    *   The access record types. Can be empty.
+    */
+   public static function loadForAccessCheck(EntityInterface $subject, string $target_type_id, string $operation, ?RefinableCacheableDependencyInterface $metadata = NULL, bool $quick_check = TRUE): array {
+@@ -389,7 +391,7 @@ class AccessRecordType extends ConfigEntityBundleBase implements AccessRecordTyp
+       $metadata->addCacheContexts(['user.roles']);
+       $role_storage = $etm->getStorage('user_role');
+       foreach ($subject->getRoles(TRUE) as $role_id) {
+-        /** @var \Drupal\user\RoleInterface $role */
++        /** @var RoleInterface $role */
+         if ($role = $role_storage->load($role_id)) {
+           if ($role->isAdmin()) {
+             return [];
+diff --git a/src/EventSubscriber/AccessRecordsQueryAccessSubscriber.php b/src/EventSubscriber/AccessRecordsQueryAccessSubscriber.php
+index 7ac1763..f0478a1 100644
+--- a/src/EventSubscriber/AccessRecordsQueryAccessSubscriber.php
++++ b/src/EventSubscriber/AccessRecordsQueryAccessSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\access_records\EventSubscriber;
+ 
++use Drupal\Core\Database\Query\SelectInterface;
+ use Drupal\access_records\AccessRecordQueryBuilder;
+ use Drupal\access_records\Entity\AccessRecordType;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -16,23 +17,23 @@ class AccessRecordsQueryAccessSubscriber implements EventSubscriberInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+   /**
+    * The access record query builder.
+    *
+-   * @var \Drupal\access_records\AccessRecordQueryBuilder
++   * @var AccessRecordQueryBuilder
+    */
+   protected AccessRecordQueryBuilder $accessRecordQueryBuilder;
+ 
+   /**
+    * The AccessRecordsQueryAccessSubscriber constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $etm
++   * @param EntityTypeManagerInterface $etm
+    *   The entity type manager.
+-   * @param \Drupal\access_records\AccessRecordQueryBuilder $aqb
++   * @param AccessRecordQueryBuilder $aqb
+    *   The access record query builder.
+    */
+   public function __construct(EntityTypeManagerInterface $etm, AccessRecordQueryBuilder $aqb) {
+@@ -43,7 +44,7 @@ class AccessRecordsQueryAccessSubscriber implements EventSubscriberInterface {
+   /**
+    * Includes access records for query access.
+    *
+-   * @param \Drupal\entity\QueryAccess\QueryAccessEvent $event
++   * @param QueryAccessEvent $event
+    *   The event.
+    */
+   public function onQueryAccess(QueryAccessEvent $event) {
+@@ -64,7 +65,7 @@ class AccessRecordsQueryAccessSubscriber implements EventSubscriberInterface {
+     $target_type = $this->entityTypeManager->getDefinition($target_type_id);
+     $operation = $event->getOperation();
+ 
+-    /** @var \Drupal\Core\Database\Query\SelectInterface[] $queries */
++    /** @var SelectInterface[] $queries */
+     $queries = [];
+     foreach (AccessRecordType::loadForAccessCheck($subject, $target_type_id, $operation, $conditions) as $ar_type) {
+       if ($query = $this->accessRecordQueryBuilder->selectByType($ar_type, $subject_id, $operation)) {
+diff --git a/src/Form/AccessRecordForm.php b/src/Form/AccessRecordForm.php
+index bffd20e..c7ec1f6 100755
+--- a/src/Form/AccessRecordForm.php
++++ b/src/Form/AccessRecordForm.php
+@@ -52,11 +52,11 @@ class AccessRecordForm extends ContentEntityForm {
+    *
+    * @param string $entity_type_id
+    *   The entity type identifier.
+-   * @param \Drupal\access_records\AccessRecordInterface $entity
++   * @param AccessRecordInterface $entity
+    *   The entity updated with the submitted values.
+    * @param array $form
+    *   The complete form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public static function applyLabelPattern($entity_type_id, AccessRecordInterface $entity, array $form, FormStateInterface $form_state) {
+diff --git a/src/Form/AccessRecordRevisionDeleteForm.php b/src/Form/AccessRecordRevisionDeleteForm.php
+index 5b0ec8d..2522e3e 100644
+--- a/src/Form/AccessRecordRevisionDeleteForm.php
++++ b/src/Form/AccessRecordRevisionDeleteForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\access_records\Form;
+ 
++use Drupal\access_records\AccessRecordInterface;
++use Drupal\Core\Entity\ContentEntityStorageInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -20,48 +22,48 @@ class AccessRecordRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The access record revision.
+    *
+-   * @var \Drupal\access_records\AccessRecordInterface
++   * @var AccessRecordInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The access record storage.
+    *
+-   * @var \Drupal\Core\Entity\ContentEntityStorageInterface
++   * @var ContentEntityStorageInterface
+    */
+   protected $accessRecordStorage;
+ 
+   /**
+    * The access record type storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $accessRecordTypeStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new AccessRecordRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $access_record_storage
++   * @param EntityStorageInterface $access_record_storage
+    *   The access record storage.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $access_record_type_storage
++   * @param EntityStorageInterface $access_record_type_storage
+    *   The access record type storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $access_record_storage, EntityStorageInterface $access_record_type_storage, Connection $connection, DateFormatterInterface $date_formatter) {
+diff --git a/src/Form/AccessRecordRevisionRevertForm.php b/src/Form/AccessRecordRevisionRevertForm.php
+index 7be0ef9..9e7d986 100644
+--- a/src/Form/AccessRecordRevisionRevertForm.php
++++ b/src/Form/AccessRecordRevisionRevertForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\access_records\Form;
+ 
++use Drupal\Core\Entity\ContentEntityStorageInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -21,39 +22,39 @@ class AccessRecordRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The access record revision.
+    *
+-   * @var \Drupal\access_records\AccessRecordInterface
++   * @var AccessRecordInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The access record storage.
+    *
+-   * @var \Drupal\Core\Entity\ContentEntityStorageInterface
++   * @var ContentEntityStorageInterface
+    */
+   protected $accessRecordStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * Constructs a new AccessRecordRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $access_record_storage
++   * @param EntityStorageInterface $access_record_storage
+    *   The access record storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+    */
+   public function __construct(EntityStorageInterface $access_record_storage, DateFormatterInterface $date_formatter, TimeInterface $time) {
+@@ -149,12 +150,12 @@ class AccessRecordRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\access_records\AccessRecordInterface $revision
++   * @param AccessRecordInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\access_records\AccessRecordInterface
++   * @return AccessRecordInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(AccessRecordInterface $revision, FormStateInterface $form_state) {
+diff --git a/src/Form/AccessRecordRevisionRevertTranslationForm.php b/src/Form/AccessRecordRevisionRevertTranslationForm.php
+index 066ca5b..ad06b6d 100644
+--- a/src/Form/AccessRecordRevisionRevertTranslationForm.php
++++ b/src/Form/AccessRecordRevisionRevertTranslationForm.php
+@@ -27,20 +27,20 @@ class AccessRecordRevisionRevertTranslationForm extends AccessRecordRevisionReve
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new AccessRecordRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $access_record_storage
++   * @param EntityStorageInterface $access_record_storage
+    *   The access record storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+    */
+   public function __construct(EntityStorageInterface $access_record_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager, TimeInterface $time) {
+diff --git a/src/Form/AccessRecordTypeForm.php b/src/Form/AccessRecordTypeForm.php
+index d3d23bf..a09fedc 100755
+--- a/src/Form/AccessRecordTypeForm.php
++++ b/src/Form/AccessRecordTypeForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\access_records\Form;
+ 
++use Drupal\access_records\AccessRecordTypeInterface;
++use Drupal\access_records\AccessRecordInterface;
+ use Drupal\access_records\Entity\AccessRecord;
+ use Drupal\Core\Entity\BundleEntityFormBase;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+@@ -18,14 +20,14 @@ class AccessRecordTypeForm extends BundleEntityFormBase {
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * Constructs the AccessRecordTypeForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+    */
+   public function __construct(EntityFieldManagerInterface $entity_field_manager) {
+@@ -49,7 +51,7 @@ class AccessRecordTypeForm extends BundleEntityFormBase {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\access_records\AccessRecordTypeInterface $access_record_type */
++    /** @var AccessRecordTypeInterface $access_record_type */
+     $access_record_type = $this->entity;
+     if ($this->operation == 'add') {
+       $has_data = FALSE;
+@@ -202,7 +204,7 @@ class AccessRecordTypeForm extends BundleEntityFormBase {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\access_records\AccessRecordTypeInterface $access_record_type */
++    /** @var AccessRecordTypeInterface $access_record_type */
+     $access_record_type = $this->entity;
+ 
+     $access_record_type->set('id', trim($access_record_type->id()));
+@@ -225,7 +227,7 @@ class AccessRecordTypeForm extends BundleEntityFormBase {
+     $fields = $this->entityFieldManager->getFieldDefinitions('access_record', $access_record_type->id());
+     // @todo Make it possible to get default values without an entity.
+     //   https://www.drupal.org/node/2318187
+-    /** @var \Drupal\access_records\AccessRecordInterface $access_record */
++    /** @var AccessRecordInterface $access_record */
+     $access_record = $this->entityTypeManager->getStorage('access_record')->create(['ar_type' => $access_record_type->id()]);
+ 
+     $value = (bool) $form_state->getValue(['options', 'status']);
+@@ -297,7 +299,7 @@ class AccessRecordTypeForm extends BundleEntityFormBase {
+    *   Array of options ready to be used in #options.
+    */
+   protected function getWorkflowOptions() {
+-    /** @var \Drupal\access_records\AccessRecordTypeInterface $access_record_type */
++    /** @var AccessRecordTypeInterface $access_record_type */
+     $access_record_type = $this->entity;
+     $workflow_options = [
+       'status' => $access_record_type->getStatus(),
+diff --git a/src/Plugin/views/field/AccessRecordSubjectId.php b/src/Plugin/views/field/AccessRecordSubjectId.php
+index e1fffa2..438aa97 100644
+--- a/src/Plugin/views/field/AccessRecordSubjectId.php
++++ b/src/Plugin/views/field/AccessRecordSubjectId.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\access_records\Plugin\views\field;
+ 
++use Drupal\access_records\AccessRecordTypeInterface;
++use Drupal\Core\Database\Query\SelectInterface;
++use Drupal\views\Plugin\views\query\Sql;
+ use Drupal\access_records\AccessRecordInterface;
+ use Drupal\access_records\AccessRecordQueryBuilder;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -22,14 +25,14 @@ class AccessRecordSubjectId extends FieldPluginBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+   /**
+    * The access record query builder.
+    *
+-   * @var \Drupal\access_records\AccessRecordQueryBuilder
++   * @var AccessRecordQueryBuilder
+    */
+   protected AccessRecordQueryBuilder $accessRecordQueryBuilder;
+ 
+@@ -85,7 +88,7 @@ class AccessRecordSubjectId extends FieldPluginBase {
+ 
+     $query_options = ['join_targets' => FALSE];
+     $queries = [];
+-    /** @var \Drupal\access_records\AccessRecordTypeInterface $ar_type */
++    /** @var AccessRecordTypeInterface $ar_type */
+     foreach ($type_storage->loadMultiple() as $ar_type) {
+       if ($query = $this->accessRecordQueryBuilder->selectByType($ar_type, NULL, 'view', $query_options)) {
+         $queries[$ar_type->id()] = $query;
+@@ -103,7 +106,7 @@ class AccessRecordSubjectId extends FieldPluginBase {
+     }
+ 
+     $query = array_shift($queries);
+-    /** @var \Drupal\Core\Database\Query\SelectInterface $union */
++    /** @var SelectInterface $union */
+     foreach ($queries as $union) {
+       $query->union($union);
+     }
+@@ -119,7 +122,7 @@ class AccessRecordSubjectId extends FieldPluginBase {
+ 
+     $alias = $def['left_table'] . '_subjects';
+ 
+-    /** @var \Drupal\views\Plugin\views\query\Sql $view_query */
++    /** @var Sql $view_query */
+     $view_query = $this->query;
+     $join = \Drupal::service('plugin.manager.views.join')->createInstance('standard', $def);
+     $this->alias = $view_query->addRelationship($alias, $join, $ar_entity_type->getDataTable(), $this->relationship);
+diff --git a/src/Plugin/views/field/AccessRecordTargetId.php b/src/Plugin/views/field/AccessRecordTargetId.php
+index bec94f4..197b3d4 100644
+--- a/src/Plugin/views/field/AccessRecordTargetId.php
++++ b/src/Plugin/views/field/AccessRecordTargetId.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\access_records\Plugin\views\field;
+ 
++use Drupal\access_records\AccessRecordTypeInterface;
++use Drupal\Core\Database\Query\SelectInterface;
++use Drupal\views\Plugin\views\query\Sql;
+ use Drupal\access_records\AccessRecordInterface;
+ use Drupal\access_records\AccessRecordQueryBuilder;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -22,14 +25,14 @@ class AccessRecordTargetId extends FieldPluginBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+   /**
+    * The access record query builder.
+    *
+-   * @var \Drupal\access_records\AccessRecordQueryBuilder
++   * @var AccessRecordQueryBuilder
+    */
+   protected AccessRecordQueryBuilder $accessRecordQueryBuilder;
+ 
+@@ -85,7 +88,7 @@ class AccessRecordTargetId extends FieldPluginBase {
+ 
+     $query_options = ['join_subjects' => FALSE];
+     $queries = [];
+-    /** @var \Drupal\access_records\AccessRecordTypeInterface $ar_type */
++    /** @var AccessRecordTypeInterface $ar_type */
+     foreach ($type_storage->loadMultiple() as $ar_type) {
+       if ($query = $this->accessRecordQueryBuilder->selectByType($ar_type, NULL, 'view', $query_options)) {
+         $queries[$ar_type->id()] = $query;
+@@ -103,7 +106,7 @@ class AccessRecordTargetId extends FieldPluginBase {
+     }
+ 
+     $query = array_shift($queries);
+-    /** @var \Drupal\Core\Database\Query\SelectInterface $union */
++    /** @var SelectInterface $union */
+     foreach ($queries as $union) {
+       $query->union($union);
+     }
+@@ -119,7 +122,7 @@ class AccessRecordTargetId extends FieldPluginBase {
+ 
+     $alias = $def['left_table'] . '_targets';
+ 
+-    /** @var \Drupal\views\Plugin\views\query\Sql $view_query */
++    /** @var Sql $view_query */
+     $view_query = $this->query;
+     $join = \Drupal::service('plugin.manager.views.join')->createInstance('standard', $def);
+     $this->alias = $view_query->addRelationship($alias, $join, $ar_entity_type->getDataTable(), $this->relationship);
+diff --git a/src/Plugin/views/relationship/AccessRecordData.php b/src/Plugin/views/relationship/AccessRecordData.php
+index 8f87373..8645611 100644
+--- a/src/Plugin/views/relationship/AccessRecordData.php
++++ b/src/Plugin/views/relationship/AccessRecordData.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\access_records\Plugin\views\relationship;
+ 
++use Drupal\access_records\AccessRecordTypeInterface;
++use Drupal\Core\Database\Query\SelectInterface;
+ use Drupal\access_records\AccessRecordQueryBuilder;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -20,14 +22,14 @@ class AccessRecordData extends RelationshipPluginBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+   /**
+    * The access record query builder.
+    *
+-   * @var \Drupal\access_records\AccessRecordQueryBuilder
++   * @var AccessRecordQueryBuilder
+    */
+   protected AccessRecordQueryBuilder $accessRecordQueryBuilder;
+ 
+@@ -40,9 +42,9 @@ class AccessRecordData extends RelationshipPluginBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $etm
++   * @param EntityTypeManagerInterface $etm
+    *   The entity type manager.
+-   * @param \Drupal\access_records\AccessRecordQueryBuilder $arqb
++   * @param AccessRecordQueryBuilder $arqb
+    *   The access record query builder.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $etm, AccessRecordQueryBuilder $arqb) {
+@@ -149,7 +151,7 @@ class AccessRecordData extends RelationshipPluginBase {
+       $query_options['join_subjects'] = FALSE;
+     }
+     $queries = [];
+-    /** @var \Drupal\access_records\AccessRecordTypeInterface $ar_type */
++    /** @var AccessRecordTypeInterface $ar_type */
+     foreach ($type_storage->loadMultiple($type_ids) as $ar_type) {
+       if ($query = $this->accessRecordQueryBuilder->selectByType($ar_type, NULL, 'view', $query_options)) {
+         $queries[$ar_type->id()] = $query;
+@@ -184,7 +186,7 @@ class AccessRecordData extends RelationshipPluginBase {
+     }
+ 
+     $query = array_shift($queries);
+-    /** @var \Drupal\Core\Database\Query\SelectInterface $union */
++    /** @var SelectInterface $union */
+     foreach ($queries as $union) {
+       $query->union($union);
+     }
+diff --git a/src/Plugin/views/relationship/AccessRecordSubject.php b/src/Plugin/views/relationship/AccessRecordSubject.php
+index 4ccfcd7..21e5387 100644
+--- a/src/Plugin/views/relationship/AccessRecordSubject.php
++++ b/src/Plugin/views/relationship/AccessRecordSubject.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\access_records\Plugin\views\relationship;
+ 
++use Drupal\access_records\AccessRecordTypeInterface;
++use Drupal\Core\Database\Query\SelectInterface;
+ use Drupal\access_records\AccessRecordQueryBuilder;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\views\Plugin\views\relationship\RelationshipPluginBase;
+@@ -19,14 +21,14 @@ class AccessRecordSubject extends RelationshipPluginBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+   /**
+    * The access record query builder.
+    *
+-   * @var \Drupal\access_records\AccessRecordQueryBuilder
++   * @var AccessRecordQueryBuilder
+    */
+   protected AccessRecordQueryBuilder $accessRecordQueryBuilder;
+ 
+@@ -39,9 +41,9 @@ class AccessRecordSubject extends RelationshipPluginBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $etm
++   * @param EntityTypeManagerInterface $etm
+    *   The entity type manager.
+-   * @param \Drupal\access_records\AccessRecordQueryBuilder $arqb
++   * @param AccessRecordQueryBuilder $arqb
+    *   The access record query builder.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $etm, AccessRecordQueryBuilder $arqb) {
+@@ -84,7 +86,7 @@ class AccessRecordSubject extends RelationshipPluginBase {
+ 
+     $query_options = ['join_targets' => FALSE];
+     $queries = [];
+-    /** @var \Drupal\access_records\AccessRecordTypeInterface $ar_type */
++    /** @var AccessRecordTypeInterface $ar_type */
+     foreach ($type_storage->loadMultiple($type_ids) as $ar_type) {
+       if ($query = $this->accessRecordQueryBuilder->selectByType($ar_type, NULL, 'view', $query_options)) {
+         $queries[$ar_type->id()] = $query;
+@@ -110,7 +112,7 @@ class AccessRecordSubject extends RelationshipPluginBase {
+     $def['adjusted'] = TRUE;
+ 
+     $query = array_shift($queries);
+-    /** @var \Drupal\Core\Database\Query\SelectInterface $union */
++    /** @var SelectInterface $union */
+     foreach ($queries as $union) {
+       $query->union($union);
+     }
+diff --git a/src/Plugin/views/relationship/AccessRecordTarget.php b/src/Plugin/views/relationship/AccessRecordTarget.php
+index e172568..8733e69 100644
+--- a/src/Plugin/views/relationship/AccessRecordTarget.php
++++ b/src/Plugin/views/relationship/AccessRecordTarget.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\access_records\Plugin\views\relationship;
+ 
++use Drupal\access_records\AccessRecordTypeInterface;
++use Drupal\Core\Database\Query\SelectInterface;
+ use Drupal\access_records\AccessRecordQueryBuilder;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\views\Plugin\views\relationship\RelationshipPluginBase;
+@@ -19,14 +21,14 @@ class AccessRecordTarget extends RelationshipPluginBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected EntityTypeManagerInterface $entityTypeManager;
+ 
+   /**
+    * The access record query builder.
+    *
+-   * @var \Drupal\access_records\AccessRecordQueryBuilder
++   * @var AccessRecordQueryBuilder
+    */
+   protected AccessRecordQueryBuilder $accessRecordQueryBuilder;
+ 
+@@ -39,9 +41,9 @@ class AccessRecordTarget extends RelationshipPluginBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $etm
++   * @param EntityTypeManagerInterface $etm
+    *   The entity type manager.
+-   * @param \Drupal\access_records\AccessRecordQueryBuilder $arqb
++   * @param AccessRecordQueryBuilder $arqb
+    *   The access record query builder.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $etm, AccessRecordQueryBuilder $arqb) {
+@@ -84,7 +86,7 @@ class AccessRecordTarget extends RelationshipPluginBase {
+ 
+     $query_options = ['join_subjects' => FALSE];
+     $queries = [];
+-    /** @var \Drupal\access_records\AccessRecordTypeInterface $ar_type */
++    /** @var AccessRecordTypeInterface $ar_type */
+     foreach ($type_storage->loadMultiple($type_ids) as $ar_type) {
+       if ($query = $this->accessRecordQueryBuilder->selectByType($ar_type, NULL, 'view', $query_options)) {
+         $queries[$ar_type->id()] = $query;
+@@ -110,7 +112,7 @@ class AccessRecordTarget extends RelationshipPluginBase {
+     $def['adjusted'] = TRUE;
+ 
+     $query = array_shift($queries);
+-    /** @var \Drupal\Core\Database\Query\SelectInterface $union */
++    /** @var SelectInterface $union */
+     foreach ($queries as $union) {
+       $query->union($union);
+     }
+diff --git a/tests/src/Kernel/AccessRecordsTest.php b/tests/src/Kernel/AccessRecordsTest.php
+index a70b859..fb1e20f 100644
+--- a/tests/src/Kernel/AccessRecordsTest.php
++++ b/tests/src/Kernel/AccessRecordsTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\access_records\Kernel;
+ 
++use Drupal\node\NodeTypeInterface;
++use Drupal\Core\Session\AccountSwitcherInterface;
+ use Drupal\access_records\Entity\AccessRecord;
+ use Drupal\access_records\Entity\AccessRecordType;
+ use Drupal\Core\Session\AccountInterface;
+@@ -43,7 +45,7 @@ class AccessRecordsTest extends KernelTestBase {
+     User::create(['uid' => 1, 'name' => 'admin'])->save();
+     User::create(['uid' => 2, 'name' => 'authenticated'])->save();
+     // Create the Article content type with revisioning and translation enabled.
+-    /** @var \Drupal\node\NodeTypeInterface $node_type */
++    /** @var NodeTypeInterface $node_type */
+     $node_type = NodeType::create([
+       'type' => 'article',
+       'name' => 'Article',
+@@ -59,7 +61,7 @@ class AccessRecordsTest extends KernelTestBase {
+    * Tests view access using access records.
+    */
+   public function testViewAccess() {
+-    /** @var \Drupal\Core\Session\AccountSwitcherInterface $account_switcher */
++    /** @var AccountSwitcherInterface $account_switcher */
+     $account_switcher = \Drupal::service('account_switcher');
+ 
+     $published_node = Node::create([
+@@ -189,7 +191,7 @@ class AccessRecordsTest extends KernelTestBase {
+    * Tests update access using access records.
+    */
+   public function testUpdateAccess() {
+-    /** @var \Drupal\Core\Session\AccountSwitcherInterface $account_switcher */
++    /** @var AccountSwitcherInterface $account_switcher */
+     $account_switcher = \Drupal::service('account_switcher');
+ 
+     $published_node = Node::create([
+@@ -320,7 +322,7 @@ class AccessRecordsTest extends KernelTestBase {
+    * Tests delete access using access records.
+    */
+   public function testDeleteAccess() {
+-    /** @var \Drupal\Core\Session\AccountSwitcherInterface $account_switcher */
++    /** @var AccountSwitcherInterface $account_switcher */
+     $account_switcher = \Drupal::service('account_switcher');
+ 
+     $published_node = Node::create([
+@@ -451,7 +453,7 @@ class AccessRecordsTest extends KernelTestBase {
+    * Tests combined view, update & delete access using access records.
+    */
+   public function testCombinedAccess() {
+-    /** @var \Drupal\Core\Session\AccountSwitcherInterface $account_switcher */
++    /** @var AccountSwitcherInterface $account_switcher */
+     $account_switcher = \Drupal::service('account_switcher');
+ 
+     $published_node = Node::create([

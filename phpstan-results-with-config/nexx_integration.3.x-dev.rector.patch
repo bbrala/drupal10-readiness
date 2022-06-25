@@ -1,0 +1,608 @@
+diff --git a/nexx_integration.drush.inc b/nexx_integration.drush.inc
+index 3e9cde4..a895548 100644
+--- a/nexx_integration.drush.inc
++++ b/nexx_integration.drush.inc
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\Core\Entity\Query\QueryInterface;
++use Drupal\media\MediaInterface;
++use Drupal\Core\Field\FieldItemInterface;
+ /**
+  * @file
+  * Drush commands for the nexx_integration module.
+@@ -84,7 +87,7 @@ function drush_nexx_integration_nexx_perform_unpublish_delete($per_batch = 20) {
+ 
+   $storage = \Drupal::entityTypeManager()->getStorage($type);
+ 
+-  /** @var \Drupal\Core\Entity\Query\QueryInterface $query */
++  /** @var QueryInterface $query */
+   $query = $storage->getQuery();
+ 
+   // Unpublish videos which should be because of active or isSSC attribute.
+@@ -133,7 +136,7 @@ function drush_nexx_integration_nexx_perform_unpublish_delete($per_batch = 20) {
+  *
+  * @param array $ids
+  *   List of video ids.
+- * @param Drupal\Core\Entity\ContentEntityStorageBase $storage
++ * @param ContentEntityStorageBase $storage
+  *   Media storage service.
+  * @param string $video_field
+  *   Video field name.
+@@ -141,9 +144,9 @@ function drush_nexx_integration_nexx_perform_unpublish_delete($per_batch = 20) {
+  *   Sandbox array.
+  */
+ function _nexx_integration_drush_batch_op(array $ids, ContentEntityStorageBase $storage, $video_field, &$sandbox) {
+-  /** @var \Drupal\media\MediaInterface $video */
++  /** @var MediaInterface $video */
+   foreach ($storage->loadMultiple($ids) as $video) {
+-    /** @var \Drupal\Core\Field\FieldItemInterface $video_data */
++    /** @var FieldItemInterface $video_data */
+     $video_data = $video->get($video_field)->first();
+     if ($video_data->get("isDeleted")->getString() == 1) {
+ 
+diff --git a/nexx_integration.install b/nexx_integration.install
+index 074322b..885736b 100644
+--- a/nexx_integration.install
++++ b/nexx_integration.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Database\Connection;
+ /**
+  * @file
+  * Install, uninstall and update hooks for nexx integration module.
+@@ -45,7 +46,7 @@ function nexx_integration_schema() {
+  * Implements hook_install().
+  */
+ function nexx_integration_install() {
+-  $source = drupal_get_path('module', 'nexx_integration') . '/images/icons';
++  $source = \Drupal::service('extension.list.module')->getPath('nexx_integration') . '/images/icons';
+   $destination = \Drupal::config('media.settings')->get('icon_base_uri');
+   $file_system = \Drupal::service('file_system');
+   $file_system->prepareDirectory($destination, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS);
+@@ -339,7 +340,7 @@ function nexx_integration_update_8007() {
+ function nexx_integration_update_8008() {
+   $table = 'nexx_taxonomy_term_data';
+ 
+-  /** @var \Drupal\Core\Database\Connection $db */
++  /** @var Connection $db */
+   $database = \Drupal::service('database');
+ 
+   $schema = $database->schema();
+diff --git a/nexx_integration.module b/nexx_integration.module
+index 7c87288..fb08ae5 100644
+--- a/nexx_integration.module
++++ b/nexx_integration.module
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\media\MediaTypeInterface;
++use Drupal\nexx_integration\VideoManagerServiceInterface;
++use Drupal\Core\Entity\Query\QueryInterface;
++use Drupal\media\MediaInterface;
+ /**
+  * @file
+  * Contains module hooks.
+@@ -127,7 +131,7 @@ function nexx_integration_taxonomy_term_request(EntityInterface $term, $command,
+    */
+   foreach ($container->get('entity_type.bundle.info')
+     ->getBundleInfo('media') as $bundle_id => $bundle_info) {
+-    /** @var \Drupal\media\MediaTypeInterface $bundle */
++    /** @var MediaTypeInterface $bundle */
+     $bundle = $entity_type_manager->getStorage('media_type')
+       ->load($bundle_id);
+     if ($bundle->getSource()->getPluginId() === 'nexx_video') {
+@@ -218,7 +222,7 @@ function nexx_integration_theme() {
+ /**
+  * Retrieve corresponding nexx id for a given taxonomy term.
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $term
++ * @param EntityInterface $term
+  *   The term for which the naxx id should be found.
+  *
+  * @return int
+@@ -259,7 +263,7 @@ function update_nexx_term_id_mapping($drupal_id, $nexx_id, $vid) {
+  * Implements hook_cron().
+  */
+ function nexx_integration_cron() {
+-  /** @var \Drupal\nexx_integration\VideoManagerServiceInterface $videoManager */
++  /** @var VideoManagerServiceInterface $videoManager */
+   $videoManager = \Drupal::getContainer()->get('nexx_integration.videomanager');
+   $logger = \Drupal::getContainer()->get('logger.factory')->get('nexx_integration');
+   $storage = \Drupal::entityTypeManager()->getStorage($videoManager->entityType());
+@@ -267,7 +271,7 @@ function nexx_integration_cron() {
+   $video_field = $videoManager->videoFieldName();
+ 
+   // Check videos, that could be activated.
+-  /** @var \Drupal\Core\Entity\Query\QueryInterface $ids */
++  /** @var QueryInterface $ids */
+   $ids = $storage->getQuery()
+     ->condition($video_field . '.validfrom_ssc', \Drupal::time()->getRequestTime(), '<=')
+     ->condition($video_field . '.validto_ssc', \Drupal::time()->getRequestTime(), '>')
+@@ -275,7 +279,7 @@ function nexx_integration_cron() {
+     ->execute();
+ 
+   foreach ($storage->loadMultiple($ids) as $video) {
+-    /** @var \Drupal\media\MediaInterface $video */
++    /** @var MediaInterface $video */
+     $video->setPublished();
+     $video->save();
+     $logger->info("Published nexx video \"@videoname\" (id: @id)", [
+@@ -285,7 +289,7 @@ function nexx_integration_cron() {
+     );
+   }
+ 
+-  /** @var \Drupal\Core\Entity\Query\QueryInterface $ids */
++  /** @var QueryInterface $ids */
+   $ids = $storage->getQuery()
+     ->condition($video_field . '.validto_ssc', 0, '<>')
+     ->condition($video_field . '.validto_ssc', \Drupal::time()->getRequestTime(), '<=')
+@@ -293,7 +297,7 @@ function nexx_integration_cron() {
+     ->execute();
+ 
+   foreach ($storage->loadMultiple($ids) as $video) {
+-    /** @var \Drupal\media\MediaInterface $video */
++    /** @var MediaInterface $video */
+     $video->setUnpublished();
+     $video->save();
+     $logger->info("Unpublished nexx video \"@videoname\" (id: @id)", [
+diff --git a/src/Controller/OmniaController.php b/src/Controller/OmniaController.php
+index 9160392..b638ac2 100644
+--- a/src/Controller/OmniaController.php
++++ b/src/Controller/OmniaController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\nexx_integration\Controller;
+ 
++use Drupal\Core\Entity\EntityTypeBundleInfo;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityTypeBundleInfoInterface;
+@@ -25,35 +28,35 @@ class OmniaController extends ControllerBase {
+   /**
+    * The database service.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * The entity type bundle info service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfo
++   * @var EntityTypeBundleInfo
+    */
+   protected $entityTypeBundleInfo;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The logger service.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Token service.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $token;
+ 
+@@ -74,27 +77,27 @@ class OmniaController extends ControllerBase {
+   /**
+    * The file system service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * OmniaController constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database service.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle info service.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger service.
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   Token service.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   The file system service.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException.
++   * @throws InvalidPluginDefinitionException .
+    */
+   public function __construct(
+     Connection $database,
+@@ -259,10 +262,10 @@ class OmniaController extends ControllerBase {
+   /**
+    * Endpoint for video creation / update.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   HTTP request.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   JSON response.
+    *
+    * @throws \Exception
+@@ -292,7 +295,7 @@ class OmniaController extends ControllerBase {
+     );
+ 
+     $video_field = $this->getVideoFieldName();
+-    /** @var \Drupal\Core\Entity\EntityInterface $mediaStorage */
++    /** @var EntityInterface $mediaStorage */
+     $mediaStorage = $this->entityTypeManager()
+       ->getStorage('media');
+     $ids = $mediaStorage->getQuery()
+@@ -406,7 +409,7 @@ class OmniaController extends ControllerBase {
+   /**
+    * Map incoming nexx video data to media entity fields.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   Media entity.
+    */
+   protected function mapData(MediaInterface $media) {
+@@ -507,7 +510,7 @@ class OmniaController extends ControllerBase {
+   /**
+    * Map incoming teaser image to medie entity field.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   The media entity.
+    * @param mixed $teaserImageField
+    *   The machine name of the field, that stores the file.
+@@ -532,7 +535,7 @@ class OmniaController extends ControllerBase {
+     $storage = $this->entityTypeManager()
+       ->getStorage($images_field_target_type);
+ 
+-    /** @var \Drupal\media\MediaInterface $thumbnail_entity */
++    /** @var MediaInterface $thumbnail_entity */
+     $thumbnail_entity = $storage->create([
+       'bundle' => $images_field_target_bundle,
+       'name' => $media->label(),
+@@ -562,7 +565,7 @@ class OmniaController extends ControllerBase {
+       if ($destination_directory) {
+         // Import file.
+         $this->fileSystem->prepareDirectory($destination_directory, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS);
+-        $thumbnail = file_save_data(file_get_contents($thumb_uri), $destination_file, FileSystemInterface::EXISTS_REPLACE);
++        $thumbnail = \Drupal::service('file.repository')->writeData(file_get_contents($thumb_uri), $destination_file, FileSystemInterface::EXISTS_REPLACE);
+         // Add this file to thumbnail field of the nexx media entity.
+         $thumbnail_entity->$thumbnail_upload_field->appendItem([
+           'target_id' => $thumbnail->id(),
+@@ -639,7 +642,7 @@ class OmniaController extends ControllerBase {
+   /**
+    * Set proper publish state to media entity.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   Media entity.
+    */
+   protected function setState(MediaInterface $media) {
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 2804369..259a7ab 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -24,21 +24,21 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity type repository service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeRepositoryInterface
++   * @var EntityTypeRepositoryInterface
+    */
+   protected $entityTypeRepository;
+ 
+   /**
+    * The entity type bundle info service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityTypeBundleInfo;
+ 
+@@ -56,7 +56,7 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Set the entity type manager service.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager service.
+    */
+   protected function setEntityTypeManager(EntityTypeManagerInterface $entityTypeManager) {
+@@ -66,7 +66,7 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Set the entity type repository service.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeRepositoryInterface $entityTypeRepository
++   * @param EntityTypeRepositoryInterface $entityTypeRepository
+    *   The entity type repository service.
+    */
+   protected function setEntityTypeRepository(EntityTypeRepositoryInterface $entityTypeRepository) {
+@@ -76,7 +76,7 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Set the entity type bundle info service.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entityTypeBundleInfo
++   * @param EntityTypeBundleInfoInterface $entityTypeBundleInfo
+    *   The entity type bundle info service.
+    */
+   protected function setEntityTypeBundleInfo(EntityTypeBundleInfoInterface $entityTypeBundleInfo) {
+@@ -202,7 +202,7 @@ class SettingsForm extends ConfigFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function generateRandomKey(array &$form, FormStateInterface $form_state) {
+@@ -263,10 +263,10 @@ class SettingsForm extends ConfigFormBase {
+    *
+    * @param array $form
+    *   The build form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   Ajax response with updated options for the embed type.
+    */
+   public function updateTypeSettings(array &$form, FormStateInterface $form_state) {
+diff --git a/src/NexxNotification.php b/src/NexxNotification.php
+index 6f1a345..be5e48d 100644
+--- a/src/NexxNotification.php
++++ b/src/NexxNotification.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\nexx_integration;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Logger\LoggerChannelInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+ use Drupal\Component\Serialization\Json;
+@@ -23,28 +25,28 @@ class NexxNotification implements NexxNotificationInterface {
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The HTTP client.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $httpClient;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+@@ -54,15 +56,15 @@ class NexxNotification implements NexxNotificationInterface {
+    * Notify when channel or actor terms have been updated,
+    * or when a video has been created.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The config factory service.
+-   * @param \GuzzleHttp\Client $http_client
++   * @param Client $http_client
+    *   The HTTP client.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $translation
++   * @param TranslationInterface $translation
+    *   The translation service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+    */
+   public function __construct(
+diff --git a/src/Plugin/Field/FieldFormatter/NexxIframeVideoPlayer.php b/src/Plugin/Field/FieldFormatter/NexxIframeVideoPlayer.php
+index fadcd7d..1f916e0 100644
+--- a/src/Plugin/Field/FieldFormatter/NexxIframeVideoPlayer.php
++++ b/src/Plugin/Field/FieldFormatter/NexxIframeVideoPlayer.php
+@@ -27,7 +27,7 @@ class NexxIframeVideoPlayer extends FormatterBase implements ContainerFactoryPlu
+   /**
+    * The nexx configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+@@ -38,7 +38,7 @@ class NexxIframeVideoPlayer extends FormatterBase implements ContainerFactoryPlu
+    *   The plugin_id for the formatter.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The definition of the field to which the formatter is associated.
+    * @param array $settings
+    *   The formatter settings.
+@@ -48,7 +48,7 @@ class NexxIframeVideoPlayer extends FormatterBase implements ContainerFactoryPlu
+    *   The view mode.
+    * @param array $third_party_settings
+    *   Third party settings.
+-   * @param \Drupal\Core\Config\ImmutableConfig $config
++   * @param ImmutableConfig $config
+    *   The nexx configuration.
+    */
+   public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, $label, $view_mode, array $third_party_settings, ImmutableConfig $config) {
+diff --git a/src/Plugin/Field/FieldWidget/NexxVideoInfo.php b/src/Plugin/Field/FieldWidget/NexxVideoInfo.php
+index f35ccd5..2f7323a 100644
+--- a/src/Plugin/Field/FieldWidget/NexxVideoInfo.php
++++ b/src/Plugin/Field/FieldWidget/NexxVideoInfo.php
+@@ -26,7 +26,7 @@ class NexxVideoInfo extends WidgetBase implements ContainerFactoryPluginInterfac
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+diff --git a/src/Plugin/media/Source/NexxVideo.php b/src/Plugin/media/Source/NexxVideo.php
+index 386ab8c..23eaf17 100644
+--- a/src/Plugin/media/Source/NexxVideo.php
++++ b/src/Plugin/media/Source/NexxVideo.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\nexx_integration\Plugin\media\Source;
+ 
++use Drupal\media\MediaTypeInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+@@ -29,7 +30,7 @@ class NexxVideo extends MediaSourceBase {
+   /**
+    * The logger service.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+@@ -42,15 +43,15 @@ class NexxVideo extends MediaSourceBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager service.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   Entity field manager service.
+-   * @param \Drupal\Core\Field\FieldTypePluginManagerInterface $field_type_manager
++   * @param FieldTypePluginManagerInterface $field_type_manager
+    *   The field type plugin manager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger service.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, FieldTypePluginManagerInterface $field_type_manager, ConfigFactoryInterface $config_factory, LoggerInterface $logger) {
+@@ -180,7 +181,7 @@ class NexxVideo extends MediaSourceBase {
+         // If a teaser file mapping is given, use this as thumbnail.
+         if (!empty($teaser_field) && !empty($media->{$teaser_field})) {
+           $teaser_image = $media->{$teaser_field}->first()->entity;
+-          /** @var \Drupal\media\MediaTypeInterface $media_type */
++          /** @var MediaTypeInterface $media_type */
+           $media_type = $this->entityTypeManager->getStorage('media_type')
+             ->load($teaser_image->bundle());
+           $source_field = $media_type->getSource()->getSourceFieldDefinition($media_type)->getName();
+@@ -223,7 +224,7 @@ class NexxVideo extends MediaSourceBase {
+    * {@inheritdoc}
+    */
+   public function buildConfigurationForm(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\media\MediaTypeInterface $type */
++    /** @var MediaTypeInterface $type */
+     $type = $form_state->getFormObject()->getEntity();
+     $options = [];
+     $allowed_field_types = ['nexx_video_data'];
+diff --git a/src/VideoManagerService.php b/src/VideoManagerService.php
+index de866ae..5bc732c 100644
+--- a/src/VideoManagerService.php
++++ b/src/VideoManagerService.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\nexx_integration;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Psr\Log\LoggerInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+@@ -18,32 +20,32 @@ class VideoManagerService implements VideoManagerServiceInterface {
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The logger service.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * VideoManagerService constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger
++   * @param LoggerChannelFactoryInterface $logger
+    *   The config factory service.
+    */
+   public function __construct(

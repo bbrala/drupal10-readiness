@@ -1,0 +1,381 @@
+diff --git a/crop_image.info.yml b/crop_image.info.yml
+index ee27b27..a426bb4 100644
+--- a/crop_image.info.yml
++++ b/crop_image.info.yml
+@@ -2,8 +2,7 @@ name: Crop Image
+ type: module
+ description: Module allow to crop image selected from media library.
+ package: Crop
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ 
+ dependencies:
+   - image_widget_crop:image_widget_crop
+diff --git a/crop_image.install b/crop_image.install
+index 5174d2d..ac6f9d5 100644
+--- a/crop_image.install
++++ b/crop_image.install
+@@ -1,13 +1,14 @@
+ <?php
+ 
++use Drupal\Core\Config\StorageInterface;
+ use Drupal\Core\Config\FileStorage;
+ 
+ /**
+  * Update the Image Browser view and new default configurations.
+  */
+ function crop_image_update_8100() {
+-  $source = new FileStorage(\Drupal::service('file_system')->realpath(drupal_get_path('module', 'crop_image') . '/config/install'));
+-  /** @var \Drupal\Core\Config\StorageInterface $active_storage */
++  $source = new FileStorage(\Drupal::service('file_system')->realpath(\Drupal::service('extension.list.module')->getPath('crop_image') . '/config/install'));
++  /** @var StorageInterface $active_storage */
+   $active_storage = \Drupal::service('config.storage');
+ 
+   $config_factory = \Drupal::configFactory();
+@@ -23,8 +24,8 @@ function crop_image_update_8100() {
+  * Update the Image Browser view.
+  */
+ function crop_image_update_8101() {
+-  $source = new FileStorage(\Drupal::service('file_system')->realpath(drupal_get_path('module', 'crop_image') . '/config/install'));
+-  /** @var \Drupal\Core\Config\StorageInterface $active_storage */
++  $source = new FileStorage(\Drupal::service('file_system')->realpath(\Drupal::service('extension.list.module')->getPath('crop_image') . '/config/install'));
++  /** @var StorageInterface $active_storage */
+   $active_storage = \Drupal::service('config.storage');
+ 
+   $config_factory = \Drupal::configFactory();
+diff --git a/src/CropDuplicateInterface.php b/src/CropDuplicateInterface.php
+index d851742..dfb34a7 100644
+--- a/src/CropDuplicateInterface.php
++++ b/src/CropDuplicateInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\crop_image;
+ 
++use Drupal\file\Entity\File;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\user\EntityOwnerInterface;
+ use Drupal\Core\Entity\EntityChangedInterface;
+@@ -14,7 +15,7 @@ interface CropDuplicateInterface extends ContentEntityInterface, EntityChangedIn
+   /**
+    * Returns the original file object
+    *
+-   * @return \Drupal\file\Entity\File
++   * @return File
+    *   Original file object
+    */
+   public function getSourceFile();
+@@ -22,7 +23,7 @@ interface CropDuplicateInterface extends ContentEntityInterface, EntityChangedIn
+   /**
+    * Returns the original file object
+    *
+-   * @return \Drupal\file\Entity\File
++   * @return File
+    *   Original file object
+    */
+   public function getDuplicateFile();
+diff --git a/src/CropImageManager.php b/src/CropImageManager.php
+index fe91c1f..b8f6e21 100644
+--- a/src/CropImageManager.php
++++ b/src/CropImageManager.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\crop_image;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\File\FileSystemInterface;
++use Drupal\file\FileRepositoryInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -14,20 +18,20 @@ class CropImageManager {
+   /**
+    * The config factory used by the config entity query.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Constructs a CropImageManager object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, ConfigFactoryInterface $config_factory) {
+     $this->entityTypeManager = $entity_type_manager;
+@@ -221,9 +225,9 @@ class CropImageManager {
+ 
+     if (isset($entity) && $entity instanceof FieldableEntityInterface) {
+       $stream_wrapper_manager = \Drupal::service('stream_wrapper_manager');
+-      /** @var \Drupal\Core\File\FileSystemInterface */
++      /** @var FileSystemInterface */
+       $file_system = \Drupal::service('file_system');
+-      /** @var \Drupal\file\FileRepositoryInterface $file_repository */
++      /** @var FileRepositoryInterface $file_repository */
+       $file_repository = \Drupal::service('file.repository');
+ 
+       $field_crop_images = [];
+diff --git a/src/Entity/CropDuplicate.php b/src/Entity/CropDuplicate.php
+index 2326534..ecf43bb 100644
+--- a/src/Entity/CropDuplicate.php
++++ b/src/Entity/CropDuplicate.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\crop_image\Entity;
+ 
++use Drupal\file\FileRepositoryInterface;
+ use Drupal\Core\Entity\ContentEntityBase;
+ use Drupal\Core\Entity\EntityChangedTrait;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -78,10 +79,10 @@ class CropDuplicate extends ContentEntityBase implements CropDuplicateInterface
+     if (!isset($values['duplicate_file_id']) && isset($values['source_file_id'])) {
+       $source_file = File::load($values['source_file_id']);
+       if ($source_file) {
+-        /** @var \Drupal\file\FileRepositoryInterface $file_repository */
++        /** @var FileRepositoryInterface $file_repository */
+         $file_repository = \Drupal::service('file.repository');
+ 
+-        /** @var \Drupal\Core\File\FileSystemInterface */
++        /** @var FileSystemInterface */
+         $file_system = \Drupal::service('file_system');
+ 
+         $dirname = $file_system->dirname($source_file->getFileUri());
+@@ -106,7 +107,7 @@ class CropDuplicate extends ContentEntityBase implements CropDuplicateInterface
+   /**
+    * Function helping to find suitable filename for the image being duplicated.
+    *
+-   * @param Drupal\file\Entity\File $source_file
++   * @param File $source_file
+    *
+    * @return string
+    */
+@@ -161,7 +162,7 @@ class CropDuplicate extends ContentEntityBase implements CropDuplicateInterface
+    * {@inheritdoc}
+    */
+   public static function baseFieldDefinitions(EntityTypeInterface $entity_type) {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition[] $fields */
++    /** @var BaseFieldDefinition[] $fields */
+     $fields = parent::baseFieldDefinitions($entity_type);
+     $fields += static::ownerBaseFieldDefinitions($entity_type);
+ 
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index db6112e..883a7d5 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\crop_image\Form;
+ 
++use GuzzleHttp\Exception\GuzzleException;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+@@ -29,34 +30,34 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Instance of ImageWidgetCropManager object.
+    *
+-   * @var \Drupal\image_widget_crop\ImageWidgetCropInterface
++   * @var ImageWidgetCropInterface
+    */
+   protected $imageWidgetCropManager;
+ 
+   /**
+    * The module handler to use to load modules.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The HTTP client to fetch the feed data with.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * Constructs a CropWidgetForm object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\image_widget_crop\ImageWidgetCropInterface $iwc_manager
++   * @param ImageWidgetCropInterface $iwc_manager
+    *   The ImageWidgetCrop manager service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to use to load modules.
+-   * @param \GuzzleHttp\ClientInterface $http_client
++   * @param ClientInterface $http_client
+    *   The Guzzle HTTP client.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, ImageWidgetCropInterface $iwc_manager, ModuleHandlerInterface $module_handler, ClientInterface $http_client) {
+@@ -166,10 +167,10 @@ class SettingsForm extends ConfigFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function validateForm(array &$form, FormStateInterface $form_state) {
+     parent::validateForm($form, $form_state);
+diff --git a/src/Plugin/Field/FieldWidget/ImageBrowserCropWidget.php b/src/Plugin/Field/FieldWidget/ImageBrowserCropWidget.php
+index 570c98f..761571f 100644
+--- a/src/Plugin/Field/FieldWidget/ImageBrowserCropWidget.php
++++ b/src/Plugin/Field/FieldWidget/ImageBrowserCropWidget.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\crop_image\Plugin\Field\FieldWidget;
+ 
++use Symfony\Component\Mime\MimeTypesInterface;
++use Drupal\Core\Render\RendererInterface;
++use Drupal\file\FileInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -14,7 +17,6 @@ use Drupal\Core\Url;
+ use Drupal\entity_browser\FieldWidgetDisplayManager;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Session\AccountInterface;
+-use Symfony\Component\HttpFoundation\File\MimeType\MimeTypeGuesserInterface;
+ use Drupal\Core\Render\Element\Select;
+ use Drupal\Core\Ajax\AjaxResponse;
+ use Drupal\Core\Ajax\ReplaceCommand;
+@@ -41,7 +43,7 @@ class ImageBrowserCropWidget extends FileBrowserWidget {
+   /**
+    * Instance of ImageWidgetCropManager object.
+    *
+-   * @var \Drupal\image_widget_crop\ImageWidgetCropInterface
++   * @var ImageWidgetCropInterface
+    */
+   protected $imageWidgetCropManager;
+ 
+@@ -61,30 +63,30 @@ class ImageBrowserCropWidget extends FileBrowserWidget {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The definition of the field to which the widget is associated.
+    * @param array $settings
+    *   The widget settings.
+    * @param array $third_party_settings
+    *   Any third party settings.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager service.
+-   * @param \Drupal\entity_browser\FieldWidgetDisplayManager $field_display_manager
++   * @param FieldWidgetDisplayManager $field_display_manager
+    *   Field widget display plugin manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $display_repository
++   * @param EntityDisplayRepositoryInterface $display_repository
+    *   The entity display repository service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+-   * @param \Symfony\Component\HttpFoundation\File\MimeType\MimeTypeGuesserInterface $mime_type_guesser
++   * @param MimeTypesInterface $mime_type_guesser
+    *   The mime type guesser service.
+    */
+-  public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, array $third_party_settings, EntityTypeManagerInterface $entity_type_manager, FieldWidgetDisplayManager $field_display_manager, ConfigFactoryInterface $config_factory, EntityDisplayRepositoryInterface $display_repository, ModuleHandlerInterface $module_handler, AccountInterface $current_user, MimeTypeGuesserInterface $mime_type_guesser, MessengerInterface $messenger, ImageWidgetCropInterface $iwc_manager) {
++  public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, array $third_party_settings, EntityTypeManagerInterface $entity_type_manager, FieldWidgetDisplayManager $field_display_manager, ConfigFactoryInterface $config_factory, EntityDisplayRepositoryInterface $display_repository, ModuleHandlerInterface $module_handler, AccountInterface $current_user, MimeTypesInterface $mime_type_guesser, MessengerInterface $messenger, ImageWidgetCropInterface $iwc_manager) {
+     parent::__construct($plugin_id, $plugin_definition, $field_definition, $settings, $third_party_settings, $entity_type_manager, $field_display_manager, $config_factory, $display_repository, $module_handler, $current_user, $mime_type_guesser, $messenger);
+     $this->imageWidgetCropManager = $iwc_manager;
+   }
+@@ -228,10 +230,10 @@ class ImageBrowserCropWidget extends FileBrowserWidget {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   The Ajax response.
+    */
+   public static function updateCropTypeRequiredOptions(array $form, FormStateInterface $form_state) {
+@@ -241,7 +243,7 @@ class ImageBrowserCropWidget extends FileBrowserWidget {
+       $crop_type_required_form = self::getImageCropWidgetElement($form_state, 'crop_types_required');
+       $crop_type_required_form['#options'] = array_intersect_key($triggering_element['#options'], $triggering_element['#value']);
+ 
+-      /** @var \Drupal\Core\Render\RendererInterface $renderer */
++      /** @var RendererInterface $renderer */
+       $renderer = \Drupal::service('renderer');
+       $output = $renderer->renderRoot($crop_type_required_form);
+ 
+@@ -267,7 +269,7 @@ class ImageBrowserCropWidget extends FileBrowserWidget {
+   /**
+    * Return a specific of ImageCropWidget form element.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    * @param string $key
+    *   Name of element needed.
+@@ -290,7 +292,7 @@ class ImageBrowserCropWidget extends FileBrowserWidget {
+    * @param array $element
+    *   An associative array containing the properties and children of the
+    *   form actions container.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    * @param array $complete_form
+    *   The complete form structure.
+@@ -420,7 +422,7 @@ class ImageBrowserCropWidget extends FileBrowserWidget {
+ 
+     $current['#header'][] = $this->t('Order', [], ['context' => 'Sort order']);
+ 
+-    /** @var \Drupal\file\FileInterface[] $entities */
++    /** @var FileInterface[] $entities */
+     foreach ($entities as $entity) {
+       // Check to see if this entity has an edit form. If not, the edit button
+       // will only throw an exception.
+diff --git a/src/Plugin/media/Source/CropImage.php b/src/Plugin/media/Source/CropImage.php
+index d7e654f..9e0557e 100644
+--- a/src/Plugin/media/Source/CropImage.php
++++ b/src/Plugin/media/Source/CropImage.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\crop_image\Plugin\media\Source;
+ 
++use Drupal\file\FileInterface;
+ use Drupal\media\MediaInterface;
+ use Drupal\media\Plugin\media\Source\Image;
+ use Drupal\crop_image\Entity\CropDuplicate;
+@@ -27,7 +28,7 @@ class CropImage extends Image {
+    */
+   public function getMetadata(MediaInterface $media, $name) {
+     // Get the file and image data.
+-    /** @var \Drupal\file\FileInterface $file */
++    /** @var FileInterface $file */
+     $file = $media->get($this->configuration['source_field'])->entity;
+     // If the source field is not required, it may be empty.
+     if (!$file) {

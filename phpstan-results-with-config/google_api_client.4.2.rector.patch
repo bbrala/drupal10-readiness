@@ -1,0 +1,552 @@
+diff --git a/google_api_client.api.php b/google_api_client.api.php
+index 06905ba..8b1b8f6 100644
+--- a/google_api_client.api.php
++++ b/google_api_client.api.php
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\Core\Access\AccessResultAllowed;
++use Drupal\Core\Access\AccessResultForbidden;
++use Drupal\Core\Access\AccessResultNeutral;
++use Drupal\Core\Access\AccessResult;
+ /**
+  * @file
+  * Hooks provided by the Google Api Client module.
+@@ -82,7 +86,7 @@ function hook_google_api_client_account_state_alter(&$state, $google_api_client)
+  * @param \Drupal\Core\Session\AccountInterface $user_account
+  *   Run access checks for this account. Logged in user session.
+  *
+- * @return \Drupal\Core\Access\AccessResultAllowed|\Drupal\Core\Access\AccessResultForbidden|\Drupal\Core\Access\AccessResultNeutral
++ * @return AccessResultAllowed|AccessResultForbidden|AccessResultNeutral
+  *   Should Return AccessResult::forbidden() if want to restrict authentication
+  *               AccessResult::allowed() if want to allow authentication
+  *               AccessResult::neutral() if unsure.
+@@ -92,18 +96,18 @@ function hook_google_api_client_authenticate_account_access($google_api_client_i
+     // If we want that only users with specific user id are allowed.
+     $allowed_users = [1, 5, 10];
+     if (in_array($user_account->id(), $allowed_users)) {
+-      return \Drupal\Core\Access\AccessResult::allowed();
++      return AccessResult::allowed();
+     }
+     // If we want some role (say Google User role) to have access.
+     if (in_array('google_user', $user_account->getRoles())) {
+-      return \Drupal\Core\Access\AccessResult::allowed();
++      return AccessResult::allowed();
+     }
+     // Nothing passed access check, restrict authentication.
+-    return \Drupal\Core\Access\AccessResult::forbidden();
++    return AccessResult::forbidden();
+   }
+   else {
+     // We don't want to check access of this account.
+-    return \Drupal\Core\Access\AccessResult::neutral();
++    return AccessResult::neutral();
+   }
+ }
+ 
+diff --git a/google_api_client.install b/google_api_client.install
+index bb6b9a1..dc04897 100755
+--- a/google_api_client.install
++++ b/google_api_client.install
+@@ -1,4 +1,8 @@
+ <?php
++use Drupal\Core\Link;
++use Drupal\Core\Url;
++use Drupal\Component\Serialization\Json;
++use Drupal\Core\Field\BaseFieldDefinition;
+ /**
+  * @file
+  * Install and uninstall functions for the Google api client module.
+@@ -13,8 +17,8 @@ function google_api_client_requirements($phase) {
+   }
+ 
+   $library_exists = google_api_client_load_library();
+-  $url = \Drupal\Core\Link::fromTextAndUrl(t('here'), \Drupal\Core\Url::fromUri('https://github.com/google/google-api-php-client/releases'))->toString();
+-  $documentation = \Drupal\Core\Link::fromTextAndUrl(t('google api php client installation'), \Drupal\Core\Url::fromUri('https://github.com/google/google-api-php-client#installation'))->toString();
++  $url = Link::fromTextAndUrl(t('here'), Url::fromUri('https://github.com/google/google-api-php-client/releases'))->toString();
++  $documentation = Link::fromTextAndUrl(t('google api php client installation'), Url::fromUri('https://github.com/google/google-api-php-client#installation'))->toString();
+   $version = isset($library_exists['versions']) && !empty($library_exists['versions']) ? array_keys($library_exists['versions']) : array('2.4.0');
+   return [
+     'google-api-php-client' => [
+@@ -34,7 +38,7 @@ function google_api_client_update_8001() {
+   $entity_type = \Drupal::entityTypeManager()->getDefinition('google_api_client');
+   \Drupal::entityDefinitionUpdateManager()->installEntityType($entity_type);
+   // Entity table is ready let's copy previous record as first account.
+-  $settings = \Drupal\Component\Serialization\Json::decode(\Drupal::config('google_api_client.settings')->get('credentials'));
++  $settings = Json::decode(\Drupal::config('google_api_client.settings')->get('credentials'));
+   $scopes = \Drupal::config('google_api_client.settings')->get('scopes');
+   $scopes = array_map('trim', explode(PHP_EOL, $scopes));
+ 
+@@ -53,7 +57,7 @@ function google_api_client_update_8001() {
+   }
+   $services = array_unique($services);
+   $token = unserialize(\Drupal::config('google_api_client.tokens')->get('google_access_token'));
+-  $token = \Drupal\Component\Serialization\Json::encode($token);
++  $token = Json::encode($token);
+   $account = [
+     'name' => 'Google Api Client',
+     'client_id' => $settings['web']['client_id'],
+@@ -94,7 +98,7 @@ function google_api_client_update_8803() {
+     $definition_manager = \Drupal::entityDefinitionUpdateManager();
+ 
+     // Create a new field definition.
+-    $new_uuid_field = \Drupal\Core\Field\BaseFieldDefinition::create('uuid')
++    $new_uuid_field = BaseFieldDefinition::create('uuid')
+       ->setLabel(t('UUID'))
+       ->setDescription(t('The Google Api Client UUID.'))
+       ->setReadOnly(TRUE);
+diff --git a/google_api_client.module b/google_api_client.module
+index 45e5f42..fa36cfa 100755
+--- a/google_api_client.module
++++ b/google_api_client.module
+@@ -1,4 +1,9 @@
+ <?php
++use Drupal\Core\Routing\RouteMatchInterface;
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Core\Url;
++use Drupal\Core\Field\BaseFieldDefinition;
++use Drupal\Component\ClassFinder\ClassFinder;
+ /**
+  * @file
+  * Google Api Client for drupal.
+@@ -8,10 +13,10 @@
+ /**
+  * Implements hook_help().
+  */
+-function google_api_client_help($route_name, \Drupal\Core\Routing\RouteMatchInterface $route_match) {
++function google_api_client_help($route_name, RouteMatchInterface $route_match) {
+   switch ($route_name) {
+     case 'help.page.google_api_client':
+-      $path = $GLOBALS['base_url'] . '/' . drupal_get_path('module', 'google_api_client');
++      $path = $GLOBALS['base_url'] . '/' . \Drupal::service('extension.list.module')->getPath('google_api_client');
+       $output = '<h3>' . t('About') . '</h3>';
+       $output .= '<p>' . t("This module allows you to authenticate with google and use this authentication to carry other api requests. This module will help you to manage accounts, authenticate with google (i.e. get access token) and use this authentication to carry api requests in other modules.") . '</p>';
+       $output .= '<h3>' . t('Uses') . '</h3>';
+@@ -24,13 +29,13 @@ function google_api_client_help($route_name, \Drupal\Core\Routing\RouteMatchInte
+ /**
+  * Implements hook_entity_operation().
+  */
+-function google_api_client_entity_operation(\Drupal\Core\Entity\EntityInterface $entity) {
++function google_api_client_entity_operation(EntityInterface $entity) {
+   if ($entity->getEntityTypeId() == 'google_api_client') {
+     $operations = [];
+     $is_authenticated = $entity->getAuthenticated();
+     $operations['authenticate_revoke'] = [
+       'title' => $is_authenticated ? t('Revoke') : t('Authenticate'),
+-      'url' => $is_authenticated ? \Drupal\Core\Url::fromRoute('entity.google_api_client.revoke_form', ['google_api_client' => $entity->getId()]) : \Drupal\Core\Url::fromRoute('google_api_client.callback', ['id' => $entity->getId()]),
++      'url' => $is_authenticated ? Url::fromRoute('entity.google_api_client.revoke_form', ['google_api_client' => $entity->getId()]) : Url::fromRoute('google_api_client.callback', ['id' => $entity->getId()]),
+       'weight' => 50,
+     ];
+     return $operations;
+@@ -62,7 +67,7 @@ function google_api_client_google_services_scopes($services, $by_pass_cache = FA
+   }
+ }
+ 
+-function google_api_client_google_scopes_names(Drupal\Core\Field\BaseFieldDefinition $field, $entity, $cacheable) {
++function google_api_client_google_scopes_names(BaseFieldDefinition $field, $entity, $cacheable) {
+   $services = _google_api_client_google_services_names();
+   $services = array_keys($services);
+   return google_api_client_google_services_scopes($services);
+@@ -153,7 +158,7 @@ function _google_api_client_read_scope_info() {
+  */
+ function google_api_client_callback_url() {
+   $is_https = \Drupal::request()->isSecure();
+-  return \Drupal\Core\Url::fromRoute('google_api_client.callback', [], ['https' => $is_https, 'absolute' => TRUE])->toString();
++  return Url::fromRoute('google_api_client.callback', [], ['https' => $is_https, 'absolute' => TRUE])->toString();
+ }
+ 
+ /**
+@@ -167,7 +172,7 @@ function google_api_client_callback_url() {
+  */
+ function google_api_client_load_library($return_path = FALSE) {
+   $library = \Drupal::service('library.discovery')->getLibraryByName('google_api_client', 'google-api-php-client');
+-  $finder = new \Drupal\Component\ClassFinder\ClassFinder();
++  $finder = new ClassFinder();
+   $file = $finder->findFile('Google_Client');
+   if ($library) {
+     if (class_exists('Google_Client') && strpos($file, 'vendor') !== FALSE) {
+diff --git a/src/Controller/Callback.php b/src/Controller/Callback.php
+index 20ffb68..ff2a4e5 100644
+--- a/src/Controller/Callback.php
++++ b/src/Controller/Callback.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\google_api_client\Controller;
+ 
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+@@ -27,41 +28,41 @@ class Callback extends ControllerBase {
+   /**
+    * Google API Client.
+    *
+-   * @var \Drupal\google_api_client\Service\GoogleApiClientService
++   * @var GoogleApiClientService
+    */
+   private $googleApiClientService;
+ 
+   /**
+    * The tempstore factory.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStoreFactory
++   * @var PrivateTempStoreFactory
+    */
+   protected $tempStoreFactory;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * Callback constructor.
+    *
+-   * @param \Drupal\google_api_client\Service\GoogleApiClientService $googleApiClient
++   * @param GoogleApiClientService $googleApiClient
+    *   Google API Client.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $temp_store_factory
++   * @param PrivateTempStoreFactory $temp_store_factory
+    *   The tempstore factory.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+    */
+   public function __construct(GoogleApiClientService $googleApiClient, ModuleHandlerInterface $module_handler, PrivateTempStoreFactory $temp_store_factory, RequestStack $request_stack) {
+@@ -86,7 +87,7 @@ class Callback extends ControllerBase {
+   /**
+    * Callback URL for Google API Auth.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   Request.
+    *
+    * @return array
+@@ -215,10 +216,10 @@ class Callback extends ControllerBase {
+   /**
+    * Checks access for authenticate url.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Run access checks for this account.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function authenticateAccess(AccountInterface $account) {
+diff --git a/src/Entity/GoogleApiClient.php b/src/Entity/GoogleApiClient.php
+index 4d87749..be715af 100755
+--- a/src/Entity/GoogleApiClient.php
++++ b/src/Entity/GoogleApiClient.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\google_api_client\Entity;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Field\BaseFieldDefinition;
+@@ -572,9 +575,9 @@ class GoogleApiClient extends ContentEntityBase implements GoogleApiClientInterf
+    * @return int
+    *   Id for the GoogleApiClient being saved.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function save() {
+     // Skip for new entity.
+diff --git a/src/Form/GoogleApiClientSettingsForm.php b/src/Form/GoogleApiClientSettingsForm.php
+index f2d3233..e614104 100644
+--- a/src/Form/GoogleApiClientSettingsForm.php
++++ b/src/Form/GoogleApiClientSettingsForm.php
+@@ -29,7 +29,7 @@ class GoogleApiClientSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -41,7 +41,7 @@ class GoogleApiClientSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/GoogleApiServiceClientForm.php b/src/Form/GoogleApiServiceClientForm.php
+index 8b5320f..af7adc0 100644
+--- a/src/Form/GoogleApiServiceClientForm.php
++++ b/src/Form/GoogleApiServiceClientForm.php
+@@ -18,7 +18,7 @@ class GoogleApiServiceClientForm extends EntityForm {
+   /**
+    * Constructs an ExampleForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entityTypeManager.
+    */
+   public function __construct(EntityTypeManagerInterface $entityTypeManager) {
+diff --git a/src/GoogleApiClientInterface.php b/src/GoogleApiClientInterface.php
+index cb894d9..525585e 100644
+--- a/src/GoogleApiClientInterface.php
++++ b/src/GoogleApiClientInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\google_api_client;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\user\EntityOwnerInterface;
+ use Drupal\user\UserInterface;
+@@ -72,7 +73,7 @@ interface GoogleApiClientInterface extends ContentEntityInterface, EntityOwnerIn
+   /**
+    * Function returns Owner Id of the account.
+    *
+-   * @return \Drupal\user\Entity\User
++   * @return User
+    *   Returns Owner object.
+    */
+   public function getOwner();
+@@ -168,7 +169,7 @@ interface GoogleApiClientInterface extends ContentEntityInterface, EntityOwnerIn
+   /**
+    * Function set whether the account is authenticated.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   Pass User object for the owner.
+    */
+   public function setOwner(UserInterface $account);
+diff --git a/src/Service/GoogleApiClientService.php b/src/Service/GoogleApiClientService.php
+index 86b5944..5d7fc0b 100644
+--- a/src/Service/GoogleApiClientService.php
++++ b/src/Service/GoogleApiClientService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\google_api_client\Service;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+@@ -32,59 +33,59 @@ class GoogleApiClientService {
+   /**
+    * The GoogleApiClient Entity Object.
+    *
+-   * @var \Drupal\google_api_client\GoogleApiClientInterface
++   * @var GoogleApiClientInterface
+    */
+   public $googleApiClient;
+ 
+   /**
+    * The logger factory.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * Cache.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   private $cacheBackend;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The system theme config object.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Callback Controller constructor.
+    *
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $loggerFactory
++   * @param LoggerChannelFactoryInterface $loggerFactory
+    *   LoggerChannelFactoryInterface.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cacheBackend
++   * @param CacheBackendInterface $cacheBackend
+    *   Cache Backend.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(LoggerChannelFactoryInterface $loggerFactory, CacheBackendInterface $cacheBackend, MessengerInterface $messenger, TranslationInterface $string_translation, ConfigFactoryInterface $config_factory, ModuleHandlerInterface $module_handler) {
+@@ -99,13 +100,13 @@ class GoogleApiClientService {
+   /**
+    * Function to set the GoogleApiClient account for the service.
+    *
+-   * @param \Drupal\google_api_client\GoogleApiClientInterface $google_api_client
++   * @param GoogleApiClientInterface $google_api_client
+    *   Pass completely loaded GoogleApiClient object.
+    * @param \Google_Client|null $googleClient
+    *   Optionally parameter for developers who want to set initial
+    *   google client object.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function setGoogleApiClient(GoogleApiClientInterface $google_api_client, \Google_Client $googleClient = NULL) {
+     $this->googleApiClient = $google_api_client;
+@@ -126,7 +127,7 @@ class GoogleApiClientService {
+    * @return \Google_Client|bool
+    *   Google_Client object with all params from the account or false.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   private function getClient(\Google_Client $client = NULL) {
+     if (!google_api_client_load_library()) {
+@@ -177,7 +178,7 @@ class GoogleApiClientService {
+    * @return bool
+    *   Was the token added or not?
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   private function setAccessToken() {
+     // If there was something in cache.
+diff --git a/src/Service/GoogleApiServiceClientService.php b/src/Service/GoogleApiServiceClientService.php
+index c856fc6..43ff1ce 100644
+--- a/src/Service/GoogleApiServiceClientService.php
++++ b/src/Service/GoogleApiServiceClientService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\google_api_client\Service;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Link;
+@@ -31,50 +32,50 @@ class GoogleApiServiceClientService {
+   /**
+    * The GoogleApiClient Entity Object.
+    *
+-   * @var \Drupal\google_api_client\GoogleApiServiceClientInterface
++   * @var GoogleApiServiceClientInterface
+    */
+   public $googleApiServiceClient;
+ 
+   /**
+    * The logger factory.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * Cache.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   private $cacheBackend;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The system theme config object.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Callback Controller constructor.
+    *
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $loggerFactory
++   * @param LoggerChannelFactoryInterface $loggerFactory
+    *   LoggerChannelFactoryInterface.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cacheBackend
++   * @param CacheBackendInterface $cacheBackend
+    *   Cache Backend.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    */
+   public function __construct(LoggerChannelFactoryInterface $loggerFactory, CacheBackendInterface $cacheBackend, MessengerInterface $messenger, TranslationInterface $string_translation, ConfigFactoryInterface $config_factory) {
+@@ -88,7 +89,7 @@ class GoogleApiServiceClientService {
+   /**
+    * Function to set the GoogleApiClient account for the service.
+    *
+-   * @param \Drupal\google_api_client\GoogleApiServiceClientInterface $google_api_client
++   * @param GoogleApiServiceClientInterface $google_api_client
+    *   Pass completely loaded GoogleApiClient object.
+    * @param \Google_Client|null $googleClient
+    *   Optionally parameter for developers who want to set initial
+@@ -115,7 +116,7 @@ class GoogleApiServiceClientService {
+    * @return \Google_Client|bool
+    *   Google_Client object with all params from the account or false.
+    *
+-   * @throws \Google_Exception|\Drupal\Core\Entity\EntityStorageException
++   * @throws \Google_Exception|EntityStorageException
+    *    Google Exception if any api function fails and
+    *    EntityStorage Exception if entity save fails.
+    */

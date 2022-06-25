@@ -1,0 +1,366 @@
+diff --git a/composer.json b/composer.json
+index acc67f7..f451301 100644
+--- a/composer.json
++++ b/composer.json
+@@ -18,6 +18,6 @@
+     "source": "http://cgit.drupalcode.org/guardian"
+   },
+   "require": {
+-     "drupal/core": "^8.7.7 || ^9"
++    "drupal/core": "^8.7.7 || ^9 || ^10"
+   }
+ }
+diff --git a/guardian.info.yml b/guardian.info.yml
+index fc966a4..3af1ab7 100644
+--- a/guardian.info.yml
++++ b/guardian.info.yml
+@@ -1,9 +1,8 @@
+ name: Guardian
+ type: module
+ description: Requires users to log in with only password reset or drush uli.
+-core: 8.x
+ package: Security
+ configure: guardian.settings
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^8 || ^9 || ^10
+ dependencies:
+   - 'drupal:system(>=8.7)'
+diff --git a/guardian.install b/guardian.install
+index fb086ee..6d1d1c8 100644
+--- a/guardian.install
++++ b/guardian.install
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\guardian\GuardianManagerInterface;
++use Drupal\user\UserInterface;
+ /**
+  * @file
+  * Install, update and uninstall functions.
+@@ -48,10 +50,10 @@ function guardian_requirements($phase) {
+  * Implements hook_install().
+  */
+ function guardian_install() {
+-  /** @var \Drupal\guardian\GuardianManagerInterface $guardian */
++  /** @var GuardianManagerInterface $guardian */
+   $guardian = \Drupal::service('guardian.manager');
+ 
+-  /** @var \Drupal\user\UserInterface[] $accounts */
++  /** @var UserInterface[] $accounts */
+   $accounts = \Drupal::entityTypeManager()
+     ->getStorage('user')
+     ->loadMultiple($guardian->getGuardedUids());
+@@ -69,7 +71,7 @@ function guardian_install() {
+  * Implements hook_uninstall().
+  */
+ function guardian_uninstall() {
+-  /** @var \Drupal\guardian\GuardianManagerInterface $guardian */
++  /** @var GuardianManagerInterface $guardian */
+   $guardian = \Drupal::service('guardian.manager');
+ 
+   $guardian->notifyModuleState(FALSE);
+diff --git a/guardian.module b/guardian.module
+index 555d1fa..9b996ad 100644
+--- a/guardian.module
++++ b/guardian.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\guardian\GuardianManagerInterface;
++use Drupal\user\UserInterface;
+ /**
+  * @file
+  * Contains guardian.module.
+@@ -33,10 +35,10 @@ function guardian_help($route_name, RouteMatchInterface $route_match) {
+  * Implements hook_cron().
+  */
+ function guardian_cron() {
+-  /** @var \Drupal\guardian\GuardianManagerInterface $guardian */
++  /** @var GuardianManagerInterface $guardian */
+   $guardian = \Drupal::service('guardian.manager');
+ 
+-  /** @var \Drupal\user\UserInterface[] $accounts */
++  /** @var UserInterface[] $accounts */
+   $accounts = \Drupal::entityTypeManager()
+     ->getStorage('user')
+     ->loadMultiple($guardian->getGuardedUids());
+@@ -68,10 +70,10 @@ function guardian_mail($key, &$message, $params) {
+  * Uid 1 can only be viewed or updated by uid 1.
+  */
+ function guardian_user_access(EntityInterface $entity, $operation, AccountInterface $account) {
+-  /** @var \Drupal\guardian\GuardianManagerInterface $guardian */
++  /** @var GuardianManagerInterface $guardian */
+   $guardian = \Drupal::service('guardian.manager');
+ 
+-  /** @var \Drupal\user\UserInterface $entity */
++  /** @var UserInterface $entity */
+   if (!$guardian->isGuarded($entity)) {
+     return AccessResult::neutral();
+   }
+@@ -89,14 +91,14 @@ function guardian_user_access(EntityInterface $entity, $operation, AccountInterf
+  * @see \Drupal\user\ProfileForm::form()
+  */
+ function guardian_form_user_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+-  /** @var \Drupal\user\UserInterface $account */
++  /** @var UserInterface $account */
+   $account = $form_state->getFormObject()->getEntity();
+ 
+   if ($account->isNew()) {
+     return;
+   }
+ 
+-  /** @var \Drupal\guardian\GuardianManagerInterface $guardian */
++  /** @var GuardianManagerInterface $guardian */
+   $guardian = \Drupal::service('guardian.manager');
+ 
+   if (!$guardian->isGuarded($account)) {
+@@ -119,10 +121,10 @@ function guardian_form_user_form_alter(&$form, FormStateInterface $form_state, $
+  * Implements hook_ENTITY_TYPE_presave().
+  */
+ function guardian_user_presave(EntityInterface $entity) {
+-  /** @var \Drupal\guardian\GuardianManagerInterface $guardian */
++  /** @var GuardianManagerInterface $guardian */
+   $guardian = \Drupal::service('guardian.manager');
+ 
+-  /** @var \Drupal\user\UserInterface $entity */
++  /** @var UserInterface $entity */
+   if ($guardian->isGuarded($entity)) {
+     $guardian->setDefaultUserValues($entity);
+   }
+@@ -138,7 +140,7 @@ function guardian_mail_alter(array &$message) {
+     return;
+   }
+ 
+-  /** @var \Drupal\guardian\GuardianManagerInterface $guardian */
++  /** @var GuardianManagerInterface $guardian */
+   $guardian = \Drupal::service('guardian.manager');
+   $users = \Drupal::entityTypeManager()
+     ->getStorage('user')
+diff --git a/src/EventSubscriber/GuardianSubscriber.php b/src/EventSubscriber/GuardianSubscriber.php
+index 26649a2..d18559b 100644
+--- a/src/EventSubscriber/GuardianSubscriber.php
++++ b/src/EventSubscriber/GuardianSubscriber.php
+@@ -2,12 +2,12 @@
+ 
+ namespace Drupal\guardian\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Core\Url;
+ use Drupal\Core\Session\AccountProxyInterface;
+ use Drupal\guardian\GuardianManagerInterface;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+ use Symfony\Component\HttpKernel\KernelEvents;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ 
+ /**
+@@ -32,10 +32,10 @@ class GuardianSubscriber implements EventSubscriberInterface {
+   /**
+    * Returns password reset page if the current Guarded User is invalid.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The event to process.
+    */
+-  public function checkUser(GetResponseEvent $event) {
++  public function checkUser(RequestEvent $event) {
+     $current_path = Url::fromRoute('<current>');
+ 
+     // Show message to guarded users that are logged out with force.
+diff --git a/src/GuardianManager.php b/src/GuardianManager.php
+index d545b09..2261b5d 100644
+--- a/src/GuardianManager.php
++++ b/src/GuardianManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\guardian;
+ 
++use Drupal\user\UserStorageInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -30,86 +31,86 @@ final class GuardianManager implements GuardianManagerInterface {
+   /**
+    * The configuration object factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\user\UserStorageInterface
++   * @var UserStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The mail manager service.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+   protected $mailManager;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The account object.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The session manager.
+    *
+-   * @var \Drupal\Core\Session\SessionManagerInterface
++   * @var SessionManagerInterface
+    */
+   protected $sessionManager;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The email validator.
+    *
+-   * @var \Egulias\EmailValidator\EmailValidator
++   * @var EmailValidator
+    */
+   protected $emailValidator;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * GuardianManager constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration object factory service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Mail\MailManagerInterface $mail_manager
++   * @param MailManagerInterface $mail_manager
+    *   The mail manager service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The account object.
+-   * @param \Drupal\Core\Session\SessionManagerInterface $session_manager
++   * @param SessionManagerInterface $session_manager
+    *   The session manager.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Egulias\EmailValidator\EmailValidator $email_validator
++   * @param EmailValidator $email_validator
+    *   The email validator.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, MailManagerInterface $mail_manager, RequestStack $request_stack, AccountInterface $current_user, SessionManagerInterface $session_manager, TimeInterface $time, EmailValidator $email_validator, ModuleHandlerInterface $module_handler) {
+@@ -159,7 +160,7 @@ final class GuardianManager implements GuardianManagerInterface {
+     ];
+ 
+     $guardian_mail = Settings::get('guardian_mail');
+-    /** @var \Drupal\user\UserInterface $user */
++    /** @var UserInterface $user */
+     $user = $this->userStorage->load(1);
+ 
+     $this->mailManager->mail('guardian', 'notification', $guardian_mail, $user->getPreferredLangcode(), $params, NULL, TRUE);
+@@ -224,7 +225,7 @@ final class GuardianManager implements GuardianManagerInterface {
+    * {@inheritdoc}
+    */
+   public function hasValidData(AccountInterface $account) {
+-    /** @var \Drupal\user\UserInterface $user */
++    /** @var UserInterface $user */
+     $user = $this->userStorage->load($account->id());
+ 
+     if ($user && is_null($user->getPassword())) {
+diff --git a/src/GuardianManagerInterface.php b/src/GuardianManagerInterface.php
+index fb48099..e58e0f4 100644
+--- a/src/GuardianManagerInterface.php
++++ b/src/GuardianManagerInterface.php
+@@ -15,7 +15,7 @@ interface GuardianManagerInterface {
+   /**
+    * Set default Guarded User values.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   User object to set with default values.
+    */
+   public function setDefaultUserValues(UserInterface $user);
+@@ -23,7 +23,7 @@ interface GuardianManagerInterface {
+   /**
+    * Check if Account has correct mail, init, pass values.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Account object.
+    *
+    * @return bool
+@@ -34,7 +34,7 @@ interface GuardianManagerInterface {
+   /**
+    * Check if Account has been active for minimum period.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Account object.
+    *
+    * @return bool
+@@ -45,7 +45,7 @@ interface GuardianManagerInterface {
+   /**
+    * Check if Account is a Guarded User.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Account object.
+    *
+    * @return bool
+@@ -56,7 +56,7 @@ interface GuardianManagerInterface {
+   /**
+    * Destroy all sessions of given Account.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Account object.
+    */
+   public function destroySession(AccountInterface $account);
+diff --git a/tests/src/Functional/GuardedUsersTest.php b/tests/src/Functional/GuardedUsersTest.php
+index ecbcb2f..5849b38 100644
+--- a/tests/src/Functional/GuardedUsersTest.php
++++ b/tests/src/Functional/GuardedUsersTest.php
+@@ -27,7 +27,7 @@ class GuardedUsersTest extends BrowserTestBase {
+   /**
+    * A guarded user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $guardedUser;
+ 

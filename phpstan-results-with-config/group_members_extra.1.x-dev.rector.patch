@@ -1,0 +1,168 @@
+diff --git a/group_members_extra.module b/group_members_extra.module
+index d690e82..f2776fe 100644
+--- a/group_members_extra.module
++++ b/group_members_extra.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\group\Entity\GroupContentInterface;
++use Drupal\group\Entity\Group;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Entity\Entity\EntityFormDisplay;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+@@ -78,7 +80,7 @@ function group_members_extra_entity_field_access($operation, FieldDefinitionInte
+     return AccessResult::neutral();
+   }
+ 
+-  /** @var \Drupal\group\Entity\GroupContentInterface $group_content */
++  /** @var GroupContentInterface $group_content */
+   $group_content = $items->getEntity();
+ 
+   // We only care if the group content entity is a group membership.
+@@ -103,13 +105,13 @@ function group_members_extra_entity_field_access($operation, FieldDefinitionInte
+  * Add substitution for the group_type_label to be used in Views.
+  */
+ function group_members_extra_views_post_execute(ViewExecutable $view) {
+-  /** @var \Drupal\views\ViewExecutable $view */
++  /** @var ViewExecutable $view */
+   $args = $view->argument;
+   if (isset($args['gid'])) {
+     $gid = $args['gid']->getValue();
+     $group = Drupal::entityTypeManager()->getStorage('group')->load($gid);
+ 
+-    /** @var \Drupal\group\Entity\Group $group */
++    /** @var Group $group */
+     if ($group) {
+       $view->build_info['substitutions']['{{ group_type_label }}'] = $group->getGroupType()->label();
+     }
+diff --git a/src/Plugin/Block/GroupContentOperationsBlock.php b/src/Plugin/Block/GroupContentOperationsBlock.php
+index 372529e..468348c 100644
+--- a/src/Plugin/Block/GroupContentOperationsBlock.php
++++ b/src/Plugin/Block/GroupContentOperationsBlock.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\group_members_extra\Plugin\Block;
+ 
++use Drupal\group\Entity\GroupInterface;
++use Drupal\group\Plugin\GroupContentEnabler\GroupMembership;
++use Drupal\group\Plugin\GroupContentEnablerInterface;
+ use Drupal\Core\Cache\CacheableMetadata;
+ use Drupal\group\Plugin\Block\GroupOperationsBlock;
+ 
+@@ -32,19 +35,19 @@ class GroupContentOperationsBlock extends GroupOperationsBlock {
+     $cacheable_metadata = new CacheableMetadata();
+     $cacheable_metadata->setCacheContexts(['user.group_permissions']);
+ 
+-    /** @var \Drupal\group\Entity\GroupInterface $group */
++    /** @var GroupInterface $group */
+     if (($group = $this->getContextValue('group')) && $group->id()) {
+       $links = [];
+ 
+       // Retrieve the operations and cacheable metadata from the installed
+       // content plugins.
+-      /** @var \Drupal\group\Plugin\GroupContentEnabler\GroupMembership $plugin */
++      /** @var GroupMembership $plugin */
+       foreach ($group->getGroupType()->getInstalledContentPlugins() as $plugin) {
+         if ($plugin->getEntityTypeId() !== 'node') {
+           continue;
+         }
+ 
+-        /** @var \Drupal\group\Plugin\GroupContentEnablerInterface $plugin */
++        /** @var GroupContentEnablerInterface $plugin */
+         $links += $plugin->getGroupOperations($group);
+         $cacheable_metadata = $cacheable_metadata->merge($plugin->getGroupOperationsCacheableMetadata());
+       }
+diff --git a/src/Plugin/Block/GroupMembershipOperationsBlock.php b/src/Plugin/Block/GroupMembershipOperationsBlock.php
+index 694eb9d..3e94acc 100644
+--- a/src/Plugin/Block/GroupMembershipOperationsBlock.php
++++ b/src/Plugin/Block/GroupMembershipOperationsBlock.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\group_members_extra\Plugin\Block;
+ 
++use Drupal\group\Entity\GroupInterface;
++use Drupal\group\Plugin\GroupContentEnabler\GroupMembership;
++use Drupal\group\Plugin\GroupContentEnablerInterface;
+ use Drupal\Core\Cache\CacheableMetadata;
+ use Drupal\group\Plugin\Block\GroupOperationsBlock;
+ 
+@@ -32,19 +35,19 @@ class GroupMembershipOperationsBlock extends GroupOperationsBlock {
+     $cacheable_metadata = new CacheableMetadata();
+     $cacheable_metadata->setCacheContexts(['user.group_permissions']);
+ 
+-    /** @var \Drupal\group\Entity\GroupInterface $group */
++    /** @var GroupInterface $group */
+     if (($group = $this->getContextValue('group')) && $group->id()) {
+       $links = [];
+ 
+       // Retrieve the operations and cacheable metadata from the installed
+       // content plugins.
+-      /** @var \Drupal\group\Plugin\GroupContentEnabler\GroupMembership $plugin */
++      /** @var GroupMembership $plugin */
+       foreach ($group->getGroupType()->getInstalledContentPlugins() as $plugin) {
+         if ($plugin->getEntityTypeId() !== 'user') {
+           continue;
+         }
+ 
+-        /** @var \Drupal\group\Plugin\GroupContentEnablerInterface $plugin */
++        /** @var GroupContentEnablerInterface $plugin */
+         $links += $plugin->getGroupOperations($group);
+         $cacheable_metadata = $cacheable_metadata->merge($plugin->getGroupOperationsCacheableMetadata());
+       }
+diff --git a/tests/src/Functional/GroupMembersExtraTest.php b/tests/src/Functional/GroupMembersExtraTest.php
+index 3017b87..b77d97b 100644
+--- a/tests/src/Functional/GroupMembersExtraTest.php
++++ b/tests/src/Functional/GroupMembersExtraTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\group_members_extra\Functional;
+ 
++use Drupal\group\Entity\Group;
++use Drupal\user\Entity\User;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\group\Entity\GroupTypeInterface;
+ use Drupal\Core\Test\AssertMailTrait;
+ use Drupal\Tests\group\Functional\GroupBrowserTestBase;
+ 
+@@ -23,28 +27,28 @@ class GroupMembersExtraTest extends GroupBrowserTestBase {
+   /**
+    * The group we will use to test methods on.
+    *
+-   * @var \Drupal\group\Entity\Group
++   * @var Group
+    */
+   protected $group;
+ 
+   /**
+    * The group administrator user we will use.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $account;
+ 
+   /**
+    * The group member user we will use.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $member;
+ 
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   protected function setUp(): void {
+     parent::setUp();
+@@ -56,7 +60,7 @@ class GroupMembersExtraTest extends GroupBrowserTestBase {
+ 
+     // Create new group type.
+     $group_type_id = 'group_contact';
+-    /** @var \Drupal\group\Entity\GroupTypeInterface $group_type */
++    /** @var GroupTypeInterface $group_type */
+     $this->entityTypeManager
+       ->getStorage('group_type')
+       ->create([

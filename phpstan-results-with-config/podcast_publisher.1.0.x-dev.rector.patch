@@ -1,0 +1,183 @@
+diff --git a/podcast_publisher.install b/podcast_publisher.install
+index d1686f2..f26b5b3 100644
+--- a/podcast_publisher.install
++++ b/podcast_publisher.install
+@@ -8,7 +8,7 @@ use Symfony\Component\Yaml\Yaml;
+ function podcast_publisher_install() {
+   // Create itunes category terms.
+   $file_path = \Drupal::service('module_handler')->getModule('podcast_publisher')->getPath() . '/itunes-categories.yml';
+-  $categories = Symfony\Component\Yaml\Yaml::parse(file_get_contents($file_path));
++  $categories = Yaml::parse(file_get_contents($file_path));
+   $term_storage = \Drupal::entityTypeManager()->getStorage('taxonomy_term');
+   $vid = 'pp_itunes_categories';
+   foreach ($categories as $category => $sub_categories) {
+diff --git a/podcast_publisher.module b/podcast_publisher.module
+index 5b88205..52bd423 100644
+--- a/podcast_publisher.module
++++ b/podcast_publisher.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\podcast_publisher\PodcastAudioServiceInterface;
+ /**
+  * @file
+  * Provides a podcast entity type.
+@@ -64,7 +65,7 @@ function podcast_publisher_media_presave(MediaInterface $media) {
+     if (!$file) {
+       return;
+     }
+-    /** @var \Drupal\podcast_publisher\PodcastAudioServiceInterface $audio_service */
++    /** @var PodcastAudioServiceInterface $audio_service */
+     $audio_service = \Drupal::service('podcast_publisher.audio_service');
+     $duration = $audio_service->getDuration($file);
+     $media->set('field_duration', $duration);
+diff --git a/src/Form/PodcastForm.php b/src/Form/PodcastForm.php
+index 9565de1..843857e 100644
+--- a/src/Form/PodcastForm.php
++++ b/src/Form/PodcastForm.php
+@@ -20,7 +20,7 @@ class PodcastForm extends ContentEntityForm {
+     $link = $entity->toLink($this->t('View'))->toRenderable();
+ 
+     $message_arguments = ['%label' => $this->entity->label()];
+-    $logger_arguments = $message_arguments + ['link' => render($link)];
++    $logger_arguments = $message_arguments + ['link' => \Drupal::service('renderer')->render($link)];
+ 
+     if ($result == SAVED_NEW) {
+       $this->messenger()->addStatus($this->t('New podcast %label has been created.', $message_arguments));
+diff --git a/src/Plugin/Field/FieldFormatter/FileLength.php b/src/Plugin/Field/FieldFormatter/FileLength.php
+index bb9f7b9..fd2dc1d 100644
+--- a/src/Plugin/Field/FieldFormatter/FileLength.php
++++ b/src/Plugin/Field/FieldFormatter/FileLength.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\podcast_publisher\Plugin\Field\FieldFormatter;
+ 
++use Drupal\file\Entity\File;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\file\Plugin\Field\FieldFormatter\FileFormatterBase;
+@@ -26,7 +27,7 @@ class FileLength extends FileFormatterBase {
+   public function viewElements(FieldItemListInterface $items, $langcode) {
+     $elements = [];
+ 
+-    /** @var \Drupal\file\Entity\File $file */
++    /** @var File $file */
+     foreach ($this->getEntitiesToView($items, $langcode) as $delta => $file) {
+       if ($file->id()) {
+         $elements[$delta] = [
+diff --git a/src/Plugin/views/row/PodcastEpisodeFields.php b/src/Plugin/views/row/PodcastEpisodeFields.php
+index fb8a749..a8bca24 100644
+--- a/src/Plugin/views/row/PodcastEpisodeFields.php
++++ b/src/Plugin/views/row/PodcastEpisodeFields.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\podcast_publisher\Plugin\views\row;
+ 
++use Drupal\Component\Render\MarkupInterface;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Url;
+@@ -236,7 +237,7 @@ class PodcastEpisodeFields extends RowPluginBase {
+    * @param $field_id
+    *   The ID assigned to the required field in the display.
+    *
+-   * @return string|null|\Drupal\Component\Render\MarkupInterface
++   * @return string|null|MarkupInterface
+    *   An empty string if there is no style plugin, or the field ID is empty.
+    *   NULL if the field value is empty. If neither of these conditions apply,
+    *   a MarkupInterface object containing the rendered field value.
+diff --git a/src/Plugin/views/style/PodcastFeed.php b/src/Plugin/views/style/PodcastFeed.php
+index 6d75292..3aca30b 100644
+--- a/src/Plugin/views/style/PodcastFeed.php
++++ b/src/Plugin/views/style/PodcastFeed.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\podcast_publisher\Plugin\views\style;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\taxonomy\TermInterface;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Url;
+@@ -26,7 +28,7 @@ class PodcastFeed extends StylePluginBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -364,7 +366,7 @@ class PodcastFeed extends StylePluginBase {
+   protected function getItunesCategories($field_value) {
+     $elements = [];
+     $term_ids = explode(',', $field_value);
+-    /** @var \Drupal\taxonomy\TermInterface[] $terms */
++    /** @var TermInterface[] $terms */
+     $terms = $this->entityTypeManager->getStorage('taxonomy_term')->loadMultiple($term_ids);
+     foreach ($terms as $term) {
+       if ($parent = $term->get('parent')->entity) {
+diff --git a/src/PodcastAudioService.php b/src/PodcastAudioService.php
+index c5a4ce2..d864d2a 100644
+--- a/src/PodcastAudioService.php
++++ b/src/PodcastAudioService.php
+@@ -11,7 +11,7 @@ use getID3;
+ class PodcastAudioService implements PodcastAudioServiceInterface {
+ 
+   /**
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *
+    * @return string
+    */
+diff --git a/src/PodcastAudioServiceInterface.php b/src/PodcastAudioServiceInterface.php
+index 6742d61..8025759 100644
+--- a/src/PodcastAudioServiceInterface.php
++++ b/src/PodcastAudioServiceInterface.php
+@@ -9,7 +9,7 @@ interface PodcastAudioServiceInterface {
+   /**
+    * Gets the duration of a given audio file.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   The audio file.
+    *
+    * @return string
+diff --git a/src/PodcastListBuilder.php b/src/PodcastListBuilder.php
+index 004439a..61d48ae 100644
+--- a/src/PodcastListBuilder.php
++++ b/src/PodcastListBuilder.php
+@@ -18,27 +18,27 @@ class PodcastListBuilder extends EntityListBuilder {
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The redirect destination service.
+    *
+-   * @var \Drupal\Core\Routing\RedirectDestinationInterface
++   * @var RedirectDestinationInterface
+    */
+   protected $redirectDestination;
+ 
+   /**
+    * Constructs a new PodcastListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Routing\RedirectDestinationInterface $redirect_destination
++   * @param RedirectDestinationInterface $redirect_destination
+    *   The redirect destination service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, DateFormatterInterface $date_formatter, RedirectDestinationInterface $redirect_destination) {

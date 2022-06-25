@@ -1,0 +1,546 @@
+diff --git a/bootstrap_layouts.info.yml b/bootstrap_layouts.info.yml
+index d257022..d7a4cec 100755
+--- a/bootstrap_layouts.info.yml
++++ b/bootstrap_layouts.info.yml
+@@ -1,8 +1,7 @@
+ name: Bootstrap Layouts
+ type: module
+ description: This module is going to generate layouts with Bootstrap grid system.
+-core: 8.x
+-core_version_requirement: '^8 || ^9'
++core_version_requirement: ^9.3 || ^10
+ package: Layout
+ dependencies:
+   - drupal:layout_discovery
+diff --git a/bootstrap_layouts.install b/bootstrap_layouts.install
+index bfc1933..4a119cf 100644
+--- a/bootstrap_layouts.install
++++ b/bootstrap_layouts.install
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Extension\ModuleInstallerInterface;
++use Drupal\bootstrap_layouts\BootstrapLayoutsManager;
+ /**
+  * @file
+  * Install, uninstall and update hooks for the Bootstrap Layouts module.
+@@ -14,7 +16,7 @@
+ function _bootstrap_layouts_ensure_dependency() {
+   $module_handler = \Drupal::moduleHandler();
+ 
+-  /** @var \Drupal\Core\Extension\ModuleInstallerInterface $module_installer */
++  /** @var ModuleInstallerInterface $module_installer */
+   $module_installer = \Drupal::service('module_installer');
+ 
+   // Uninstall "layout_plugin".
+@@ -50,7 +52,7 @@ function _bootstrap_layouts_update($schema) {
+   // Ensure dependencies.
+   _bootstrap_layouts_ensure_dependency();
+ 
+-  /** @var \Drupal\bootstrap_layouts\BootstrapLayoutsManager $bootstrap_layouts_manager */
++  /** @var BootstrapLayoutsManager $bootstrap_layouts_manager */
+   if ($manager = \Drupal::service('plugin.manager.bootstrap_layouts')) {
+     $manager->update($schema);
+   }
+diff --git a/bootstrap_layouts.module b/bootstrap_layouts.module
+index 6f0dba5..ca14fc2 100644
+--- a/bootstrap_layouts.module
++++ b/bootstrap_layouts.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\Core\Layout\LayoutDefinition;
++use Drupal\Core\Utility\Token;
++use Drupal\Core\Entity\EntityInterface;
+ /**
+  * @file
+  * Contains bootstrap_layouts.module.
+@@ -24,7 +27,7 @@ function bootstrap_layouts_theme_registry_alter(&$theme_registry) {
+   // Find all Bootstrap Layouts.
+   $layouts = \Drupal::service('plugin.manager.core.layout')->getDefinitions();
+   $layout_theme_hooks = [];
+-  /** @var \Drupal\Core\Layout\LayoutDefinition $info */
++  /** @var LayoutDefinition $info */
+   foreach ($layouts as $info) {
+     if ($info->getClass() === 'Drupal\bootstrap_layouts\Plugin\Layout\BootstrapLayoutsBase') {
+       $layout_theme_hooks[] = $info->getThemeHook();
+@@ -53,7 +56,7 @@ function bootstrap_layouts_theme_registry_alter(&$theme_registry) {
+ function _bootstrap_layouts_parse_attributes($string = NULL, array $tokens = []) {
+   static $token;
+   if (!isset($token)) {
+-    /** @var \Drupal\Core\Utility\Token $token */
++    /** @var Token $token */
+     $token = \Drupal::service('token');
+   }
+   $attributes = [];
+@@ -80,14 +83,14 @@ function _bootstrap_layouts_parse_attributes($string = NULL, array $tokens = [])
+  *   Variables array, passed by reference.
+  */
+ function _bootstrap_layouts_preprocess_layout(array &$variables) {
+-  /** @var \Drupal\Core\Layout\LayoutDefinition $layout_definition */
++  /** @var LayoutDefinition $layout_definition */
+   $layout_definition = $variables['layout'];
+ 
+   // Utilize the BootstrapLayout utility class to normalize DX readability here.
+   $layout = new BootstrapLayout($layout_definition->id(), [], $variables['settings']);
+ 
+   // Determine the entity, entity type and bundle.
+-  /** @var \Drupal\Core\Entity\EntityInterface $entity */
++  /** @var EntityInterface $entity */
+   $entity = isset($variables['content']['#entity']) ? $variables['content']['#entity'] : FALSE;
+   $entity_type = isset($variables['content']['#entity_type']) ? $variables['content']['#entity_type'] : FALSE;
+   $bundle = isset($variables['content']['#bundle']) ? $variables['content']['#bundle'] : FALSE;
+diff --git a/src/BootstrapLayout.php b/src/BootstrapLayout.php
+index b3b58c4..317331a 100644
+--- a/src/BootstrapLayout.php
++++ b/src/BootstrapLayout.php
+@@ -141,7 +141,7 @@ class BootstrapLayout {
+   public function isBootstrapLayout() {
+     static $bootstrap_manager;
+     if (!isset($bootstrap_manager)) {
+-      /** @var \Drupal\bootstrap_layouts\BootstrapLayoutsManager $bootstrap_manager */
++      /** @var BootstrapLayoutsManager $bootstrap_manager */
+       $bootstrap_manager = \Drupal::service('plugin.manager.bootstrap_layouts');
+     }
+     return $bootstrap_manager->isBootstrapLayout($this->data['id']);
+diff --git a/src/BootstrapLayoutsManager.php b/src/BootstrapLayoutsManager.php
+index c728cda..9a82caf 100644
+--- a/src/BootstrapLayoutsManager.php
++++ b/src/BootstrapLayoutsManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bootstrap_layouts;
+ 
++use Drupal\bootstrap_layouts\Plugin\BootstrapLayouts\BootstrapLayoutsHandlerInterface;
+ use Drupal\bootstrap_layouts\Plugin\Layout\BootstrapLayoutsBase;
+ use Drupal\Component\Serialization\Yaml;
+ use Drupal\Component\Utility\NestedArray;
+@@ -19,12 +20,12 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class BootstrapLayoutsManager extends BootstrapLayoutsPluginManager {
+ 
+   /**
+-   * @var \Drupal\Core\Layout\LayoutPluginManager
++   * @var LayoutPluginManager
+    */
+   protected $layoutManager;
+ 
+   /**
+-   * @var \Drupal\bootstrap_layouts\BootstrapLayoutsUpdateManager
++   * @var BootstrapLayoutsUpdateManager
+    */
+   protected $updateManager;
+ 
+@@ -34,17 +35,17 @@ class BootstrapLayoutsManager extends BootstrapLayoutsPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+-   * @param \Drupal\Core\Extension\ThemeHandlerInterface $theme_handler
++   * @param ThemeHandlerInterface $theme_handler
+    *   The theme manager used to invoke the alter hook with.
+-   * @param \Drupal\Core\Theme\ThemeManagerInterface $theme_manager
++   * @param ThemeManagerInterface $theme_manager
+    *   The theme manager used to invoke the alter hook with.
+-   * @param \Drupal\Core\Layout\LayoutPluginManager $layout_manager
++   * @param LayoutPluginManager $layout_manager
+    *   The Layout Manager.
+-   * @param \Drupal\bootstrap_layouts\BootstrapLayoutsUpdateManager $update_manager
++   * @param BootstrapLayoutsUpdateManager $update_manager
+    *   The Bootstrap Layouts update manager.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler, ThemeHandlerInterface $theme_handler, ThemeManagerInterface $theme_manager, LayoutPluginManager $layout_manager, BootstrapLayoutsUpdateManager $update_manager) {
+@@ -220,7 +221,7 @@ class BootstrapLayoutsManager extends BootstrapLayoutsPluginManager {
+   /**
+    * Retrieves all available handler instances.
+    *
+-   * @return \Drupal\bootstrap_layouts\Plugin\BootstrapLayouts\BootstrapLayoutsHandlerInterface[]
++   * @return BootstrapLayoutsHandlerInterface[]
+    */
+   public function getHandlers() {
+     $instances = [];
+@@ -284,9 +285,12 @@ class BootstrapLayoutsManager extends BootstrapLayoutsPluginManager {
+                 }
+               }
+               else {
++                // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++                // This needs to be replaced, but Rector was not yet able to replace this because the type of message was set with a variable. If you need to continue to use a variable, you might consider using a switch statement.
++                // @noRector
+                 drupal_set_message($message, $type);
+                 if ($error) {
+-                  drupal_set_message($error, 'error');
++                  \Drupal::messenger()->addError($error);
+                 }
+               }
+             }
+diff --git a/src/BootstrapLayoutsPluginManager.php b/src/BootstrapLayoutsPluginManager.php
+index c6041e5..7853b2f 100644
+--- a/src/BootstrapLayoutsPluginManager.php
++++ b/src/BootstrapLayoutsPluginManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bootstrap_layouts;
+ 
++use Composer\Autoload\ClassLoader;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+@@ -19,12 +20,12 @@ class BootstrapLayoutsPluginManager extends DefaultPluginManager implements Cont
+   use StringTranslationTrait;
+ 
+   /**
+-   * @var \Drupal\Core\Extension\ThemeHandlerInterface
++   * @var ThemeHandlerInterface
+    */
+   protected $themeHandler;
+ 
+   /**
+-   * @var \Drupal\Core\Theme\ThemeManagerInterface
++   * @var ThemeManagerInterface
+    */
+   protected $themeManager;
+ 
+@@ -39,13 +40,13 @@ class BootstrapLayoutsPluginManager extends DefaultPluginManager implements Cont
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+-   * @param \Drupal\Core\Extension\ThemeHandlerInterface $theme_handler
++   * @param ThemeHandlerInterface $theme_handler
+    *   The theme manager used to invoke the alter hook with.
+-   * @param \Drupal\Core\Theme\ThemeManagerInterface $theme_manager
++   * @param ThemeManagerInterface $theme_manager
+    *   The theme manager used to invoke the alter hook with.
+    * @param string|null $plugin_interface
+    *   (optional) The interface each plugin should implement.
+@@ -54,7 +55,7 @@ class BootstrapLayoutsPluginManager extends DefaultPluginManager implements Cont
+    *   Defaults to 'Drupal\Component\Annotation\Plugin'.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler, ThemeHandlerInterface $theme_handler, ThemeManagerInterface $theme_manager, $plugin_interface = NULL, $plugin_definition_annotation_name = 'Drupal\Component\Annotation\Plugin') {
+-    /** @var \Composer\Autoload\ClassLoader $class_loader */
++    /** @var ClassLoader $class_loader */
+     $class_loader = \Drupal::service('class_loader');
+ 
+     /** @var \ArrayObject $namespaces */
+diff --git a/src/BootstrapLayoutsUninstallValidator.php b/src/BootstrapLayoutsUninstallValidator.php
+index e98a528..1c5a72b 100644
+--- a/src/BootstrapLayoutsUninstallValidator.php
++++ b/src/BootstrapLayoutsUninstallValidator.php
+@@ -15,14 +15,14 @@ class BootstrapLayoutsUninstallValidator implements ModuleUninstallValidatorInte
+   /**
+    * The BootstrapLayouts manager.
+    *
+-   * @var \Drupal\bootstrap_layouts\BootstrapLayoutsManager
++   * @var BootstrapLayoutsManager
+    */
+   protected $manager;
+ 
+   /**
+    * Constructs a new ContentUninstallValidator.
+    *
+-   * @param \Drupal\bootstrap_layouts\BootstrapLayoutsManager $manager
++   * @param BootstrapLayoutsManager $manager
+    *   The BootstrapLayouts manager.
+    */
+   public function __construct(BootstrapLayoutsManager $manager) {
+diff --git a/src/BootstrapLayoutsUpdateManager.php b/src/BootstrapLayoutsUpdateManager.php
+index ba7ac02..708a17f 100644
+--- a/src/BootstrapLayoutsUpdateManager.php
++++ b/src/BootstrapLayoutsUpdateManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bootstrap_layouts;
+ 
++use Drupal\bootstrap_layouts\Plugin\BootstrapLayouts\BootstrapLayoutsUpdateInterface;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\Extension\ThemeHandlerInterface;
+@@ -15,13 +16,13 @@ class BootstrapLayoutsUpdateManager extends BootstrapLayoutsPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+-   * @param \Drupal\Core\Extension\ThemeHandlerInterface $theme_handler
++   * @param ThemeHandlerInterface $theme_handler
+    *   The theme manager used to invoke the alter hook with.
+-   * @param \Drupal\Core\Theme\ThemeManagerInterface $theme_manager
++   * @param ThemeManagerInterface $theme_manager
+    *   The theme manager used to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler, ThemeHandlerInterface $theme_handler, ThemeManagerInterface $theme_manager) {
+@@ -36,7 +37,7 @@ class BootstrapLayoutsUpdateManager extends BootstrapLayoutsPluginManager {
+    * @param int $schema
+    *   The update schema version to retrieve.
+    *
+-   * @return \Drupal\bootstrap_layouts\Plugin\BootstrapLayouts\BootstrapLayoutsUpdateInterface[]
++   * @return BootstrapLayoutsUpdateInterface[]
+    *   An array of update plugins, keyed by their plugin id.
+    */
+   public function getUpdates($schema) {
+diff --git a/src/Plugin/BootstrapLayouts/BootstrapLayoutsHandlerInterface.php b/src/Plugin/BootstrapLayouts/BootstrapLayoutsHandlerInterface.php
+index 78477ed..d9faf02 100644
+--- a/src/Plugin/BootstrapLayouts/BootstrapLayoutsHandlerInterface.php
++++ b/src/Plugin/BootstrapLayouts/BootstrapLayoutsHandlerInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bootstrap_layouts\Plugin\BootstrapLayouts;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\bootstrap_layouts\BootstrapLayout;
+ use Drupal\Component\Plugin\DerivativeInspectionInterface;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+@@ -27,7 +28,7 @@ interface BootstrapLayoutsHandlerInterface extends ContainerAwareInterface, Cont
+    * @param string|int $id
+    *   The identifier to load.
+    *
+-   * @return \Drupal\bootstrap_layouts\BootstrapLayout
++   * @return BootstrapLayout
+    *   The BootstrapLayout instance.
+    */
+   public function loadInstance($id);
+@@ -39,7 +40,7 @@ interface BootstrapLayoutsHandlerInterface extends ContainerAwareInterface, Cont
+    *   Optional. An array of identifiers to load. If no identifiers are
+    *   specified, then all available instances will be loaded.
+    *
+-   * @return \Drupal\bootstrap_layouts\BootstrapLayout[]
++   * @return BootstrapLayout[]
+    *   An associative array of BootstrapLayout instances, keyed by identifier.
+    */
+   public function loadInstances(array $ids = NULL);
+@@ -49,10 +50,10 @@ interface BootstrapLayoutsHandlerInterface extends ContainerAwareInterface, Cont
+    *
+    * @param string|int $id
+    *   The identifier to save.
+-   * @param \Drupal\bootstrap_layouts\BootstrapLayout $layout
++   * @param BootstrapLayout $layout
+    *   The layout instance info array.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of failures an exception is thrown.
+    */
+   public function saveInstance($id, BootstrapLayout $layout);
+@@ -60,10 +61,10 @@ interface BootstrapLayoutsHandlerInterface extends ContainerAwareInterface, Cont
+   /**
+    * Saves layout instances.
+    *
+-   * @param \Drupal\bootstrap_layouts\BootstrapLayout[] $layouts
++   * @param BootstrapLayout[] $layouts
+    *   An associative array of BootstrapLayout instances, keyed by identifier.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of failures an exception is thrown.
+    */
+   public function saveInstances(array $layouts = []);
+diff --git a/src/Plugin/BootstrapLayouts/BootstrapLayoutsUpdateBase.php b/src/Plugin/BootstrapLayouts/BootstrapLayoutsUpdateBase.php
+index 3a7938c..64adab1 100644
+--- a/src/Plugin/BootstrapLayouts/BootstrapLayoutsUpdateBase.php
++++ b/src/Plugin/BootstrapLayouts/BootstrapLayoutsUpdateBase.php
+@@ -30,7 +30,7 @@ class BootstrapLayoutsUpdateBase extends PluginBase implements BootstrapLayoutsU
+     $this->setContainer($container);
+ 
+     // Retrieve the path to provider.
+-    $this->path = drupal_get_path('module', $this->pluginDefinition['provider']) ?: drupal_get_path('theme', $this->pluginDefinition['provider']);
++    $this->path = \Drupal::service('extension.list.module')->getPath($this->pluginDefinition['provider']) ?: \Drupal::service('extension.list.theme')->getPath($this->pluginDefinition['provider']);
+   }
+ 
+   /**
+diff --git a/src/Plugin/BootstrapLayouts/BootstrapLayoutsUpdateInterface.php b/src/Plugin/BootstrapLayouts/BootstrapLayoutsUpdateInterface.php
+index ff8e99e..d53b8c6 100644
+--- a/src/Plugin/BootstrapLayouts/BootstrapLayoutsUpdateInterface.php
++++ b/src/Plugin/BootstrapLayouts/BootstrapLayoutsUpdateInterface.php
+@@ -22,14 +22,13 @@ interface BootstrapLayoutsUpdateInterface extends ContainerAwareInterface, Conta
+   /**
+    * Provide an update.
+    *
+-   * @param \Drupal\bootstrap_layouts\BootstrapLayoutsManager $manager
++   * @param BootstrapLayoutsManager $manager
+    *   The BootstrapLayoutsManager instance.
+    * @param array $data
+    *   Any static YAML data found for the update.
+    * @param bool $display_messages
+    *   Flag determining whether a message will be displayed indicating whether
+    *   the layout was processed successfully or not.
+-
+    */
+   public function update(BootstrapLayoutsManager $manager, array $data = [], $display_messages = TRUE);
+ 
+@@ -40,7 +39,7 @@ interface BootstrapLayoutsUpdateInterface extends ContainerAwareInterface, Conta
+    * "Bootstrap Layouts" based layouts. If implementing this update, you should
+    * check the $layout->getId() before performing any tasks.
+    *
+-   * @param \Drupal\bootstrap_layouts\BootstrapLayout $layout
++   * @param BootstrapLayout $layout
+    *   The existing BootstrapLayout instance that is being processed.
+    * @param array $data
+    *   Any static YAML data found for the update.
+diff --git a/src/Plugin/BootstrapLayouts/Ds.php b/src/Plugin/BootstrapLayouts/Ds.php
+index eeb953f..4469d17 100644
+--- a/src/Plugin/BootstrapLayouts/Ds.php
++++ b/src/Plugin/BootstrapLayouts/Ds.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bootstrap_layouts\Plugin\BootstrapLayouts;
+ 
++use Drupal\Core\Entity\Display\EntityDisplayInterface;
+ use Drupal\bootstrap_layouts\BootstrapLayout;
+ use Drupal\Core\Entity\Entity\EntityViewDisplay;
+ 
+@@ -17,7 +18,7 @@ class Ds extends BootstrapLayoutsHandlerBase {
+    */
+   public function loadInstances(array $entity_ids = NULL) {
+     $layouts = [];
+-    /** @var \Drupal\Core\Entity\Display\EntityDisplayInterface $display */
++    /** @var EntityDisplayInterface $display */
+     foreach (EntityViewDisplay::loadMultiple($entity_ids) as $entity_id => $display) {
+       if (($info = $display->getThirdPartySettings('ds')) && isset($info['layout']['id'])) {
+         $id = $info['layout']['id'];
+@@ -35,9 +36,9 @@ class Ds extends BootstrapLayoutsHandlerBase {
+    */
+   public function saveInstances(array $layouts = []) {
+     $displays = EntityViewDisplay::loadMultiple(array_keys($layouts));
+-    /** @var \Drupal\bootstrap_layouts\BootstrapLayout[] $layouts */
++    /** @var BootstrapLayout[] $layouts */
+     foreach ($layouts as $entity_id => $layout) {
+-      /** @var \Drupal\Core\Entity\Display\EntityDisplayInterface $display */
++      /** @var EntityDisplayInterface $display */
+       $display = $displays[$entity_id];
+       $info = $display->getThirdPartySettings('ds');
+       $info['layout']['id'] = $layout->getId();
+diff --git a/src/Plugin/BootstrapLayouts/PageManager.php b/src/Plugin/BootstrapLayouts/PageManager.php
+index b4e4fe1..d759af0 100644
+--- a/src/Plugin/BootstrapLayouts/PageManager.php
++++ b/src/Plugin/BootstrapLayouts/PageManager.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\bootstrap_layouts\Plugin\BootstrapLayouts;
+ 
++use Drupal\Core\Entity\EntityTypeManager;
++use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ use Drupal\bootstrap_layouts\BootstrapLayout;
+ 
+ /**
+@@ -20,9 +22,9 @@ class PageManager extends BootstrapLayoutsHandlerBase {
+     if ($entity_ids) {
+       $properties['id'] = $entity_ids;
+     }
+-    /** @var \Drupal\Core\Entity\EntityTypeManager $entity_type_manager */
++    /** @var EntityTypeManager $entity_type_manager */
+     $entity_type_manager = $this->container->get('entity_type.manager');
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityInterface[] $config_entities */
++    /** @var ConfigEntityInterface[] $config_entities */
+     $config_entities = $entity_type_manager->getStorage('page_variant')->loadByProperties($properties);
+     foreach ($config_entities as $entity_id => $config_entity) {
+       if (($info = $config_entity->get('variant_settings')) && isset($info['layout']) && isset($info['blocks'])) {
+@@ -50,14 +52,14 @@ class PageManager extends BootstrapLayoutsHandlerBase {
+    * {@inheritdoc}
+    */
+   public function saveInstances(array $layouts = []) {
+-    /** @var \Drupal\Core\Entity\EntityTypeManager $entity_type_manager */
++    /** @var EntityTypeManager $entity_type_manager */
+     $entity_type_manager = $this->container->get('entity_type.manager');
+ 
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityInterface[] $config_entities */
++    /** @var ConfigEntityInterface[] $config_entities */
+     $config_entities = $entity_type_manager->getStorage('page_variant')
+       ->loadByProperties(['variant' => 'panels_variant', 'id' => array_keys($layouts)]);
+ 
+-    /** @var \Drupal\bootstrap_layouts\BootstrapLayout[] $layouts */
++    /** @var BootstrapLayout[] $layouts */
+     foreach ($layouts as $entity_id => $layout) {
+       $config_entity = $config_entities[$entity_id];
+       $info = $config_entity->get('variant_settings');
+diff --git a/src/Plugin/Layout/BootstrapLayoutsBase.php b/src/Plugin/Layout/BootstrapLayoutsBase.php
+index 1c84a5b..6a2b15a 100644
+--- a/src/Plugin/Layout/BootstrapLayoutsBase.php
++++ b/src/Plugin/Layout/BootstrapLayoutsBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\bootstrap_layouts\Plugin\Layout;
+ 
++use Drupal\bootstrap_layouts\BootstrapLayoutsManager;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Component\Utility\NestedArray;
+ use Drupal\Component\Utility\Xss;
+@@ -78,7 +79,7 @@ class BootstrapLayoutsBase extends LayoutDefault implements PluginFormInterface
+ 
+     $configuration = $this->getConfiguration();
+ 
+-    /** @var \Drupal\bootstrap_layouts\BootstrapLayoutsManager $manager */
++    /** @var BootstrapLayoutsManager $manager */
+     $manager = \Drupal::getContainer()->get('plugin.manager.bootstrap_layouts');
+     $classes = $manager->getClassOptions();
+ 
+diff --git a/src/ProxyClass/BootstrapLayoutsUninstallValidator.php b/src/ProxyClass/BootstrapLayoutsUninstallValidator.php
+index 6900d68..159955b 100644
+--- a/src/ProxyClass/BootstrapLayoutsUninstallValidator.php
++++ b/src/ProxyClass/BootstrapLayoutsUninstallValidator.php
+@@ -7,15 +7,19 @@
+ 
+ namespace Drupal\bootstrap_layouts\ProxyClass {
+ 
++    use Drupal\Core\Extension\ModuleUninstallValidatorInterface;
++    use Drupal\Core\DependencyInjection\DependencySerializationTrait;
++    use Symfony\Component\DependencyInjection\ContainerInterface;
++    use Drupal\Core\StringTranslation\TranslationInterface;
+     /**
+      * Provides a proxy class for \Drupal\bootstrap_layouts\BootstrapLayoutsUninstallValidator.
+      *
+      * @see \Drupal\Component\ProxyBuilder
+      */
+-    class BootstrapLayoutsUninstallValidator implements \Drupal\Core\Extension\ModuleUninstallValidatorInterface
++    class BootstrapLayoutsUninstallValidator implements ModuleUninstallValidatorInterface
+     {
+ 
+-        use \Drupal\Core\DependencyInjection\DependencySerializationTrait;
++        use DependencySerializationTrait;
+ 
+         /**
+          * The id of the original proxied service.
+@@ -34,19 +38,19 @@ namespace Drupal\bootstrap_layouts\ProxyClass {
+         /**
+          * The service container.
+          *
+-         * @var \Symfony\Component\DependencyInjection\ContainerInterface
++         * @var ContainerInterface
+          */
+         protected $container;
+ 
+         /**
+          * Constructs a ProxyClass Drupal proxy object.
+          *
+-         * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++         * @param ContainerInterface $container
+          *   The container.
+          * @param string $drupal_proxy_original_service_id
+          *   The service ID of the original service.
+          */
+-        public function __construct(\Symfony\Component\DependencyInjection\ContainerInterface $container, $drupal_proxy_original_service_id)
++        public function __construct(ContainerInterface $container, $drupal_proxy_original_service_id)
+         {
+             $this->container = $container;
+             $this->drupalProxyOriginalServiceId = $drupal_proxy_original_service_id;
+@@ -78,7 +82,7 @@ namespace Drupal\bootstrap_layouts\ProxyClass {
+         /**
+          * {@inheritdoc}
+          */
+-        public function setStringTranslation(\Drupal\Core\StringTranslation\TranslationInterface $translation)
++        public function setStringTranslation(TranslationInterface $translation)
+         {
+             return $this->lazyLoadItself()->setStringTranslation($translation);
+         }

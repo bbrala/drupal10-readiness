@@ -1,0 +1,1671 @@
+diff --git a/build_hooks.module b/build_hooks.module
+index 80a10a9..800da73 100644
+--- a/build_hooks.module
++++ b/build_hooks.module
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityTypeManager;
++use Drupal\build_hooks\Entity\FrontendEnvironment;
++use Drupal\build_hooks\Trigger;
++use Drupal\build_hooks\DeployLogger;
+ /**
+  * @file
+  * Contains build_hooks.module.
+@@ -84,7 +88,7 @@ function build_hooks_toolbar() {
+   $items = [];
+   if ($triggerService->showMenu()) {
+ 
+-    /** @var \Drupal\Core\Entity\EntityTypeManager $entityTypeManager */
++    /** @var EntityTypeManager $entityTypeManager */
+     $entityTypeManager = \Drupal::service('entity_type.manager');
+     // Load all defined environments.
+     $allEnvironments = $entityTypeManager->getStorage('frontend_environment')->loadMultiple();
+@@ -98,7 +102,7 @@ function build_hooks_toolbar() {
+     if ($has_envs && count($allEnvironments) < 2) {
+       foreach ($allEnvironments as $environment) {
+         $num = build_hooks_get_logger_service()->getNumberOfItemsSinceLastDeploymentForEnvironment($environment);
+-        /** @var \Drupal\build_hooks\Entity\FrontendEnvironment $environment */
++        /** @var FrontendEnvironment $environment */
+         $items['build_hooks-' . $environment->id()] = [
+           '#cache' => $cache,
+           '#weight' => $environment->getWeight() + 999,
+@@ -119,7 +123,7 @@ function build_hooks_toolbar() {
+       foreach ($allEnvironments as $environment) {
+         $changes = build_hooks_get_logger_service()->getNumberOfItemsSinceLastDeploymentForEnvironment($environment);
+         $totalChanges += $changes;
+-        /** @var \Drupal\build_hooks\Entity\FrontendEnvironment $environment */
++        /** @var FrontendEnvironment $environment */
+         $bh_items['build_hooks_' . $environment->id()] = [
+           '#type' => 'link',
+           '#title' => \Drupal::translation()->formatPlural($changes, '@envName (1 change)', '@envName (@count changes)', [
+@@ -169,7 +173,7 @@ function build_hooks_toolbar_alter(&$items) {
+ /**
+  * Get the trigger service.
+  *
+- * @return \Drupal\build_hooks\Trigger
++ * @return Trigger
+  *   The trigger service.
+  */
+ function build_hooks_get_trigger_service() {
+@@ -179,7 +183,7 @@ function build_hooks_get_trigger_service() {
+ /**
+  * Get the deploy logger service.
+  *
+- * @return \Drupal\build_hooks\DeployLogger
++ * @return DeployLogger
+  *   The deploy logger service.
+  */
+ function build_hooks_get_logger_service() {
+diff --git a/modules/build_hooks_bitbucket/src/BitbucketManager.php b/modules/build_hooks_bitbucket/src/BitbucketManager.php
+index ab02d1c..fb0a60b 100644
+--- a/modules/build_hooks_bitbucket/src/BitbucketManager.php
++++ b/modules/build_hooks_bitbucket/src/BitbucketManager.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\build_hooks_bitbucket;
+ 
++use Drupal\Core\Config\Config;
++use GuzzleHttp\Exception\GuzzleException;
+ use Drupal\build_hooks\BuildHookDetails;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use GuzzleHttp\ClientInterface;
+@@ -14,14 +16,14 @@ class BitbucketManager {
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * GuzzleHttp\ClientInterface definition.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+@@ -32,9 +34,9 @@ class BitbucketManager {
+   /**
+    * Constructs a BitbucketManager object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \GuzzleHttp\ClientInterface $http_client
++   * @param ClientInterface $http_client
+    *   HTTP client.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, ClientInterface $http_client) {
+@@ -74,7 +76,7 @@ class BitbucketManager {
+    * @param array $settings
+    *   The configuration for this hook.
+    *
+-   * @return \Drupal\build_hooks\BuildHookDetails
++   * @return BuildHookDetails
+    *   An object that will trigger a pipeline based on config.
+    */
+   public function getBuildHookDetailsForPluginConfiguration($settings) {
+@@ -110,7 +112,7 @@ class BitbucketManager {
+    * @return array
+    *   An array with info about the builds.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function retrieveLatestBuilds(array $settings, $limit = 10) {
+     $url = $this->getPipelinesApiPath($settings);
+diff --git a/modules/build_hooks_bitbucket/src/Form/SettingsForm.php b/modules/build_hooks_bitbucket/src/Form/SettingsForm.php
+index 955a67b..429002d 100644
+--- a/modules/build_hooks_bitbucket/src/Form/SettingsForm.php
++++ b/modules/build_hooks_bitbucket/src/Form/SettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks_bitbucket\Form;
+ 
++use Drupal\build_hooks_bitbucket\BitbucketManager;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -12,7 +13,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class SettingsForm extends ConfigFormBase {
+ 
+   /**
+-   * @var \Drupal\build_hooks_bitbucket\BitbucketManager
++   * @var BitbucketManager
+    */
+   protected $manager;
+ 
+diff --git a/modules/build_hooks_bitbucket/src/Plugin/FrontendEnvironment/BitbucketFrontendEnvironment.php b/modules/build_hooks_bitbucket/src/Plugin/FrontendEnvironment/BitbucketFrontendEnvironment.php
+index 5010a77..9536664 100644
+--- a/modules/build_hooks_bitbucket/src/Plugin/FrontendEnvironment/BitbucketFrontendEnvironment.php
++++ b/modules/build_hooks_bitbucket/src/Plugin/FrontendEnvironment/BitbucketFrontendEnvironment.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks_bitbucket\Plugin\FrontendEnvironment;
+ 
++use GuzzleHttp\Exception\GuzzleException;
+ use Drupal\build_hooks\Plugin\FrontendEnvironmentBase;
+ use Drupal\build_hooks_bitbucket\BitbucketManager;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -26,7 +27,7 @@ class BitbucketFrontendEnvironment extends FrontendEnvironmentBase implements Co
+   /**
+    * Drupal\build_hooks_bitbucket\BitbucketManager definition.
+    *
+-   * @var \Drupal\build_hooks_bitbucket\BitbucketManager
++   * @var BitbucketManager
+    */
+   protected $bitbucketManager;
+ 
+@@ -39,7 +40,7 @@ class BitbucketFrontendEnvironment extends FrontendEnvironmentBase implements Co
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\build_hooks_bitbucket\BitbucketManager $bitbucketManager
++   * @param BitbucketManager $bitbucketManager
+    *   The Bitbucket pipelines Manager.
+    */
+   public function __construct(
+@@ -200,7 +201,7 @@ class BitbucketFrontendEnvironment extends FrontendEnvironmentBase implements Co
+    * @return array
+    *   Render array.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    *   When fetching fails.
+    */
+   private function getLastBitbucketDeploymentsTable(array $settings) {
+@@ -247,7 +248,7 @@ class BitbucketFrontendEnvironment extends FrontendEnvironmentBase implements Co
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state of the form.
+    *
+    * @return array
+diff --git a/modules/build_hooks_bitbucket/tests/src/Functional/BitbucketFormTest.php b/modules/build_hooks_bitbucket/tests/src/Functional/BitbucketFormTest.php
+index 8067c70..42c5f56 100644
+--- a/modules/build_hooks_bitbucket/tests/src/Functional/BitbucketFormTest.php
++++ b/modules/build_hooks_bitbucket/tests/src/Functional/BitbucketFormTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\build_hooks_bitbucket\Functional;
+ 
++use Drupal\build_hooks\Entity\FrontendEnvironmentInterface;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -58,7 +59,7 @@ class BitbucketFormTest extends BrowserTestBase {
+       $assert->fieldExists($name)->setValue($value);
+     }
+     $this->submitForm([], 'Save');
+-    /** @var \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $environment */
++    /** @var FrontendEnvironmentInterface $environment */
+     $environment = \Drupal::entityTypeManager()->getStorage('frontend_environment')->load($random);
+     $this->assertNotEmpty($environment);
+     $settings = $environment->get('settings');
+diff --git a/modules/build_hooks_bitbucket/tests/src/Unit/BitbucketManagerTest.php b/modules/build_hooks_bitbucket/tests/src/Unit/BitbucketManagerTest.php
+index 4ab6bf0..6bf561d 100644
+--- a/modules/build_hooks_bitbucket/tests/src/Unit/BitbucketManagerTest.php
++++ b/modules/build_hooks_bitbucket/tests/src/Unit/BitbucketManagerTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\build_hooks_bitbucket\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\build_hooks\BuildHookDetails;
+ use Drupal\build_hooks_bitbucket\BitbucketManager;
+ use Drupal\Tests\UnitTestCase;
+@@ -14,6 +15,7 @@ use GuzzleHttp\ClientInterface;
+  */
+ class BitbucketManagerTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Tests getting build hook details..
+    */
+diff --git a/modules/build_hooks_circleci/src/CircleCiManager.php b/modules/build_hooks_circleci/src/CircleCiManager.php
+index 22d7894..4693393 100644
+--- a/modules/build_hooks_circleci/src/CircleCiManager.php
++++ b/modules/build_hooks_circleci/src/CircleCiManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks_circleci;
+ 
++use GuzzleHttp\Exception\GuzzleException;
+ use Drupal\build_hooks\BuildHookDetails;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+@@ -19,21 +20,21 @@ class CircleCiManager implements CircleCiManagerInterface {
+   /**
+    * Drupal\Core\Config\ConfigFactoryInterface definition.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * GuzzleHttp\ClientInterface definition.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * The Date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+@@ -83,7 +84,7 @@ class CircleCiManager implements CircleCiManagerInterface {
+    * @param array $config
+    *   The plugin configuration array.
+    *
+-   * @return \Drupal\build_hooks\BuildHookDetails
++   * @return BuildHookDetails
+    *   Build hooks detail object with info about the request to make.
+    */
+   public function getBuildHookDetailsForPluginConfiguration(array $config) {
+@@ -109,7 +110,7 @@ class CircleCiManager implements CircleCiManagerInterface {
+    * @return array
+    *   An array with info about the builds.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function retrieveLatestBuildsFromCircleciForEnvironment(array $settings, $limit = 1) {
+     $url = $this->buildCircleCiApiRetrieveBuildsUrl($settings, $limit);
+diff --git a/modules/build_hooks_circleci/src/CircleCiManagerInterface.php b/modules/build_hooks_circleci/src/CircleCiManagerInterface.php
+index 88e56cf..e5ccb2a 100644
+--- a/modules/build_hooks_circleci/src/CircleCiManagerInterface.php
++++ b/modules/build_hooks_circleci/src/CircleCiManagerInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\build_hooks_circleci;
+ 
++use Drupal\build_hooks\BuildHookDetails;
++use GuzzleHttp\Exception\GuzzleException;
+ /**
+  * CircleCiManager interface.
+  */
+@@ -13,7 +15,7 @@ interface CircleCiManagerInterface {
+    * @param array $config
+    *   The plugin configuration array.
+    *
+-   * @return \Drupal\build_hooks\BuildHookDetails
++   * @return BuildHookDetails
+    *   Build hooks detail object with info about the request to make.
+    */
+   public function getBuildHookDetailsForPluginConfiguration(array $config);
+@@ -29,7 +31,7 @@ interface CircleCiManagerInterface {
+    * @return array
+    *   An array with info about the builds.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function retrieveLatestBuildsFromCircleciForEnvironment(array $settings, $limit = 1);
+ 
+diff --git a/modules/build_hooks_circleci/src/Plugin/FrontendEnvironment/CircleCiFrontendEnvironment.php b/modules/build_hooks_circleci/src/Plugin/FrontendEnvironment/CircleCiFrontendEnvironment.php
+index bf0a690..d2bd2f2 100644
+--- a/modules/build_hooks_circleci/src/Plugin/FrontendEnvironment/CircleCiFrontendEnvironment.php
++++ b/modules/build_hooks_circleci/src/Plugin/FrontendEnvironment/CircleCiFrontendEnvironment.php
+@@ -26,7 +26,7 @@ class CircleCiFrontendEnvironment extends FrontendEnvironmentBase implements Con
+   /**
+    * Drupal\build_hooks_circleci\CircleCiManager definition.
+    *
+-   * @var \Drupal\build_hooks_circleci\CircleCiManager
++   * @var CircleCiManager
+    */
+   protected $circleCiManager;
+ 
+@@ -39,7 +39,7 @@ class CircleCiFrontendEnvironment extends FrontendEnvironmentBase implements Con
+    *   The plugin_id for the plugin instance.
+    * @param string $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\build_hooks_circleci\CircleCiManager $circleCiManager
++   * @param CircleCiManager $circleCiManager
+    *   The Circle CI Manager.
+    */
+   public function __construct(
+@@ -153,7 +153,7 @@ class CircleCiFrontendEnvironment extends FrontendEnvironmentBase implements Con
+    * @return array
+    *   Renderable array.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   private function getLastCircleCiDeploymentsTable(array $settings) {
+     $circleCiData = $this->circleCiManager->retrieveLatestBuildsFromCircleciForEnvironment($settings, 8);
+@@ -203,7 +203,7 @@ class CircleCiFrontendEnvironment extends FrontendEnvironmentBase implements Con
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state of the form.
+    *
+    * @return array
+diff --git a/modules/build_hooks_circleci/src/Plugin/FrontendEnvironment/CircleV2.php b/modules/build_hooks_circleci/src/Plugin/FrontendEnvironment/CircleV2.php
+index 559e706..fc214ca 100644
+--- a/modules/build_hooks_circleci/src/Plugin/FrontendEnvironment/CircleV2.php
++++ b/modules/build_hooks_circleci/src/Plugin/FrontendEnvironment/CircleV2.php
+@@ -29,14 +29,14 @@ class CircleV2 extends FrontendEnvironmentBase implements ContainerFactoryPlugin
+   /**
+    * HTTP client.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   private $httpClient;
+ 
+   /**
+    * Date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   private $formatter;
+ 
+@@ -49,9 +49,9 @@ class CircleV2 extends FrontendEnvironmentBase implements ContainerFactoryPlugin
+    *   Plugin ID.
+    * @param mixed $plugin_definition
+    *   Plugin definition.
+-   * @param \GuzzleHttp\ClientInterface $httpClient
++   * @param ClientInterface $httpClient
+    *   HTTP client.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $formatter
++   * @param DateFormatterInterface $formatter
+    *   Date formatter.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, ClientInterface $httpClient, DateFormatterInterface $formatter) {
+@@ -372,7 +372,7 @@ class CircleV2 extends FrontendEnvironmentBase implements ContainerFactoryPlugin
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state of the form.
+    *
+    * @return array
+diff --git a/modules/build_hooks_circleci/tests/src/Functional/CircleV2FormTest.php b/modules/build_hooks_circleci/tests/src/Functional/CircleV2FormTest.php
+index 90189d7..1acc978 100644
+--- a/modules/build_hooks_circleci/tests/src/Functional/CircleV2FormTest.php
++++ b/modules/build_hooks_circleci/tests/src/Functional/CircleV2FormTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\build_hooks_circleci\Functional;
+ 
++use Drupal\build_hooks\Entity\FrontendEnvironmentInterface;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -82,7 +83,7 @@ class CircleV2FormTest extends BrowserTestBase {
+     $assert->buttonExists('Remove item 4')->click();
+     $assert->fieldNotExists('settings[parameters][3][name]');
+     $this->submitForm([], 'Save');
+-    /** @var \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $environment */
++    /** @var FrontendEnvironmentInterface $environment */
+     $environment = \Drupal::entityTypeManager()->getStorage('frontend_environment')->load($random);
+     $this->assertNotEmpty($environment);
+     $this->assertEquals([
+diff --git a/modules/build_hooks_circleci/tests/src/Kernel/CircleBuildHookTest.php b/modules/build_hooks_circleci/tests/src/Kernel/CircleBuildHookTest.php
+index cc47457..c631812 100644
+--- a/modules/build_hooks_circleci/tests/src/Kernel/CircleBuildHookTest.php
++++ b/modules/build_hooks_circleci/tests/src/Kernel/CircleBuildHookTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\build_hooks_circleci\Kernel;
+ 
++use Drupal\build_hooks\Plugin\FrontendEnvironmentInterface;
+ use Drupal\build_hooks\TriggerInterface;
+ use Drupal\build_hooks\Entity\FrontendEnvironment;
+ use Drupal\build_hooks\Trigger;
+@@ -26,7 +27,7 @@ class CircleBuildHookTest extends BuildHooksKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installConfig('system');
+     $this->installConfig('build_hooks_circleci');
+@@ -120,7 +121,7 @@ class CircleBuildHookTest extends BuildHooksKernelTestBase {
+       new Response('500', [], json_encode([]))
+     );
+     $title = $this->randomMachineName();
+-    /** @var \Drupal\build_hooks\Entity\FrontendEnvironment $environment */
++    /** @var FrontendEnvironment $environment */
+     $project = 'foo/bar';
+     $environment = FrontendEnvironment::create([
+       'id' => 'foo',
+@@ -137,7 +138,7 @@ class CircleBuildHookTest extends BuildHooksKernelTestBase {
+       'deployment_strategy' => Trigger::DEPLOYMENT_STRATEGY_CRON,
+     ]);
+     $environment->save();
+-    /** @var \Drupal\build_hooks\Plugin\FrontendEnvironmentInterface $plugin */
++    /** @var FrontendEnvironmentInterface $plugin */
+     $plugin = $environment->getPlugin();
+     $extra = $plugin->getAdditionalDeployFormElements(new FormState())['builds'];
+     $expected_url = 'https://circleci.com/api/v2/project/gh/' . $project . '/pipeline/mine?branch=master';
+diff --git a/modules/build_hooks_netlify/src/NetlifyManager.php b/modules/build_hooks_netlify/src/NetlifyManager.php
+index 7258753..2e43c82 100644
+--- a/modules/build_hooks_netlify/src/NetlifyManager.php
++++ b/modules/build_hooks_netlify/src/NetlifyManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks_netlify;
+ 
++use GuzzleHttp\Exception\GuzzleException;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use GuzzleHttp\ClientInterface;
+@@ -17,21 +18,21 @@ class NetlifyManager implements NetlifyManagerInterface {
+   /**
+    * Drupal\Core\Config\ConfigFactoryInterface definition.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * GuzzleHttp\ClientInterface definition.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * The Date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+@@ -55,7 +56,7 @@ class NetlifyManager implements NetlifyManagerInterface {
+    * @return array
+    *   An array with info about the builds.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function retrieveLatestBuildsFromNetlifyForEnvironment(array $settings, $limit = 1) {
+     $url = $this->buildNetlifyApiRetrieveBuildsUrl($settings);
+diff --git a/modules/build_hooks_netlify/src/NetlifyManagerInterface.php b/modules/build_hooks_netlify/src/NetlifyManagerInterface.php
+index 40ced5a..1733f15 100644
+--- a/modules/build_hooks_netlify/src/NetlifyManagerInterface.php
++++ b/modules/build_hooks_netlify/src/NetlifyManagerInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks_netlify;
+ 
++use GuzzleHttp\Exception\GuzzleException;
+ /**
+  * NetlifyManager interface.
+  */
+@@ -29,7 +30,7 @@ interface NetlifyManagerInterface {
+    * @return array
+    *   An array with info about the builds.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function retrieveLatestBuildsFromNetlifyForEnvironment(array $settings, $limit = 1);
+ 
+diff --git a/modules/build_hooks_netlify/src/Plugin/FrontendEnvironment/NetlifyFrontendEnvironment.php b/modules/build_hooks_netlify/src/Plugin/FrontendEnvironment/NetlifyFrontendEnvironment.php
+index cfd0891..f9b891f 100644
+--- a/modules/build_hooks_netlify/src/Plugin/FrontendEnvironment/NetlifyFrontendEnvironment.php
++++ b/modules/build_hooks_netlify/src/Plugin/FrontendEnvironment/NetlifyFrontendEnvironment.php
+@@ -27,7 +27,7 @@ class NetlifyFrontendEnvironment extends FrontendEnvironmentBase implements Cont
+   /**
+    * Drupal\build_hooks_netlify\NetlifyManager definition.
+    *
+-   * @var \Drupal\build_hooks_netlify\NetlifyManager
++   * @var NetlifyManager
+    */
+   protected $netlifyManager;
+ 
+@@ -40,7 +40,7 @@ class NetlifyFrontendEnvironment extends FrontendEnvironmentBase implements Cont
+    *   The plugin_id for the plugin instance.
+    * @param string $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\build_hooks_netlify\NetlifyManager $netlifyManager
++   * @param NetlifyManager $netlifyManager
+    *   The Netlify Manager.
+    */
+   public function __construct(
+@@ -168,7 +168,7 @@ class NetlifyFrontendEnvironment extends FrontendEnvironmentBase implements Cont
+    * @return array
+    *   Renderable array.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   private function getLastNetlifyDeploymentsTable(array $settings) {
+     $netlifyData = $this->netlifyManager->retrieveLatestBuildsFromNetlifyForEnvironment($settings, 8);
+@@ -221,7 +221,7 @@ class NetlifyFrontendEnvironment extends FrontendEnvironmentBase implements Cont
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state of the form.
+    *
+    * @return array
+diff --git a/modules/build_hooks_netlify/tests/src/Kernel/NetlifyBuildHooksTest.php b/modules/build_hooks_netlify/tests/src/Kernel/NetlifyBuildHooksTest.php
+index 14b6ca0..2698e94 100644
+--- a/modules/build_hooks_netlify/tests/src/Kernel/NetlifyBuildHooksTest.php
++++ b/modules/build_hooks_netlify/tests/src/Kernel/NetlifyBuildHooksTest.php
+@@ -22,7 +22,7 @@ class NetlifyBuildHooksTest extends BuildHooksKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installConfig('build_hooks_netlify');
+   }
+diff --git a/src/Annotation/FrontendEnvironment.php b/src/Annotation/FrontendEnvironment.php
+index 6f9fb6c..57169c0 100644
+--- a/src/Annotation/FrontendEnvironment.php
++++ b/src/Annotation/FrontendEnvironment.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -25,7 +26,7 @@ class FrontendEnvironment extends Plugin {
+   /**
+    * The label of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -34,7 +35,7 @@ class FrontendEnvironment extends Plugin {
+   /**
+    * The label of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Controller/FrontendEnvironmentAddController.php b/src/Controller/FrontendEnvironmentAddController.php
+index dc9b993..77e72be 100644
+--- a/src/Controller/FrontendEnvironmentAddController.php
++++ b/src/Controller/FrontendEnvironmentAddController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\build_hooks\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Controller\ControllerBase;
+ 
+ /**
+@@ -18,8 +20,8 @@ class FrontendEnvironmentAddController extends ControllerBase {
+    * @return array
+    *   The form to add and configure a frontend environment entity.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function frontendEnvironmentAddConfigureForm($plugin_id) {
+     // Create a frontend environment entity.
+diff --git a/src/Controller/FrontendEnvironmentLibraryController.php b/src/Controller/FrontendEnvironmentLibraryController.php
+index 1b84d6d..48f6b3d 100644
+--- a/src/Controller/FrontendEnvironmentLibraryController.php
++++ b/src/Controller/FrontendEnvironmentLibraryController.php
+@@ -15,14 +15,14 @@ class FrontendEnvironmentLibraryController extends ControllerBase {
+   /**
+    * The frontend environment manager.
+    *
+-   * @var \Drupal\build_hooks\Plugin\FrontendEnvironmentManager
++   * @var FrontendEnvironmentManager
+    */
+   protected $frontendEnvironmentManager;
+ 
+   /**
+    * FrontendEnvironmentLibraryController constructor.
+    *
+-   * @param \Drupal\build_hooks\Plugin\FrontendEnvironmentManager $frontendEnvironmentManager
++   * @param FrontendEnvironmentManager $frontendEnvironmentManager
+    *   The frontend environment manager.
+    */
+   public function __construct(FrontendEnvironmentManager $frontendEnvironmentManager) {
+diff --git a/src/DeployLogger.php b/src/DeployLogger.php
+index 5cb76e0..55b11b0 100644
+--- a/src/DeployLogger.php
++++ b/src/DeployLogger.php
+@@ -27,32 +27,32 @@ class DeployLogger {
+   /**
+    * The config.factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Time.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * Constructs a new DeployLogger object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   Config factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity type manager.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   Time.
+    */
+   public function __construct(ConfigFactoryInterface $configFactory, EntityTypeManagerInterface $entityTypeManager, TimeInterface $time) {
+@@ -64,7 +64,7 @@ class DeployLogger {
+   /**
+    * Determines if we should log activity related to the passed entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity.
+    *
+    * @return bool
+@@ -80,11 +80,11 @@ class DeployLogger {
+   /**
+    * Logs the creation of an entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity.
+    */
+   public function logEntityCreated(ContentEntityInterface $entity) {
+-    /** @var \Drupal\build_hooks\DeploymentStorageHandlerInterface $deployment_storage */
++    /** @var DeploymentStorageHandlerInterface $deployment_storage */
+     $deployment_storage = $this->entityTypeManager->getStorage('build_hooks_deployment');
+     foreach ($this->entityTypeManager->getStorage('frontend_environment')->loadMultiple() as $environment) {
+       $deployment = $deployment_storage->getOrCreateNextDeploymentForEnvironment($environment);
+@@ -101,7 +101,7 @@ class DeployLogger {
+   /**
+    * Logs the updating of an entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity.
+    */
+   public function logEntityUpdated(ContentEntityInterface $entity) {
+@@ -111,11 +111,11 @@ class DeployLogger {
+   /**
+    * Logs the deleting of an entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity.
+    */
+   public function logEntityDeleted(ContentEntityInterface $entity) {
+-    /** @var \Drupal\build_hooks\DeploymentStorageHandlerInterface $deployment_storage */
++    /** @var DeploymentStorageHandlerInterface $deployment_storage */
+     $deployment_storage = $this->entityTypeManager->getStorage('build_hooks_deployment');
+     foreach ($this->entityTypeManager->getStorage('frontend_environment')->loadMultiple() as $environment) {
+       $deployment = $deployment_storage->getOrCreateNextDeploymentForEnvironment($environment);
+@@ -127,13 +127,13 @@ class DeployLogger {
+   /**
+    * Get the last deployed time for an environment.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $environment
++   * @param FrontendEnvironmentInterface $environment
+    *   The frontend environment config entity.
+    * @param int|null $timestamp
+    *   Timestamp.
+    */
+   public function setLastDeployTimeForEnvironment(FrontendEnvironmentInterface $environment, int $timestamp = NULL) {
+-    /** @var \Drupal\build_hooks\DeploymentStorageHandlerInterface $deployment_storage */
++    /** @var DeploymentStorageHandlerInterface $deployment_storage */
+     $deployment_storage = $this->entityTypeManager->getStorage('build_hooks_deployment');
+     $deployment = $deployment_storage->getOrCreateNextDeploymentForEnvironment($environment);
+     $deployment->deployed = $timestamp ?: $this->time->getCurrentTime();
+@@ -144,14 +144,14 @@ class DeployLogger {
+   /**
+    * Get the last deployed time for an environment.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironment $environment
++   * @param FrontendEnvironment $environment
+    *   The frontend environment config entity.
+    *
+    * @return int
+    *   The timestamp of the latest deployment for the environment.
+    */
+   public function getLastDeployTimeForEnvironment(FrontendEnvironment $environment) {
+-    /** @var \Drupal\build_hooks\DeploymentStorageHandlerInterface $deployment_storage */
++    /** @var DeploymentStorageHandlerInterface $deployment_storage */
+     $deployment_storage = $this->entityTypeManager->getStorage('build_hooks_deployment');
+     if ($last = $deployment_storage->getLastDeploymentForEnvironment($environment)) {
+       return $last->deployed->value;
+@@ -176,14 +176,14 @@ class DeployLogger {
+   /**
+    * Gets how many changes have happened since the last deployment for an env.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironment $environment
++   * @param FrontendEnvironment $environment
+    *   The frontend environment config entity.
+    *
+    * @return int
+    *   The amount of changes for the environment since last deployment.
+    */
+   public function getNumberOfItemsSinceLastDeploymentForEnvironment(FrontendEnvironment $environment) {
+-    /** @var \Drupal\build_hooks\DeploymentStorageHandlerInterface $deployment_storage */
++    /** @var DeploymentStorageHandlerInterface $deployment_storage */
+     $deployment_storage = $this->entityTypeManager->getStorage('build_hooks_deployment');
+     $next = $deployment_storage->getOrCreateNextDeploymentForEnvironment($environment);
+     return count(array_filter(iterator_to_array($next->get('contents')), function (DynamicEntityReferenceItem $item) {
+@@ -195,9 +195,9 @@ class DeployLogger {
+   /**
+    * Checks if an entity is already part of a deployment.
+    *
+-   * @param \Drupal\build_hooks\Entity\DeploymentInterface $deployment
++   * @param DeploymentInterface $deployment
+    *   Deployment.
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   Entity.
+    *
+    * @return bool
+diff --git a/src/DeploymentListBuilder.php b/src/DeploymentListBuilder.php
+index ff14a48..64531a5 100644
+--- a/src/DeploymentListBuilder.php
++++ b/src/DeploymentListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks;
+ 
++use Drupal\build_hooks\Entity\DeploymentInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ 
+@@ -25,7 +26,7 @@ class DeploymentListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\build_hooks\Entity\DeploymentInterface $entity */
++    /** @var DeploymentInterface $entity */
+     return [
+       'label' => $entity->label(),
+       'environment' => $entity->bundle(),
+diff --git a/src/DeploymentStorageHandler.php b/src/DeploymentStorageHandler.php
+index 0e12a35..1d68084 100644
+--- a/src/DeploymentStorageHandler.php
++++ b/src/DeploymentStorageHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks;
+ 
++use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\build_hooks\Entity\DeploymentInterface;
+ use Drupal\build_hooks\Entity\FrontendEnvironmentInterface;
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -16,7 +17,7 @@ class DeploymentStorageHandler extends SqlContentEntityStorage implements Deploy
+   /**
+    * Date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+@@ -73,7 +74,7 @@ class DeploymentStorageHandler extends SqlContentEntityStorage implements Deploy
+   /**
+    * Gets the label for the next deployment.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $environment
++   * @param FrontendEnvironmentInterface $environment
+    *   Environment.
+    *
+    * @return string
+diff --git a/src/DeploymentStorageHandlerInterface.php b/src/DeploymentStorageHandlerInterface.php
+index 36b248a..2304289 100644
+--- a/src/DeploymentStorageHandlerInterface.php
++++ b/src/DeploymentStorageHandlerInterface.php
+@@ -14,10 +14,10 @@ interface DeploymentStorageHandlerInterface extends SqlEntityStorageInterface {
+   /**
+    * Gets the next deployment for an environment.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $environment
++   * @param FrontendEnvironmentInterface $environment
+    *   Environment.
+    *
+-   * @return \Drupal\build_hooks\Entity\DeploymentInterface
++   * @return DeploymentInterface
+    *   Next deployment.
+    */
+   public function getOrCreateNextDeploymentForEnvironment(FrontendEnvironmentInterface $environment) : DeploymentInterface;
+@@ -25,10 +25,10 @@ interface DeploymentStorageHandlerInterface extends SqlEntityStorageInterface {
+   /**
+    * Gets the last deployment for an environment.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $environment
++   * @param FrontendEnvironmentInterface $environment
+    *   Environment.
+    *
+-   * @return \Drupal\build_hooks\Entity\DeploymentInterface|null
++   * @return DeploymentInterface|null
+    *   Last deployment if it exists.
+    */
+   public function getLastDeploymentForEnvironment(FrontendEnvironmentInterface $environment) : ?DeploymentInterface;
+diff --git a/src/Entity/FrontendEnvironment.php b/src/Entity/FrontendEnvironment.php
+index 10a0b63..cab8f6d 100644
+--- a/src/Entity/FrontendEnvironment.php
++++ b/src/Entity/FrontendEnvironment.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\build_hooks\Entity;
+ 
++use Drupal\block\BlockPluginCollection;
++use Drupal\Component\Plugin\LazyPluginCollection;
+ use Drupal\build_hooks\FrontendEnvironmentPluginCollection;
+ use Drupal\Core\Config\Entity\ConfigEntityBundleBase;
+ use Drupal\Core\Entity\EntityWithPluginCollectionInterface;
+@@ -62,7 +64,7 @@ class FrontendEnvironment extends ConfigEntityBundleBase implements FrontendEnvi
+   /**
+    * The plugin collection that holds the block plugin for this entity.
+    *
+-   * @var \Drupal\block\BlockPluginCollection
++   * @var BlockPluginCollection
+    */
+   protected $pluginCollection;
+ 
+@@ -139,7 +141,7 @@ class FrontendEnvironment extends ConfigEntityBundleBase implements FrontendEnvi
+   /**
+    * Encapsulates creation of the frontend environment's LazyPluginCollection.
+    *
+-   * @return \Drupal\Component\Plugin\LazyPluginCollection
++   * @return LazyPluginCollection
+    *   The frontend environment's plugin collection.
+    */
+   protected function getPluginCollection() {
+diff --git a/src/Event/ResponseEvent.php b/src/Event/ResponseEvent.php
+index 8bb8aee..3f67f9d 100755
+--- a/src/Event/ResponseEvent.php
++++ b/src/Event/ResponseEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\build_hooks\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Psr\Http\Message\ResponseInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ use Drupal\build_hooks\Plugin\FrontendEnvironmentInterface;
+ 
+ /**
+@@ -19,21 +19,21 @@ class ResponseEvent extends Event {
+   /**
+    * The http client response.
+    *
+-   * @var \Psr\Http\Message\ResponseInterface
++   * @var ResponseInterface
+    */
+   protected $response;
+ 
+   /**
+    * The build hook plugin.
+    *
+-   * @var \Drupal\build_hooks\Plugin\FrontendEnvironmentInterface
++   * @var FrontendEnvironmentInterface
+    */
+   protected $plugin;
+ 
+   /**
+    * Set the response.
+    *
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   Response.
+    */
+   public function setResponse(ResponseInterface $response) {
+@@ -43,7 +43,7 @@ class ResponseEvent extends Event {
+   /**
+    * Get the response.
+    *
+-   * @return \Psr\Http\Message\ResponseInterface
++   * @return ResponseInterface
+    *   The http client $response.
+    */
+   public function getResponse() {
+@@ -53,7 +53,7 @@ class ResponseEvent extends Event {
+   /**
+    * Set the plugin.
+    *
+-   * @param \Drupal\build_hooks\Plugin\FrontendEnvironmentInterface $plugin
++   * @param FrontendEnvironmentInterface $plugin
+    *   The build hook plugin.
+    */
+   public function setPlugin(FrontendEnvironmentInterface $plugin) {
+@@ -63,7 +63,7 @@ class ResponseEvent extends Event {
+   /**
+    * Get the plugin.
+    *
+-   * @return \Drupal\build_hooks\Plugin\FrontendEnvironmentInterface
++   * @return FrontendEnvironmentInterface
+    *   The build hook plugin.
+    */
+   public function getPlugin() {
+@@ -73,9 +73,9 @@ class ResponseEvent extends Event {
+   /**
+    * ResponseEvent constructor.
+    *
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   The http client $response.
+-   * @param \Drupal\build_hooks\Plugin\FrontendEnvironmentInterface $plugin
++   * @param FrontendEnvironmentInterface $plugin
+    *   The build hook plugin.
+    */
+   public function __construct(ResponseInterface $response, FrontendEnvironmentInterface $plugin) {
+diff --git a/src/Form/DeploymentForm.php b/src/Form/DeploymentForm.php
+index 7b6a56f..76d96a5 100644
+--- a/src/Form/DeploymentForm.php
++++ b/src/Form/DeploymentForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\build_hooks\Form;
+ 
++use Drupal\build_hooks\Plugin\FrontendEnvironmentBase;
++use Drupal\build_hooks\DeploymentStorageHandlerInterface;
+ use Drupal\build_hooks\DeployLogger;
+ use Drupal\build_hooks\Entity\FrontendEnvironment;
+ use Drupal\build_hooks\Entity\FrontendEnvironmentInterface;
+@@ -24,35 +26,35 @@ class DeploymentForm extends FormBase {
+   /**
+    * Drupal\build_hooks\TriggerInterface definition.
+    *
+-   * @var \Drupal\build_hooks\TriggerInterface
++   * @var TriggerInterface
+    */
+   protected $buildHooksTrigger;
+ 
+   /**
+    * Drupal\build_hooks\DeployLogger definition.
+    *
+-   * @var \Drupal\build_hooks\DeployLogger
++   * @var DeployLogger
+    */
+   protected $buildHooksDeploylogger;
+ 
+   /**
+    * Drupal\Core\Render\Renderer definition.
+    *
+-   * @var \Drupal\Core\Render\Renderer
++   * @var Renderer
+    */
+   protected $renderer;
+ 
+   /**
+    * Drupal\Core\Datetime\DateFormatter definition.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -76,7 +78,7 @@ class DeploymentForm extends FormBase {
+   /**
+    * Create.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The container.
+    *
+    * @return \Drupal\build_hooks\Form\DeploymentForm
+@@ -154,7 +156,7 @@ class DeploymentForm extends FormBase {
+     ];
+ 
+     // Plugins have a possibility to return additional elements for this form:
+-    /** @var \Drupal\build_hooks\Plugin\FrontendEnvironmentBase $plugin */
++    /** @var FrontendEnvironmentBase $plugin */
+     $plugin = $frontend_environment->getPlugin();
+     $additionalFormElements = $plugin->getAdditionalDeployFormElements($form_state);
+ 
+@@ -178,7 +180,7 @@ class DeploymentForm extends FormBase {
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     // Get the environment entity:
+-    /** @var \Drupal\build_hooks\Entity\FrontendEnvironment $frontend_environment */
++    /** @var FrontendEnvironment $frontend_environment */
+     $frontend_environment = $form_state->getValue('frontend_environment');
+     $this->buildHooksTrigger->triggerBuildHookForEnvironment($frontend_environment);
+   }
+@@ -186,14 +188,14 @@ class DeploymentForm extends FormBase {
+   /**
+    * Use the included view to render the changelog.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $environment
++   * @param FrontendEnvironmentInterface $environment
+    *   Environment.
+    *
+    * @return array
+    *   Render array.
+    */
+   private function getChangelogView(FrontendEnvironmentInterface $environment) {
+-    /** @var \Drupal\build_hooks\DeploymentStorageHandlerInterface $deployment_storage */
++    /** @var DeploymentStorageHandlerInterface $deployment_storage */
+     $deployment_storage = $this->entityTypeManager->getStorage('build_hooks_deployment');
+     $deployment = $deployment_storage->getOrCreateNextDeploymentForEnvironment($environment);
+     return $this->entityTypeManager->getViewBuilder('build_hooks_deployment')->view($deployment);
+diff --git a/src/Form/FrontendEnvironmentForm.php b/src/Form/FrontendEnvironmentForm.php
+index 65b13e4..1bda715 100644
+--- a/src/Form/FrontendEnvironmentForm.php
++++ b/src/Form/FrontendEnvironmentForm.php
+@@ -19,14 +19,14 @@ class FrontendEnvironmentForm extends EntityForm {
+   /**
+    * The plugin form manager.
+    *
+-   * @var \Drupal\Core\Plugin\PluginFormFactoryInterface
++   * @var PluginFormFactoryInterface
+    */
+   protected $pluginFormFactory;
+ 
+   /**
+    * FrontendEnvironmentForm constructor.
+    *
+-   * @param \Drupal\Core\Plugin\PluginFormFactoryInterface $plugin_form_manager
++   * @param PluginFormFactoryInterface $plugin_form_manager
+    *   The plugin form manager.
+    */
+   public function __construct(PluginFormFactoryInterface $plugin_form_manager) {
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 57bd4d5..22a1aad 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -17,17 +17,17 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Class constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+    */
+   public function __construct(
+diff --git a/src/FrontendEnvironmentListBuilder.php b/src/FrontendEnvironmentListBuilder.php
+index da309f3..51c7ada 100644
+--- a/src/FrontendEnvironmentListBuilder.php
++++ b/src/FrontendEnvironmentListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks;
+ 
++use Drupal\build_hooks\Entity\FrontendEnvironment;
+ use Drupal\Core\Config\Entity\ConfigEntityListBuilder;
+ use Drupal\Core\Entity\EntityInterface;
+ 
+@@ -24,7 +25,7 @@ class FrontendEnvironmentListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\build_hooks\Entity\FrontendEnvironment $entity */
++    /** @var FrontendEnvironment $entity */
+     $row['label'] = $entity->label();
+     $row['plugin'] = $entity->getPlugin()->getPluginDefinition()['label'];
+     $row['id'] = $entity->id();
+diff --git a/src/FrontendEnvironmentPluginCollection.php b/src/FrontendEnvironmentPluginCollection.php
+index 491b9f7..8b32c29 100644
+--- a/src/FrontendEnvironmentPluginCollection.php
++++ b/src/FrontendEnvironmentPluginCollection.php
+@@ -21,7 +21,7 @@ class FrontendEnvironmentPluginCollection extends DefaultSingleLazyPluginCollect
+   /**
+    * Constructs a new BlockPluginCollection.
+    *
+-   * @param \Drupal\Component\Plugin\PluginManagerInterface $manager
++   * @param PluginManagerInterface $manager
+    *   The manager to be used for instantiating plugins.
+    * @param string $instance_id
+    *   The ID of the plugin instance.
+diff --git a/src/Plugin/FrontendEnvironmentBase.php b/src/Plugin/FrontendEnvironmentBase.php
+index 4571ff8..8490e25 100644
+--- a/src/Plugin/FrontendEnvironmentBase.php
++++ b/src/Plugin/FrontendEnvironmentBase.php
+@@ -22,7 +22,7 @@ abstract class FrontendEnvironmentBase extends PluginBase implements FrontendEnv
+   /**
+    * The transliteration service.
+    *
+-   * @var \Drupal\Component\Transliteration\TransliterationInterface
++   * @var TransliterationInterface
+    */
+   protected $transliteration;
+ 
+@@ -167,7 +167,7 @@ abstract class FrontendEnvironmentBase extends PluginBase implements FrontendEnv
+   /**
+    * Wraps the transliteration service.
+    *
+-   * @return \Drupal\Component\Transliteration\TransliterationInterface
++   * @return TransliterationInterface
+    *   The transliteration service.
+    */
+   protected function transliteration() {
+@@ -180,7 +180,7 @@ abstract class FrontendEnvironmentBase extends PluginBase implements FrontendEnv
+   /**
+    * Sets the transliteration service.
+    *
+-   * @param \Drupal\Component\Transliteration\TransliterationInterface $transliteration
++   * @param TransliterationInterface $transliteration
+    *   The transliteration service.
+    */
+   public function setTransliteration(TransliterationInterface $transliteration) {
+diff --git a/src/Plugin/FrontendEnvironmentInterface.php b/src/Plugin/FrontendEnvironmentInterface.php
+index 67539a4..83f2135 100644
+--- a/src/Plugin/FrontendEnvironmentInterface.php
++++ b/src/Plugin/FrontendEnvironmentInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks\Plugin;
+ 
++use Drupal\build_hooks\BuildHookDetails;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Plugin\PluginFormInterface;
+@@ -18,7 +19,7 @@ interface FrontendEnvironmentInterface extends ConfigurableInterface, DependentP
+   /**
+    * Get the info to trigger the hook based on the configuration of the plugin.
+    *
+-   * @return \Drupal\build_hooks\BuildHookDetails
++   * @return BuildHookDetails
+    *   An object containing the details to trigger the hook.
+    */
+   public function getBuildHookDetails();
+@@ -26,7 +27,7 @@ interface FrontendEnvironmentInterface extends ConfigurableInterface, DependentP
+   /**
+    * Allows the plugin to add elements to the deployment form.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    *
+    * @return array
+@@ -37,7 +38,7 @@ interface FrontendEnvironmentInterface extends ConfigurableInterface, DependentP
+   /**
+    * Determine if the deployment was triggered successfully.
+    *
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   Response for the trigger request.
+    *
+    * @return bool
+diff --git a/src/Plugin/FrontendEnvironmentManager.php b/src/Plugin/FrontendEnvironmentManager.php
+index 3efe9c2..70ff158 100644
+--- a/src/Plugin/FrontendEnvironmentManager.php
++++ b/src/Plugin/FrontendEnvironmentManager.php
+@@ -17,9 +17,9 @@ class FrontendEnvironmentManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Plugin/Validation/Constraint/BuildHooksDeploymentValidator.php b/src/Plugin/Validation/Constraint/BuildHooksDeploymentValidator.php
+index 03e84e6..dab3100 100644
+--- a/src/Plugin/Validation/Constraint/BuildHooksDeploymentValidator.php
++++ b/src/Plugin/Validation/Constraint/BuildHooksDeploymentValidator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks\Plugin\Validation\Constraint;
+ 
++use Drupal\build_hooks\Entity\DeploymentInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -16,14 +17,14 @@ class BuildHooksDeploymentValidator extends ConstraintValidator implements Conta
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+    * Creates a new BuildHooksEnvironmentConstraintValidator instance.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -43,7 +44,7 @@ class BuildHooksDeploymentValidator extends ConstraintValidator implements Conta
+    * {@inheritdoc}
+    */
+   public function validate($entity, Constraint $constraint) {
+-    /** @var \Drupal\build_hooks\Entity\DeploymentInterface $entity */
++    /** @var DeploymentInterface $entity */
+     $deployment_storage = $this->entityTypeManager->getStorage($entity->getEntityTypeId());
+ 
+     if ($entity->isDeployed()) {
+diff --git a/src/Trigger.php b/src/Trigger.php
+index e2c783a..097173f 100755
+--- a/src/Trigger.php
++++ b/src/Trigger.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\build_hooks;
+ 
++use Psr\Http\Message\ResponseInterface;
+ use Drupal\build_hooks\Plugin\FrontendEnvironmentInterface as PluginEnv;
+ use Drupal\build_hooks\Entity\FrontendEnvironmentInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -29,70 +30,70 @@ class Trigger implements TriggerInterface {
+   /**
+    * The config.factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The http_client service.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * The current_user service.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The string_translation service.
+    *
+-   * @var \Drupal\Core\StringTranslation\TranslationManager
++   * @var TranslationManager
+    */
+   protected $stringTranslation;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The logger.factory service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The deploy logger service.
+    *
+-   * @var \Drupal\build_hooks\DeployLogger
++   * @var DeployLogger
+    */
+   protected $deployLogger;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManager
++   * @var EntityTypeManager
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The cache tag invalidator service.
+    *
+-   * @var \Drupal\Core\Cache\CacheTagsInvalidatorInterface
++   * @var CacheTagsInvalidatorInterface
+    */
+   protected $cacheTagInvalidator;
+ 
+   /**
+    * The event dispatcher service.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+@@ -226,15 +227,15 @@ class Trigger implements TriggerInterface {
+   /**
+    * Triggers a build hook by the details.
+    *
+-   * @param \Drupal\build_hooks\BuildHookDetails $buildHookDetails
++   * @param BuildHookDetails $buildHookDetails
+    *   An object that holds the information about the call.
+    * @param \Drupal\build_hooks\Plugin\FrontendEnvironmentInterface $plugin
+    *   The plugin which performs the trigger.
+    *
+-   * @return \Psr\Http\Message\ResponseInterface
++   * @return ResponseInterface
+    *   The response of client.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   private function triggerBuildHook(BuildHookDetails $buildHookDetails, PluginEnv $plugin) {
+     $response = $this->httpClient->request(
+@@ -243,7 +244,7 @@ class Trigger implements TriggerInterface {
+       $buildHookDetails->getOptions()
+     );
+     $event = new ResponseEvent($response, $plugin);
+-    $this->eventDispatcher->dispatch(ResponseEvent::EVENT_NAME, $event);
++    $this->eventDispatcher->dispatch($event, ResponseEvent::EVENT_NAME);
+     return $response;
+   }
+ 
+diff --git a/src/TriggerInterface.php b/src/TriggerInterface.php
+index c38d195..86b204e 100644
+--- a/src/TriggerInterface.php
++++ b/src/TriggerInterface.php
+@@ -25,7 +25,7 @@ interface TriggerInterface {
+   /**
+    * Triggers a build hook for an environment.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $frontend_environment
++   * @param FrontendEnvironmentInterface $frontend_environment
+    *   The Environment to trigger the deployment for.
+    *
+    * @return mixed
+diff --git a/tests/src/Functional/UiTest.php b/tests/src/Functional/UiTest.php
+index c39c7c0..c2a5f45 100644
+--- a/tests/src/Functional/UiTest.php
++++ b/tests/src/Functional/UiTest.php
+@@ -144,7 +144,7 @@ class UiTest extends BrowserTestBase {
+    */
+   private function assertAddEnvironmentForPluginFunctionality() {
+     $assert = $this->assertSession();
+-    $query = $assert->buildXPathQuery('//a[contains(@href, :href)]', [
++    $query = $this->assertSession()->buildXPathQuery('//a[contains(@href, :href)]', [
+       ':href' => Url::fromRoute('build_hooks.admin_add', [
+         'plugin_id' => 'build_hooks_test',
+       ])->toString(),
+@@ -158,7 +158,7 @@ class UiTest extends BrowserTestBase {
+   /**
+    * Asserts admin can create new environment.
+    *
+-   * @return \Drupal\build_hooks\Entity\FrontendEnvironmentInterface
++   * @return FrontendEnvironmentInterface
+    *   Created entity.
+    */
+   private function assertThatAdminCanAddFrontEndEnvironment() : FrontendEnvironmentInterface {
+@@ -195,10 +195,10 @@ class UiTest extends BrowserTestBase {
+   /**
+    * Tests editing an environment.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $environment
++   * @param FrontendEnvironmentInterface $environment
+    *   Environment.
+    *
+-   * @return \Drupal\build_hooks\Entity\FrontendEnvironmentInterface
++   * @return FrontendEnvironmentInterface
+    *   Edited entity.
+    */
+   private function assertThatAdminCanEditFrontEndEnvironment(FrontendEnvironmentInterface $environment) : FrontendEnvironmentInterface {
+@@ -219,7 +219,7 @@ class UiTest extends BrowserTestBase {
+   /**
+    * Tests deployment form functionality.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $environment
++   * @param FrontendEnvironmentInterface $environment
+    *   Environment.
+    */
+   private function assertFrontEndEnvironmentDeploymentFormFunctionality(FrontendEnvironmentInterface $environment) {
+@@ -252,7 +252,7 @@ class UiTest extends BrowserTestBase {
+   /**
+    * Tests admin can delete environments.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $environment
++   * @param FrontendEnvironmentInterface $environment
+    *   Environment.
+    */
+   private function assertThatAdminCanDeleteFrontEndEnvironment(FrontendEnvironmentInterface $environment) {
+@@ -267,7 +267,7 @@ class UiTest extends BrowserTestBase {
+   /**
+    * Tests toolbar integration.
+    *
+-   * @param \Drupal\build_hooks\Entity\FrontendEnvironmentInterface $environment
++   * @param FrontendEnvironmentInterface $environment
+    *   Environment.
+    * @param int $expected_count
+    *   Expected count.
+diff --git a/tests/src/Kernel/BuildHooksKernelTestBase.php b/tests/src/Kernel/BuildHooksKernelTestBase.php
+index f4e7863..0114e36 100644
+--- a/tests/src/Kernel/BuildHooksKernelTestBase.php
++++ b/tests/src/Kernel/BuildHooksKernelTestBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\build_hooks\Kernel;
+ 
++use GuzzleHttp\ClientInterface;
++use Drupal\build_hooks\DeployLogger;
+ use Drupal\build_hooks\Entity\FrontendEnvironment;
+ use Drupal\build_hooks\TriggerInterface;
+ use Drupal\entity_test\Entity\EntityTest;
+@@ -34,21 +36,21 @@ abstract class BuildHooksKernelTestBase extends KernelTestBase {
+   /**
+    * History of requests.
+    *
+-   * @var \GuzzleHttp\Psr7\Request[]
++   * @var Request[]
+    */
+   protected $history = [];
+ 
+   /**
+    * Mock client.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $mockClient;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installConfig('build_hooks');
+     $this->installConfig('system');
+@@ -85,7 +87,7 @@ abstract class BuildHooksKernelTestBase extends KernelTestBase {
+    * @param array $settings
+    *   Plugin settings.
+    *
+-   * @return \GuzzleHttp\Psr7\Request
++   * @return Request
+    *   Build hook request.
+    */
+   protected function assertFrontendEnvironmentBuildHook(
+@@ -109,7 +111,7 @@ abstract class BuildHooksKernelTestBase extends KernelTestBase {
+       'name' => $this->randomMachineName(),
+     ]);
+     $entity->save();
+-    /** @var \Drupal\build_hooks\DeployLogger $logger */
++    /** @var DeployLogger $logger */
+     $logger = \Drupal::service('build_hooks.deploylogger');
+     // The entity-save strategy will never have queued items.
+     $this->assertEquals($deployment_strategy === TriggerInterface::DEPLOYMENT_STRATEGY_ENTITYSAVE ? 0 : 1, $logger->getNumberOfItemsSinceLastDeploymentForEnvironment($environment));
+diff --git a/tests/src/Kernel/DeployLogDeprecatedTest.php b/tests/src/Kernel/DeployLogDeprecatedTest.php
+index f41c26d..a431865 100644
+--- a/tests/src/Kernel/DeployLogDeprecatedTest.php
++++ b/tests/src/Kernel/DeployLogDeprecatedTest.php
+@@ -14,6 +14,7 @@ class DeployLogDeprecatedTest extends BuildHooksKernelTestBase {
+    * Tests removed method.
+    *
+    * @expectedDeprecation Drupal\build_hooks\DeployLogger::getLogItemsSinceTimestamp is deprecated in build_hooks:8.x-2.4 and is removed from build_hooks:8.x-3.0. There is no replacement, instead work with the deployment content entity. See https://www.drupal.org/node/3172327
++   * @doesNotPerformAssertions
+    */
+   public function testDeprecatedMethod() {
+     $logger = \Drupal::service('build_hooks.deploylogger');
+diff --git a/tests/src/Kernel/DeploymentStorageHandlerTest.php b/tests/src/Kernel/DeploymentStorageHandlerTest.php
+index fc78fa3..d96457d 100644
+--- a/tests/src/Kernel/DeploymentStorageHandlerTest.php
++++ b/tests/src/Kernel/DeploymentStorageHandlerTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\build_hooks\Kernel;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Drupal\build_hooks\DeploymentStorageHandlerInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\entity_test\Entity\EntityTest;
+ use Drupal\Tests\build_hooks\Traits\EnvironmentTestTrait;
+@@ -14,6 +16,7 @@ use GuzzleHttp\Psr7\Response;
+  */
+ class DeploymentStorageHandlerTest extends BuildHooksKernelTestBase {
+ 
++  use ProphecyTrait;
+   use EnvironmentTestTrait;
+ 
+   const MOCK_TIME = 1600745446;
+@@ -21,14 +24,14 @@ class DeploymentStorageHandlerTest extends BuildHooksKernelTestBase {
+   /**
+    * Deployment storage.
+    *
+-   * @var \Drupal\build_hooks\DeploymentStorageHandlerInterface
++   * @var DeploymentStorageHandlerInterface
+    */
+   protected $storage;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->createTestEnvironment();
+     $time = $this->prophesize(TimeInterface::class);
+diff --git a/tests/src/Kernel/DeploymentValidationTest.php b/tests/src/Kernel/DeploymentValidationTest.php
+index 07cd8ed..016e5ff 100644
+--- a/tests/src/Kernel/DeploymentValidationTest.php
++++ b/tests/src/Kernel/DeploymentValidationTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\build_hooks\Kernel;
+ 
++use Drupal\Core\Entity\EntityConstraintViolationList;
+ use Drupal\build_hooks\Entity\Deployment;
+ use Drupal\Tests\build_hooks\Traits\EnvironmentTestTrait;
+ 
+@@ -17,7 +18,7 @@ class DeploymentValidationTest extends BuildHooksKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->createTestEnvironment();
+   }
+@@ -27,16 +28,16 @@ class DeploymentValidationTest extends BuildHooksKernelTestBase {
+    */
+   public function testValidation() {
+     \Drupal::entityTypeManager()->getStorage('build_hooks_deployment')->getOrCreateNextDeploymentForEnvironment($this->environment);
+-    /** @var \Drupal\build_hooks\Entity\Deployment $another */
++    /** @var Deployment $another */
+     $another = Deployment::create([
+       'label' => $this->randomMachineName(),
+       'environment' => ['target_id' => $this->environment->id()],
+       'status' => 0,
+     ]);
+-    /** @var \Drupal\Core\Entity\EntityConstraintViolationList $errors */
++    /** @var EntityConstraintViolationList $errors */
+     $errors = $another->validate();
+     $this->assertCount(1, $errors);
+-    $this->assertRegExp('/There is already an active deployment for this environment/', (string) $errors[0]->getMessage());
++    $this->assertMatchesRegularExpression('/There is already an active deployment for this environment/', (string) $errors[0]->getMessage());
+     $this->assertEquals('status', $errors[0]->getPropertyPath());
+   }
+ 
+diff --git a/tests/src/Traits/EnvironmentTestTrait.php b/tests/src/Traits/EnvironmentTestTrait.php
+index 357e56c..1b790fd 100644
+--- a/tests/src/Traits/EnvironmentTestTrait.php
++++ b/tests/src/Traits/EnvironmentTestTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\build_hooks\Traits;
+ 
++use Drupal\build_hooks\Entity\FrontendEnvironmentInterface;
+ use Drupal\build_hooks\Entity\FrontendEnvironment;
+ use Drupal\build_hooks\Trigger;
+ 
+@@ -13,7 +14,7 @@ trait EnvironmentTestTrait {
+   /**
+    * Test environment.
+    *
+-   * @var \Drupal\build_hooks\Entity\FrontendEnvironmentInterface
++   * @var FrontendEnvironmentInterface
+    */
+   protected $environment;
+ 
+diff --git a/tests/src/Unit/BuildHookDetailsDeprecatedTest.php b/tests/src/Unit/BuildHookDetailsDeprecatedTest.php
+index 7f84320..d79fd26 100644
+--- a/tests/src/Unit/BuildHookDetailsDeprecatedTest.php
++++ b/tests/src/Unit/BuildHookDetailsDeprecatedTest.php
+@@ -18,6 +18,7 @@ class BuildHookDetailsDeprecatedTest extends UnitTestCase {
+    *
+    * @expectedDeprecation Drupal\build_hooks\BuildHookDetails::getBody is deprecated in build_hooks:8.x-2.4 and is removed from build_hooks:8.x-3.0. Instead, you should use Drupal\build_hooks\BuildHookDetails::getOptions. See https://www.drupal.org/node/3173753
+    * @expectedDeprecation Drupal\build_hooks\BuildHookDetails::setBody is deprecated in build_hooks:8.x-2.4 and is removed from build_hooks:8.x-3.0. Instead, you should use Drupal\build_hooks\BuildHookDetails::setOptions. See https://www.drupal.org/node/3173753
++   * @doesNotPerformAssertions
+    */
+   public function testDeprecatedMethods() {
+     $details = new BuildHookDetails();

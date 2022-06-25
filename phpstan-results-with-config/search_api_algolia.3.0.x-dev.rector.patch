@@ -1,0 +1,457 @@
+diff --git a/search_api_algolia.api.php b/search_api_algolia.api.php
+index 252155a..9046071 100644
+--- a/search_api_algolia.api.php
++++ b/search_api_algolia.api.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\search_api\Item\ItemInterface;
+ /**
+  * @file
+  * Hooks provided by the Search API Algolia search module.
+@@ -11,18 +12,17 @@ use Drupal\search_api\IndexInterface;
+  * @addtogroup hooks
+  * @{
+  */
+-
+ /**
+  * Alter Algolia objects before they are sent to Algolia for indexing.
+  *
+  * @param array $objects
+  *   An array of objects ready to be indexed, generated from $items array.
+- * @param \Drupal\search_api\IndexInterface $index
++ * @param IndexInterface $index
+  *   The search index for which items are being indexed.
+- * @param \Drupal\search_api\Item\ItemInterface[] $items
++ * @param ItemInterface[] $items
+  *   An array of items to be indexed, keyed by their item IDs.
+  */
+-function hook_search_api_algolia_objects_alter(array &$objects, \Drupal\search_api\IndexInterface $index, array $items) {
++function hook_search_api_algolia_objects_alter(array &$objects, IndexInterface $index, array $items) {
+   // Adds a "foo" field with value "bar" to all documents.
+   foreach ($objects as $key => $object) {
+     $objects[$key]['foo'] = 'bar';
+@@ -34,7 +34,7 @@ function hook_search_api_algolia_objects_alter(array &$objects, \Drupal\search_a
+  *
+  * @param array $sorts
+  *   Sorts from query.
+- * @param \Drupal\search_api\IndexInterface $index
++ * @param IndexInterface $index
+  *   Index.
+  */
+ function hook_search_api_algolia_sorts_alter(array &$sorts, IndexInterface $index) {
+diff --git a/search_api_algolia.info.yml b/search_api_algolia.info.yml
+index e949b1a..3d213f0 100644
+--- a/search_api_algolia.info.yml
++++ b/search_api_algolia.info.yml
+@@ -1,8 +1,7 @@
+ type: module
+ name: 'Algolia Search'
+ description: 'Provides integration with the Algolia search engine'
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ package: Search
+ dependencies:
+  - search_api:search_api
+diff --git a/search_api_algolia.module b/search_api_algolia.module
+index cc5c764..8692852 100644
+--- a/search_api_algolia.module
++++ b/search_api_algolia.module
+@@ -68,7 +68,7 @@ function search_api_algolia_form_search_api_index_edit_form_alter(&$form, FormSt
+ 
+       $form['options']['algolia_index_list'] = [
+         '#type' => 'item',
+-        '#markup' => render($element),
++        '#markup' => \Drupal::service('renderer')->render($element),
+         '#weight' => 3,
+       ];
+     }
+diff --git a/src/Commands/SearchApiAlgoliaCommands.php b/src/Commands/SearchApiAlgoliaCommands.php
+index 6b6c71d..7568bc8 100644
+--- a/src/Commands/SearchApiAlgoliaCommands.php
++++ b/src/Commands/SearchApiAlgoliaCommands.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\search_api_algolia\Commands;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Algolia\AlgoliaSearch\SearchClient;
+ use Drupal\Core\Database\Database;
+ use Drush\Commands\DrushCommands;
+@@ -18,23 +21,23 @@ class SearchApiAlgoliaCommands extends DrushCommands {
+   /**
+    * Logger Factory.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $drupalLogger;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * SearchApiAlgoliaCommands constructor.
+    *
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $loggerChannelFactory
++   * @param LoggerChannelFactoryInterface $loggerChannelFactory
+    *   Logger factory.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   Database connection object.
+    */
+   public function __construct(
+@@ -62,8 +65,8 @@ class SearchApiAlgoliaCommands extends DrushCommands {
+    * @usage drush sapia-d --batch-size=100
+    *   Fetch and delete objects  in algolia with batch of 100.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function deleteFromAlgolia(array $options = ['batch-size' => NULL]) {
+     $batch_size = $options['batch-size'] ?? 100;
+@@ -129,8 +132,8 @@ class SearchApiAlgoliaCommands extends DrushCommands {
+    *   The batch current context.
+    *
+    * @throws \AlgoliaSearch\AlgoliaException
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public static function batchProcess(array $object_ids, $index_name, &$context) {
+     // Store Algolia Connection credentials in context if not available.
+diff --git a/src/Plugin/search_api/backend/SearchApiAlgoliaBackend.php b/src/Plugin/search_api/backend/SearchApiAlgoliaBackend.php
+index c15e36f..7c99470 100644
+--- a/src/Plugin/search_api/backend/SearchApiAlgoliaBackend.php
++++ b/src/Plugin/search_api/backend/SearchApiAlgoliaBackend.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\search_api_algolia\Plugin\search_api\backend;
+ 
++use Drupal\search_api\SearchApiException;
++use Drupal\search_api\Item\FieldInterface;
++use Drupal\search_api\Query\Condition;
++use Drupal\search_api_autocomplete\SearchInterface;
++use Drupal\search_api_autocomplete\Suggestion\SuggestionFactory;
+ use Algolia\AlgoliaSearch\SearchClient;
+ use Algolia\AlgoliaSearch\Exceptions\AlgoliaException;
+ use Algolia\AlgoliaSearch\SearchIndex;
+@@ -39,49 +44,49 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Algolia Index.
+    *
+-   * @var \Algolia\AlgoliaSearch\SearchIndex
++   * @var SearchIndex
+    */
+   protected $algoliaIndex = NULL;
+ 
+   /**
+    * A connection to the Algolia server.
+    *
+-   * @var \Algolia\AlgoliaSearch\SearchClient
++   * @var SearchClient
+    */
+   protected $algoliaClient;
+ 
+   /**
+    * The logger to use for logging messages.
+    *
+-   * @var \Psr\Log\LoggerInterface|null
++   * @var LoggerInterface|null
+    */
+   protected $logger;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Search API Algolia Helper service.
+    *
+-   * @var \Drupal\search_api_algolia\SearchApiAlgoliaHelper
++   * @var SearchApiAlgoliaHelper
+    */
+   protected $helper;
+ 
+@@ -114,11 +119,11 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+       $container->get('search_api_algolia.helper')
+     );
+ 
+-    /** @var \Drupal\Core\Extension\ModuleHandlerInterface $module_handler */
++    /** @var ModuleHandlerInterface $module_handler */
+     $module_handler = $container->get('module_handler');
+     $backend->setModuleHandler($module_handler);
+ 
+-    /** @var \Psr\Log\LoggerInterface $logger */
++    /** @var LoggerInterface $logger */
+     $logger = $container->get('logger.channel.search_api_algolia');
+     $backend->setLogger($logger);
+ 
+@@ -217,7 +222,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\search_api\SearchApiException
++   * @throws SearchApiException
+    */
+   public function removeIndex($index) {
+     // Only delete the index's data if the index isn't read-only.
+@@ -232,7 +237,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   public function indexItems(IndexInterface $index, array $items) {
+     $objects = [];
+ 
+-    /** @var \Drupal\search_api\Item\ItemInterface $item */
++    /** @var ItemInterface $item */
+     foreach ($items as $id => $item) {
+       $objects[$id] = $this->prepareItem($index, $item);
+     }
+@@ -279,9 +284,9 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Indexes a single item on the specified index.
+    *
+-   * @param \Drupal\search_api\IndexInterface $index
++   * @param IndexInterface $index
+    *   The index for which the item is being indexed.
+-   * @param \Drupal\search_api\Item\ItemInterface $item
++   * @param ItemInterface $item
+    *   The item to index.
+    */
+   protected function indexItem(IndexInterface $index, ItemInterface $item) {
+@@ -293,9 +298,9 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+    *
+    * Used as a helper method in indexItem()/indexItems().
+    *
+-   * @param \Drupal\search_api\IndexInterface $index
++   * @param IndexInterface $index
+    *   Index.
+-   * @param \Drupal\search_api\Item\ItemInterface $item
++   * @param ItemInterface $item
+    *   The item to index.
+    *
+    * @return array
+@@ -307,7 +312,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+     $item_fields = $item->getFields();
+     $item_fields += $this->getSpecialFields($index, $item);
+ 
+-    /** @var \Drupal\search_api\Item\FieldInterface $field */
++    /** @var FieldInterface $field */
+     foreach ($item_fields as $field) {
+       $type = $field->getType();
+       $values = NULL;
+@@ -373,7 +378,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+    *
+    * @param array $objects
+    *   An array of objects ready to be indexed, generated from $items array.
+-   * @param \Drupal\search_api\IndexInterface $index
++   * @param IndexInterface $index
+    *   The search index for which items are being indexed.
+    * @param array $items
+    *   An array of items being indexed.
+@@ -557,7 +562,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Creates a connection to the Algolia Search server as configured.
+    *
+-   * @param \Drupal\search_api\IndexInterface|null $index
++   * @param IndexInterface|null $index
+    *   Index to connect to.
+    * @param string $index_suffix
+    *   Index suffix, specified when connecting to replica or query suggestion.
+@@ -608,7 +613,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Retrieves the logger to use.
+    *
+-   * @return \Psr\Log\LoggerInterface
++   * @return LoggerInterface
+    *   The logger to use.
+    */
+   public function getLogger() {
+@@ -618,7 +623,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Sets the logger to use.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger to use.
+    *
+    * @return $this
+@@ -631,7 +636,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Returns the module handler to use for this plugin.
+    *
+-   * @return \Drupal\Core\Extension\ModuleHandlerInterface
++   * @return ModuleHandlerInterface
+    *   The module handler.
+    */
+   public function getModuleHandler() {
+@@ -641,7 +646,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Sets the module handler to use for this plugin.
+    *
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to use for this plugin.
+    *
+    * @return $this
+@@ -654,7 +659,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Returns the AlgoliaSearch client.
+    *
+-   * @return \Algolia\AlgoliaSearch\SearchClient
++   * @return SearchClient
+    *   The algolia instance object.
+    */
+   public function getAlgolia() {
+@@ -736,7 +741,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Extract conditions.
+    *
+-   * @param \Drupal\search_api\Query\ConditionGroupInterface $condition_group
++   * @param ConditionGroupInterface $condition_group
+    *   Condition group.
+    * @param array $options
+    *   Algolia options to updatesearch_api_algolia.module.
+@@ -752,7 +757,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+ 
+       $field = $condition->getField();
+ 
+-      /** @var \Drupal\search_api\Query\Condition $condition */
++      /** @var Condition $condition */
+       // We support limited operators for now.
+       if ($condition->getOperator() == '=' ) {
+         $query = $field . ':' . $condition->getValue();
+@@ -776,7 +781,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Implements autocomplete compatible to AutocompleteBackendInterface.
+    *
+-   * @param \Drupal\search_api\Query\QueryInterface $query
++   * @param QueryInterface $query
+    *   A query representing the completed user input so far.
+    * @param \Drupal\search_api_autocomplete\SearchInterface $search
+    *   An object containing details about the search the user is on, and
+@@ -796,14 +801,14 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+    *
+    * @see \Drupal\search_api_autocomplete\AutocompleteBackendInterface
+    */
+-  public function getAutocompleteSuggestions(QueryInterface $query, \Drupal\search_api_autocomplete\SearchInterface $search, $incomplete_key, $user_input) {
++  public function getAutocompleteSuggestions(QueryInterface $query, SearchInterface $search, $incomplete_key, $user_input) {
+     // This function will be used only is search_api_autocomplete is enabled
+     // and used. We have it here to add the support but it might never be used
+     // in normal cases.
+     $suggestions = [];
+ 
+     try {
+-      $factory = new \Drupal\search_api_autocomplete\Suggestion\SuggestionFactory($user_input);
++      $factory = new SuggestionFactory($user_input);
+     }
+     catch (\Exception $e) {
+       return $suggestions;
+@@ -889,7 +894,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Wrapper function to check if multi-lingual language suffix is enabled.
+    *
+-   * @param \Drupal\search_api\IndexInterface $index
++   * @param IndexInterface $index
+    *   Index to check for.
+    *
+    * @return bool
+@@ -902,7 +907,7 @@ class SearchApiAlgoliaBackend extends BackendPluginBase implements PluginFormInt
+   /**
+    * Get all the languages supported by the Index.
+    *
+-   * @param \Drupal\search_api\IndexInterface $index
++   * @param IndexInterface $index
+    *   Index.
+    *
+    * @return array
+diff --git a/src/SearchApiAlgoliaHelper.php b/src/SearchApiAlgoliaHelper.php
+index ec51ce2..4b94345 100644
+--- a/src/SearchApiAlgoliaHelper.php
++++ b/src/SearchApiAlgoliaHelper.php
+@@ -20,32 +20,32 @@ class SearchApiAlgoliaHelper {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManager
++   * @var LanguageManager
+    */
+   protected $languageManager;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new class instance.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Language\LanguageManager $language_manager
++   * @param LanguageManager $language_manager
+    *   The language manager.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   Database connection object.
+    */
+   public function __construct(EntityTypeManagerInterface $entityTypeManager,
+@@ -62,7 +62,7 @@ class SearchApiAlgoliaHelper {
+    * Deletes all entries for this entity from the tracking table for each index
+    * that tracks this entity type.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The deleted entity.
+    *
+    * @see search_api_algolia_entity_delete()
+@@ -97,7 +97,7 @@ class SearchApiAlgoliaHelper {
+    *
+    * This items will be deleted via drush command sapia-d.
+    *
+-   * @param \Drupal\search_api\IndexInterface $index
++   * @param IndexInterface $index
+    *   Index.
+    * @param array $item_ids
+    *   Items to delete.

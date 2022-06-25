@@ -1,0 +1,3693 @@
+diff --git a/braintree_cashier.api.php b/braintree_cashier.api.php
+index 444e8bf..d5a7ef8 100644
+--- a/braintree_cashier.api.php
++++ b/braintree_cashier.api.php
+@@ -58,9 +58,9 @@ function hook_braintree_cashier_billing_plan_subscription_type_options_alter(arr
+  * @param array $params
+  *   The array of parameters passed to
+  *   BraintreeCashierSubscriptionInterface::create().
+- * @param \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan
++ * @param BraintreeCashierBillingPlanInterface $billing_plan
+  *   The billing plan entity from which the subscription will be created.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state of the sign up form.
+  */
+ function hook_braintree_cashier_create_subscription_params_alter(array &$params, BraintreeCashierBillingPlanInterface $billing_plan, FormStateInterface $form_state = NULL) {
+diff --git a/braintree_cashier.module b/braintree_cashier.module
+index 8c53644..305b574 100644
+--- a/braintree_cashier.module
++++ b/braintree_cashier.module
+@@ -1,5 +1,10 @@
+ <?php
+ 
++use Symfony\Component\HttpFoundation\Request;
++use Drupal\braintree_cashier\BillableUser;
++use Drupal\braintree_cashier\Entity\BraintreeCashierSubscription;
++use Drupal\braintree_cashier\SubscriptionService;
++use Drupal\braintree_api\BraintreeApiServiceInterface;
+ /**
+  * @file
+  * Contains braintree_cashier.module.
+@@ -298,7 +303,7 @@ function braintree_cashier_user_login($account) {
+  * Dispatch an event when a user creates a new account after selecting a plan.
+  */
+ function braintree_cashier_user_insert(User $user) {
+-  /** @var \Symfony\Component\HttpFoundation\Request $current_request */
++  /** @var Request $current_request */
+   $current_request = \Drupal::service('request_stack')->getCurrentRequest();
+   if (!empty($current_request->getSession())) {
+     $plan_id = $current_request->getSession()->get('plan_id');
+@@ -339,10 +344,10 @@ function braintree_cashier_braintree_cashier_subscription_insert(BraintreeCashie
+  * email address locally.
+  */
+ function braintree_cashier_user_update(UserInterface $user) {
+-  /** @var \Drupal\user\UserInterface $original */
++  /** @var UserInterface $original */
+   $original = $user->original;
+   if ($user->getEmail() != $original->getEmail()) {
+-    /** @var \Drupal\braintree_cashier\BillableUser $billable_user_service */
++    /** @var BillableUser $billable_user_service */
+     $billable_user_service = \Drupal::service('braintree_cashier.billable_user');
+     if (!empty($billable_user_service->getBraintreeCustomerId($user))) {
+       $billable_user_service->updateVaultedEmail($user);
+@@ -354,7 +359,7 @@ function braintree_cashier_user_update(UserInterface $user) {
+     $subscription_service = \Drupal::service('braintree_cashier.subscription_service');
+     $billable_user_service = \Drupal::service('braintree_cashier.billable_user');
+     foreach ($billable_user_service->getSubscriptions($user) as $subscription) {
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription */
++      /** @var BraintreeCashierSubscriptionInterface $subscription */
+       $subscription_service->cancelNow($subscription);
+     }
+   }
+@@ -371,7 +376,7 @@ function braintree_cashier_user_update(UserInterface $user) {
+  */
+ function braintree_cashier_braintree_cashier_subscription_update(BraintreeCashierSubscriptionInterface $subscription) {
+   /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription */
+-  /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $original */
++  /** @var BraintreeCashierSubscriptionInterface $original */
+   $original = $subscription->original;
+   if ($original->getStatus() != $subscription->getStatus()) {
+     $user = $subscription->getSubscribedUser();
+@@ -395,7 +400,7 @@ function braintree_cashier_braintree_cashier_subscription_update(BraintreeCashie
+  * Set the date at which the subscription ended.
+  */
+ function braintree_cashier_braintree_cashier_subscription_presave(BraintreeCashierSubscriptionInterface $subscription) {
+-  /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $original */
++  /** @var BraintreeCashierSubscriptionInterface $original */
+   if (!empty($original = $subscription->original)) {
+     $status_changed = $original->getStatus() != $subscription->getStatus();
+     if ($status_changed && $subscription->getStatus() == BraintreeCashierSubscriptionInterface::CANCELED) {
+@@ -480,7 +485,7 @@ function braintree_cashier_token_info() {
+  * Implements hook_tokens().
+  */
+ function braintree_cashier_tokens($type, $tokens, array $data, array $options, BubbleableMetadata $bubbleable_metadata) {
+-  /** @var \Drupal\braintree_cashier\BillableUser $billable_user_service */
++  /** @var BillableUser $billable_user_service */
+   $billable_user_service = \Drupal::service('braintree_cashier.billable_user');
+ 
+   $replacements = [];
+@@ -489,7 +494,7 @@ function braintree_cashier_tokens($type, $tokens, array $data, array $options, B
+     $user = $data['user'];
+     // It's OK to loop through subscriptions since there should be only one
+     // active subscription.
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscription $subscription */
++    /** @var BraintreeCashierSubscription $subscription */
+     foreach ($billable_user_service->getSubscriptions($user) as $subscription) {
+       foreach ($tokens as $name => $original) {
+         switch ($name) {
+@@ -512,9 +517,9 @@ function braintree_cashier_tokens($type, $tokens, array $data, array $options, B
+  * Implements hook_user_cancel().
+  */
+ function braintree_cashier_user_cancel($edit, UserInterface $account, $method) {
+-  /** @var \Drupal\braintree_cashier\BillableUser $billable_user_service */
++  /** @var BillableUser $billable_user_service */
+   $billable_user_service = \Drupal::service('braintree_cashier.billable_user');
+-  /** @var \Drupal\braintree_cashier\SubscriptionService $subscription_serivce */
++  /** @var SubscriptionService $subscription_serivce */
+   $subscription_serivce = \Drupal::service('braintree_cashier.subscription_service');
+   $subscriptions = $billable_user_service->getSubscriptions($account);
+ 
+@@ -527,12 +532,12 @@ function braintree_cashier_user_cancel($edit, UserInterface $account, $method) {
+  * Implements hook_ENTITY_TYPE_predelete().
+  */
+ function braintree_cashier_user_predelete(UserInterface $account) {
+-  /** @var \Drupal\braintree_cashier\BillableUser $billable_user_service */
++  /** @var BillableUser $billable_user_service */
+   $billable_user_service = \Drupal::service('braintree_cashier.billable_user');
+   // Delete data from Braintree, including payment methods and subscriptions.
+   // See https://developers.braintreepayments.com/reference/request/customer/delete/php
+   if (!empty($billable_user_service->getBraintreeCustomerId($account))) {
+-    /** @var \Drupal\braintree_api\BraintreeApiServiceInterface $braintree_api */
++    /** @var BraintreeApiServiceInterface $braintree_api */
+     $braintree_api = \Drupal::service('braintree_api.braintree_api');
+ 
+     try {
+@@ -545,8 +550,8 @@ function braintree_cashier_user_predelete(UserInterface $account) {
+     }
+   }
+   $subscriptions = $billable_user_service->getSubscriptions($account, FALSE);
+-  /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscription $subscription */
++  /** @var BraintreeCashierSubscription $subscription */
+   foreach ($subscriptions as $subscription) {
+     $subscription->delete();
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/braintree_cashier_billing_plan.page.inc b/braintree_cashier_billing_plan.page.inc
+index 3158eda..581f1c2 100644
+--- a/braintree_cashier_billing_plan.page.inc
++++ b/braintree_cashier_billing_plan.page.inc
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface;
+ /**
+  * @file
+  * Contains billing_plan.page.inc.
+@@ -21,7 +22,7 @@ use Drupal\Core\Url;
+  *   - attributes: HTML attributes for the containing element.
+  */
+ function template_preprocess_braintree_cashier_billing_plan(array &$variables) {
+-  /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan */
++  /** @var BraintreeCashierBillingPlanInterface $billing_plan */
+   $billing_plan = $variables['elements']['#braintree_cashier_billing_plan'];
+   $view_mode = $variables['elements']['#view_mode'];
+ 
+diff --git a/src/BillableUser.php b/src/BillableUser.php
+index ff9206f..e40929b 100644
+--- a/src/BillableUser.php
++++ b/src/BillableUser.php
+@@ -2,6 +2,13 @@
+ 
+ namespace Drupal\braintree_cashier;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Braintree\Customer;
++use Braintree\Exception\NotFound;
++use Braintree\ApplePayCard;
++use Braintree\AndroidPayCard;
+ use Braintree\CreditCard;
+ use Braintree\PayPalAccount;
+ use Drupal\braintree_api\BraintreeApiService;
+@@ -35,87 +42,87 @@ class BillableUser {
+   /**
+    * The Braintree Cashier logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The subscription entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $subscriptionStorage;
+ 
+   /**
+    * The user entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The braintree cashier service.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * Event dispatcher.
+    *
+-   * @var \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher
++   * @var ContainerAwareEventDispatcher
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * The Braintree API service.
+    *
+-   * @var \Drupal\braintree_api\BraintreeApiService
++   * @var BraintreeApiService
+    */
+   protected $braintreeApiService;
+ 
+   /**
+    * Braintree cashier settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $bcConfig;
+ 
+   /**
+    * The theme manager.
+    *
+-   * @var \Drupal\Core\Theme\ThemeManagerInterface
++   * @var ThemeManagerInterface
+    */
+   protected $themeManager;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * BillableUser constructor.
+    *
+-   * @param \Drupal\Core\Logger\LoggerChannelInterface $logger
++   * @param LoggerChannelInterface $logger
+    *   The Braintree Cashier logger channel.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\braintree_cashier\BraintreeCashierService $bcService
++   * @param BraintreeCashierService $bcService
+    *   The braintree cashier service.
+-   * @param \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher $eventDispatcher
++   * @param ContainerAwareEventDispatcher $eventDispatcher
+    *   The container aware event dispatcher.
+-   * @param \Drupal\braintree_api\BraintreeApiService $braintreeApiService
++   * @param BraintreeApiService $braintreeApiService
+    *   The Braintree API service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The config factory.
+-   * @param \Drupal\Core\Theme\ThemeManagerInterface $themeManager
++   * @param ThemeManagerInterface $themeManager
+    *   The theme manager.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   public function __construct(LoggerChannelInterface $logger, EntityTypeManagerInterface $entity_type_manager, BraintreeCashierService $bcService, ContainerAwareEventDispatcher $eventDispatcher, BraintreeApiService $braintreeApiService, ConfigFactoryInterface $configFactory, ThemeManagerInterface $themeManager, MessengerInterface $messenger) {
+     $this->logger = $logger;
+@@ -134,7 +141,7 @@ class BillableUser {
+    *
+    * Deletes the previous payment method so that only one is kept on file.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity.
+    * @param string $nonce
+    *   The payment method nonce from the Braintree Drop-in UI.
+@@ -162,7 +169,7 @@ class BillableUser {
+     if (!$result->success) {
+       $this->logger->error('Error creating payment method: ' . $result->message);
+       $event = new BraintreeErrorEvent($user, $result->message, $result);
+-      $this->eventDispatcher->dispatch(BraintreeCashierEvents::BRAINTREE_ERROR, $event);
++      $this->eventDispatcher->dispatch($event, BraintreeCashierEvents::BRAINTREE_ERROR);
+       if (!empty($result->creditCardVerification)) {
+         $credit_card_verification = $result->creditCardVerification;
+         if ($credit_card_verification->status == 'processor_declined') {
+@@ -188,7 +195,7 @@ class BillableUser {
+     $payment_method_type = get_class($result->paymentMethod);
+ 
+     $event = new PaymentMethodUpdatedEvent($user, $payment_method_type);
+-    $this->eventDispatcher->dispatch(BraintreeCashierEvents::PAYMENT_METHOD_UPDATED, $event);
++    $this->eventDispatcher->dispatch($event, BraintreeCashierEvents::PAYMENT_METHOD_UPDATED);
+ 
+     return TRUE;
+   }
+@@ -196,13 +203,13 @@ class BillableUser {
+   /**
+    * Gets the Braintree customer.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user entity.
+    *
+-   * @return \Braintree\Customer
++   * @return Customer
+    *   The Braintree customer object.
+    *
+-   * @throws \Braintree\Exception\NotFound
++   * @throws NotFound
+    *   The Braintree not found exception.
+    */
+   public function asBraintreeCustomer(UserInterface $user) {
+@@ -212,7 +219,7 @@ class BillableUser {
+   /**
+    * Gets the Braintree customer ID.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user entity.
+    *
+    * @return string
+@@ -225,7 +232,7 @@ class BillableUser {
+   /**
+    * Updates all subscriptions to use the payment method with the given token.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity.
+    * @param string $token
+    *   The payment method token.
+@@ -243,12 +250,12 @@ class BillableUser {
+   /**
+    * Gets the subscription entities for a user.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user entity.
+    * @param bool $active
+    *   Whether to return only subscriptions that are currently active.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface[]
++   * @return EntityInterface[]
+    *   An array of subscription entities.
+    */
+   public function getSubscriptions(UserInterface $user, $active = TRUE) {
+@@ -270,10 +277,10 @@ class BillableUser {
+    * This keeps the Drop-in UI simple since otherwise all payment methods are
+    * always shown.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity.
+    *
+-   * @throws \Braintree\Exception\NotFound
++   * @throws NotFound
+    *   The Braintree not found exception.
+    */
+   public function removeNonDefaultPaymentMethods(User $user) {
+@@ -289,13 +296,13 @@ class BillableUser {
+   /**
+    * Gets a Braintree payment method.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity.
+    *
+-   * @return \Braintree\CreditCard|\Braintree\PayPalAccount|\Braintree\ApplePayCard|\Braintree\AndroidPayCard
++   * @return CreditCard|PayPalAccount|ApplePayCard|AndroidPayCard
+    *   The Braintree payment method object, or FALSE if none found.
+    *
+-   * @throws \Braintree\Exception\NotFound
++   * @throws NotFound
+    *   The Braintree not found exception.
+    */
+   public function getPaymentMethod(User $user) {
+@@ -306,14 +313,14 @@ class BillableUser {
+   /**
+    * Creates a new Braintree customer.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity.
+    * @param string $nonce
+    *   The payment method nonce from the Drop-in UI.
+    * @param string $device_data
+    *   Device data collected by the Drop-in UI for Advanced Fraud Management.
+    *
+-   * @return \Braintree\Customer|bool
++   * @return Customer|bool
+    *   The Braintree customer object.
+    */
+   public function createAsBraintreeCustomer(User $user, $nonce, $device_data) {
+@@ -333,7 +340,7 @@ class BillableUser {
+     if (!$result->success) {
+       $this->logger->error('Error creating Braintree customer: ' . $result->message);
+       $event = new BraintreeErrorEvent($user, $result->message, $result);
+-      $this->eventDispatcher->dispatch(BraintreeCashierEvents::BRAINTREE_ERROR, $event);
++      $this->eventDispatcher->dispatch($event, BraintreeCashierEvents::BRAINTREE_ERROR);
+       if (!empty($result->creditCardVerification)) {
+         $credit_card_verification = $result->creditCardVerification;
+         if ($credit_card_verification->status == 'processor_declined') {
+@@ -366,7 +373,7 @@ class BillableUser {
+     $user->save();
+ 
+     $event = new BraintreeCustomerCreatedEvent($user);
+-    $this->eventDispatcher->dispatch(BraintreeCashierEvents::BRAINTREE_CUSTOMER_CREATED, $event);
++    $this->eventDispatcher->dispatch($event, BraintreeCashierEvents::BRAINTREE_CUSTOMER_CREATED);
+ 
+     // Invalidate the local tasks cache to make the "Invoices" task appear when
+     // viewed by other users such as administrators.
+@@ -379,12 +386,12 @@ class BillableUser {
+   /**
+    * Sets the user-provided invoice billing information.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity with the provided billing information.
+    * @param string $billing_information
+    *   The billing information.
+    *
+-   * @return \Drupal\user\Entity\User
++   * @return User
+    *   The user entity.
+    */
+   public function setInvoiceBillingInformation(User $user, $billing_information) {
+@@ -396,7 +403,7 @@ class BillableUser {
+   /**
+    * Gets the user-provided invoice billing information for the user.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity.
+    *
+    * @return string
+@@ -409,7 +416,7 @@ class BillableUser {
+   /**
+    * Gets the user's billing information as plain text.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity.
+    *
+    * @return mixed
+@@ -422,7 +429,7 @@ class BillableUser {
+   /**
+    * Generate client token for the Drop-in UI for the provided user entity.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity which might have a Braintree customer ID.
+    * @param int $version
+    *   The Braintree API version.
+@@ -484,7 +491,7 @@ class BillableUser {
+    * This function permits updating the version of the drop-in UI in only one
+    * place since the drop-in UI is used in multiple forms.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $user
++   * @param EntityInterface $user
+    *   The user account for which to generate the Drop-in UI.
+    *
+    * @return array
+@@ -508,7 +515,7 @@ class BillableUser {
+   /**
+    * Check whether a payment method is in use by a different account.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user account that wishes to own the payment method.
+    * @param mixed $payment_method
+    *   The payment method object.
+@@ -537,7 +544,7 @@ class BillableUser {
+   /**
+    * Records the payment method identifier on the user entity.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user account that wishes to own the payment method.
+    * @param mixed $payment_method
+    *   The payment method object.
+@@ -563,7 +570,7 @@ class BillableUser {
+   /**
+    * Prevent duplicate payment methods.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user account that wishes to own the payment method.
+    * @param mixed $payment_method
+    *   The payment method object.
+@@ -603,7 +610,7 @@ class BillableUser {
+    * entity is already vaulted in Braintree by checking for a Braintree customer
+    * ID.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user entity for which to update the email address.
+    */
+   public function updateVaultedEmail(UserInterface $user) {
+diff --git a/src/BraintreeCashierBillingPlanAccessControlHandler.php b/src/BraintreeCashierBillingPlanAccessControlHandler.php
+index 0b2c01d..6a08a70 100644
+--- a/src/BraintreeCashierBillingPlanAccessControlHandler.php
++++ b/src/BraintreeCashierBillingPlanAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier;
+ 
++use Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,7 +19,7 @@ class BraintreeCashierBillingPlanAccessControlHandler extends EntityAccessContro
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $entity */
++    /** @var BraintreeCashierBillingPlanInterface $entity */
+     switch ($operation) {
+       case 'view':
+         if ($entity->isAvailableForPurchase()) {
+diff --git a/src/BraintreeCashierBillingPlanHtmlRouteProvider.php b/src/BraintreeCashierBillingPlanHtmlRouteProvider.php
+index 0eab96e..5fc4781 100644
+--- a/src/BraintreeCashierBillingPlanHtmlRouteProvider.php
++++ b/src/BraintreeCashierBillingPlanHtmlRouteProvider.php
+@@ -34,10 +34,10 @@ class BraintreeCashierBillingPlanHtmlRouteProvider extends AdminHtmlRouteProvide
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/BraintreeCashierDiscountAccessControlHandler.php b/src/BraintreeCashierDiscountAccessControlHandler.php
+index 8edbe32..1fcb433 100644
+--- a/src/BraintreeCashierDiscountAccessControlHandler.php
++++ b/src/BraintreeCashierDiscountAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier;
+ 
++use Drupal\braintree_cashier\Entity\BraintreeCashierDiscountInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,7 +19,7 @@ class BraintreeCashierDiscountAccessControlHandler extends EntityAccessControlHa
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierDiscountInterface $entity */
++    /** @var BraintreeCashierDiscountInterface $entity */
+     return AccessResult::allowedIfHasPermission($account, 'administer braintree cashier');
+   }
+ 
+diff --git a/src/BraintreeCashierDiscountHtmlRouteProvider.php b/src/BraintreeCashierDiscountHtmlRouteProvider.php
+index 3dd45b0..576e28b 100644
+--- a/src/BraintreeCashierDiscountHtmlRouteProvider.php
++++ b/src/BraintreeCashierDiscountHtmlRouteProvider.php
+@@ -34,10 +34,10 @@ class BraintreeCashierDiscountHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/BraintreeCashierService.php b/src/BraintreeCashierService.php
+index c106b8a..4af1f00 100644
+--- a/src/BraintreeCashierService.php
++++ b/src/BraintreeCashierService.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\braintree_cashier;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Core\Entity\EntityStorageException;
++use Braintree\Plan;
++use Braintree\Discount;
++use Drupal\braintree_cashier\Entity\BraintreeCashierDiscountInterface;
+ use Braintree\Transaction;
+ use Drupal\braintree_api\BraintreeApiService;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface;
+@@ -30,106 +36,105 @@ class BraintreeCashierService {
+   /**
+    * Drupal\Core\Session\AccountProxy definition.
+    *
+-   * @var \Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $currentUser;
+ 
+   /**
+    * The mail manager.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+-
+   protected $mailManager;
+ 
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Billing plan storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $billingPlanStorage;
+ 
+   /**
+    * The Braintree API service.
+    *
+-   * @var \Drupal\braintree_api\BraintreeApiService
++   * @var BraintreeApiService
+    */
+   protected $braintreeApi;
+ 
+   /**
+    * The braintree_cashier logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The discount entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $discountStorage;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+ 
+   /**
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+ 
+   /**
+    * Constructs a new Helper object.
+    *
+-   * @param \Drupal\Core\Session\AccountProxy $current_user
++   * @param AccountProxy $current_user
+    *   The user entity.
+-   * @param \Drupal\Core\Mail\MailManagerInterface $plugin_manager_mail
++   * @param MailManagerInterface $plugin_manager_mail
+    *   The mail manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\braintree_api\BraintreeApiService $braintree_api
++   * @param BraintreeApiService $braintree_api
+    *   The Braintree API service.
+-   * @param \Drupal\Core\Logger\LoggerChannelInterface $logger
++   * @param LoggerChannelInterface $logger
+    *   The braintree_cashier logger channel.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   The request stack.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   public function __construct(AccountProxy $current_user, MailManagerInterface $plugin_manager_mail, ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, BraintreeApiService $braintree_api, LoggerChannelInterface $logger, RequestStack $requestStack, MessengerInterface $messenger, ModuleHandlerInterface $moduleHandler) {
+     $this->currentUser = $current_user;
+@@ -162,7 +167,7 @@ class BraintreeCashierService {
+    * @param string $braintree_plan_id
+    *   The ID of the plan displayed in the Braintree control panel.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface|false
++   * @return BraintreeCashierBillingPlanInterface|false
+    *   The billing plan entity.
+    */
+   public function getBillingPlanFromBraintreePlanId($braintree_plan_id) {
+@@ -176,7 +181,7 @@ class BraintreeCashierService {
+     $result = $query->execute();
+     if (!empty($result)) {
+       $entity_id = array_shift($result);
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan */
++      /** @var BraintreeCashierBillingPlanInterface $billing_plan */
+       $billing_plan = $this->billingPlanStorage->load($entity_id);
+       return $billing_plan;
+     }
+@@ -245,10 +250,10 @@ class BraintreeCashierService {
+    * Any active subscriptions will automatically be canceled in
+    * braintree_cashier_user_update().
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function blockFraudAccount() {
+-    /** @var \Drupal\user\Entity\User $user */
++    /** @var User $user */
+     $user = User::load($this->currentUser->id());
+     $user->block();
+     $user->save();
+@@ -288,7 +293,7 @@ class BraintreeCashierService {
+    * This status is rare, and only certain types of transactions can be
+    * affected.
+    *
+-   * @param \Braintree\Transaction $transaction
++   * @param Transaction $transaction
+    *   The transaction property of the Braintree response object.
+    *   $transaction->status must be "processor_settlement_declined".
+    *
+@@ -308,7 +313,7 @@ class BraintreeCashierService {
+    * @param string $braintree_plan_id
+    *   The machine name of the Plan in the Braintree control panel.
+    *
+-   * @return \Braintree\Plan
++   * @return Plan
+    *   The Braintree Plan object.
+    *
+    * @throws \Exception
+@@ -329,7 +334,7 @@ class BraintreeCashierService {
+    * @param string $discount_id
+    *   The discount ID contained in the Braintree console.
+    *
+-   * @return \Braintree\Discount|bool
++   * @return Discount|bool
+    *   The Braintree discount object.
+    */
+   public function getBraintreeDiscount($discount_id) {
+@@ -370,11 +375,11 @@ class BraintreeCashierService {
+    * plan entity. If the discount does not specify a billing plan then it
+    * is valid for any billing plan.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan
++   * @param BraintreeCashierBillingPlanInterface $billing_plan
+    *   The billing plan.
+    * @param string $coupon_code
+    *   The coupon code.
+-   * @param \Drupal\user\Entity\User $account
++   * @param User $account
+    *   The account attempting to use the coupon code.
+    *
+    * @return bool
+@@ -392,7 +397,7 @@ class BraintreeCashierService {
+ 
+     $results = $query->execute();
+     foreach ($results as $result) {
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierDiscountInterface $discount */
++      /** @var BraintreeCashierDiscountInterface $discount */
+       $discount = BraintreeCashierDiscount::load($result);
+       // The Braintree API is case sensitive.
+       if (strcmp($discount->getBraintreeDiscountId(), $coupon_code) === 0) {
+diff --git a/src/BraintreeCashierSubscriptionAccessControlHandler.php b/src/BraintreeCashierSubscriptionAccessControlHandler.php
+index 9ee53c8..3dd50e2 100644
+--- a/src/BraintreeCashierSubscriptionAccessControlHandler.php
++++ b/src/BraintreeCashierSubscriptionAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier;
+ 
++use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,7 +19,7 @@ class BraintreeCashierSubscriptionAccessControlHandler extends EntityAccessContr
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $entity */
++    /** @var BraintreeCashierSubscriptionInterface $entity */
+     return AccessResult::allowedIfHasPermission($account, 'administer braintree cashier');
+   }
+ 
+diff --git a/src/BraintreeCashierSubscriptionHtmlRouteProvider.php b/src/BraintreeCashierSubscriptionHtmlRouteProvider.php
+index c3e3fd1..270e8d6 100644
+--- a/src/BraintreeCashierSubscriptionHtmlRouteProvider.php
++++ b/src/BraintreeCashierSubscriptionHtmlRouteProvider.php
+@@ -34,10 +34,10 @@ class BraintreeCashierSubscriptionHtmlRouteProvider extends AdminHtmlRouteProvid
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/Controller/InvoicesController.php b/src/Controller/InvoicesController.php
+index 18dbed8..a4900a5 100644
+--- a/src/Controller/InvoicesController.php
++++ b/src/Controller/InvoicesController.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\braintree_cashier\Controller;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Braintree\ResourceCollection;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Access\AccessResult;
++use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Braintree\Transaction;
+ use Braintree\TransactionSearch;
+ use Drupal\braintree_cashier\BillableUser;
+@@ -33,84 +38,84 @@ class InvoicesController extends ControllerBase {
+   /**
+    * Drupal\braintree_api\BraintreeApiService definition.
+    *
+-   * @var \Drupal\braintree_api\BraintreeApiService
++   * @var BraintreeApiService
+    */
+   protected $braintreeApi;
+ 
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The decimal money parser.
+    *
+-   * @var \Money\Parser\DecimalMoneyParser
++   * @var DecimalMoneyParser
+    */
+   protected $moneyParser;
+ 
+   /**
+    * The international money formatter.
+    *
+-   * @var \Money\Formatter\IntlMoneyFormatter
++   * @var IntlMoneyFormatter
+    */
+   protected $moneyFormatter;
+ 
+   /**
+    * A collection of successful payments or authorizations.
+    *
+-   * @var \Braintree\ResourceCollection
++   * @var ResourceCollection
+    */
+   protected $transactionSuccessfulCollection;
+ 
+   /**
+    * The immutable config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The braintree cashier service.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * The billable user service.
+    *
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+ 
+   /**
+    * The subscription service.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\Renderer
++   * @var Renderer
+    */
+   protected $renderer;
+ 
+   /**
+    * The braintree_cashier logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+@@ -156,12 +161,12 @@ class InvoicesController extends ControllerBase {
+   /**
+    * Access control handler for this route.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $browsing_account
++   * @param AccountInterface $browsing_account
+    *   The browsing account.
+-   * @param \Drupal\user\Entity\User|null $user
++   * @param User|null $user
+    *   The account being viewed.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   The access result.
+    */
+   public function accessRoute(AccountInterface $browsing_account, User $user = NULL) {
+@@ -173,7 +178,7 @@ class InvoicesController extends ControllerBase {
+   /**
+    * Invoices for a user.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user account being viewed.
+    *
+    * @return array
+@@ -200,7 +205,7 @@ class InvoicesController extends ControllerBase {
+ 
+     $subscriptions = $this->billableUser->getSubscriptions($user);
+     foreach ($subscriptions as $subscription) {
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription */
++      /** @var BraintreeCashierSubscriptionInterface $subscription */
+       if (!$subscription->willCancelAtPeriodEnd() && $this->subscriptionService->isBraintreeManaged($subscription)) {
+         $braintree_subscription = $this->subscriptionService->asBraintreeSubscription($subscription);
+         $amount = $this->moneyParser->parse($braintree_subscription->nextBillingPeriodAmount, $this->config->get('currency_code'));
+diff --git a/src/Controller/MySubscriptionController.php b/src/Controller/MySubscriptionController.php
+index 8a4f11c..9e0d3c4 100644
+--- a/src/Controller/MySubscriptionController.php
++++ b/src/Controller/MySubscriptionController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier\Controller;
+ 
++use Drupal\Core\Access\AccessResult;
+ use Drupal\braintree_cashier\BraintreeCashierService;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Drupal\braintree_cashier\SubscriptionService;
+@@ -27,40 +28,40 @@ class MySubscriptionController extends ControllerBase {
+   /**
+    * Drupal\braintree_api\BraintreeApiService definition.
+    *
+-   * @var \Drupal\braintree_api\BraintreeApiService
++   * @var BraintreeApiService
+    */
+   protected $braintreeApi;
+   /**
+    * Drupal\braintree_cashier\BillableUser definition.
+    *
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+   /**
+    * Drupal\Core\Logger\LoggerChannel definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannel
++   * @var LoggerChannel
+    */
+   protected $logger;
+ 
+   /**
+    * The braintree cashier service.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * The subscription service.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * The date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+@@ -93,7 +94,7 @@ class MySubscriptionController extends ControllerBase {
+   /**
+    * View callback.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity being viewed.
+    *
+    * @return array
+@@ -127,7 +128,7 @@ class MySubscriptionController extends ControllerBase {
+       $current_subscription_label = $this->t('None');
+     }
+     else {
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription */
++      /** @var BraintreeCashierSubscriptionInterface $subscription */
+       $subscription = array_shift($subscriptions);
+       $build['#current_subscription_entity'] = $subscription;
+       $current_subscription_label = $subscription->label();
+@@ -163,12 +164,12 @@ class MySubscriptionController extends ControllerBase {
+   /**
+    * Access control handler for this route.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $browsing_account
++   * @param AccountInterface $browsing_account
+    *   The user account browsing.
+-   * @param \Drupal\user\Entity\User|null $user
++   * @param User|null $user
+    *   The user account being viewed.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   The access result.
+    */
+   public function accessRoute(AccountInterface $browsing_account, User $user = NULL) {
+diff --git a/src/Controller/SingleInvoiceController.php b/src/Controller/SingleInvoiceController.php
+index 40a22fd..8425d6f 100644
+--- a/src/Controller/SingleInvoiceController.php
++++ b/src/Controller/SingleInvoiceController.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\braintree_cashier\Controller;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Money\MoneyParser;
++use Money\MoneyFormatter;
++use Braintree\Discount;
++use Money\Money;
+ use Braintree\Transaction;
+ use Dompdf\Dompdf;
+ use Drupal\braintree_cashier\BraintreeCashierService;
+@@ -31,70 +36,70 @@ class SingleInvoiceController extends ControllerBase {
+   /**
+    * Drupal\Core\Logger\LoggerChannel definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannel
++   * @var LoggerChannel
+    */
+   protected $logger;
+ 
+   /**
+    * Drupal\braintree_api\BraintreeApiService definition.
+    *
+-   * @var \Drupal\braintree_api\BraintreeApiService
++   * @var BraintreeApiService
+    */
+   protected $braintreeApi;
+ 
+   /**
+    * Drupal\braintree_cashier\BillableUser definition.
+    *
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+ 
+   /**
+    * The renderer service.
+    *
+-   * @var \Drupal\Core\Render\Renderer
++   * @var Renderer
+    */
+   protected $renderer;
+ 
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The money parser.
+    *
+-   * @var \Money\MoneyParser
++   * @var MoneyParser
+    */
+   protected $moneyParser;
+ 
+   /**
+    * The money formatter.
+    *
+-   * @var \Money\MoneyFormatter
++   * @var MoneyFormatter
+    */
+   protected $moneyFormatter;
+ 
+   /**
+    * The Braintree Cashier Service.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+@@ -142,7 +147,7 @@ class SingleInvoiceController extends ControllerBase {
+    * active theme. This allows creating a PDF file download in the download()
+    * method.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity being viewed.
+    * @param string $invoice
+    *   The Braintree transaction ID.
+@@ -162,12 +167,12 @@ class SingleInvoiceController extends ControllerBase {
+   /**
+    * Downloads a single invoice as a pdf.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity being viewed.
+    * @param string $invoice
+    *   The Braintree transaction ID.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   The symfony response.
+    *
+    * @throws \Exception
+@@ -194,7 +199,7 @@ class SingleInvoiceController extends ControllerBase {
+   /**
+    * Gets the render array for the single-invoice template.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity which had this transaction.
+    * @param string $invoice
+    *   The Braintree transaction ID, which we assign as the invoice ID.
+@@ -236,7 +241,7 @@ class SingleInvoiceController extends ControllerBase {
+   /**
+    * Get discounts associated with the Braintree transaction.
+    *
+-   * @param \Braintree\Transaction $transaction
++   * @param Transaction $transaction
+    *   The Braintree transaction.
+    *
+    * @return array
+@@ -247,7 +252,7 @@ class SingleInvoiceController extends ControllerBase {
+     $discounts = [];
+     $currency_code = $this->config('braintree_cashier.settings')->get('currency_code');
+     foreach ($transaction->discounts as $discount) {
+-      /** @var \Braintree\Discount $discount */
++      /** @var Discount $discount */
+       $amount = $this->moneyParser->parse($discount->amount, $currency_code);
+       $discounts[] = [
+         'id' => $discount->id,
+@@ -260,10 +265,10 @@ class SingleInvoiceController extends ControllerBase {
+   /**
+    * Determines the original price for a transaction before discounts.
+    *
+-   * @param \Braintree\Transaction $transaction
++   * @param Transaction $transaction
+    *   The Braintree transaction.
+    *
+-   * @return \Money\Money
++   * @return Money
+    *   The original price.
+    */
+   private function getOriginalPrice(Transaction $transaction) {
+@@ -282,7 +287,7 @@ class SingleInvoiceController extends ControllerBase {
+    * @param string $invoice
+    *   The Braintree Transaction ID.
+    *
+-   * @return \Braintree\Transaction
++   * @return Transaction
+    *   The Braintree transaction object.
+    */
+   private function asBraintreeTransaction($invoice) {
+diff --git a/src/Controller/ThankYouController.php b/src/Controller/ThankYouController.php
+index 654cc08..3534578 100644
+--- a/src/Controller/ThankYouController.php
++++ b/src/Controller/ThankYouController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\braintree_cashier\Controller;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Drupal\braintree_cashier\BraintreeCashierService;
++use Drupal\braintree_cashier\SubscriptionService;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -17,21 +20,21 @@ class ThankYouController extends ControllerBase {
+   /**
+    * Drupal\Core\Logger\LoggerChannelInterface definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Braintree Cashier service.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * Braintree Cashier Subscription service.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+ 
+@@ -90,11 +93,11 @@ class ThankYouController extends ControllerBase {
+   /**
+    * Access control handler for this route.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $browsing_account
++   * @param AccountInterface $browsing_account
+    *   The user account browsing.
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription
++   * @param BraintreeCashierSubscriptionInterface $subscription
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   The access result.
+    */
+   public function accessRoute(AccountInterface $browsing_account, BraintreeCashierSubscriptionInterface $subscription) {
+diff --git a/src/Cron.php b/src/Cron.php
+index 7a990ed..73bccb7 100644
+--- a/src/Cron.php
++++ b/src/Cron.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\braintree_cashier;
+ 
++use Drupal\Core\State\State;
++use Drupal\Core\Config\ConfigFactory;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierSubscription;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -18,59 +20,59 @@ class Cron implements CronInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The subscription service.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * The state system.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+   /**
+    * The queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queue;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected $config;
+ 
+   /**
+    * The time.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * Constructs a new Cron object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\braintree_cashier\SubscriptionService $subscription_service
++   * @param SubscriptionService $subscription_service
+    *   The subscription service.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state service.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   The queue factory.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, SubscriptionService $subscription_service, StateInterface $state, QueueFactory $queue_factory, ConfigFactoryInterface $config_factory, TimeInterface $time) {
+@@ -98,7 +100,7 @@ class Cron implements CronInterface {
+ 
+     $subscriptions = BraintreeCashierSubscription::loadMultiple($subscription_ids_will_cancel);
+     foreach ($subscriptions as $subscription) {
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription */
++      /** @var BraintreeCashierSubscriptionInterface $subscription */
+       if (!$this->subscriptionService->isBraintreeManaged($subscription) && $subscription->getPeriodEndDate() < time()) {
+         $subscription->setStatus(BraintreeCashierSubscriptionInterface::CANCELED);
+         $subscription->save();
+diff --git a/src/Entity/BraintreeCashierBillingPlanInterface.php b/src/Entity/BraintreeCashierBillingPlanInterface.php
+index fe1b08e..c37816e 100644
+--- a/src/Entity/BraintreeCashierBillingPlanInterface.php
++++ b/src/Entity/BraintreeCashierBillingPlanInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier\Entity;
+ 
++use Drupal\Component\Render\MarkupInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityChangedInterface;
+ use Drupal\user\EntityOwnerInterface;
+@@ -86,7 +87,7 @@ interface BraintreeCashierBillingPlanInterface extends ContentEntityInterface, E
+   /**
+    * Gets the billing plan long description.
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface
++   * @return MarkupInterface
+    *   Long description of the billing plan.
+    */
+   public function getLongDescription();
+@@ -94,7 +95,7 @@ interface BraintreeCashierBillingPlanInterface extends ContentEntityInterface, E
+   /**
+    * Gets the billing plan price.
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface
++   * @return MarkupInterface
+    *   Price of the billing plan.
+    */
+   public function getPrice();
+diff --git a/src/Entity/BraintreeCashierDiscount.php b/src/Entity/BraintreeCashierDiscount.php
+index fdf3e8b..7286469 100644
+--- a/src/Entity/BraintreeCashierDiscount.php
++++ b/src/Entity/BraintreeCashierDiscount.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier\Entity;
+ 
++use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
+ use Drupal\braintree_api\BraintreeApiService;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Field\BaseFieldDefinition;
+@@ -162,7 +163,7 @@ class BraintreeCashierDiscount extends ContentEntityBase implements BraintreeCas
+    * {@inheritdoc}
+    */
+   public function getBillingPlans() {
+-    /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface $field */
++    /** @var EntityReferenceFieldItemListInterface $field */
+     $field = $this->get('billing_plan');
+     return $field->referencedEntities();
+   }
+diff --git a/src/Entity/BraintreeCashierDiscountInterface.php b/src/Entity/BraintreeCashierDiscountInterface.php
+index 50179fd..2f79f82 100644
+--- a/src/Entity/BraintreeCashierDiscountInterface.php
++++ b/src/Entity/BraintreeCashierDiscountInterface.php
+@@ -91,7 +91,7 @@ interface BraintreeCashierDiscountInterface extends ContentEntityInterface, Enti
+   /**
+    * Gets the billing plans for which this discount applies.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface[]
++   * @return BraintreeCashierBillingPlanInterface[]
+    *   An array of billing plan entities keyed by field item deltas.
+    */
+   public function getBillingPlans();
+diff --git a/src/Entity/BraintreeCashierSubscription.php b/src/Entity/BraintreeCashierSubscription.php
+index c81d234..8172964 100644
+--- a/src/Entity/BraintreeCashierSubscription.php
++++ b/src/Entity/BraintreeCashierSubscription.php
+@@ -721,7 +721,7 @@ class BraintreeCashierSubscription extends ContentEntityBase implements Braintre
+   public static function postDelete(EntityStorageInterface $storage, array $entities) {
+     parent::postDelete($storage, $entities);
+     foreach ($entities as $entity) {
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $entity */
++      /** @var BraintreeCashierSubscriptionInterface $entity */
+       Cache::invalidateTags(['user:' . $entity->getSubscribedUserId()]);
+     }
+     $theme_machine_name = \Drupal::theme()->getActiveTheme()->getName();
+diff --git a/src/Entity/BraintreeCashierSubscriptionInterface.php b/src/Entity/BraintreeCashierSubscriptionInterface.php
+index 1806758..d577e35 100644
+--- a/src/Entity/BraintreeCashierSubscriptionInterface.php
++++ b/src/Entity/BraintreeCashierSubscriptionInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\braintree_cashier\Entity;
+ 
++use Drupal\Core\Field\EntityReferenceFieldItemList;
++use Drupal\user\UserInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityChangedInterface;
+ use Drupal\user\EntityOwnerInterface;
+@@ -44,7 +46,7 @@ interface BraintreeCashierSubscriptionInterface extends ContentEntityInterface,
+   /**
+    * Gets the billing plan from which this subscription was generated.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface
++   * @return BraintreeCashierBillingPlanInterface
+    *   The billing plan.
+    */
+   public function getBillingPlan();
+@@ -52,7 +54,7 @@ interface BraintreeCashierSubscriptionInterface extends ContentEntityInterface,
+   /**
+    * Get the discounts associated with the subscription.
+    *
+-   * @return \Drupal\Core\Field\EntityReferenceFieldItemList
++   * @return EntityReferenceFieldItemList
+    *   The list of Discount entity references.
+    */
+   public function getDiscounts();
+@@ -281,7 +283,7 @@ interface BraintreeCashierSubscriptionInterface extends ContentEntityInterface,
+   /**
+    * Gets the subscribed user.
+    *
+-   * @return \Drupal\user\UserInterface
++   * @return UserInterface
+    *   The subscribed user entity.
+    */
+   public function getSubscribedUser();
+diff --git a/src/Event/BraintreeCustomerCreatedEvent.php b/src/Event/BraintreeCustomerCreatedEvent.php
+index 4940d8e..69650e3 100644
+--- a/src/Event/BraintreeCustomerCreatedEvent.php
++++ b/src/Event/BraintreeCustomerCreatedEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\braintree_cashier\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\user\Entity\User;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * A Braintree customer has been created for a user.
+@@ -13,14 +13,14 @@ class BraintreeCustomerCreatedEvent extends Event {
+   /**
+    * The user account for which the Braintree customer was created.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $user;
+ 
+   /**
+    * BraintreeCustomerCreatedEvent constructor.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user for whom the Braintree customer was created.
+    */
+   public function __construct(User $user) {
+@@ -30,7 +30,7 @@ class BraintreeCustomerCreatedEvent extends Event {
+   /**
+    * Gets the user account entity.
+    *
+-   * @return \Drupal\user\Entity\User
++   * @return User
+    *   The user entity.
+    */
+   public function getUser() {
+diff --git a/src/Event/BraintreeErrorEvent.php b/src/Event/BraintreeErrorEvent.php
+index 154b912..198afd7 100644
+--- a/src/Event/BraintreeErrorEvent.php
++++ b/src/Event/BraintreeErrorEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\braintree_cashier\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\user\Entity\User;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Event dispatched when there's an error interacting with the Braintree API.
+@@ -13,7 +13,7 @@ class BraintreeErrorEvent extends Event {
+   /**
+    * The user entity.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    *   The user entity.
+    */
+   protected $user;
+@@ -35,7 +35,7 @@ class BraintreeErrorEvent extends Event {
+   /**
+    * PaymentMethodOrCustomerCreateErrorEvent constructor.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity.
+    * @param string $error_message
+    *   The error message provided by Braintree.
+@@ -51,7 +51,7 @@ class BraintreeErrorEvent extends Event {
+   /**
+    * Gets the user that attempted to create a payment method or customer.
+    *
+-   * @return \Drupal\user\Entity\User
++   * @return User
+    *   The user entity.
+    */
+   public function getUser() {
+diff --git a/src/Event/NewAccountAfterPlan.php b/src/Event/NewAccountAfterPlan.php
+index c3646f8..fbdef96 100644
+--- a/src/Event/NewAccountAfterPlan.php
++++ b/src/Event/NewAccountAfterPlan.php
+@@ -2,9 +2,9 @@
+ 
+ namespace Drupal\braintree_cashier\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface;
+ use Drupal\user\Entity\User;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Creates an event when a new user account is created after selecting a plan.
+@@ -14,23 +14,23 @@ class NewAccountAfterPlan extends Event {
+   /**
+    * The billing plan selected.
+    *
+-   * @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface
++   * @var BraintreeCashierBillingPlanInterface
+    */
+   protected $billingPlan;
+ 
+   /**
+    * The user account created.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $account;
+ 
+   /**
+    * NewAccountAfterPlan constructor.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billingPlan
++   * @param BraintreeCashierBillingPlanInterface $billingPlan
+    *   The billing plan entity selected.
+-   * @param \Drupal\user\Entity\User $account
++   * @param User $account
+    *   The user account created.
+    */
+   public function __construct(BraintreeCashierBillingPlanInterface $billingPlan, User $account) {
+@@ -41,7 +41,7 @@ class NewAccountAfterPlan extends Event {
+   /**
+    * Gets the billing plan.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface
++   * @return BraintreeCashierBillingPlanInterface
+    *   The billing plan selected.
+    */
+   public function getBillingPlan() {
+@@ -51,7 +51,7 @@ class NewAccountAfterPlan extends Event {
+   /**
+    * Gets the user account created.
+    *
+-   * @return \Drupal\user\Entity\User
++   * @return User
+    *   The user account created.
+    */
+   public function getAccount() {
+diff --git a/src/Event/NewSubscriptionEvent.php b/src/Event/NewSubscriptionEvent.php
+index e5727b7..5684483 100644
+--- a/src/Event/NewSubscriptionEvent.php
++++ b/src/Event/NewSubscriptionEvent.php
+@@ -2,11 +2,12 @@
+ 
+ namespace Drupal\braintree_cashier\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
++use Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlan;
+ use Braintree\Subscription;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Drupal\Core\Form\FormStateInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Creates an Event when a new subscription is created after signup.
+@@ -16,14 +17,14 @@ class NewSubscriptionEvent extends Event {
+   /**
+    * The Braintree Subscription.
+    *
+-   * @var \Braintree\Subscription
++   * @var Subscription
+    */
+   protected $braintreeSubscription;
+ 
+   /**
+    * The Billing Plan entity.
+    *
+-   * @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlan
++   * @var BraintreeCashierBillingPlan
+    *   The billing plan entity.
+    */
+   protected $billingPlan;
+@@ -31,7 +32,7 @@ class NewSubscriptionEvent extends Event {
+   /**
+    * The subscription entity created.
+    *
+-   * @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface
++   * @var BraintreeCashierSubscriptionInterface
+    *   The subscription entity created.
+    */
+   protected $subscriptionEntity;
+@@ -39,18 +40,18 @@ class NewSubscriptionEvent extends Event {
+   /**
+    * The form state.
+    *
+-   * @var \Drupal\Core\Form\FormStateInterface
++   * @var FormStateInterface
+    */
+   protected $formState;
+ 
+   /**
+    * NewSubscriptionEvent constructor.
+    *
+-   * @param \Braintree\Subscription $braintree_subscription
++   * @param Subscription $braintree_subscription
+    *   The Braintree subscription just created.
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan
++   * @param BraintreeCashierBillingPlanInterface $billing_plan
+    *   The billing plan entity used to crete the subscription.
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription_entity
++   * @param BraintreeCashierSubscriptionInterface $subscription_entity
+    *   The subscription entity created.
+    */
+   public function __construct(Subscription $braintree_subscription, BraintreeCashierBillingPlanInterface $billing_plan, BraintreeCashierSubscriptionInterface $subscription_entity, FormStateInterface $formState) {
+@@ -63,7 +64,7 @@ class NewSubscriptionEvent extends Event {
+   /**
+    * Gets the Billing Plan entity.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlan
++   * @return BraintreeCashierBillingPlan
+    *   The billing plan entity.
+    */
+   public function getBillingPlan() {
+@@ -73,7 +74,7 @@ class NewSubscriptionEvent extends Event {
+   /**
+    * Gets the Braintree subscription.
+    *
+-   * @return \Braintree\Subscription
++   * @return Subscription
+    *   The Braintree subscription.
+    */
+   public function getBraintreeSubscription() {
+@@ -83,7 +84,7 @@ class NewSubscriptionEvent extends Event {
+   /**
+    * Gets the subscription entity.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface
++   * @return BraintreeCashierSubscriptionInterface
+    *   The subscription entity.
+    */
+   public function getSubscriptionEntity() {
+@@ -93,7 +94,7 @@ class NewSubscriptionEvent extends Event {
+   /**
+    * Gets the Form State.
+    *
+-   * @return \Drupal\Core\Form\FormStateInterface
++   * @return FormStateInterface
+    *   The form state.
+    */
+   public function getFormState() {
+diff --git a/src/Event/PaymentMethodUpdatedEvent.php b/src/Event/PaymentMethodUpdatedEvent.php
+index a5c80d0..bb36408 100644
+--- a/src/Event/PaymentMethodUpdatedEvent.php
++++ b/src/Event/PaymentMethodUpdatedEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\braintree_cashier\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\user\Entity\User;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * A user has updated their payment method.
+@@ -13,7 +13,7 @@ class PaymentMethodUpdatedEvent extends Event {
+   /**
+    * The user that updated their payment method.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $user;
+ 
+@@ -30,7 +30,7 @@ class PaymentMethodUpdatedEvent extends Event {
+   /**
+    * PaymentMethodUpdatedEvent constructor.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user that updated their payment method.
+    * @param string $payment_method_type
+    *   Payment method type.
+@@ -43,7 +43,7 @@ class PaymentMethodUpdatedEvent extends Event {
+   /**
+    * Gets the user that updated their payment method.
+    *
+-   * @return \Drupal\user\Entity\User
++   * @return User
+    *   The user entity.
+    */
+   public function getUser() {
+diff --git a/src/Event/SubscriptionCanceledByUserEvent.php b/src/Event/SubscriptionCanceledByUserEvent.php
+index 689f508..2907849 100644
+--- a/src/Event/SubscriptionCanceledByUserEvent.php
++++ b/src/Event/SubscriptionCanceledByUserEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\braintree_cashier\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * A subscription was canceled by a user.
+@@ -13,14 +13,14 @@ class SubscriptionCanceledByUserEvent extends Event {
+   /**
+    * The subscription entity canceled.
+    *
+-   * @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface
++   * @var BraintreeCashierSubscriptionInterface
+    */
+   protected $subscription;
+ 
+   /**
+    * SubscriptionCanceledByUserEvent constructor.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription
++   * @param BraintreeCashierSubscriptionInterface $subscription
+    *   The subscription entity canceled.
+    */
+   public function __construct(BraintreeCashierSubscriptionInterface $subscription) {
+@@ -30,7 +30,7 @@ class SubscriptionCanceledByUserEvent extends Event {
+   /**
+    * Gets the subscription entity canceled.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface
++   * @return BraintreeCashierSubscriptionInterface
+    *   The subscription entity canceled.
+    */
+   public function getSubscription() {
+diff --git a/src/EventSubscriber/CreateMessageEventSubscriber.php b/src/EventSubscriber/CreateMessageEventSubscriber.php
+index 34377b8..7e4760b 100644
+--- a/src/EventSubscriber/CreateMessageEventSubscriber.php
++++ b/src/EventSubscriber/CreateMessageEventSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier\EventSubscriber;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\braintree_cashier\Event\BraintreeCashierEvents;
+ use Drupal\braintree_cashier\Event\BraintreeCustomerCreatedEvent;
+ use Drupal\braintree_cashier\Event\NewAccountAfterPlan;
+@@ -36,10 +37,10 @@ class CreateMessageEventSubscriber implements EventSubscriberInterface {
+    * The error occurs when trying to update or add a payment method, or when
+    * trying to create a Braintree customer.
+    *
+-   * @param \Drupal\braintree_cashier\Event\BraintreeErrorEvent $event
++   * @param BraintreeErrorEvent $event
+    *   The error event.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function braintreeError(BraintreeErrorEvent $event) {
+     $message = Message::create([
+@@ -55,10 +56,10 @@ class CreateMessageEventSubscriber implements EventSubscriberInterface {
+    *
+    * The cancellation occurred in the UI.
+    *
+-   * @param \Drupal\braintree_cashier\Event\SubscriptionCanceledByUserEvent $event
++   * @param SubscriptionCanceledByUserEvent $event
+    *   The subscription canceled by user event.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function subscriptionCanceledByUser(SubscriptionCanceledByUserEvent $event) {
+     $subscription = $event->getSubscription();
+@@ -73,10 +74,10 @@ class CreateMessageEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Creates a message to record the creation of a Braintree customer.
+    *
+-   * @param \Drupal\braintree_cashier\Event\BraintreeCustomerCreatedEvent $event
++   * @param BraintreeCustomerCreatedEvent $event
+    *   The Braintree customer created event.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function braintreeCustomerCreated(BraintreeCustomerCreatedEvent $event) {
+     $message = Message::create([
+@@ -89,10 +90,10 @@ class CreateMessageEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Creates a message to record that the payment method was updated for a user.
+    *
+-   * @param \Drupal\braintree_cashier\Event\PaymentMethodUpdatedEvent $event
++   * @param PaymentMethodUpdatedEvent $event
+    *   The payment updated event.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function paymentMethodUpdated(PaymentMethodUpdatedEvent $event) {
+     $message = Message::create([
+@@ -106,10 +107,10 @@ class CreateMessageEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Creates a message to record the new account and selected billing plan.
+    *
+-   * @param \Drupal\braintree_cashier\Event\NewAccountAfterPlan $event
++   * @param NewAccountAfterPlan $event
+    *   The new account after plan selected event.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function newAccountAfterPlan(NewAccountAfterPlan $event) {
+     $account = $event->getAccount();
+@@ -127,10 +128,10 @@ class CreateMessageEventSubscriber implements EventSubscriberInterface {
+    *
+    * The applies to new customers who have never had a subscription before.
+    *
+-   * @param \Drupal\braintree_cashier\Event\NewSubscriptionEvent $event
++   * @param NewSubscriptionEvent $event
+    *   The new subscription event.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function newSubscription(NewSubscriptionEvent $event) {
+     $billing_plan = $event->getBillingPlan();
+diff --git a/src/EventSubscriber/KernelRequestSubscriber.php b/src/EventSubscriber/KernelRequestSubscriber.php
+index 4e942ac..94dcf13 100644
+--- a/src/EventSubscriber/KernelRequestSubscriber.php
++++ b/src/EventSubscriber/KernelRequestSubscriber.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\braintree_cashier\EventSubscriber;
+ 
++use Drupal\user\UserStorageInterface;
++use Symfony\Component\HttpKernel\Event\RequestEvent;
++use Drupal\user\Entity\User;
+ use Drupal\braintree_cashier\BillableUser;
+ use Drupal\braintree_cashier\SubscriptionService;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -12,7 +15,6 @@ use Drupal\Core\Url;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+ use Symfony\Component\HttpFoundation\RequestStack;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ 
+ /**
+  * Class KernelRequestSubscriber.
+@@ -22,35 +24,35 @@ class KernelRequestSubscriber implements EventSubscriberInterface {
+   /**
+    * The route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\user\UserStorageInterface
++   * @var UserStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The subscription service.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * The billable user service.
+    *
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+ 
+@@ -64,14 +66,14 @@ class KernelRequestSubscriber implements EventSubscriberInterface {
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The cache kill switch.
+    *
+-   * @var \Drupal\Core\PageCache\ResponsePolicy\KillSwitch
++   * @var KillSwitch
+    */
+   protected $killSwitch;
+ 
+@@ -104,10 +106,10 @@ class KernelRequestSubscriber implements EventSubscriberInterface {
+    * This method is called whenever the kernel.request event is
+    * dispatched.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The symfony event.
+    */
+-  public function kernelRequest(GetResponseEvent $event) {
++  public function kernelRequest(RequestEvent $event) {
+ 
+     if ($this->routeMatch->getRouteName() == 'braintree_cashier.signup_form') {
+       // Don't cache this page even when anonymous page caching is enabled.
+@@ -125,7 +127,7 @@ class KernelRequestSubscriber implements EventSubscriberInterface {
+         return;
+       }
+       // Redirect existing customers to the My Subscription tab.
+-      /** @var \Drupal\user\Entity\User $user */
++      /** @var User $user */
+       $user = $this->userStorage->load($this->currentUser->id());
+       if (!empty($this->billableUser->getBraintreeCustomerId($user))) {
+         // Redirect to My Subscription tab on user profile.
+diff --git a/src/EventSubscriber/WebhookSubscriber.php b/src/EventSubscriber/WebhookSubscriber.php
+index 768b4ad..4deb4c9 100644
+--- a/src/EventSubscriber/WebhookSubscriber.php
++++ b/src/EventSubscriber/WebhookSubscriber.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\braintree_cashier\EventSubscriber;
+ 
++use Drupal\Core\Queue\QueueInterface;
++use Drupal\Core\Entity\EntityStorageException;
+ use Braintree\WebhookNotification;
+ use Drupal\braintree_api\Event\BraintreeApiEvents;
+ use Drupal\braintree_api\Event\BraintreeApiWebhookEvent;
+@@ -21,42 +23,42 @@ class WebhookSubscriber implements EventSubscriberInterface {
+   /**
+    * Drupal\braintree_api\BraintreeApiService definition.
+    *
+-   * @var \Drupal\braintree_api\BraintreeApiService
++   * @var BraintreeApiService
+    */
+   protected $braintreeApi;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Drupal\Core\Logger\LoggerChannel definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannel
++   * @var LoggerChannel
+    */
+   protected $logger;
+ 
+   /**
+    * The subscription service.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * The braintree cashier service.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * The queue to process the subscription webhook.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+@@ -91,10 +93,10 @@ class WebhookSubscriber implements EventSubscriberInterface {
+    * subscription is being processed simultaneously as a result of a local event
+    * and as a result of the webhook.
+    *
+-   * @param \Drupal\braintree_api\Event\BraintreeApiWebhookEvent $event
++   * @param BraintreeApiWebhookEvent $event
+    *   The BraintreeApiWebhookEvent.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function handleWebhook(BraintreeApiWebhookEvent $event) {
+     $subscription_webhooks = [
+diff --git a/src/Form/BraintreeCashierBillingPlanSettingsForm.php b/src/Form/BraintreeCashierBillingPlanSettingsForm.php
+index 61e391e..17a748e 100644
+--- a/src/Form/BraintreeCashierBillingPlanSettingsForm.php
++++ b/src/Form/BraintreeCashierBillingPlanSettingsForm.php
+@@ -27,7 +27,7 @@ class BraintreeCashierBillingPlanSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class BraintreeCashierBillingPlanSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/BraintreeCashierDiscountSettingsForm.php b/src/Form/BraintreeCashierDiscountSettingsForm.php
+index 0e12df9..ac24cc7 100644
+--- a/src/Form/BraintreeCashierDiscountSettingsForm.php
++++ b/src/Form/BraintreeCashierDiscountSettingsForm.php
+@@ -27,7 +27,7 @@ class BraintreeCashierDiscountSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class BraintreeCashierDiscountSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/BraintreeCashierSubscriptionSettingsForm.php b/src/Form/BraintreeCashierSubscriptionSettingsForm.php
+index f7f48ea..571854f 100644
+--- a/src/Form/BraintreeCashierSubscriptionSettingsForm.php
++++ b/src/Form/BraintreeCashierSubscriptionSettingsForm.php
+@@ -27,7 +27,7 @@ class BraintreeCashierSubscriptionSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class BraintreeCashierSubscriptionSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/CancelForm.php b/src/Form/CancelForm.php
+index 247ece6..159f8e7 100644
+--- a/src/Form/CancelForm.php
++++ b/src/Form/CancelForm.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\braintree_cashier\Form;
+ 
++use Drupal\user\UserStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Drupal\braintree_cashier\BillableUser;
+ use Drupal\braintree_cashier\Event\BraintreeCashierEvents;
+ use Drupal\braintree_cashier\Event\SubscriptionCanceledByUserEvent;
+@@ -26,52 +29,52 @@ class CancelForm extends ConfirmFormBase {
+   /**
+    * Drupal\braintree_cashier\SubscriptionService definition.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+   /**
+    * Drupal\Core\Logger\LoggerChannel definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannel
++   * @var LoggerChannel
+    */
+   protected $loggerChannelBraintreeCashier;
+ 
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\user\UserStorageInterface
++   * @var UserStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The billable user service.
+    *
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+ 
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher
++   * @var ContainerAwareEventDispatcher
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Constructs a new CancelConfirmForm object.
+    *
+-   * @param \Drupal\braintree_cashier\SubscriptionService $braintree_cashier_subscription_service
++   * @param SubscriptionService $braintree_cashier_subscription_service
+    *   The subscription service.
+-   * @param \Drupal\Core\Logger\LoggerChannel $logger_channel_braintree_cashier
++   * @param LoggerChannel $logger_channel_braintree_cashier
+    *   The braintree_cashier logger channel.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+-   * @param \Drupal\braintree_cashier\BillableUser $billableUser
++   * @param BillableUser $billableUser
+    *   The billable user service.
+-   * @param \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher $eventDispatcher
++   * @param ContainerAwareEventDispatcher $eventDispatcher
+    *   The event dispatcher.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   public function __construct(SubscriptionService $braintree_cashier_subscription_service, LoggerChannel $logger_channel_braintree_cashier, EntityTypeManagerInterface $entityTypeManager, BillableUser $billableUser, ContainerAwareEventDispatcher $eventDispatcher) {
+     $this->subscriptionService = $braintree_cashier_subscription_service;
+@@ -162,22 +165,22 @@ class CancelForm extends ConfirmFormBase {
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $values = $form_state->getValues();
+-    /** @var \Drupal\user\Entity\User $user */
++    /** @var User $user */
+     $user = $this->userStorage->load($values['uid']);
+     $subscriptions = $this->billableUser->getSubscriptions($user);
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription */
++    /** @var BraintreeCashierSubscriptionInterface $subscription */
+     foreach ($subscriptions as $subscription) {
+       if (!empty($values['reason'])) {
+         $subscription->setCancelMessage($values['reason']);
+         $subscription->save();
+       }
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription */
++      /** @var BraintreeCashierSubscriptionInterface $subscription */
+       $this->subscriptionService->cancel($subscription);
+       // Set the canceled at date field.
+       $subscription->setCanceledAtDate(time());
+       $subscription->save();
+       $event = new SubscriptionCanceledByUserEvent($subscription);
+-      $this->eventDispatcher->dispatch(BraintreeCashierEvents::SUBSCRIPTION_CANCELED_BY_USER, $event);
++      $this->eventDispatcher->dispatch($event, BraintreeCashierEvents::SUBSCRIPTION_CANCELED_BY_USER);
+     }
+     $form_state->setRedirect('braintree_cashier.my_subscription', [
+       'user' => $values['uid'],
+@@ -192,7 +195,7 @@ class CancelForm extends ConfirmFormBase {
+     $is_allowed = $browsing_account->isAuthenticated() && !empty($user);
+     $is_allowed = $is_allowed && ($browsing_account->id() == $user->id() || $browsing_account->hasPermission('administer braintree cashier'));
+     foreach ($this->billableUser->getSubscriptions($user) as $subscription) {
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription */
++      /** @var BraintreeCashierSubscriptionInterface $subscription */
+       if (!$subscription->willCancelAtPeriodEnd()) {
+         return AccessResultAllowed::allowedIf($is_allowed);
+       }
+diff --git a/src/Form/InvoiceBillingInformationForm.php b/src/Form/InvoiceBillingInformationForm.php
+index 276a5b6..4d440e9 100644
+--- a/src/Form/InvoiceBillingInformationForm.php
++++ b/src/Form/InvoiceBillingInformationForm.php
+@@ -18,32 +18,32 @@ class InvoiceBillingInformationForm extends FormBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Drupal\Core\Logger\LoggerChannel definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannel
++   * @var LoggerChannel
+    */
+   protected $logger;
+ 
+   /**
+    * The billable user service.
+    *
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+ 
+   /**
+    * Constructs a new InvoiceBillingInformationForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Logger\LoggerChannel $logger_channel_braintree_cashier
++   * @param LoggerChannel $logger_channel_braintree_cashier
+    *   The braintree_cashier logger channel.
+-   * @param \Drupal\braintree_cashier\BillableUser $billableUser
++   * @param BillableUser $billableUser
+    *   The billable user service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, LoggerChannel $logger_channel_braintree_cashier, BillableUser $billableUser) {
+diff --git a/src/Form/PaymentMethodForm.php b/src/Form/PaymentMethodForm.php
+index fc8d94c..938533b 100644
+--- a/src/Form/PaymentMethodForm.php
++++ b/src/Form/PaymentMethodForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier\Form;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\braintree_cashier\BillableUser;
+ use Drupal\Core\Access\AccessResultAllowed;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -21,28 +22,28 @@ class PaymentMethodForm extends FormBase {
+   /**
+    * Drupal\braintree_api\BraintreeApiService definition.
+    *
+-   * @var \Drupal\braintree_api\BraintreeApiService
++   * @var BraintreeApiService
+    */
+   protected $braintreeApiBraintreeApi;
+ 
+   /**
+    * Drupal\Core\Logger\LoggerChannel definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannel
++   * @var LoggerChannel
+    */
+   protected $logger;
+ 
+   /**
+    * The billable user service.
+    *
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+ 
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $userStorage;
+ 
+@@ -173,7 +174,7 @@ class PaymentMethodForm extends FormBase {
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $values = $form_state->getValues();
+-    /** @var \Drupal\user\Entity\User $user */
++    /** @var User $user */
+     $user = $this->userStorage->load($values['uid']);
+     if (empty($this->billableUser->getBraintreeCustomerId($user))) {
+       $result = $this->billableUser->createAsBraintreeCustomer($user, $values['payment_method_nonce'], $values['device_data']);
+diff --git a/src/Form/PlanSelectFormBase.php b/src/Form/PlanSelectFormBase.php
+index 607fa03..fb8f60b 100644
+--- a/src/Form/PlanSelectFormBase.php
++++ b/src/Form/PlanSelectFormBase.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\braintree_cashier\Form;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Money\MoneyParser;
++use Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface;
+ use Drupal\braintree_api\BraintreeApiService;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlan;
+ use Drupal\Core\Ajax\AjaxResponse;
+@@ -27,63 +30,63 @@ class PlanSelectFormBase extends FormBase {
+   /**
+    * Symfony\Component\HttpFoundation\RequestStack definition.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The billing plan entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $billingPlanStorage;
+ 
+   /**
+    * The braintree API service.
+    *
+-   * @var \Drupal\braintree_api\BraintreeApiService
++   * @var BraintreeApiService
+    */
+   protected $braintreeApi;
+ 
+   /**
+    * The Braintree Cashier logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The discount entity storate.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $discountStorage;
+ 
+   /**
+    * The money parser.
+    *
+-   * @var \Money\MoneyParser
++   * @var MoneyParser
+    */
+   protected $moneyParser;
+ 
+   /**
+    * The international money formatter.
+    *
+-   * @var \Money\Formatter\IntlMoneyFormatter
++   * @var IntlMoneyFormatter
+    */
+   protected $moneyFormatter;
+ 
+   /**
+    * The braintree cashier service.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -134,7 +137,7 @@ class PlanSelectFormBase extends FormBase {
+         ->get('plan_id');
+     }
+     if (!empty($plan_id) && is_numeric($plan_id)) {
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan */
++      /** @var BraintreeCashierBillingPlanInterface $billing_plan */
+       $billing_plan = $this->billingPlanStorage->load($plan_id);
+       if (!empty($billing_plan) && $billing_plan->isAvailableForPurchase()) {
+         $default_value = $billing_plan->id();
+@@ -217,7 +220,7 @@ class PlanSelectFormBase extends FormBase {
+     $entity_ids = $query->execute();
+     $options = [];
+     foreach ($entity_ids as $entity_id) {
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlan $billing_plan */
++      /** @var BraintreeCashierBillingPlan $billing_plan */
+       $billing_plan = $this->billingPlanStorage->load($entity_id);
+       $options[$billing_plan->id()] = $billing_plan->getDescription();
+     }
+@@ -231,7 +234,7 @@ class PlanSelectFormBase extends FormBase {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    */
+   public function confirmCouponSubmit(array &$form, FormStateInterface $form_state) {
+@@ -272,7 +275,7 @@ class PlanSelectFormBase extends FormBase {
+         ->get('currency_code'));
+       $formatted_amount = $moneyFormatter->format($amount);
+ 
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan */
++      /** @var BraintreeCashierBillingPlanInterface $billing_plan */
+       $billing_plan = $this->billingPlanStorage->load($plan_entity_id);
+       $braintree_plan = $this->bcService->getBraintreeBillingPlan($billing_plan->getBraintreePlanId());
+       switch ($braintree_plan->billingFrequency) {
+@@ -321,9 +324,9 @@ class PlanSelectFormBase extends FormBase {
+     parent::validateForm($form, $form_state);
+     // Validate that the billing plan can be loaded.
+     $values = $form_state->getValues();
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan */
++    /** @var BraintreeCashierBillingPlanInterface $billing_plan */
+     $billing_plan = $this->billingPlanStorage->load($values['plan_entity_id']);
+-    /** @var \Drupal\user\Entity\User $account */
++    /** @var User $account */
+     $account = User::load($this->currentUser()->id());
+     if ($form_state->getTriggeringElement()['#name'] != 'confirm_coupon') {
+       if (empty($billing_plan) || !$billing_plan->isAvailableForPurchase()) {
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index ffb2ce7..21cca98 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -40,11 +40,11 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * SettingsForm constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    * @param \Drupal\Core\Datetime\DateFormatterInterface
+    *   The date formatter.
+-   * @param \Drupal\Core\Entity\EntityDefinitionUpdateManagerInterface $entityDefinitionUpdateManager
++   * @param EntityDefinitionUpdateManagerInterface $entityDefinitionUpdateManager
+    *   The entity update manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, DateFormatterInterface $date_formatter) {
+diff --git a/src/Form/SignupForm.php b/src/Form/SignupForm.php
+index 888d88d..ea7f5a0 100644
+--- a/src/Form/SignupForm.php
++++ b/src/Form/SignupForm.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\braintree_cashier\Form;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\user\Entity\User;
++use Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface;
++use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Drupal\braintree_cashier\BillableUser;
+ use Drupal\braintree_cashier\BraintreeCashierService;
+ use Drupal\braintree_cashier\Event\BraintreeCashierEvents;
+@@ -25,68 +30,68 @@ class SignupForm extends PlanSelectFormBase {
+   /**
+    * Drupal\Core\Session\AccountProxy definition.
+    *
+-   * @var \Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $currentUser;
+ 
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The billable user service.
+    *
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+ 
+   /**
+    * The braintree cashier service.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * The subscription service.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Constructs a new SignupForm object.
+    *
+-   * @param \Drupal\braintree_api\BraintreeApiService $braintree_api
++   * @param BraintreeApiService $braintree_api
+    *   The braintree api service.
+-   * @param \Drupal\Core\Session\AccountProxy $current_user
++   * @param AccountProxy $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Logger\LoggerChannelInterface $logger
++   * @param LoggerChannelInterface $logger
+    *   The braintree_cashier logger channel.
+-   * @param \Drupal\braintree_cashier\BraintreeCashierService $braintree_cashier_service
++   * @param BraintreeCashierService $braintree_cashier_service
+    *   The braintree cashier service.
+-   * @param \Drupal\braintree_cashier\BillableUser $billable_user
++   * @param BillableUser $billable_user
+    *   The billable user service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   The request stack.
+-   * @param \Drupal\braintree_cashier\SubscriptionService $subscriptionService
++   * @param SubscriptionService $subscriptionService
+    *   The subscription service.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $eventDispatcher
++   * @param EventDispatcherInterface $eventDispatcher
+    *   The event dispatcher.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   public function __construct(BraintreeApiService $braintree_api, AccountProxy $current_user, EntityTypeManagerInterface $entity_type_manager, LoggerChannelInterface $logger, BraintreeCashierService $braintree_cashier_service, BillableUser $billable_user, RequestStack $requestStack, SubscriptionService $subscriptionService, EventDispatcherInterface $eventDispatcher) {
+     parent::__construct($requestStack, $entity_type_manager, $braintree_api, $logger, $braintree_cashier_service);
+@@ -205,7 +210,7 @@ class SignupForm extends PlanSelectFormBase {
+         $form_state->setErrorByName('payment_method_nonce', $message);
+         $this->logger->error($message);
+       }
+-      /** @var \Drupal\user\Entity\User $user */
++      /** @var User $user */
+       $user = $this->userStorage->load($this->currentUser->id());
+       if ($this->currentUser->isAnonymous() || !empty($this->billableUser->getBraintreeCustomerId($user))) {
+         $message = t('Can not process this form. Please contact a site administrator.');
+@@ -225,10 +230,10 @@ class SignupForm extends PlanSelectFormBase {
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $values = $form_state->getValues();
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan */
++    /** @var BraintreeCashierBillingPlanInterface $billing_plan */
+     $billing_plan = $this->billingPlanStorage->load($values['plan_entity_id']);
+ 
+-    /** @var \Drupal\user\Entity\User $user */
++    /** @var User $user */
+     $user = $this->userStorage->load($this->currentUser->id());
+ 
+     // Cancel any existing subscriptions, such as a free subscription
+@@ -237,7 +242,7 @@ class SignupForm extends PlanSelectFormBase {
+     // Braintree customer ID.
+     $subscriptions = $this->billableUser->getSubscriptions($user);
+     foreach ($subscriptions as $subscription) {
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription */
++      /** @var BraintreeCashierSubscriptionInterface $subscription */
+       $this->subscriptionService->cancelNow($subscription);
+     }
+ 
+@@ -273,7 +278,7 @@ class SignupForm extends PlanSelectFormBase {
+     }
+ 
+     $new_subscription_event = new NewSubscriptionEvent($braintree_subscription, $billing_plan, $subscription_entity, $form_state);
+-    $this->eventDispatcher->dispatch(BraintreeCashierEvents::NEW_SUBSCRIPTION, $new_subscription_event);
++    $this->eventDispatcher->dispatch($new_subscription_event, BraintreeCashierEvents::NEW_SUBSCRIPTION);
+ 
+     $form_state->setRedirect('braintree_cashier.thank_you', [
+       'subscription' => $subscription_entity->id(),
+diff --git a/src/Form/UpdateSubscriptionForm.php b/src/Form/UpdateSubscriptionForm.php
+index 6e34a9e..42cdc6d 100644
+--- a/src/Form/UpdateSubscriptionForm.php
++++ b/src/Form/UpdateSubscriptionForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier\Form;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\braintree_api\BraintreeApiService;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -21,32 +22,32 @@ class UpdateSubscriptionForm extends PlanSelectFormBase {
+   /**
+    * Drupal\braintree_cashier\BillableUser definition.
+    *
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+   /**
+    * Drupal\braintree_cashier\SubscriptionService definition.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+   /**
+    * Drupal\Core\Logger\LoggerChannel definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannel
++   * @var LoggerChannel
+    */
+   protected $logger;
+   /**
+    * Drupal\braintree_cashier\BraintreeCashierService definition.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * The entity storage interface.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $userStorage;
+ 
+diff --git a/src/Form/UpdateSubscriptionFormConfirm.php b/src/Form/UpdateSubscriptionFormConfirm.php
+index a6b8c39..6c126ce 100644
+--- a/src/Form/UpdateSubscriptionFormConfirm.php
++++ b/src/Form/UpdateSubscriptionFormConfirm.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\braintree_cashier\Form;
+ 
++use Drupal\Core\Logger\LoggerChannel;
++use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
++use Drupal\braintree_cashier\Entity\BraintreeCashierSubscription;
+ use Drupal\braintree_api\BraintreeApiService;
+ use Drupal\braintree_cashier\BillableUser;
+ use Drupal\braintree_cashier\BraintreeCashierService;
+@@ -29,67 +32,67 @@ class UpdateSubscriptionFormConfirm extends ConfirmFormBase {
+   /**
+    * Drupal\braintree_cashier\BillableUser definition.
+    *
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+   /**
+    * Drupal\braintree_cashier\SubscriptionService definition.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+   /**
+    * Drupal\Core\Logger\LoggerChannel definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannel
++   * @var LoggerChannel
+    */
+   protected $logger;
+   /**
+    * Drupal\braintree_cashier\BraintreeCashierService definition.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * The user entity for which a subscription is being changed.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $account;
+ 
+   /**
+    * The Billing Plan entity to which the user's subscription will be updated.
+    *
+-   * @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface
++   * @var BraintreeCashierBillingPlanInterface
+    */
+   protected $billingPlan;
+ 
+   /**
+    * Event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * UpdateSubscriptionFormConfirm constructor.
+    *
+-   * @param \Drupal\braintree_cashier\BillableUser $braintree_cashier_billable_user
++   * @param BillableUser $braintree_cashier_billable_user
+    *   The billable user service.
+-   * @param \Drupal\braintree_cashier\SubscriptionService $braintree_cashier_subscription_service
++   * @param SubscriptionService $braintree_cashier_subscription_service
+    *   The subscription service.
+-   * @param \Drupal\Core\Logger\LoggerChannelInterface $logger
++   * @param LoggerChannelInterface $logger
+    *   The braintree_cashier logger channel.
+-   * @param \Drupal\braintree_cashier\BraintreeCashierService $braintree_cashier_braintree_cashier_service
++   * @param BraintreeCashierService $braintree_cashier_braintree_cashier_service
+    *   The generic braintree_cashier service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   The request stack.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\braintree_api\BraintreeApiService $braintree_api
++   * @param BraintreeApiService $braintree_api
+    *   The braintree API service.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $eventDispatcher
++   * @param EventDispatcherInterface $eventDispatcher
+    *   The event dispatcher.
+    */
+   public function __construct(BillableUser $braintree_cashier_billable_user, SubscriptionService $braintree_cashier_subscription_service, LoggerChannelInterface $logger, BraintreeCashierService $braintree_cashier_braintree_cashier_service, RequestStack $requestStack, EntityTypeManagerInterface $entity_type_manager, BraintreeApiService $braintree_api, EventDispatcherInterface $eventDispatcher) {
+@@ -175,7 +178,7 @@ class UpdateSubscriptionFormConfirm extends ConfirmFormBase {
+    */
+   public function validateForm(array &$form, FormStateInterface $form_state) {
+     parent::validateForm($form, $form_state);
+-    /** @var \Drupal\user\Entity\User $account */
++    /** @var User $account */
+     $account = User::load($this->currentUser()->id());
+     if (!empty($form_state->getValue('coupon_code')) && !$this->bcService->discountExists($this->billingPlan, $form_state->getValue('coupon_code'), $account)) {
+       $form_state->setErrorByName('coupon_code', t('The coupon code %coupon_code is invalid', [
+@@ -185,7 +188,7 @@ class UpdateSubscriptionFormConfirm extends ConfirmFormBase {
+     // Validate that the new plan is not the same as the plan for a currently
+     // active subscription.
+     if (!empty($subscriptions = $this->billableUser->getSubscriptions($this->account))) {
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription */
++      /** @var BraintreeCashierSubscriptionInterface $subscription */
+       $subscription = array_shift($subscriptions);
+       // If the subscription is on a grace period then validation will
+       // succeed since the subscription needs to resume.
+@@ -215,7 +218,7 @@ class UpdateSubscriptionFormConfirm extends ConfirmFormBase {
+         $this->bcService->sendAdminErrorEmail($message);
+         return;
+       }
+-      /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscription $subscription */
++      /** @var BraintreeCashierSubscription $subscription */
+       $subscription = array_shift($subscriptions);
+       if ($this->subscriptionService->isBraintreeManaged($subscription)) {
+         $result = $this->subscriptionService->swap($subscription, $this->billingPlan, $this->account);
+@@ -286,7 +289,7 @@ class UpdateSubscriptionFormConfirm extends ConfirmFormBase {
+     }
+ 
+     $new_subscription_event = new NewSubscriptionEvent($braintree_subscription, $this->billingPlan, $subscription_entity, $form_state);
+-    $this->eventDispatcher->dispatch(BraintreeCashierEvents::NEW_SUBSCRIPTION, $new_subscription_event);
++    $this->eventDispatcher->dispatch($new_subscription_event, BraintreeCashierEvents::NEW_SUBSCRIPTION);
+     $form_state->setRedirect('braintree_cashier.thank_you', [
+       'subscription' => $subscription_entity->id(),
+     ]);
+diff --git a/src/Plugin/QueueWorker/FreeTrialExpiringNotifier.php b/src/Plugin/QueueWorker/FreeTrialExpiringNotifier.php
+index cf64138..d21523a 100644
+--- a/src/Plugin/QueueWorker/FreeTrialExpiringNotifier.php
++++ b/src/Plugin/QueueWorker/FreeTrialExpiringNotifier.php
+@@ -25,21 +25,21 @@ class FreeTrialExpiringNotifier extends QueueWorkerBase implements ContainerFact
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The message notifier.
+    *
+-   * @var \Drupal\message_notify\MessageNotifier
++   * @var MessageNotifier
+    */
+   protected $messageNotifier;
+ 
+   /**
+    * The Braintree Cashier logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+diff --git a/src/Plugin/QueueWorker/PopulateNewDateFields.php b/src/Plugin/QueueWorker/PopulateNewDateFields.php
+index ab2e642..72fa6e3 100644
+--- a/src/Plugin/QueueWorker/PopulateNewDateFields.php
++++ b/src/Plugin/QueueWorker/PopulateNewDateFields.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier\Plugin\QueueWorker;
+ 
++use Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierSubscription;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Drupal\braintree_cashier\SubscriptionService;
+@@ -25,14 +26,14 @@ class PopulateNewDateFields extends QueueWorkerBase implements ContainerFactoryP
+   /**
+    * The subscription service.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * Message entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $messageStorage;
+ 
+@@ -64,7 +65,7 @@ class PopulateNewDateFields extends QueueWorkerBase implements ContainerFactoryP
+   public function processItem($data) {
+     // $data is a subscription entity id.
+     $subscription_entity = BraintreeCashierSubscription::load($data);
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan */
++    /** @var BraintreeCashierBillingPlanInterface $billing_plan */
+     $billing_plan = $subscription_entity->getBillingPlan();
+     $braintree_subscription = $this->subscriptionService->asBraintreeSubscription($subscription_entity);
+ 
+diff --git a/src/Plugin/QueueWorker/ProcessSubscriptionWebhook.php b/src/Plugin/QueueWorker/ProcessSubscriptionWebhook.php
+index cc837d7..6e62e50 100644
+--- a/src/Plugin/QueueWorker/ProcessSubscriptionWebhook.php
++++ b/src/Plugin/QueueWorker/ProcessSubscriptionWebhook.php
+@@ -26,21 +26,21 @@ class ProcessSubscriptionWebhook extends QueueWorkerBase implements ContainerFac
+   /**
+    * The Braintree Cashier logger service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The Braintree Cashier service.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * The subscription service.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+ 
+diff --git a/src/Plugin/QueueWorker/RetrieveExpiringFreeTrials.php b/src/Plugin/QueueWorker/RetrieveExpiringFreeTrials.php
+index 04ab13c..2bbe823 100644
+--- a/src/Plugin/QueueWorker/RetrieveExpiringFreeTrials.php
++++ b/src/Plugin/QueueWorker/RetrieveExpiringFreeTrials.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\braintree_cashier\Plugin\QueueWorker;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface;
+ use Braintree\Subscription;
+ use Braintree\SubscriptionSearch;
+ use Drupal\braintree_api\BraintreeApiService;
+@@ -33,63 +35,63 @@ class RetrieveExpiringFreeTrials extends QueueWorkerBase implements ContainerFac
+   /**
+    * The Braintree API service.
+    *
+-   * @var \Drupal\braintree_api\BraintreeApiService
++   * @var BraintreeApiService
+    */
+   protected $braintreeApi;
+ 
+   /**
+    * Braintree Cashier configuration.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $bcConfig;
+ 
+   /**
+    * The queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The subscription service.
+    *
+-   * @var \Drupal\braintree_cashier\SubscriptionService
++   * @var SubscriptionService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * The decimal money parser.
+    *
+-   * @var \Money\Parser\DecimalMoneyParser
++   * @var DecimalMoneyParser
+    */
+   protected $moneyParser;
+ 
+   /**
+    * The international money formatter.
+    *
+-   * @var \Money\Formatter\IntlMoneyFormatter
++   * @var IntlMoneyFormatter
+    */
+   protected $moneyFormatter;
+ 
+   /**
+    * The Braintree Cashier service.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * The subscriptions to notify store.
+    *
+-   * @var \Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface
++   * @var KeyValueStoreExpirableInterface
+    */
+   protected $freeTrialNotificationsStore;
+ 
+   /**
+    * The Braintree Cashier logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+diff --git a/src/Plugin/Validation/Constraint/BraintreeCashierBillingPlanEnvironmentConstraintValidator.php b/src/Plugin/Validation/Constraint/BraintreeCashierBillingPlanEnvironmentConstraintValidator.php
+index 4f40ad7..d7bc987 100644
+--- a/src/Plugin/Validation/Constraint/BraintreeCashierBillingPlanEnvironmentConstraintValidator.php
++++ b/src/Plugin/Validation/Constraint/BraintreeCashierBillingPlanEnvironmentConstraintValidator.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\braintree_cashier\Plugin\Validation\Constraint;
+ 
++use Symfony\Component\Validator\Context\ExecutionContextInterface;
++use Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface;
+ use Symfony\Component\Validator\Constraint;
+ use Symfony\Component\Validator\ConstraintValidator;
+ 
+@@ -13,7 +15,7 @@ class BraintreeCashierBillingPlanEnvironmentConstraintValidator extends Constrai
+   /**
+    * Validator 2.5 and upwards compatible execution context.
+    *
+-   * @var \Symfony\Component\Validator\Context\ExecutionContextInterface
++   * @var ExecutionContextInterface
+    */
+   protected $context;
+ 
+@@ -21,7 +23,7 @@ class BraintreeCashierBillingPlanEnvironmentConstraintValidator extends Constrai
+    * {@inheritdoc}
+    */
+   public function validate($entity, Constraint $constraint) {
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $entity */
++    /** @var BraintreeCashierBillingPlanInterface $entity */
+     if (empty($entity->getBraintreePlanId())) {
+       return;
+     }
+diff --git a/src/Plugin/Validation/Constraint/BraintreeCashierBraintreeSubscriptionIdConstraintValidator.php b/src/Plugin/Validation/Constraint/BraintreeCashierBraintreeSubscriptionIdConstraintValidator.php
+index e1c9005..1b326c4 100644
+--- a/src/Plugin/Validation/Constraint/BraintreeCashierBraintreeSubscriptionIdConstraintValidator.php
++++ b/src/Plugin/Validation/Constraint/BraintreeCashierBraintreeSubscriptionIdConstraintValidator.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\braintree_cashier\Plugin\Validation\Constraint;
+ 
++use Symfony\Component\Validator\Context\ExecutionContextInterface;
++use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierSubscription;
+ use Symfony\Component\Validator\Constraint;
+ use Symfony\Component\Validator\ConstraintValidator;
+@@ -17,7 +19,7 @@ class BraintreeCashierBraintreeSubscriptionIdConstraintValidator extends Constra
+   /**
+    * Validator 2.5 and upwards compatible execution context.
+    *
+-   * @var \Symfony\Component\Validator\Context\ExecutionContextInterface
++   * @var ExecutionContextInterface
+    */
+   protected $context;
+ 
+@@ -25,7 +27,7 @@ class BraintreeCashierBraintreeSubscriptionIdConstraintValidator extends Constra
+    * {@inheritdoc}
+    */
+   public function validate($entity, Constraint $constraint) {
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $entity */
++    /** @var BraintreeCashierSubscriptionInterface $entity */
+     $needs_braintree_subscription_id = in_array($entity->getSubscriptionType(), BraintreeCashierSubscription::getSubscriptionTypesNeedBraintreeId());
+     if ($needs_braintree_subscription_id && empty($entity->getBraintreeSubscriptionId())) {
+       $this->context->buildViolation($constraint->message)
+diff --git a/src/Plugin/Validation/Constraint/BraintreeCashierPeriodEndDateNotEmptyConstraintValidator.php b/src/Plugin/Validation/Constraint/BraintreeCashierPeriodEndDateNotEmptyConstraintValidator.php
+index 8c512ad..224f0f8 100644
+--- a/src/Plugin/Validation/Constraint/BraintreeCashierPeriodEndDateNotEmptyConstraintValidator.php
++++ b/src/Plugin/Validation/Constraint/BraintreeCashierPeriodEndDateNotEmptyConstraintValidator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier\Plugin\Validation\Constraint;
+ 
++use Symfony\Component\Validator\Context\ExecutionContextInterface;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -20,21 +21,21 @@ class BraintreeCashierPeriodEndDateNotEmptyConstraintValidator extends Constrain
+   /**
+    * Validator 2.5 and upwards compatible execution context.
+    *
+-   * @var \Symfony\Component\Validator\Context\ExecutionContextInterface
++   * @var ExecutionContextInterface
+    */
+   protected $context;
+ 
+   /**
+    * Subscription entity storage handler.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $subscriptionStorage;
+ 
+   /**
+    * Constructs a new PeriodEndDateNotEmptyConstraintValidator.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $subscription_storage
++   * @param EntityStorageInterface $subscription_storage
+    *   The subscription entity storage handler.
+    */
+   public function __construct(EntityStorageInterface $subscription_storage) {
+@@ -52,7 +53,7 @@ class BraintreeCashierPeriodEndDateNotEmptyConstraintValidator extends Constrain
+    * {@inheritdoc}
+    */
+   public function validate($entity, Constraint $constraint) {
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $entity */
++    /** @var BraintreeCashierSubscriptionInterface $entity */
+     $will_cancel_at_period_end = $entity->willCancelAtPeriodEnd();
+     $period_end_date_is_set = !empty($entity->getPeriodEndDate());
+     $is_free_type = $entity->getSubscriptionType() === BraintreeCashierSubscriptionInterface::FREE;
+diff --git a/src/Plugin/Validation/Constraint/OneActiveBraintreeCashierSubscriptionConstraintValidator.php b/src/Plugin/Validation/Constraint/OneActiveBraintreeCashierSubscriptionConstraintValidator.php
+index 9f4654d..ac21e16 100644
+--- a/src/Plugin/Validation/Constraint/OneActiveBraintreeCashierSubscriptionConstraintValidator.php
++++ b/src/Plugin/Validation/Constraint/OneActiveBraintreeCashierSubscriptionConstraintValidator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\braintree_cashier\Plugin\Validation\Constraint;
+ 
++use Symfony\Component\Validator\Context\ExecutionContextInterface;
+ use Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -17,21 +18,21 @@ class OneActiveBraintreeCashierSubscriptionConstraintValidator extends Constrain
+   /**
+    * Validator 2.5 and upwards compatible execution context.
+    *
+-   * @var \Symfony\Component\Validator\Context\ExecutionContextInterface
++   * @var ExecutionContextInterface
+    */
+   protected $context;
+ 
+   /**
+    * Subscription storage handler.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $subscriptionStorage;
+ 
+   /**
+    * BraintreeCashierOneActiveSubscriptionConstraintValidator constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $subscription_storage
++   * @param EntityStorageInterface $subscription_storage
+    *   The subscription storage.
+    */
+   public function __construct(EntityStorageInterface $subscription_storage) {
+@@ -49,7 +50,7 @@ class OneActiveBraintreeCashierSubscriptionConstraintValidator extends Constrain
+    * {@inheritdoc}
+    */
+   public function validate($entity, Constraint $constraint) {
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $entity */
++    /** @var BraintreeCashierSubscriptionInterface $entity */
+     if ($entity->getStatus() == BraintreeCashierSubscriptionInterface::ACTIVE) {
+       $query = $this->subscriptionStorage->getQuery();
+       $query->condition('subscribed_user.target_id', $entity->subscribed_user->target_id)
+diff --git a/src/SubscriptionService.php b/src/SubscriptionService.php
+index ecf46bb..4ad26c2 100644
+--- a/src/SubscriptionService.php
++++ b/src/SubscriptionService.php
+@@ -2,6 +2,14 @@
+ 
+ namespace Drupal\braintree_cashier;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Core\Entity\EntityStorageException;
++use Braintree\Exception\NotFound;
++use Drupal\Core\Entity\EntityConstraintViolationListInterface;
++use Symfony\Component\Validator\ConstraintViolationInterface;
++use Money\Money;
+ use Braintree\Plan;
+ use Braintree\Result\Error;
+ use Braintree\Subscription;
+@@ -37,63 +45,63 @@ class SubscriptionService {
+   /**
+    * Drupal\Core\Logger\LoggerChannel definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannel
++   * @var LoggerChannel
+    */
+   protected $logger;
+ 
+   /**
+    * Drupal\braintree_api\BraintreeApiService definition.
+    *
+-   * @var \Drupal\braintree_api\BraintreeApiService
++   * @var BraintreeApiService
+    */
+   protected $braintreeApi;
+ 
+   /**
+    * The subscription entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $subscriptionStorage;
+ 
+   /**
+    * The Braintree cashier config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The decimal money parser.
+    *
+-   * @var \Money\Parser\DecimalMoneyParser
++   * @var DecimalMoneyParser
+    */
+   protected $moneyParser;
+ 
+   /**
+    * The decimal money formatter.
+    *
+-   * @var \Money\Formatter\DecimalMoneyFormatter
++   * @var DecimalMoneyFormatter
+    */
+   protected $decimalMoneyFormatter;
+ 
+   /**
+    * The braintree cashier service.
+    *
+-   * @var \Drupal\braintree_cashier\BraintreeCashierService
++   * @var BraintreeCashierService
+    */
+   protected $bcService;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The billable user service.
+    *
+-   * @var \Drupal\braintree_cashier\BillableUser
++   * @var BillableUser
+    */
+   protected $billableUser;
+ 
+@@ -107,65 +115,65 @@ class SubscriptionService {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher
++   * @var ContainerAwareEventDispatcher
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * The date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The discount entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $discountStorage;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Constructs a new SubscriptionService object.
+    *
+-   * @param \Drupal\Core\Logger\LoggerChannel $logger_channel_braintree_cashier
++   * @param LoggerChannel $logger_channel_braintree_cashier
+    *   The braintree_cashier logger channel.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\braintree_api\BraintreeApiService $braintree_api_braintree_api
++   * @param BraintreeApiService $braintree_api_braintree_api
+    *   The Braintree API service.
+-   * @param \Drupal\braintree_cashier\BraintreeCashierService $bcService
++   * @param BraintreeCashierService $bcService
+    *   The braintree cashier service.
+-   * @param \Drupal\Core\Config\ConfigFactory $configFactory
++   * @param ConfigFactory $configFactory
+    *   The config factory.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   The request stack.
+-   * @param \Drupal\braintree_cashier\BillableUser $billableUser
++   * @param BillableUser $billableUser
+    *   The billable user service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler
++   * @param ModuleHandlerInterface $moduleHandler
+    *   The module handler.
+-   * @param \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher $eventDispatcher
++   * @param ContainerAwareEventDispatcher $eventDispatcher
+    *   The container aware event dispatcher.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $dateFormatter
++   * @param DateFormatterInterface $dateFormatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   public function __construct(LoggerChannel $logger_channel_braintree_cashier, EntityTypeManagerInterface $entity_type_manager, BraintreeApiService $braintree_api_braintree_api, BraintreeCashierService $bcService, ConfigFactory $configFactory, RequestStack $requestStack, BillableUser $billableUser, ModuleHandlerInterface $moduleHandler, ContainerAwareEventDispatcher $eventDispatcher, DateFormatterInterface $dateFormatter, MessengerInterface $messenger) {
+     $this->logger = $logger_channel_braintree_cashier;
+@@ -195,10 +203,10 @@ class SubscriptionService {
+    *
+    * It will remain active until the end of the currnt period.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription
++   * @param BraintreeCashierSubscriptionInterface $subscription
+    *   The subscription entity.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function cancel(BraintreeCashierSubscriptionInterface $subscription) {
+     if ($this->isBraintreeManaged($subscription)) {
+@@ -234,7 +242,7 @@ class SubscriptionService {
+    * managed by Braintree since the corresponding Braintree subscription will
+    * have already been canceled.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription
++   * @param BraintreeCashierSubscriptionInterface $subscription
+    *   The subscription entity.
+    *
+    * @return bool
+@@ -247,10 +255,10 @@ class SubscriptionService {
+   /**
+    * Get the subscription as a Braintree subscription object.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription
++   * @param BraintreeCashierSubscriptionInterface $subscription
+    *   The subscription entity.
+    *
+-   * @return \Braintree\Subscription
++   * @return Subscription
+    *   The braintree subscription object.
+    */
+   public function asBraintreeSubscription(BraintreeCashierSubscriptionInterface $subscription) {
+@@ -260,10 +268,10 @@ class SubscriptionService {
+   /**
+    * Cancels the subscription immediately.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription
++   * @param BraintreeCashierSubscriptionInterface $subscription
+    *   The subscription entity to cancel.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function cancelNow(BraintreeCashierSubscriptionInterface $subscription) {
+     if ($this->isBraintreeManaged($subscription)) {
+@@ -277,14 +285,14 @@ class SubscriptionService {
+   /**
+    * Swap a subscription between billing plans.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription_entity
++   * @param BraintreeCashierSubscriptionInterface $subscription_entity
+    *   The subscription entity.
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan
++   * @param BraintreeCashierBillingPlanInterface $billing_plan
+    *   The billing plan entity to swap to.
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface
++   * @return BraintreeCashierSubscriptionInterface
+    *   The updated, or new, subscription entity.
+    *
+    * @throws \Exception
+@@ -316,14 +324,14 @@ class SubscriptionService {
+     }
+     else {
+       $event = new BraintreeErrorEvent($user, $result->message, $result);
+-      $this->eventDispatcher->dispatch(BraintreeCashierEvents::BRAINTREE_ERROR, $event);
++      $this->eventDispatcher->dispatch($event, BraintreeCashierEvents::BRAINTREE_ERROR);
+     }
+   }
+ 
+   /**
+    * Determine if the subscription will cancel at period end but is active.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription
++   * @param BraintreeCashierSubscriptionInterface $subscription
+    *   The subscription entity.
+    *
+    * @return bool
+@@ -336,13 +344,13 @@ class SubscriptionService {
+   /**
+    * Resumes a subscription that on it's grace period.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription
++   * @param BraintreeCashierSubscriptionInterface $subscription
+    *   The subscription entity.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface
++   * @return BraintreeCashierSubscriptionInterface
+    *   The subscription entity.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function resume(BraintreeCashierSubscriptionInterface $subscription) {
+     if (!$this->onGracePeriod($subscription)) {
+@@ -362,9 +370,9 @@ class SubscriptionService {
+   /**
+    * Determines if the given plan would alter the billing frequency.
+    *
+-   * @param \Braintree\Subscription $current_subscription
++   * @param Subscription $current_subscription
+    *   The subscription entity.
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan
++   * @param BraintreeCashierBillingPlanInterface $billing_plan
+    *   The billing plan entity.
+    *
+    * @return bool
+@@ -385,18 +393,18 @@ class SubscriptionService {
+    * subscription and create a new one. We give prorated credit from the old
+    * subscription to the new one.
+    *
+-   * @param \Braintree\Subscription $current_braintree_subscription
++   * @param Subscription $current_braintree_subscription
+    *   The old Braintree subscription that will be canceled.
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan
++   * @param BraintreeCashierBillingPlanInterface $billing_plan
+    *   The target billing plan for which to create a new subscription.
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user for whom the new subscription will be created.
+    *
+-   * @return bool|\Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface|false
++   * @return bool|BraintreeCashierSubscriptionInterface|false
+    *   The subscription entity, or FALSE on failure.
+    *
+-   * @throws \Braintree\Exception\NotFound
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws NotFound
++   * @throws EntityStorageException
+    * @throws \Exception
+    */
+   public function swapAcrossFrequencies(Subscription $current_braintree_subscription, BraintreeCashierBillingPlanInterface $billing_plan, User $user) {
+@@ -454,9 +462,9 @@ class SubscriptionService {
+   /**
+    * Determines if the user is switching form monthly to yearly billing.
+    *
+-   * @param \Braintree\Plan $current_plan
++   * @param Plan $current_plan
+    *   The current billing plan entity.
+-   * @param \Braintree\Plan $target_plan
++   * @param Plan $target_plan
+    *   The billing plan entity to change to.
+    *
+    * @return bool
+@@ -469,18 +477,18 @@ class SubscriptionService {
+   /**
+    * Creates a Braintree Subscription.
+    *
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity.
+    * @param string $token
+    *   A payment method token.
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan
++   * @param BraintreeCashierBillingPlanInterface $billing_plan
+    *   The billing plan entity.
+    * @param array $options
+    *   An array of subscription options to add to the payload.
+    * @param string $coupon
+    *   A discount ID.
+    *
+-   * @return bool|\Braintree\Subscription
++   * @return bool|Subscription
+    *   The braintree subscription entity, or false on failure.
+    */
+   public function createBraintreeSubscription(User $user, $token, BraintreeCashierBillingPlanInterface $billing_plan, array $options = [], $coupon = NULL) {
+@@ -499,7 +507,7 @@ class SubscriptionService {
+     if (!$result->success) {
+       $this->processBraintreeSubscriptionCreateFailure($result);
+       $event = new BraintreeErrorEvent($user, $result->message, $result);
+-      $this->eventDispatcher->dispatch(BraintreeCashierEvents::BRAINTREE_ERROR, $event);
++      $this->eventDispatcher->dispatch($event, BraintreeCashierEvents::BRAINTREE_ERROR);
+       return FALSE;
+     }
+ 
+@@ -518,7 +526,7 @@ class SubscriptionService {
+   /**
+    * Process a failed attempt with Braintree to create a subscription.
+    *
+-   * @param \Braintree\Result\Error $result
++   * @param Error $result
+    *   The Braintree response object which indicates failure.
+    *
+    * @see https://developers.braintreepayments.com/reference/general/testing/php#test-amounts
+@@ -597,7 +605,7 @@ class SubscriptionService {
+    * @param string $braintree_subscription_id
+    *   The subscription ID in the Braintree control panel.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface
++   * @return BraintreeCashierSubscriptionInterface
+    *   The corresponding subscription entity.
+    *
+    * @throws \Exception
+@@ -616,7 +624,7 @@ class SubscriptionService {
+       $this->logger->emergency($message);
+       throw new \Exception($message);
+     }
+-    /** @var \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription */
++    /** @var BraintreeCashierSubscriptionInterface $subscription */
+     $subscription = $this->subscriptionStorage->load(array_shift($result));
+     return $subscription;
+   }
+@@ -624,16 +632,16 @@ class SubscriptionService {
+   /**
+    * Creates an active subscription entity.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $billing_plan
++   * @param BraintreeCashierBillingPlanInterface $billing_plan
+    *   The billing plan entity.
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    *   The user entity.
+-   * @param \Braintree\Subscription $braintree_subscription
++   * @param Subscription $braintree_subscription
+    *   The subscription entity.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state of the sign up form.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface|false
++   * @return BraintreeCashierSubscriptionInterface|false
+    *   The subscription entity.
+    */
+   public function createSubscriptionEntity(BraintreeCashierBillingPlanInterface $billing_plan, User $user, Subscription $braintree_subscription = NULL, FormStateInterface $form_state = NULL) {
+@@ -677,10 +685,10 @@ class SubscriptionService {
+ 
+     $subscription_entity = BraintreeCashierSubscription::create($params);
+ 
+-    /** @var \Drupal\Core\Entity\EntityConstraintViolationListInterface $violations */
++    /** @var EntityConstraintViolationListInterface $violations */
+     $violations = $subscription_entity->validate();
+     foreach ($violations as $violation) {
+-      /** @var \Symfony\Component\Validator\ConstraintViolationInterface $violation */
++      /** @var ConstraintViolationInterface $violation */
+       $admin_message = $this->t('Constraint validation failed when creating a subscription. Message: %message', [
+         '%message' => $violation->getMessage(),
+       ]);
+@@ -702,17 +710,17 @@ class SubscriptionService {
+    * it's associated is replaced with a Braintree subscription with a new
+    * billing plan.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $subscription
++   * @param BraintreeCashierSubscriptionInterface $subscription
+    *   The subscription entity that needs updating.
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierBillingPlanInterface $new_billing_plan
++   * @param BraintreeCashierBillingPlanInterface $new_billing_plan
+    *   The new billing plan used to modify the Braintree subscription.
+-   * @param \Braintree\Subscription $updated_braintree_subscription
++   * @param Subscription $updated_braintree_subscription
+    *   The updated Braintree subscription.
+    *
+-   * @return \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface
++   * @return BraintreeCashierSubscriptionInterface
+    *   The subscription entity.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function updateSubscriptionEntityBillingPlan(BraintreeCashierSubscriptionInterface $subscription, BraintreeCashierBillingPlanInterface $new_billing_plan, Subscription $updated_braintree_subscription) {
+     // Cancel subscription entity in order to invoke hooks on cancellation such
+@@ -752,10 +760,10 @@ class SubscriptionService {
+   /**
+    * Gets the money remaining in the current period.
+    *
+-   * @param \Braintree\Subscription $current_subscription
++   * @param Subscription $current_subscription
+    *   The current Braintree subscription from which to switch.
+    *
+-   * @return \Money\Money
++   * @return Money
+    *   The amount of money remaining in the current period.
+    */
+   public function moneyRemainingInCurrentPeriod(Subscription $current_subscription) {
+@@ -770,7 +778,7 @@ class SubscriptionService {
+   /**
+    * Gets the discount to apply for a switch to a yearly plan.
+    *
+-   * @param \Braintree\Subscription $current_subscription
++   * @param Subscription $current_subscription
+    *   The current Braintree subscription.
+    *
+    * @return array
+@@ -791,7 +799,7 @@ class SubscriptionService {
+   /**
+    * Gets the period end date of the current subscription.
+    *
+-   * @param \Drupal\braintree_cashier\Entity\BraintreeCashierSubscriptionInterface $current_subscription
++   * @param BraintreeCashierSubscriptionInterface $current_subscription
+    *   The current subscription entity.
+    *
+    * @return string
+diff --git a/tests/src/Functional/AdminPagesTest.php b/tests/src/Functional/AdminPagesTest.php
+index 54202a4..0c0c9fc 100644
+--- a/tests/src/Functional/AdminPagesTest.php
++++ b/tests/src/Functional/AdminPagesTest.php
+@@ -34,7 +34,7 @@ class AdminPagesTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $billing_plan = $this->createMonthlyBillingPlan();
+     $account = $this->createUser([], NULL, TRUE);

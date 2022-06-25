@@ -1,0 +1,1418 @@
+diff --git a/profile.install b/profile.install
+index 09a6a83..a1ec79c 100644
+--- a/profile.install
++++ b/profile.install
+@@ -60,7 +60,7 @@ function profile_update_8001() {
+  * Updates view profile permission name.
+  */
+ function profile_update_8002() {
+-  /** @var \Drupal\user\Entity\Role[] $roles */
++  /** @var Role[] $roles */
+   $roles = Role::loadMultiple();
+ 
+   foreach ($roles as $role) {
+diff --git a/profile.module b/profile.module
+index a8597c2..f0e2ef7 100644
+--- a/profile.module
++++ b/profile.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\profile\Entity\ProfileTypeInterface;
++use Drupal\profile\Entity\ProfileInterface;
+ /**
+  * @file
+  * Support for configurable user profiles.
+@@ -48,7 +50,7 @@ function profile_entity_bundle_info_alter(&$bundles) {
+   }
+ 
+   $profile_type_ids = array_keys($bundles['profile']);
+-  /** @var \Drupal\profile\Entity\ProfileTypeInterface[] $profile_types */
++  /** @var ProfileTypeInterface[] $profile_types */
+   $profile_types = ProfileType::loadMultiple($profile_type_ids);
+   foreach ($bundles['profile'] as $bundle => $info) {
+     if (isset($profile_types[$bundle])) {
+@@ -75,7 +77,7 @@ function profile_entity_field_access($operation, FieldDefinitionInterface $field
+       if ($is_private) {
+         // Users may see their own private profile fields by default, so this
+         // requires user granularity for caching.
+-        /** @var \Drupal\profile\Entity\ProfileInterface $profile */
++        /** @var ProfileInterface $profile */
+         $profile = $items->getEntity();
+         if ($account->id() === $profile->getOwnerId()) {
+           return AccessResult::neutral();
+@@ -125,7 +127,7 @@ function profile_theme() {
+  *   - attributes: HTML attributes for the containing element.
+  */
+ function template_preprocess_profile(array &$variables) {
+-  /** @var Drupal\profile\Entity\ProfileInterface $profile */
++  /** @var ProfileInterface $profile */
+   $profile = $variables['elements']['#profile'];
+ 
+   $variables['view_mode'] = $variables['elements']['#view_mode'];
+@@ -175,7 +177,7 @@ function profile_form_field_config_edit_form_alter(&$form, FormStateInterface $f
+  *
+  * @param array $form
+  *   The form array.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state.
+  */
+ function profile_form_field_config_edit_form_submit(array $form, FormStateInterface $form_state) {
+@@ -269,7 +271,7 @@ function profile_entity_base_field_info(EntityTypeInterface $entity_type) {
+       return $fields;
+     }
+ 
+-    /** @var Drupal\profile\Entity\ProfileType[] $profile_types */
++    /** @var ProfileType[] $profile_types */
+     $profile_types = $entity_type_manager->getStorage('profile_type')->loadMultiple();
+     foreach ($profile_types as $profile_type) {
+       $profile_type_id = $profile_type->id();
+diff --git a/profile.post_update.php b/profile.post_update.php
+index 775e22c..922137f 100644
+--- a/profile.post_update.php
++++ b/profile.post_update.php
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Config\Entity\ConfigEntityStorageInterface;
++use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ /**
+  * @file
+  * Post update functions for Profile.
+@@ -46,7 +48,7 @@ function profile_post_update_change_publish_action_plugins() {
+  * Add new revision settings to profile types.
+  */
+ function profile_post_update_add_revision_settings() {
+-  /** @var \Drupal\profile\Entity\ProfileType[] $profile_types */
++  /** @var ProfileType[] $profile_types */
+   $profile_types = ProfileType::loadMultiple();
+   foreach ($profile_types as $profile_type) {
+     if ($profile_type->get('use_revisions')) {
+@@ -92,9 +94,9 @@ function profile_post_update_configure_register_form_mode() {
+  * Replace the "profiles" view with the updated version.
+  */
+ function profile_post_update_replace_view() {
+-  /** @var \Drupal\Core\Config\Entity\ConfigEntityStorageInterface $view_storage */
++  /** @var ConfigEntityStorageInterface $view_storage */
+   $view_storage = \Drupal::entityTypeManager()->getStorage('view');
+-  /** @var \Drupal\Core\Config\Entity\ConfigEntityInterface $view */
++  /** @var ConfigEntityInterface $view */
+   $view = $view_storage->load('profiles');
+   if (!$view) {
+     return;
+diff --git a/profile.tokens.inc b/profile.tokens.inc
+index 4951ede..66ae680 100644
+--- a/profile.tokens.inc
++++ b/profile.tokens.inc
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\profile\ProfileStorageInterface;
++use Drupal\Core\Render\Renderer;
+ /**
+  * @file
+  * Provides token support for profiles.
+@@ -46,7 +48,7 @@ function profile_tokens($type, array $tokens, array $data, array $options, Bubbl
+       if (!empty($parts[0]) && in_array($parts[0], array_keys(ProfileType::loadMultiple()))) {
+         $profile_type = $parts[0];
+ 
+-        /** @var \Drupal\profile\ProfileStorageInterface $storage */
++        /** @var ProfileStorageInterface $storage */
+         $storage = \Drupal::entityTypeManager()->getStorage('profile');
+         $profile = $storage->loadByUser($user, $profile_type);
+ 
+@@ -69,7 +71,7 @@ function profile_tokens($type, array $tokens, array $data, array $options, Bubbl
+             $view_builder = $entity_type_manager->getViewBuilder('profile');
+             $profile_view = $view_builder->view($profile, 'token');
+ 
+-            /** @var Drupal\Core\Render\Renderer $renderer */
++            /** @var Renderer $renderer */
+             $renderer = \Drupal::service('renderer');
+             $replacements[$original] = $renderer->renderRoot($profile_view);
+           }
+diff --git a/src/Access/ProfileTypeMultipleAccessCheck.php b/src/Access/ProfileTypeMultipleAccessCheck.php
+index 56a372b..050d9b0 100644
+--- a/src/Access/ProfileTypeMultipleAccessCheck.php
++++ b/src/Access/ProfileTypeMultipleAccessCheck.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\profile\Access;
+ 
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Routing\Access\AccessInterface;
+ use Drupal\profile\Entity\ProfileTypeInterface;
+@@ -17,12 +18,12 @@ class ProfileTypeMultipleAccessCheck implements AccessInterface {
+   /**
+    * Performs the access check.
+    *
+-   * @param \Symfony\Component\Routing\Route $route
++   * @param Route $route
+    *   The route to check against.
+-   * @param \Drupal\profile\Entity\ProfileTypeInterface $profile_type
++   * @param ProfileTypeInterface $profile_type
+    *   The profile type.
+    *
+-   * @return bool|\Drupal\Core\Access\AccessResultInterface
++   * @return bool|AccessResultInterface
+    *   The access result.
+    */
+   public function access(Route $route, ProfileTypeInterface $profile_type) {
+diff --git a/src/Controller/ProfileController.php b/src/Controller/ProfileController.php
+index 31330c5..b19e046 100644
+--- a/src/Controller/ProfileController.php
++++ b/src/Controller/ProfileController.php
+@@ -14,10 +14,10 @@ class ProfileController extends ControllerBase {
+   /**
+    * Mark profile as default.
+    *
+-   * @param \Drupal\profile\Entity\ProfileInterface $profile
++   * @param ProfileInterface $profile
+    *   The profile.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirect back to the profile listing.
+    */
+   public function setDefault(ProfileInterface $profile) {
+diff --git a/src/Controller/UserController.php b/src/Controller/UserController.php
+index ca3be7c..ea12bf9 100644
+--- a/src/Controller/UserController.php
++++ b/src/Controller/UserController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\profile\Controller;
+ 
++use Drupal\profile\ProfileStorageInterface;
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Session\AccountInterface;
+@@ -17,7 +19,7 @@ class UserController extends ControllerBase {
+   /**
+    * Builds a page title for the given profile type.
+    *
+-   * @param \Drupal\profile\Entity\ProfileTypeInterface $profile_type
++   * @param ProfileTypeInterface $profile_type
+    *   The profile type.
+    *
+    * @return string
+@@ -30,16 +32,16 @@ class UserController extends ControllerBase {
+   /**
+    * Builds the add/edit page for "single" profile types.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user account.
+-   * @param \Drupal\profile\Entity\ProfileTypeInterface $profile_type
++   * @param ProfileTypeInterface $profile_type
+    *   The profile type.
+    *
+    * @return array
+    *   The response.
+    */
+   public function singlePage(UserInterface $user, ProfileTypeInterface $profile_type) {
+-    /** @var \Drupal\profile\ProfileStorageInterface $profile_storage */
++    /** @var ProfileStorageInterface $profile_storage */
+     $profile_storage = $this->entityTypeManager()->getStorage('profile');
+     $profile = $profile_storage->loadByUser($user, $profile_type->id());
+ 
+@@ -54,9 +56,9 @@ class UserController extends ControllerBase {
+   /**
+    * Builds the listing page for "multiple" profile types.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user account.
+-   * @param \Drupal\profile\Entity\ProfileTypeInterface $profile_type
++   * @param ProfileTypeInterface $profile_type
+    *   The profile type.
+    *
+    * @return array
+@@ -78,9 +80,9 @@ class UserController extends ControllerBase {
+   /**
+    * Builds the profile add form.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user account.
+-   * @param \Drupal\profile\Entity\ProfileTypeInterface $profile_type
++   * @param ProfileTypeInterface $profile_type
+    *   The profile type.
+    *
+    * @return array
+@@ -97,7 +99,7 @@ class UserController extends ControllerBase {
+   /**
+    * Builds the edit form.
+    *
+-   * @param \Drupal\profile\Entity\ProfileInterface $profile
++   * @param ProfileInterface $profile
+    *   The profile.
+    *
+    * @return array
+@@ -110,14 +112,14 @@ class UserController extends ControllerBase {
+   /**
+    * Checks access for the single/multiple pages.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user account.
+-   * @param \Drupal\profile\Entity\ProfileTypeInterface $profile_type
++   * @param ProfileTypeInterface $profile_type
+    *   The profile type.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The currently logged in account.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function checkAccess(UserInterface $user, ProfileTypeInterface $profile_type, AccountInterface $account) {
+@@ -143,14 +145,14 @@ class UserController extends ControllerBase {
+   /**
+    * Checks access for the profile add form.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user account.
+-   * @param \Drupal\profile\Entity\ProfileTypeInterface $profile_type
++   * @param ProfileTypeInterface $profile_type
+    *   The profile type.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The currently logged in account.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function checkCreateAccess(UserInterface $user, ProfileTypeInterface $profile_type, AccountInterface $account) {
+@@ -162,7 +164,7 @@ class UserController extends ControllerBase {
+     }
+ 
+     $access_control_handler = $this->entityTypeManager()->getAccessControlHandler('profile');
+-    /** @var \Drupal\Core\Access\AccessResult $result */
++    /** @var AccessResult $result */
+     $result = $access_control_handler->createAccess($profile_type->id(), $account, [
+       'profile_owner' => $user,
+     ], TRUE);
+diff --git a/src/Entity/Profile.php b/src/Entity/Profile.php
+index 1496dfa..670aa5f 100644
+--- a/src/Entity/Profile.php
++++ b/src/Entity/Profile.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\profile\Entity;
+ 
++use Drupal\profile\ProfileStorage;
+ use Drupal\Core\Entity\EditorialContentEntityBase;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -232,7 +233,7 @@ class Profile extends EditorialContentEntityBase implements ProfileInterface {
+   /**
+    * Gets the names of all configurable fields on the given profile.
+    *
+-   * @param \Drupal\profile\Entity\ProfileInterface $profile
++   * @param ProfileInterface $profile
+    *   The profile.
+    *
+    * @return string[]
+@@ -252,7 +253,7 @@ class Profile extends EditorialContentEntityBase implements ProfileInterface {
+    * {@inheritdoc}
+    */
+   public function preSave(EntityStorageInterface $storage) {
+-    /** @var \Drupal\profile\ProfileStorage $storage */
++    /** @var ProfileStorage $storage */
+     parent::preSave($storage);
+ 
+     // Only published profiles can be default.
+@@ -277,7 +278,7 @@ class Profile extends EditorialContentEntityBase implements ProfileInterface {
+    * {@inheritdoc}
+    */
+   public function postSave(EntityStorageInterface $storage, $update = TRUE) {
+-    /** @var \Drupal\profile\ProfileStorage $storage */
++    /** @var ProfileStorage $storage */
+     parent::postSave($storage, $update);
+ 
+     if ($this->getOwnerId()) {
+diff --git a/src/Entity/ProfileInterface.php b/src/Entity/ProfileInterface.php
+index 06dc310..9661eea 100644
+--- a/src/Entity/ProfileInterface.php
++++ b/src/Entity/ProfileInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\profile\Entity;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityChangedInterface;
+ use Drupal\Core\Entity\EntityPublishedInterface;
+@@ -119,7 +120,7 @@ interface ProfileInterface extends ContentEntityInterface, EntityChangedInterfac
+   /**
+    * Gets the profile revision author.
+    *
+-   * @return \Drupal\user\UserInterface
++   * @return UserInterface
+    *   The user entity for the revision author.
+    *
+    * @deprecated in profile:8.x-1.0-rc5 and is removed from
+diff --git a/src/Event/ProfileLabelEvent.php b/src/Event/ProfileLabelEvent.php
+index 095ddcb..5f6450a 100644
+--- a/src/Event/ProfileLabelEvent.php
++++ b/src/Event/ProfileLabelEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\profile\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\profile\Entity\ProfileInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Defines the profile label event.
+@@ -15,7 +15,7 @@ class ProfileLabelEvent extends Event {
+   /**
+    * The profile.
+    *
+-   * @var \Drupal\profile\Entity\ProfileInterface
++   * @var ProfileInterface
+    */
+   protected $profile;
+ 
+@@ -29,7 +29,7 @@ class ProfileLabelEvent extends Event {
+   /**
+    * Constructs a new ProfileLabelEvent object.
+    *
+-   * @param \Drupal\profile\Entity\ProfileInterface $profile
++   * @param ProfileInterface $profile
+    *   The profile.
+    * @param string $label
+    *   The profile label.
+@@ -42,7 +42,7 @@ class ProfileLabelEvent extends Event {
+   /**
+    * Gets the profile.
+    *
+-   * @return \Drupal\profile\Entity\ProfileInterface
++   * @return ProfileInterface
+    *   The profile.
+    */
+   public function getProfile() {
+diff --git a/src/Form/ProfileDeleteForm.php b/src/Form/ProfileDeleteForm.php
+index 9d4dc27..d8dd060 100644
+--- a/src/Form/ProfileDeleteForm.php
++++ b/src/Form/ProfileDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\profile\Form;
+ 
++use Drupal\profile\Entity\ProfileInterface;
+ use Drupal\Core\Entity\ContentEntityDeleteForm;
+ use Drupal\Core\Url;
+ 
+@@ -33,7 +34,7 @@ class ProfileDeleteForm extends ContentEntityDeleteForm {
+    * {@inheritdoc}
+    */
+   public function getCancelUrl() {
+-    /** @var \Drupal\profile\Entity\ProfileInterface $entity */
++    /** @var ProfileInterface $entity */
+     $entity = $this->entity;
+     if ($entity->getOwnerId()) {
+       return Url::fromRoute('entity.user.canonical', [
+diff --git a/src/Form/ProfileForm.php b/src/Form/ProfileForm.php
+index cb0d730..9c6ea02 100644
+--- a/src/Form/ProfileForm.php
++++ b/src/Form/ProfileForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\profile\Form;
+ 
++use Drupal\profile\Entity\ProfileTypeInterface;
++use Drupal\profile\Entity\ProfileInterface;
+ use Drupal\Core\Entity\ContentEntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -14,7 +16,7 @@ class ProfileForm extends ContentEntityForm {
+    * {@inheritdoc}
+    */
+   protected function showRevisionUi() {
+-    /** @var \Drupal\profile\Entity\ProfileTypeInterface $profile_type */
++    /** @var ProfileTypeInterface $profile_type */
+     $profile_type = $this->entityTypeManager->getStorage('profile_type')->load($this->entity->bundle());
+     return $profile_type->showRevisionUi();
+   }
+@@ -23,12 +25,12 @@ class ProfileForm extends ContentEntityForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\profile\Entity\ProfileInterface $profile */
++    /** @var ProfileInterface $profile */
+     $profile = $this->entity;
+     $profile->save();
+ 
+     $profile_type_storage = $this->entityTypeManager->getStorage('profile_type');
+-    /** @var \Drupal\profile\Entity\ProfileTypeInterface $profile_type */
++    /** @var ProfileTypeInterface $profile_type */
+     $profile_type = $profile_type_storage->load($profile->bundle());
+     if ($profile_type->allowsMultiple()) {
+       $this->messenger()->addMessage($this->t('%label has been saved.', ['%label' => $profile->label()]));
+diff --git a/src/Form/ProfileTypeForm.php b/src/Form/ProfileTypeForm.php
+index f5131fb..bc84072 100644
+--- a/src/Form/ProfileTypeForm.php
++++ b/src/Form/ProfileTypeForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\profile\Form;
+ 
++use Drupal\profile\Entity\ProfileTypeInterface;
++use Drupal\user\RoleInterface;
+ use Drupal\Core\Entity\BundleEntityFormBase;
+ use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -21,7 +23,7 @@ class ProfileTypeForm extends BundleEntityFormBase {
+    */
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+-    /** @var \Drupal\profile\Entity\ProfileTypeInterface $profile_type */
++    /** @var ProfileTypeInterface $profile_type */
+     $profile_type = $this->entity;
+ 
+     $form['label'] = [
+@@ -66,7 +68,7 @@ class ProfileTypeForm extends BundleEntityFormBase {
+       '#default_value' => $profile_type->getRoles(),
+     ];
+     foreach (Role::loadMultiple() as $role) {
+-      /** @var \Drupal\user\RoleInterface $role */
++      /** @var RoleInterface $role */
+       if ($role->id() !== Role::ANONYMOUS_ID) {
+         $form['roles']['#options'][$role->id()] = $role->label();
+       }
+@@ -119,7 +121,7 @@ class ProfileTypeForm extends BundleEntityFormBase {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\profile\Entity\ProfileTypeInterface $profile_type */
++    /** @var ProfileTypeInterface $profile_type */
+     $profile_type = $this->entity;
+     $profile_type->save();
+     $this->postSave($profile_type, $this->operation);
+diff --git a/src/Plugin/Derivative/UserLocalTask.php b/src/Plugin/Derivative/UserLocalTask.php
+index 09c0d5d..360a889 100644
+--- a/src/Plugin/Derivative/UserLocalTask.php
++++ b/src/Plugin/Derivative/UserLocalTask.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\profile\Plugin\Derivative;
+ 
++use Drupal\profile\Entity\ProfileTypeInterface;
+ use Drupal\Component\Plugin\Derivative\DeriverBase;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Plugin\Discovery\ContainerDeriverInterface;
+@@ -15,7 +16,7 @@ class UserLocalTask extends DeriverBase implements ContainerDeriverInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -24,7 +25,7 @@ class UserLocalTask extends DeriverBase implements ContainerDeriverInterface {
+    *
+    * @param string $base_plugin_definition
+    *   The base plugin definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct($base_plugin_definition, EntityTypeManagerInterface $entity_type_manager) {
+@@ -48,7 +49,7 @@ class UserLocalTask extends DeriverBase implements ContainerDeriverInterface {
+     $this->derivatives = [];
+     // Starting weight for ordering the local tasks.
+     $weight = 10;
+-    /** @var \Drupal\profile\Entity\ProfileTypeInterface[] $profile_types */
++    /** @var ProfileTypeInterface[] $profile_types */
+     $profile_types = $this->entityTypeManager->getStorage('profile_type')->loadMultiple();
+     foreach ($profile_types as $profile_type_id => $profile_type) {
+       if ($profile_type->allowsMultiple()) {
+diff --git a/src/Plugin/Field/FieldWidget/ProfileFormWidget.php b/src/Plugin/Field/FieldWidget/ProfileFormWidget.php
+index 8cd0dfe..e7c7821 100644
+--- a/src/Plugin/Field/FieldWidget/ProfileFormWidget.php
++++ b/src/Plugin/Field/FieldWidget/ProfileFormWidget.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\profile\Plugin\Field\FieldWidget;
+ 
++use Drupal\user\UserInterface;
++use Drupal\profile\ProfileStorageInterface;
++use Drupal\profile\Entity\ProfileTypeInterface;
++use Drupal\Core\Session\AccountInterface;
+ use Drupal\Core\Entity\Entity\EntityFormDisplay;
+ use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+@@ -30,21 +34,21 @@ class ProfileFormWidget extends WidgetBase implements ContainerFactoryPluginInte
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+@@ -55,7 +59,7 @@ class ProfileFormWidget extends WidgetBase implements ContainerFactoryPluginInte
+    *   The plugin_id for the widget.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The definition of the field to which the widget is associated.
+    * @param array $settings
+    *   The widget settings.
+@@ -63,9 +67,9 @@ class ProfileFormWidget extends WidgetBase implements ContainerFactoryPluginInte
+    *   Any third party settings.
+    * @param \Drupal\core\Entity\EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
++   * @param EntityDisplayRepositoryInterface $entity_display_repository
+    *   The entity display repository.
+    */
+   public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, array $third_party_settings, EntityFieldManagerInterface $entity_field_manager, EntityTypeManagerInterface $entity_type_manager, EntityDisplayRepositoryInterface $entity_display_repository) {
+@@ -146,12 +150,12 @@ class ProfileFormWidget extends WidgetBase implements ContainerFactoryPluginInte
+    * {@inheritdoc}
+    */
+   public function formElement(FieldItemListInterface $items, $delta, array $element, array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\user\UserInterface $account */
++    /** @var UserInterface $account */
+     $account = $items->getEntity();
+-    /** @var \Drupal\profile\ProfileStorageInterface $profile_storage */
++    /** @var ProfileStorageInterface $profile_storage */
+     $profile_storage = $this->entityTypeManager->getStorage('profile');
+     $profile_type_storage = $this->entityTypeManager->getStorage('profile_type');
+-    /** @var \Drupal\profile\Entity\ProfileTypeInterface $profile_type */
++    /** @var ProfileTypeInterface $profile_type */
+     $profile_type = $profile_type_storage->load($this->getFieldSetting('profile_type'));
+     $property = ['profiles', $profile_type->id()];
+     $profile = $form_state->get($property);
+@@ -277,11 +281,11 @@ class ProfileFormWidget extends WidgetBase implements ContainerFactoryPluginInte
+    *
+    * @param array $element
+    *   The profile form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public static function validateProfileForm(array &$element, FormStateInterface $form_state) {
+-    /** @var \Drupal\profile\Entity\ProfileInterface $profile */
++    /** @var ProfileInterface $profile */
+     $property = ['profiles', $element['#bundle']];
+     $profile = $form_state->get($property);
+     if (!empty($profile)) {
+@@ -297,11 +301,11 @@ class ProfileFormWidget extends WidgetBase implements ContainerFactoryPluginInte
+    *
+    * @param array $form
+    *   The complete form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public static function saveProfiles(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Session\AccountInterface $account */
++    /** @var AccountInterface $account */
+     $account = $form_state->getFormObject()->getEntity();
+     if (!$account) {
+       return;
+diff --git a/src/Plugin/Field/ProfileEntityFieldItemList.php b/src/Plugin/Field/ProfileEntityFieldItemList.php
+index b8fea9c..9b192d1 100644
+--- a/src/Plugin/Field/ProfileEntityFieldItemList.php
++++ b/src/Plugin/Field/ProfileEntityFieldItemList.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\profile\Plugin\Field;
+ 
++use Drupal\profile\Entity\ProfileInterface;
++use Drupal\profile\ProfileStorageInterface;
+ use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
+ use Drupal\Core\Field\FieldItemList;
+ use Drupal\Core\TypedData\ComputedItemListTrait;
+@@ -33,13 +35,13 @@ class ProfileEntityFieldItemList extends FieldItemList implements EntityReferenc
+   /**
+    * Get the user's profiles.
+    *
+-   * @return array|\Drupal\profile\Entity\ProfileInterface[]
++   * @return array|ProfileInterface[]
+    *   An array of profiles.
+    */
+   protected function getUserProfiles() {
+     $user = $this->getEntity();
+     assert($user instanceof UserInterface);
+-    /** @var \Drupal\profile\ProfileStorageInterface $profile_storage */
++    /** @var ProfileStorageInterface $profile_storage */
+     $profile_storage = \Drupal::entityTypeManager()->getStorage('profile');
+ 
+     // Ignore anonymous and user accounts not saved yet.
+diff --git a/src/Plugin/Menu/LocalAction/ProfileLocalAction.php b/src/Plugin/Menu/LocalAction/ProfileLocalAction.php
+index 06e1033..65a27c4 100644
+--- a/src/Plugin/Menu/LocalAction/ProfileLocalAction.php
++++ b/src/Plugin/Menu/LocalAction/ProfileLocalAction.php
+@@ -16,7 +16,7 @@ class ProfileLocalAction extends LocalActionDefault {
+   /**
+    * The redirect destination.
+    *
+-   * @var \Drupal\Core\Routing\RedirectDestinationInterface
++   * @var RedirectDestinationInterface
+    */
+   private $redirectDestination;
+ 
+@@ -29,9 +29,9 @@ class ProfileLocalAction extends LocalActionDefault {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Routing\RouteProviderInterface $route_provider
++   * @param RouteProviderInterface $route_provider
+    *   The route provider to load routes by name.
+-   * @param \Drupal\Core\Routing\RedirectDestinationInterface $redirect_destination
++   * @param RedirectDestinationInterface $redirect_destination
+    *   The redirect destination.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, RouteProviderInterface $route_provider, RedirectDestinationInterface $redirect_destination) {
+diff --git a/src/Plugin/views/argument_default/ProfileOwner.php b/src/Plugin/views/argument_default/ProfileOwner.php
+index b3cf21e..eb50d13 100644
+--- a/src/Plugin/views/argument_default/ProfileOwner.php
++++ b/src/Plugin/views/argument_default/ProfileOwner.php
+@@ -22,7 +22,7 @@ class ProfileOwner extends ArgumentDefaultPluginBase implements CacheableDepende
+   /**
+    * The route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+@@ -35,7 +35,7 @@ class ProfileOwner extends ArgumentDefaultPluginBase implements CacheableDepende
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, RouteMatchInterface $route_match) {
+diff --git a/src/ProfileAccessControlHandler.php b/src/ProfileAccessControlHandler.php
+index b27a9e3..3956ef4 100644
+--- a/src/ProfileAccessControlHandler.php
++++ b/src/ProfileAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\profile;
+ 
++use Drupal\profile\Entity\ProfileInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -40,7 +41,7 @@ class ProfileAccessControlHandler extends UncacheableEntityAccessControlHandler
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+     $result = parent::checkAccess($entity, $operation, $account);
+     if ($result->isAllowed()) {
+-      /** @var \Drupal\profile\Entity\ProfileInterface $entity */
++      /** @var ProfileInterface $entity */
+       $result = $result->andIf($this->checkRoleAccess($entity->getOwner(), $entity->bundle()));
+     }
+ 
+@@ -52,12 +53,12 @@ class ProfileAccessControlHandler extends UncacheableEntityAccessControlHandler
+    *
+    * If the profile type has no roles specified, the check will always pass.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account.
+    * @param string $profile_type_id
+    *   The profile type ID.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   The access result.
+    */
+   protected function checkRoleAccess(AccountInterface $account, $profile_type_id) {
+diff --git a/src/ProfileListBuilder.php b/src/ProfileListBuilder.php
+index a44a609..7106fd6 100644
+--- a/src/ProfileListBuilder.php
++++ b/src/ProfileListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\profile;
+ 
++use Drupal\profile\Entity\ProfileInterface;
+ use Drupal\Core\Datetime\DateFormatter;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+@@ -22,36 +23,36 @@ class ProfileListBuilder extends EntityListBuilder {
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The redirect destination service.
+    *
+-   * @var \Drupal\Core\Routing\RedirectDestinationInterface
++   * @var RedirectDestinationInterface
+    */
+   protected $redirectDestination;
+ 
+   /**
+    * Constructs a new ProfileListController object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Datetime\DateFormatter $date_formatter
++   * @param DateFormatter $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+-   * @param \Drupal\Core\Routing\RedirectDestinationInterface $redirect_destination
++   * @param RedirectDestinationInterface $redirect_destination
+    *   The redirect destination service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, DateFormatter $date_formatter, RendererInterface $renderer, RedirectDestinationInterface $redirect_destination) {
+@@ -109,7 +110,7 @@ class ProfileListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\profile\Entity\ProfileInterface $entity */
++    /** @var ProfileInterface $entity */
+     $langcode = $entity->language()->getId();
+     $uri = $entity->toUrl();
+     $options = $uri->getOptions();
+@@ -143,7 +144,7 @@ class ProfileListBuilder extends EntityListBuilder {
+       $operations[$key]['query'] = $destination;
+     }
+ 
+-    /** @var \Drupal\profile\Entity\ProfileInterface $entity */
++    /** @var ProfileInterface $entity */
+     if ($entity->access('update') && $entity->isPublished() && !$entity->isDefault()) {
+       $operations['set_default'] = [
+         'title' => $this->t('Mark as default'),
+diff --git a/src/ProfileStorageInterface.php b/src/ProfileStorageInterface.php
+index 31779c2..48bfa26 100644
+--- a/src/ProfileStorageInterface.php
++++ b/src/ProfileStorageInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\profile;
+ 
++use Drupal\profile\Entity\ProfileInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Session\AccountInterface;
+ 
+@@ -13,14 +14,14 @@ interface ProfileStorageInterface extends EntityStorageInterface {
+   /**
+    * Loads the given user's profiles.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user.
+    * @param string $profile_type_id
+    *   The profile type ID.
+    * @param bool $published
+    *   Whether to load published or unpublished profiles. Defaults to published.
+    *
+-   * @return \Drupal\profile\Entity\ProfileInterface[]
++   * @return ProfileInterface[]
+    *   The profiles, ordered by publishing status and ID, descending.
+    */
+   public function loadMultipleByUser(AccountInterface $account, string $profile_type_id, bool $published = TRUE);
+@@ -34,12 +35,12 @@ interface ProfileStorageInterface extends EntityStorageInterface {
+    * Primarily used for profile types which only allow a
+    * single profile per user.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user.
+    * @param string $profile_type_id
+    *   The profile type ID.
+    *
+-   * @return \Drupal\profile\Entity\ProfileInterface|null
++   * @return ProfileInterface|null
+    *   The profile. NULL if no matching entity was found.
+    */
+   public function loadByUser(AccountInterface $account, string $profile_type_id);
+@@ -47,12 +48,12 @@ interface ProfileStorageInterface extends EntityStorageInterface {
+   /**
+    * Loads the given user's default profile.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user.
+    * @param string $profile_type_id
+    *   The profile type ID.
+    *
+-   * @return \Drupal\profile\Entity\ProfileInterface|null
++   * @return ProfileInterface|null
+    *   The profile. NULL if no matching entity was found.
+    *
+    * @deprecated in profile:8.x-1.0 and is removed from
+diff --git a/src/ProfileTestTrait.php b/src/ProfileTestTrait.php
+index fb5f9ff..811830c 100644
+--- a/src/ProfileTestTrait.php
++++ b/src/ProfileTestTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\profile;
+ 
++use Drupal\profile\Entity\ProfileInterface;
+ use Drupal\profile\Entity\ProfileTypeInterface;
+ use Drupal\profile\Entity\ProfileType;
+ use Drupal\profile\Entity\Profile;
+@@ -26,7 +27,7 @@ trait ProfileTestTrait {
+    * @param array $roles
+    *   Array of user role machine names.
+    *
+-   * @return \Drupal\profile\Entity\ProfileTypeInterface
++   * @return ProfileTypeInterface
+    *   Returns a profile type entity.
+    */
+   protected function createProfileType($id = NULL, $label = NULL, $registration = FALSE, array $roles = []) {
+@@ -48,12 +49,12 @@ trait ProfileTestTrait {
+   /**
+    * Create a user, and optionally a profile.
+    *
+-   * @param \Drupal\profile\Entity\ProfileTypeInterface $profile_type
++   * @param ProfileTypeInterface $profile_type
+    *   A profile type for the created profile entity.
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user to create a profile.
+    *
+-   * @return \Drupal\profile\Entity\ProfileInterface
++   * @return ProfileInterface
+    *   A profile for a user.
+    */
+   protected function createProfile(ProfileTypeInterface $profile_type, UserInterface $user) {
+diff --git a/src/ProfileTypeListBuilder.php b/src/ProfileTypeListBuilder.php
+index 04f57f5..2b1dfbb 100644
+--- a/src/ProfileTypeListBuilder.php
++++ b/src/ProfileTypeListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\profile;
+ 
++use Drupal\profile\Entity\ProfileTypeInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityListBuilder;
+ 
+@@ -24,7 +25,7 @@ class ProfileTypeListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\profile\Entity\ProfileTypeInterface $entity */
++    /** @var ProfileTypeInterface $entity */
+     $row['type'] = $entity->toLink(NULL, 'edit-form');
+     $row['registration'] = $entity->getRegistration() ? $this->t('Yes') : $this->t('No');
+     $row['multiple'] = $entity->allowsMultiple() ? $this->t('Yes') : $this->t('No');
+diff --git a/tests/src/Functional/ProfileDefaultTest.php b/tests/src/Functional/ProfileDefaultTest.php
+index f098129..7040db2 100644
+--- a/tests/src/Functional/ProfileDefaultTest.php
++++ b/tests/src/Functional/ProfileDefaultTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\profile\Functional;
+ 
++use Drupal\profile\ProfileStorageInterface;
+ use Drupal\Core\Url;
+ use Drupal\profile\Entity\Profile;
+ 
+@@ -15,7 +16,7 @@ class ProfileDefaultTest extends ProfileTestBase {
+   /**
+    * Profile entity storage.
+    *
+-   * @var \Drupal\profile\ProfileStorageInterface
++   * @var ProfileStorageInterface
+    */
+   public $profileStorage;
+ 
+@@ -84,7 +85,7 @@ class ProfileDefaultTest extends ProfileTestBase {
+     $this->assertSession()->pageTextContains($field_label);
+     $edit = ["fields[{$id}_profiles][label]" => 'inline'];
+     $edit = ["fields[{$id}_profiles][type]" => 'entity_reference_entity_view'];
+-    $this->drupalPostForm(NULL, $edit, t('Save'));
++    $this->submitForm($edit, t('Save'));
+   }
+ 
+ }
+diff --git a/tests/src/Functional/ProfileFieldAccessTest.php b/tests/src/Functional/ProfileFieldAccessTest.php
+index f3a1c48..342f904 100644
+--- a/tests/src/Functional/ProfileFieldAccessTest.php
++++ b/tests/src/Functional/ProfileFieldAccessTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\profile\Functional;
+ 
++use Drupal\user\Entity\User;
++use Drupal\profile\ProfileStorageInterface;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+ 
+@@ -15,14 +17,14 @@ class ProfileFieldAccessTest extends ProfileTestBase {
+   /**
+    * A test user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $webUser;
+ 
+   /**
+    * A test user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $otherUser;
+ 
+@@ -96,7 +98,7 @@ class ProfileFieldAccessTest extends ProfileTestBase {
+     $this->assertSession()->buttonNotExists('Save and make default');
+     $this->submitForm($edit, 'Save');
+ 
+-    /** @var \Drupal\profile\ProfileStorageInterface $storage */
++    /** @var ProfileStorageInterface $storage */
+     $storage = $this->container->get('entity_type.manager')->getStorage('profile');
+     $web_user_profile = $storage->loadByUser($this->webUser, $this->type->id());
+ 
+diff --git a/tests/src/Functional/ProfileRegisterFormTest.php b/tests/src/Functional/ProfileRegisterFormTest.php
+index 2e671db..f57665e 100644
+--- a/tests/src/Functional/ProfileRegisterFormTest.php
++++ b/tests/src/Functional/ProfileRegisterFormTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\profile\Functional;
+ 
++use Drupal\profile\ProfileStorageInterface;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\user\UserInterface;
+@@ -56,7 +57,7 @@ class ProfileRegisterFormTest extends ProfileTestBase {
+     $new_user = user_load_by_name($name);
+     $this->assertTrue($new_user->isActive(), 'New account is active after registration.');
+ 
+-    /** @var \Drupal\profile\ProfileStorageInterface $storage */
++    /** @var ProfileStorageInterface $storage */
+     $storage = $this->container->get('entity_type.manager')->getStorage('profile');
+ 
+     // Verify that a new profile was created for the new user ID.
+diff --git a/tests/src/Functional/ProfileRevisionTest.php b/tests/src/Functional/ProfileRevisionTest.php
+index a54bd90..3fa99c5 100644
+--- a/tests/src/Functional/ProfileRevisionTest.php
++++ b/tests/src/Functional/ProfileRevisionTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\profile\Functional;
+ 
++use Drupal\profile\ProfileStorageInterface;
+ use Drupal\Core\Entity\Entity\EntityFormDisplay;
+ use Drupal\Core\Entity\Entity\EntityViewDisplay;
+ use Drupal\Core\Url;
+@@ -18,7 +19,7 @@ class ProfileRevisionTest extends ProfileTestBase {
+   /**
+    * Testing profile type that uses revisions.
+    *
+-   * @var \Drupal\profile\Entity\ProfileType
++   * @var ProfileType
+    */
+   protected $useRevisionsType;
+ 
+@@ -81,7 +82,7 @@ class ProfileRevisionTest extends ProfileTestBase {
+    * Tests revision handling.
+    */
+   public function testProfileRevisions() {
+-    /** @var \Drupal\profile\ProfileStorageInterface $storage */
++    /** @var ProfileStorageInterface $storage */
+     $storage = $this->container->get('entity_type.manager')->getStorage('profile');
+ 
+     $user = $this->createUser([
+diff --git a/tests/src/Functional/ProfileTestBase.php b/tests/src/Functional/ProfileTestBase.php
+index df23968..ba2319e 100644
+--- a/tests/src/Functional/ProfileTestBase.php
++++ b/tests/src/Functional/ProfileTestBase.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\profile\Functional;
+ 
++use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
++use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
++use Drupal\Core\Field\FieldConfigInterface;
++use Drupal\user\Entity\User;
+ use Drupal\Core\Entity\Entity\EntityFormDisplay;
+ use Drupal\Core\Entity\Entity\EntityViewDisplay;
+ use Drupal\field\Entity\FieldConfig;
+@@ -25,35 +29,35 @@ abstract class ProfileTestBase extends BrowserTestBase {
+   /**
+    * Testing profile type entity.
+    *
+-   * @var \Drupal\profile\Entity\ProfileType
++   * @var ProfileType
+    */
+   protected $type;
+ 
+   /**
+    * Testing profile type entity view display.
+    *
+-   * @var \Drupal\Core\Entity\Display\EntityViewDisplayInterface
++   * @var EntityViewDisplayInterface
+    */
+   protected $display;
+ 
+   /**
+    * Testing profile type entity form display.
+    *
+-   * @var \Drupal\Core\Entity\Display\EntityFormDisplayInterface
++   * @var EntityFormDisplayInterface
+    */
+   protected $form;
+ 
+   /**
+    * Testing field on profile type.
+    *
+-   * @var \Drupal\Core\Field\FieldConfigInterface
++   * @var FieldConfigInterface
+    */
+   protected $field;
+ 
+   /**
+    * Testing admin user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $adminUser;
+ 
+diff --git a/tests/src/Functional/UserTest.php b/tests/src/Functional/UserTest.php
+index bf6b212..d2b2489 100644
+--- a/tests/src/Functional/UserTest.php
++++ b/tests/src/Functional/UserTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\profile\Functional;
+ 
++use Drupal\profile\ProfileStorageInterface;
+ use Drupal\Core\Url;
+ use Drupal\profile\Entity\Profile;
+ use Drupal\user\Entity\User;
+@@ -17,7 +18,7 @@ class UserTest extends ProfileTestBase {
+    * Tests the user pages with a "single" profile type.
+    */
+   public function testSingle() {
+-    /** @var \Drupal\profile\ProfileStorageInterface $profile_storage */
++    /** @var ProfileStorageInterface $profile_storage */
+     $profile_storage = $this->container->get('entity_type.manager')->getStorage('profile');
+     $first_user = $this->createUser(['view own test profile']);
+     $second_user = $this->createUser([
+@@ -88,7 +89,7 @@ class UserTest extends ProfileTestBase {
+   public function testMultiple() {
+     $this->type->setMultiple(TRUE);
+     $this->type->save();
+-    /** @var \Drupal\profile\ProfileStorageInterface $profile_storage */
++    /** @var ProfileStorageInterface $profile_storage */
+     $profile_storage = $this->container->get('entity_type.manager')->getStorage('profile');
+     $user = $this->createUser([
+       'create test profile',
+diff --git a/tests/src/Kernel/ProfileRoleAccessTest.php b/tests/src/Kernel/ProfileRoleAccessTest.php
+index 7b7d3a1..6419436 100644
+--- a/tests/src/Kernel/ProfileRoleAccessTest.php
++++ b/tests/src/Kernel/ProfileRoleAccessTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\profile\Kernel;
+ 
++use Drupal\profile\Entity\ProfileType;
++use Drupal\profile\ProfileAccessControlHandler;
++use Drupal\Core\Access\AccessManagerInterface;
+ use Drupal\KernelTests\Core\Entity\EntityKernelTestBase;
+ use Drupal\profile\ProfileTestTrait;
+ use Drupal\user\Entity\Role;
+@@ -31,7 +34,7 @@ class ProfileRoleAccessTest extends EntityKernelTestBase {
+    *
+    * No roles.
+    *
+-   * @var \Drupal\profile\Entity\ProfileType
++   * @var ProfileType
+    */
+   protected $type1;
+ 
+@@ -40,7 +43,7 @@ class ProfileRoleAccessTest extends EntityKernelTestBase {
+    *
+    * Requires some, but not all roles.
+    *
+-   * @var \Drupal\profile\Entity\ProfileType
++   * @var ProfileType
+    */
+   protected $type2;
+ 
+@@ -49,35 +52,35 @@ class ProfileRoleAccessTest extends EntityKernelTestBase {
+    *
+    * Requires all profile roles.
+    *
+-   * @var \Drupal\profile\Entity\ProfileType
++   * @var ProfileType
+    */
+   protected $type3;
+ 
+   /**
+    * Randomly generated user role entity.
+    *
+-   * @var \Drupal\user\Entity\Role
++   * @var Role
+    */
+   protected $role1;
+ 
+   /**
+    * Randomly generated user role entity.
+    *
+-   * @var \Drupal\user\Entity\Role
++   * @var Role
+    */
+   protected $role2;
+ 
+   /**
+    * The profile access handler.
+    *
+-   * @var \Drupal\profile\ProfileAccessControlHandler
++   * @var ProfileAccessControlHandler
+    */
+   protected $accessHandler;
+ 
+   /**
+    * The access manager.
+    *
+-   * @var \Drupal\Core\Access\AccessManagerInterface
++   * @var AccessManagerInterface
+    */
+   protected $accessManager;
+ 
+diff --git a/tests/src/Kernel/ProfileTest.php b/tests/src/Kernel/ProfileTest.php
+index 9f000d0..5c43454 100644
+--- a/tests/src/Kernel/ProfileTest.php
++++ b/tests/src/Kernel/ProfileTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\profile\Kernel;
+ 
++use Drupal\user\UserInterface;
++use Drupal\profile\ProfileStorageInterface;
++use Drupal\profile\Entity\ProfileTypeInterface;
++use Drupal\profile\Entity\ProfileInterface;
+ use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+@@ -30,21 +34,21 @@ class ProfileTest extends EntityKernelTestBase {
+   /**
+    * Testing demo user 1.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   public $user1;
+ 
+   /**
+    * Testing demo user 2.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   public $user2;
+ 
+   /**
+    * Profile entity storage.
+    *
+-   * @var \Drupal\profile\ProfileStorageInterface
++   * @var ProfileStorageInterface
+    */
+   public $profileStorage;
+ 
+@@ -72,7 +76,7 @@ class ProfileTest extends EntityKernelTestBase {
+       'profile_type_0' => ['label' => $this->randomMachineName()],
+       'profile_type_1' => ['label' => $this->randomMachineName()],
+     ];
+-    /** @var \Drupal\profile\Entity\ProfileTypeInterface[] $types */
++    /** @var ProfileTypeInterface[] $types */
+     $types = [];
+     foreach ($types_data as $id => $values) {
+       $types[$id] = ProfileType::create(['id' => $id] + $values);
+@@ -80,7 +84,7 @@ class ProfileTest extends EntityKernelTestBase {
+     }
+ 
+     // Create a new profile.
+-    /** @var \Drupal\profile\Entity\ProfileInterface $profile */
++    /** @var ProfileInterface $profile */
+     $profile = $this->profileStorage->create([
+       'type' => $types['profile_type_0']->id(),
+     ]);
+@@ -269,7 +273,7 @@ class ProfileTest extends EntityKernelTestBase {
+     ]);
+     $profile_type->save();
+ 
+-    /** @var \Drupal\profile\Entity\ProfileInterface $profile1 */
++    /** @var ProfileInterface $profile1 */
+     $profile1 = Profile::create([
+       'type' => $profile_type->id(),
+       'uid' => $this->user1->id(),
+@@ -278,7 +282,7 @@ class ProfileTest extends EntityKernelTestBase {
+     // Confirm that the profile was set as default.
+     $this->assertTrue($profile1->isDefault());
+ 
+-    /** @var \Drupal\profile\Entity\ProfileInterface $profile2 */
++    /** @var ProfileInterface $profile2 */
+     $profile2 = Profile::create([
+       'type' => $profile_type->id(),
+       'uid' => $this->user1->id(),
+@@ -330,7 +334,7 @@ class ProfileTest extends EntityKernelTestBase {
+     $field->save();
+ 
+     // Create new profiles.
+-    /** @var \Drupal\profile\Entity\Profile $profile1 */
++    /** @var Profile $profile1 */
+     $profile1 = Profile::create([
+       'type' => $profile_type->id(),
+       'uid' => $this->user1->id(),
+@@ -353,7 +357,7 @@ class ProfileTest extends EntityKernelTestBase {
+     $profile_type->save();
+ 
+     // Create new profiles.
+-    /** @var \Drupal\profile\Entity\Profile $profile2 */
++    /** @var Profile $profile2 */
+     $profile2 = Profile::create([
+       'type' => $profile_type->id(),
+       'uid' => $this->user1->id(),
+diff --git a/tests/src/Kernel/ProfileTokenTest.php b/tests/src/Kernel/ProfileTokenTest.php
+index 9447a47..9fbf356 100644
+--- a/tests/src/Kernel/ProfileTokenTest.php
++++ b/tests/src/Kernel/ProfileTokenTest.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\Tests\profile\Kernel;
+ 
++use Drupal\user\UserInterface;
++use Drupal\profile\ProfileStorageInterface;
++use Drupal\Core\Entity\EntityViewBuilderInterface;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Core\Render\RendererInterface;
+ use Drupal\profile\Entity\Profile;
+ use Drupal\profile\Entity\ProfileType;
+ use Drupal\field\Entity\FieldStorageConfig;
+@@ -30,21 +35,21 @@ class ProfileTokenTest extends EntityKernelTestBase {
+   /**
+    * The user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+   /**
+    * The profile storage.
+    *
+-   * @var \Drupal\profile\ProfileStorageInterface
++   * @var ProfileStorageInterface
+    */
+   protected $profileStorage;
+ 
+   /**
+    * The entity view builder.
+    *
+-   * @var \Drupal\Core\Entity\EntityViewBuilderInterface
++   * @var EntityViewBuilderInterface
+    */
+   protected $viewBuilder;
+ 
+@@ -57,7 +62,7 @@ class ProfileTokenTest extends EntityKernelTestBase {
+     $this->installEntitySchema('view');
+     $this->installSchema('user', ['users_data']);
+     $this->installConfig(self::$modules);
+-    /** @var \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager */
++    /** @var EntityTypeManagerInterface $entity_type_manager */
+     $entity_type_manager = $this->container->get('entity_type.manager');
+     $this->profileStorage = $entity_type_manager->getStorage('profile');
+     $this->viewBuilder = $entity_type_manager->getViewBuilder('profile');
+@@ -89,7 +94,7 @@ class ProfileTokenTest extends EntityKernelTestBase {
+     $field->save();
+ 
+     // Create new profiles.
+-    /** @var \Drupal\profile\Entity\Profile $profile1 */
++    /** @var Profile $profile1 */
+     $profile = Profile::create([
+       'type' => $profile_type->id(),
+       'uid' => $this->user->id(),
+@@ -112,7 +117,7 @@ class ProfileTokenTest extends EntityKernelTestBase {
+     // it can be compared to the token output.
+     $entity_type_manager = \Drupal::entityTypeManager();
+ 
+-    /** @var \Drupal\Core\Entity\EntityViewBuilderInterface $view_builder */
++    /** @var EntityViewBuilderInterface $view_builder */
+     $view_builder = $entity_type_manager->getViewBuilder('profile');
+     $entity_view = $view_builder->view($profile, 'token');
+     $field_view = $view_builder->viewField($profile->get('profile_fullname'));
+@@ -120,7 +125,7 @@ class ProfileTokenTest extends EntityKernelTestBase {
+     // Add the pre_render method to match the rendered output of a field token.
+     $field_output['#pre_render'][] = '\Drupal\token\TokenFieldRender::preRender';
+ 
+-    /** @var \Drupal\Core\Render\RendererInterface $renderer */
++    /** @var RendererInterface $renderer */
+     $renderer = \Drupal::service('renderer');
+     $rendered_field = $renderer->renderPlain($field_view);
+     $rendered_entity = $renderer->renderRoot($entity_view);
+diff --git a/tests/src/Kernel/ProfileViewTest.php b/tests/src/Kernel/ProfileViewTest.php
+index 4212c95..e192b6b 100644
+--- a/tests/src/Kernel/ProfileViewTest.php
++++ b/tests/src/Kernel/ProfileViewTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\profile\Kernel;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\profile\ProfileTestTrait;
+ use Drupal\Tests\views\Kernel\ViewsKernelTestBase;
+ use Drupal\user\Entity\User;
+@@ -96,7 +97,7 @@ class ProfileViewTest extends ViewsKernelTestBase {
+   /**
+    * Create a user, and optionally a profile.
+    *
+-   * @return \Drupal\user\UserInterface
++   * @return UserInterface
+    *   A newly created user.
+    */
+   protected function createUser() {

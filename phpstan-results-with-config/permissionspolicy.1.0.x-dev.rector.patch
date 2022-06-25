@@ -1,0 +1,296 @@
+diff --git a/composer.json b/composer.json
+index 455fdbf..006be64 100644
+--- a/composer.json
++++ b/composer.json
+@@ -12,7 +12,7 @@
+     },
+     "require": {
+         "php": "^7.3 || ^8.0",
+-        "drupal/core": "^8.9 || ^9",
+-        "gapple/structured-fields": "^1.0"
++        "gapple/structured-fields": "^1.0",
++        "drupal/core": "^8.9 || ^9 || ^10"
+     }
+ }
+diff --git a/permissionspolicy.info.yml b/permissionspolicy.info.yml
+index a1a9d4c..0facaee 100644
+--- a/permissionspolicy.info.yml
++++ b/permissionspolicy.info.yml
+@@ -1,5 +1,5 @@
+ name: Permissions Policy
+ type: module
+ description: Provide Permissions-Policy header
+-core_version_requirement: ^8.9 || ^9
++core_version_requirement: ^8.9 || ^9 || ^10
+ configure: permissionspolicy.settings
+diff --git a/src/Event/PolicyAlterEvent.php b/src/Event/PolicyAlterEvent.php
+index b1a99e0..f954e6b 100644
+--- a/src/Event/PolicyAlterEvent.php
++++ b/src/Event/PolicyAlterEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\permissionspolicy\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\permissionspolicy\PermissionsPolicy;
+-use Symfony\Component\EventDispatcher\Event;
+ use Symfony\Component\HttpFoundation\Response;
+ 
+ /**
+@@ -14,23 +14,23 @@ class PolicyAlterEvent extends Event {
+   /**
+    * A Permissions policy.
+    *
+-   * @var \Drupal\permissionspolicy\PermissionsPolicy
++   * @var PermissionsPolicy
+    */
+   private $policy;
+ 
+   /**
+    * The Response the policy is being applied to.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Response
++   * @var Response
+    */
+   private $response;
+ 
+   /**
+    * Create a new PolicyAlterEvent instance.
+    *
+-   * @param \Drupal\permissionspolicy\PermissionsPolicy $policy
++   * @param PermissionsPolicy $policy
+    *   A Permissions policy.
+-   * @param \Symfony\Component\HttpFoundation\Response $response
++   * @param Response $response
+    *   The Response the policy is being applied to.
+    */
+   public function __construct(PermissionsPolicy $policy, Response $response) {
+@@ -41,7 +41,7 @@ class PolicyAlterEvent extends Event {
+   /**
+    * Retrieve the defined Permissions policy.
+    *
+-   * @return \Drupal\permissionspolicy\PermissionsPolicy
++   * @return PermissionsPolicy
+    *   The Permissions policy.
+    */
+   public function getPolicy(): PermissionsPolicy {
+@@ -51,7 +51,7 @@ class PolicyAlterEvent extends Event {
+   /**
+    * Retrieve the Response the policy is applied to.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   The Response the policy is applied to.
+    */
+   public function getResponse(): Response {
+diff --git a/src/EventSubscriber/ResponseSubscriber.php b/src/EventSubscriber/ResponseSubscriber.php
+index 6817f4a..81c8f79 100644
+--- a/src/EventSubscriber/ResponseSubscriber.php
++++ b/src/EventSubscriber/ResponseSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\permissionspolicy\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\ResponseEvent;
+ use Drupal\Core\Cache\CacheableResponseInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\permissionspolicy\Event\PolicyAlterEvent;
+@@ -9,7 +10,6 @@ use Drupal\permissionspolicy\PermissionsPolicy;
+ use Drupal\permissionspolicy\PermissionsPolicyEvents;
+ use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+-use Symfony\Component\HttpKernel\Event\FilterResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -20,23 +20,23 @@ class ResponseSubscriber implements EventSubscriberInterface {
+   /**
+    * The Config Factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The Event Dispatcher service.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Constructs a new ResponseSubscriber object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   Config Factory service.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $eventDispatcher
++   * @param EventDispatcherInterface $eventDispatcher
+    *   Event Dispatcher service.
+    */
+   public function __construct(
+@@ -58,10 +58,10 @@ class ResponseSubscriber implements EventSubscriberInterface {
+   /**
+    * Add Permissions-Policy header to response.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\FilterResponseEvent $event
++   * @param ResponseEvent $event
+    *   The Response event.
+    */
+-  public function onKernelResponse(FilterResponseEvent $event) {
++  public function onKernelResponse(ResponseEvent $event) {
+     if (!$event->isMasterRequest()) {
+       return;
+     }
+@@ -108,8 +108,8 @@ class ResponseSubscriber implements EventSubscriberInterface {
+       }
+ 
+       $this->eventDispatcher->dispatch(
+-        PermissionsPolicyEvents::POLICY_ALTER,
+-        new PolicyAlterEvent($policy, $response)
++        new PolicyAlterEvent($policy, $response),
++        PermissionsPolicyEvents::POLICY_ALTER
+       );
+ 
+       if (($headerValue = $policy->getHeaderValue())) {
+diff --git a/tests/src/Unit/EventSubscriber/ResponseSubscriberTest.php b/tests/src/Unit/EventSubscriber/ResponseSubscriberTest.php
+index e962b78..cb2d3e2 100644
+--- a/tests/src/Unit/EventSubscriber/ResponseSubscriberTest.php
++++ b/tests/src/Unit/EventSubscriber/ResponseSubscriberTest.php
+@@ -2,13 +2,16 @@
+ 
+ namespace Drupal\Tests\permissionspolicy\Unit\EventSubscriber;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
++use Symfony\Component\HttpKernel\Event\ResponseEvent;
++use Symfony\Component\EventDispatcher\EventDispatcherInterface;
++use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Cache\CacheableMetadata;
+ use Drupal\Core\Render\HtmlResponse;
+ use Drupal\Tests\UnitTestCase;
+ use Drupal\permissionspolicy\EventSubscriber\ResponseSubscriber;
+ use Symfony\Component\EventDispatcher\EventDispatcher;
+ use Symfony\Component\HttpFoundation\ResponseHeaderBag;
+-use Symfony\Component\HttpKernel\Event\FilterResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -20,21 +23,21 @@ class ResponseSubscriberTest extends UnitTestCase {
+   /**
+    * Mock HTTP Response.
+    *
+-   * @var \Drupal\Core\Render\HtmlResponse|\PHPUnit_Framework_MockObject_MockObject
++   * @var HtmlResponse|MockObject
+    */
+   protected $response;
+ 
+   /**
+    * Mock Response Event.
+    *
+-   * @var \Symfony\Component\HttpKernel\Event\FilterResponseEvent|\PHPUnit_Framework_MockObject_MockObject
++   * @var ResponseEvent|MockObject
+    */
+   protected $event;
+ 
+   /**
+    * The Event Dispatcher Service.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject|\Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var MockObject|EventDispatcherInterface
+    */
+   private $eventDispatcher;
+ 
+@@ -44,21 +47,14 @@ class ResponseSubscriberTest extends UnitTestCase {
+   public function setUp(): void {
+     parent::setUp();
+ 
+-    $this->response = $this->getMockBuilder(HtmlResponse::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
+-    $this->response->headers = $this->getMockBuilder(ResponseHeaderBag::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
+-    $responseCacheableMetadata = $this->getMockBuilder(CacheableMetadata::class)
+-      ->getMock();
++    $this->response = $this->createMock(HtmlResponse::class);
++    $this->response->headers = $this->createMock(ResponseHeaderBag::class);
++    $responseCacheableMetadata = $this->createMock(CacheableMetadata::class);
+     $this->response->method('getCacheableMetadata')
+       ->willReturn($responseCacheableMetadata);
+ 
+-    /** @var \Symfony\Component\HttpKernel\Event\FilterResponseEvent|\PHPUnit_Framework_MockObject_MockObject $event */
+-    $this->event = $this->getMockBuilder(FilterResponseEvent::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    /** @var ResponseEvent|MockObject $event */
++    $this->event = $this->createMock(ResponseEvent::class);
+     $this->event->expects($this->any())
+       ->method('isMasterRequest')
+       ->willReturn(TRUE);
+@@ -66,9 +62,7 @@ class ResponseSubscriberTest extends UnitTestCase {
+       ->method('getResponse')
+       ->willReturn($this->response);
+ 
+-    $this->eventDispatcher = $this->getMockBuilder(EventDispatcher::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->eventDispatcher = $this->createMock(EventDispatcher::class);
+   }
+ 
+   /**
+@@ -86,7 +80,7 @@ class ResponseSubscriberTest extends UnitTestCase {
+    * @covers ::onKernelResponse
+    */
+   public function testEmptyPolicy() {
+-    /** @var \Drupal\Core\Config\ConfigFactoryInterface|\PHPUnit_Framework_MockObject_MockObject $configFactory */
++    /** @var ConfigFactoryInterface|MockObject $configFactory */
+     $configFactory = $this->getConfigFactoryStub([
+       'permissionspolicy.settings' => [
+         'enforce' => [
+@@ -114,7 +108,7 @@ class ResponseSubscriberTest extends UnitTestCase {
+    */
+   public function testDisabledPolicy() {
+ 
+-    /** @var \Drupal\Core\Config\ConfigFactoryInterface|\PHPUnit_Framework_MockObject_MockObject $configFactory */
++    /** @var ConfigFactoryInterface|MockObject $configFactory */
+     $configFactory = $this->getConfigFactoryStub([
+       'permissionspolicy.settings' => [
+         'enforce' => [
+@@ -147,7 +141,7 @@ class ResponseSubscriberTest extends UnitTestCase {
+    */
+   public function testSingleDirective() {
+ 
+-    /** @var \Drupal\Core\Config\ConfigFactoryInterface|\PHPUnit_Framework_MockObject_MockObject $configFactory */
++    /** @var ConfigFactoryInterface|MockObject $configFactory */
+     $configFactory = $this->getConfigFactoryStub([
+       'permissionspolicy.settings' => [
+         'enforce' => [
+@@ -180,7 +174,7 @@ class ResponseSubscriberTest extends UnitTestCase {
+    */
+   public function testMultipleDirectives() {
+ 
+-    /** @var \Drupal\Core\Config\ConfigFactoryInterface|\PHPUnit_Framework_MockObject_MockObject $configFactory */
++    /** @var ConfigFactoryInterface|MockObject $configFactory */
+     $configFactory = $this->getConfigFactoryStub([
+       'permissionspolicy.settings' => [
+         'enforce' => [
+@@ -216,7 +210,7 @@ class ResponseSubscriberTest extends UnitTestCase {
+    */
+   public function testOverrideWhenEmpty() {
+ 
+-    /** @var \Drupal\Core\Config\ConfigFactoryInterface|\PHPUnit_Framework_MockObject_MockObject $configFactory */
++    /** @var ConfigFactoryInterface|MockObject $configFactory */
+     $configFactory = $this->getConfigFactoryStub([
+       'permissionspolicy.settings' => [
+         'enforce' => [
+@@ -252,7 +246,7 @@ class ResponseSubscriberTest extends UnitTestCase {
+    */
+   public function testNoOverrideWhenDisabled() {
+ 
+-    /** @var \Drupal\Core\Config\ConfigFactoryInterface|\PHPUnit_Framework_MockObject_MockObject $configFactory */
++    /** @var ConfigFactoryInterface|MockObject $configFactory */
+     $configFactory = $this->getConfigFactoryStub([
+       'permissionspolicy.settings' => [
+         'enforce' => [

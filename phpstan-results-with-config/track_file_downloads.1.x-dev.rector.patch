@@ -1,0 +1,212 @@
+diff --git a/src/Controller/TrackingFileDownloadController.php b/src/Controller/TrackingFileDownloadController.php
+index d85bd57..ac02d5a 100644
+--- a/src/Controller/TrackingFileDownloadController.php
++++ b/src/Controller/TrackingFileDownloadController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\track_file_downloads\Controller;
+ 
++use Drupal\track_file_downloads\Entity\FileTracker;
+ use Drupal\system\FileDownloadController;
+ use Symfony\Component\HttpFoundation\Request;
+ 
+@@ -49,7 +50,7 @@ class TrackingFileDownloadController extends FileDownloadController {
+     // Find the related tracking entity.
+     $tracker_storage = $this->entityTypeManager()->getStorage('file_tracker');
+     $entities = $tracker_storage->loadByProperties(['file__target_id' => $file->id()]);
+-    /** @var \Drupal\track_file_downloads\Entity\FileTracker $tracker */
++    /** @var FileTracker $tracker */
+     if (!$tracker = reset($entities)) {
+       return;
+     }
+diff --git a/src/Entity/FileTrackerInterface.php b/src/Entity/FileTrackerInterface.php
+index 797ddb2..be49db8 100644
+--- a/src/Entity/FileTrackerInterface.php
++++ b/src/Entity/FileTrackerInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\track_file_downloads\Entity;
+ 
++use Drupal\file\FileInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ 
+ /**
+@@ -31,7 +32,7 @@ interface FileTrackerInterface extends ContentEntityInterface {
+   /**
+    * Gets the file if one exists.
+    *
+-   * @return \Drupal\file\FileInterface
++   * @return FileInterface
+    *   The file this entity is tracking.
+    */
+   public function getFile();
+diff --git a/src/EventSubscriber/RouteAlterSubscriber.php b/src/EventSubscriber/RouteAlterSubscriber.php
+index 082189c..d43a562 100644
+--- a/src/EventSubscriber/RouteAlterSubscriber.php
++++ b/src/EventSubscriber/RouteAlterSubscriber.php
+@@ -14,7 +14,7 @@ class RouteAlterSubscriber implements EventSubscriberInterface {
+   /**
+    * Alter the system file routes so we can track downloads.
+    *
+-   * @param \Drupal\Core\Routing\RouteBuildEvent $event
++   * @param RouteBuildEvent $event
+    *   The event to process.
+    */
+   public function onRoutingAlter(RouteBuildEvent $event) {
+diff --git a/src/FileTrackerAccessControlHandler.php b/src/FileTrackerAccessControlHandler.php
+index 643a549..c03d32b 100644
+--- a/src/FileTrackerAccessControlHandler.php
++++ b/src/FileTrackerAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\track_file_downloads;
+ 
++use Drupal\track_file_downloads\Entity\FileTrackerInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -20,7 +21,7 @@ class FileTrackerAccessControlHandler extends EntityAccessControlHandler {
+       return AccessResult::allowed();
+     }
+ 
+-    /** @var \Drupal\track_file_downloads\Entity\FileTrackerInterface $entity */
++    /** @var FileTrackerInterface $entity */
+     switch ($operation) {
+       case 'view':
+         return AccessResult::allowedIfHasPermission($account, 'view file tracker entities');
+diff --git a/src/FileTrackerFileUsage.php b/src/FileTrackerFileUsage.php
+index 0e1693a..2bb8aec 100644
+--- a/src/FileTrackerFileUsage.php
++++ b/src/FileTrackerFileUsage.php
+@@ -15,7 +15,7 @@ class FileTrackerFileUsage extends DatabaseFileUsageBackend {
+   /**
+    * The parent service we are decorating.
+    *
+-   * @var \Drupal\file\FileUsage\DatabaseFileUsageBackend
++   * @var DatabaseFileUsageBackend
+    */
+   protected $parentService;
+ 
+diff --git a/src/FileTrackerHtmlRouteProvider.php b/src/FileTrackerHtmlRouteProvider.php
+index 8eb16ac..d602d27 100644
+--- a/src/FileTrackerHtmlRouteProvider.php
++++ b/src/FileTrackerHtmlRouteProvider.php
+@@ -32,10 +32,10 @@ class FileTrackerHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the collection route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getCollectionRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/FileTrackerListBuilder.php b/src/FileTrackerListBuilder.php
+index 7e36627..fdd4e8c 100644
+--- a/src/FileTrackerListBuilder.php
++++ b/src/FileTrackerListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\track_file_downloads;
+ 
++use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ 
+@@ -28,7 +29,7 @@ class FileTrackerListBuilder extends EntityListBuilder {
+     /* @var $entity \Drupal\track_file_downloads\Entity\FileTracker */
+     $row['file'] = $entity->getFile()->label();
+     $row['downloads'] = $entity->getDownloadCount();
+-    /** @var \Drupal\Core\Datetime\DateFormatterInterface $date_formatter */
++    /** @var DateFormatterInterface $date_formatter */
+     $date_formatter = \Drupal::service('date.formatter');
+     $row['last_download_date'] = $date_formatter->format($entity->getLastDownloadedDate());
+     return $row;
+diff --git a/tests/src/Functional/TrackFileDownloadsFunctionalTest.php b/tests/src/Functional/TrackFileDownloadsFunctionalTest.php
+index 2d35b36..5f1afdf 100644
+--- a/tests/src/Functional/TrackFileDownloadsFunctionalTest.php
++++ b/tests/src/Functional/TrackFileDownloadsFunctionalTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\track_file_downloads\Functional;
+ 
++use Drupal\file\FileInterface;
++use Drupal\user\UserInterface;
++use Drupal\track_file_downloads\Entity\FileTrackerInterface;
+ use Drupal\Core\Url;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+@@ -29,14 +32,14 @@ class TrackFileDownloadsFunctionalTest extends BrowserTestBase {
+   /**
+    * The test file.
+    *
+-   * @var \Drupal\file\FileInterface
++   * @var FileInterface
+    */
+   protected $file;
+ 
+   /**
+    * The user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+@@ -85,10 +88,10 @@ class TrackFileDownloadsFunctionalTest extends BrowserTestBase {
+     $usage = \Drupal::service('file.usage')->listUsage($this->file);
+     $this->assertArrayNotHasKey('file_tracker', $usage['file']);
+     $this->assertNotEmpty($usage['file']['node']);
+-    /** @var \Drupal\track_file_downloads\Entity\FileTrackerInterface $tracker */
++    /** @var FileTrackerInterface $tracker */
+     $tracker = reset($entities);
+     $this->assertDownloadCount(0, $tracker->id());
+-    $url = Url::fromUri(file_create_url($tracker->getFile()->getFileUri()));
++    $url = \Drupal::service('file_url_generator')->generate($tracker->getFile()->getFileUri());
+     $this->drupalGet($url);
+     $this->assertDownloadCount(1, $tracker->id());
+     $this->grantPermissions(Role::load(RoleInterface::AUTHENTICATED_ID), ['skip file tracking']);
+@@ -107,7 +110,7 @@ class TrackFileDownloadsFunctionalTest extends BrowserTestBase {
+   protected function assertDownloadCount($count, $entity_id) {
+     $storage = \Drupal::entityTypeManager()->getStorage('file_tracker');
+     $storage->resetCache([$entity_id]);
+-    /** @var \Drupal\track_file_downloads\Entity\FileTrackerInterface $tracker */
++    /** @var FileTrackerInterface $tracker */
+     $tracker = $storage->load($entity_id);
+     $this->assertEquals($count, $tracker->getDownloadCount());
+   }
+diff --git a/track_file_downloads.info.yml b/track_file_downloads.info.yml
+index 4aef3b6..355e34b 100644
+--- a/track_file_downloads.info.yml
++++ b/track_file_downloads.info.yml
+@@ -1,6 +1,6 @@
+ name: Track File Downloads
+ type: module
+ description: Tracks private file downloads.
+-core_version_requirement: ^9
++core_version_requirement: ^9.3 || ^10
+ dependencies:
+   - drupal:file
+diff --git a/track_file_downloads.module b/track_file_downloads.module
+index 4d48eb1..833766c 100644
+--- a/track_file_downloads.module
++++ b/track_file_downloads.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\file\FileInterface;
+ /**
+  * @file
+  * Module file for track_file_downloads.
+@@ -11,7 +12,7 @@ use Drupal\Core\Entity\EntityInterface;
+  * Implements hook_ENTITY_TYPE_insert().
+  */
+ function track_file_downloads_file_insert(EntityInterface $entity) {
+-  /** @var \Drupal\file\FileInterface $entity */
++  /** @var FileInterface $entity */
+   if (\Drupal::service('stream_wrapper_manager')->getScheme($entity->getFileUri()) !== 'private') {
+     return;
+   }

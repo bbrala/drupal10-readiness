@@ -1,0 +1,1179 @@
+diff --git a/simple_survey.module b/simple_survey.module
+index 10983c6..adec31c 100644
+--- a/simple_survey.module
++++ b/simple_survey.module
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\simple_survey\Service\SurveyState;
++use Drupal\simple_survey\Service\BigQueryConnect;
++use Drupal\Core\Datetime\DateFormatterInterface;
++use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\Link;
+ use Drupal\Core\Routing\RouteMatchInterface;
+ use Drupal\Core\Url;
+@@ -117,7 +121,7 @@ function simple_survey_cron() {
+ }
+ 
+ function simple_survey_queue_bq_submissions() {
+-  /** @var \Drupal\simple_survey\Service\SurveyState $surveyState */
++  /** @var SurveyState $surveyState */
+   $surveyState = \Drupal::service('simple_survey.survey_state');
+   $queueFactory = \Drupal::service('queue');
+   $entityTypeManager = \Drupal::entityTypeManager();
+@@ -129,7 +133,7 @@ function simple_survey_queue_bq_submissions() {
+     return;
+   }
+ 
+-  /** @var \Drupal\simple_survey\Service\BigQueryConnect $bigQuery */
++  /** @var BigQueryConnect $bigQuery */
+   $bigQuery = \Drupal::service('simple_survey.big_query');
+ 
+   foreach ($surveys as $survey) {
+@@ -174,9 +178,9 @@ function simple_survey_queue_bq_submissions() {
+  * Implements hook_page_attachments().
+  */
+ function simple_survey_page_attachments(array &$attachments) {
+-  /** @var \Drupal\Core\Datetime\DateFormatterInterface $dateFormatter */
++  /** @var DateFormatterInterface $dateFormatter */
+   $dateFormatter = \Drupal::service('date.formatter');
+-  /** @var \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler */
++  /** @var ModuleHandlerInterface $moduleHandler */
+   $moduleHandler = \Drupal::service('module_handler');
+ 
+   if (!\Drupal::service('router.admin_context')->isAdminRoute()) {
+diff --git a/src/Controller/BigQueryController.php b/src/Controller/BigQueryController.php
+index eed048c..d7bc827 100644
+--- a/src/Controller/BigQueryController.php
++++ b/src/Controller/BigQueryController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\simple_survey\Controller;
+ 
++use Drupal\simple_survey\Service\SurveyState;
++use Symfony\Component\HttpFoundation\Response;
+ use Drupal\Core\Controller\ControllerBase;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Database\Connection;
+@@ -28,20 +30,20 @@ class BigQueryController extends ControllerBase {
+   /**
+    * File System service.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * Simple Survery Controller constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The Drupal file system service.
+    */
+   public function __construct(
+     Connection $connection) {
+     $this->database = $connection;
+-    $this->modulePath = drupal_get_path('module', $this->moduleName);
++    $this->modulePath = \Drupal::service('extension.list.module')->getPath($this->moduleName);
+   }
+ 
+   /**
+@@ -73,7 +75,7 @@ class BigQueryController extends ControllerBase {
+         ':survey' => $results['survey'],
+       ]);
+ 
+-      /** @var \Drupal\simple_survey\Service\SurveyState $state */
++      /** @var SurveyState $state */
+       $state = \Drupal::service('simple_survey.survey_state');
+ 
+       $state->setLastExported($results['survey']);
+@@ -95,7 +97,7 @@ class BigQueryController extends ControllerBase {
+   /**
+    * Manual submission to BigQuery.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Returns response object.
+    */
+   public function resetBigQuery(SimpleSurveyInterface $simple_survey) {
+diff --git a/src/Controller/SimpleSurveyController.php b/src/Controller/SimpleSurveyController.php
+index 28ba824..e88cd5b 100644
+--- a/src/Controller/SimpleSurveyController.php
++++ b/src/Controller/SimpleSurveyController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\simple_survey\Controller;
+ 
++use Drupal\Core\Datetime\DateFormatter;
++use Drupal\Core\File\FileSystem;
+ use Drupal\Core\Controller\ControllerBase;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Symfony\Component\HttpFoundation\Response;
+@@ -20,28 +22,28 @@ class SimpleSurveyController extends ControllerBase {
+   /**
+    * Drupal date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The survey state service.
+    *
+-   * @var \Drupal\simple_survey\Service\SurveyState
++   * @var SurveyState
+    */
+   protected $surveyState;
+ 
+   /**
+    * File System service.
+    *
+-   * @var \Drupal\Core\File\FileSystem
++   * @var FileSystem
+    */
+   protected $fileSystem;
+ 
+   /**
+    * Simple Survery Controller constructor.
+    *
+-   * @param \Drupal\Core\File\FileSystemInterface $fileSystemInterface
++   * @param FileSystemInterface $fileSystemInterface
+    *   The Drupal file system service.
+    */
+   public function __construct(
+@@ -50,7 +52,7 @@ class SimpleSurveyController extends ControllerBase {
+     $this->fileSystem = $fileSystemInterface;
+     $this->surveyState = $surveyState;
+ 
+-    $this->modulePath = drupal_get_path('module', 'simple_survey');
++    $this->modulePath = \Drupal::service('extension.list.module')->getPath('simple_survey');
+   }
+ 
+   /**
+@@ -109,7 +111,7 @@ class SimpleSurveyController extends ControllerBase {
+   /**
+    * Displays information about a survey.
+    *
+-   * @param \Drupal\simple_survey\Entity\SimpleSurveyInterface $simple_survey
++   * @param SimpleSurveyInterface $simple_survey
+    *   The survey to display.
+    *
+    * @return array
+@@ -135,7 +137,7 @@ class SimpleSurveyController extends ControllerBase {
+   /**
+    * Returns the page title for an survey's "View" tab.
+    *
+-   * @param \Drupal\simple_survey\Entity\SimpleSurveyInterface $simple_survey
++   * @param SimpleSurveyInterface $simple_survey
+    *   The survey that is displayed.
+    *
+    * @return string
+diff --git a/src/Controller/SimpleSurveyRestController.php b/src/Controller/SimpleSurveyRestController.php
+index 5702aac..5dd8f8a 100644
+--- a/src/Controller/SimpleSurveyRestController.php
++++ b/src/Controller/SimpleSurveyRestController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Controller;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Component\Uuid\UuidInterface;
+@@ -38,7 +39,7 @@ class SimpleSurveyRestController extends ControllerBase {
+   /**
+    * The survey.
+    *
+-   * @var \Drupal\simple_survey\Entity\SimpleSurveyInterface
++   * @var SimpleSurveyInterface
+    */
+   private $survey = '';
+ 
+@@ -52,35 +53,35 @@ class SimpleSurveyRestController extends ControllerBase {
+   /**
+    * Drupal\Core\Messenger\MessengerInterface definition.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Drupal\Component\Uuid\UuidInterface definition.
+    *
+-   * @var \Drupal\Component\Uuid\UuidInterface
++   * @var UuidInterface
+    */
+   protected $uuidService;
+ 
+   /**
+    * Drupal\Core\Logger\LoggerChannelFactory definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Drupal date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Response export service.
+    *
+-   * @var \Drupal\simple_survey\Service\BigQueryConnect
++   * @var BigQueryConnect
+    */
+   protected $bigQuery;
+ 
+@@ -94,14 +95,14 @@ class SimpleSurveyRestController extends ControllerBase {
+   /**
+    * The Drupal Time Service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The Entity Type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -110,21 +111,21 @@ class SimpleSurveyRestController extends ControllerBase {
+    *
+    * @todo Look into creating a service to handle DI. Doing a janky call in simple_survey.module
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The Drupal messenger service.
+-   * @param \Drupal\Component\Uuid\UuidInterface $uuid
++   * @param UuidInterface $uuid
+    *   The Drupal UUID service.
+-   * @param Drupal\Core\Datetime\DateFormatter $dateFormatter
++   * @param DateFormatter $dateFormatter
+    *   The Drupal date formatter service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger factory service.
+-   * @param \Drupal\simple_survey\Service\BigQueryConnect $big_query
++   * @param BigQueryConnect $big_query
+    *   The BigQuery Connection service.
+    * @param \Drupal\simple_survey\ResponseExportService $response_export_service
+    *   The response export service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The Drupal time service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity Type Manager service.
+    */
+   public function __construct(
+@@ -146,7 +147,7 @@ class SimpleSurveyRestController extends ControllerBase {
+     $this->time = $time;
+     $this->entityTypeManager = $entity_type_manager;
+ 
+-    $this->modulePath = drupal_get_path('module', $this->moduleName);
++    $this->modulePath = \Drupal::service('extension.list.module')->getPath($this->moduleName);
+   }
+ 
+   /**
+@@ -170,7 +171,7 @@ class SimpleSurveyRestController extends ControllerBase {
+   /**
+    * Generates a Cookie for tracking and CSRF.
+    *
+-   * @return Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Returns a http response.
+    */
+   private function generateCookie(Request $request, string $cookieName) {
+@@ -187,17 +188,7 @@ class SimpleSurveyRestController extends ControllerBase {
+     $expireTime = $this->time->getRequestTime() + (60 * 60 * 24 * $cooldown);
+ 
+     $headerResponse = new Response();
+-    $cookie = new Cookie(
+-      $cookieName,
+-      $this->uuidService->generate(),
+-      $expireTime,
+-      '/',
+-      $request->getHost(),
+-      FALSE,
+-      FALSE,
+-      FALSE,
+-      'strict'
+-    );
++    $cookie = Cookie::create($cookieName, $this->uuidService->generate(), $expireTime, '/', $request->getHost(), FALSE, FALSE, FALSE, 'strict');
+ 
+     if ($cookie) {
+       $headerResponse->headers->setCookie($cookie);
+@@ -217,12 +208,12 @@ class SimpleSurveyRestController extends ControllerBase {
+   /**
+    * Checks if request to load a survey is valid and should be loaded displayed.
+    *
+-   * @param Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The Drupal request.
+-   * @param Drupal\simple_survey\Entity\SimpleSurveyInterface $simple_survey
++   * @param SimpleSurveyInterface $simple_survey
+    *   The Simple survey config entity.
+    *
+-   * @return Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   The returned response.
+    */
+   public function validate(Request $request, SimpleSurveyInterface $simple_survey) {
+@@ -265,10 +256,10 @@ class SimpleSurveyRestController extends ControllerBase {
+   /**
+    * Displays the questions as JSON.
+    *
+-   * @param Drupal\simple_survey\Entity\SimpleSurveyInterface $simple_survey
++   * @param SimpleSurveyInterface $simple_survey
+    *   The Simple survey config entity.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   Returns a JSON Response.
+    */
+   public function displayQuestions(SimpleSurveyInterface $simple_survey) {
+@@ -351,12 +342,12 @@ class SimpleSurveyRestController extends ControllerBase {
+   /**
+    * Submits the responses.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The drupal request.
+-   * @param Drupal\simple_survey\Entity\SimpleSurveyInterface $simple_survey
++   * @param SimpleSurveyInterface $simple_survey
+    *   The Simple survey config entity.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Returns a HTTP Response.
+    */
+   public function submitForm(Request $request, SimpleSurveyInterface $simple_survey) {
+diff --git a/src/Entity/Routing/SimpleSurveyRoutingProvider.php b/src/Entity/Routing/SimpleSurveyRoutingProvider.php
+index 3ff72d1..109bf34 100644
+--- a/src/Entity/Routing/SimpleSurveyRoutingProvider.php
++++ b/src/Entity/Routing/SimpleSurveyRoutingProvider.php
+@@ -74,10 +74,10 @@ class SimpleSurveyRoutingProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the questions-form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getQuestionsFormRoute(EntityTypeInterface $entity_type) {
+@@ -104,10 +104,10 @@ class SimpleSurveyRoutingProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the display-form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getDisplayFormRoute(EntityTypeInterface $entity_type) {
+@@ -134,10 +134,10 @@ class SimpleSurveyRoutingProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the external-services-form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getExternalServicesFormRoute(EntityTypeInterface $entity_type) {
+@@ -164,10 +164,10 @@ class SimpleSurveyRoutingProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the BigQuery reset route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getResetBigQueryRoute(EntityTypeInterface $entity_type) {
+@@ -194,10 +194,10 @@ class SimpleSurveyRoutingProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the CSV export route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getCsvExportRoute(EntityTypeInterface $entity_type) {
+@@ -224,10 +224,10 @@ class SimpleSurveyRoutingProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the Export form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getExportFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/Entity/SimpleSurvey.php b/src/Entity/SimpleSurvey.php
+index a1b5e0e..f8c0539 100644
+--- a/src/Entity/SimpleSurvey.php
++++ b/src/Entity/SimpleSurvey.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\simple_survey\Entity;
+ 
++use Drupal\Core\Path\CurrentPathStack;
++use Drupal\path_alias\AliasManager;
++use Drupal\Core\Path\PathMatcher;
++use Drupal\simple_survey\Service\SurveyState;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+ use Drupal\Core\Messenger\MessengerInterface;
+ use Drupal\Core\Messenger\MessengerTrait;
+@@ -400,17 +404,17 @@ class SimpleSurvey extends ConfigEntityBase implements SimpleSurveyInterface {
+    */
+   public function checkPath(string $path = NULL) {
+     /**
+-     * @var \Drupal\Core\Path\CurrentPathStack $currentPath
++     * @var CurrentPathStack $currentPath
+      *   Drupal Patch Matcher service.
+      */
+     $currentPath = \Drupal::service('path.current')->getPath();
+     /**
+-     * @var \Drupal\path_alias\AliasManager $currentPath
++     * @var AliasManager $currentPath
+      *   Drupal Patch Matcher service.
+      */
+     $currentAlias = \Drupal::service('path_alias.manager')->getAliasByPath($currentPath);
+     /**
+-     * @var \Drupal\Core\Path\PathMatcher $pathMatcher
++     * @var PathMatcher $pathMatcher
+      *   Drupal Patch Matcher service.
+      */
+     $pathMatcher = \Drupal::service('path.matcher');
+@@ -429,7 +433,7 @@ class SimpleSurvey extends ConfigEntityBase implements SimpleSurveyInterface {
+   /**
+    * Get the survey that loads on this path.
+    *
+-   * @return null|\Drupal\simple_survey\Entity\SimpleSurveyInterface
++   * @return null|SimpleSurveyInterface
+    *   Returns either null or the Simple Survey entity.
+    */
+   public static function getSurvey() {
+@@ -518,7 +522,7 @@ class SimpleSurvey extends ConfigEntityBase implements SimpleSurveyInterface {
+    * Sets the last time the data was submitted to BigQuery.
+    */
+   public function setBqSubmission() {
+-    /** @var \Drupal\simple_survey\Service\SurveyState $state */
++    /** @var SurveyState $state */
+     $state = \Drupal::service('simple_survey.survey_state');
+ 
+     $state->setLastExported($this->id());
+@@ -531,7 +535,7 @@ class SimpleSurvey extends ConfigEntityBase implements SimpleSurveyInterface {
+    *   The stored last submitted value or NULL.
+    */
+   public function getBqSubmission() {
+-    /** @var \Drupal\simple_survey\Service\SurveyState $state */
++    /** @var SurveyState $state */
+     $state = \Drupal::service('simple_survey.survey_state');
+     return $state->getLastExported($this->id());
+   }
+diff --git a/src/Entity/SimpleSurveyListBuilder.php b/src/Entity/SimpleSurveyListBuilder.php
+index 7c235ef..158b95c 100644
+--- a/src/Entity/SimpleSurveyListBuilder.php
++++ b/src/Entity/SimpleSurveyListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Entity;
+ 
++use Drupal\Core\Datetime\DateFormatter;
+ use Drupal\Core\Config\Entity\ConfigEntityListBuilder;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\Query\QueryException;
+@@ -26,7 +27,7 @@ class SimpleSurveyListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\Core\Datetime\DateFormatter $dateFormatter */
++    /** @var DateFormatter $dateFormatter */
+     $dateFormatter = \Drupal::service('date.formatter');
+ 
+     $surveyQuestionCount = \Drupal::service('entity_type.manager')->getStorage('survey_question')->getQuery()
+diff --git a/src/Entity/SurveyQuestionInterface.php b/src/Entity/SurveyQuestionInterface.php
+index d999ce5..d36630e 100644
+--- a/src/Entity/SurveyQuestionInterface.php
++++ b/src/Entity/SurveyQuestionInterface.php
+@@ -26,7 +26,7 @@ interface SurveyQuestionInterface extends ContentEntityInterface, EntityChangedI
+    * @param int $timestamp
+    *   The Survey Response creation timestamp.
+    *
+-   * @return \Drupal\simple_survey\Entity\SurveyResponseInterface
++   * @return SurveyResponseInterface
+    *   The called Survey Response entity.
+    */
+   public function setCreatedTime($timestamp);
+diff --git a/src/Entity/SurveyResponseListBuilder.php b/src/Entity/SurveyResponseListBuilder.php
+index 84ea7cf..72ef42e 100644
+--- a/src/Entity/SurveyResponseListBuilder.php
++++ b/src/Entity/SurveyResponseListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Entity;
+ 
++use Drupal\Core\Datetime\DateFormatter;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -18,7 +19,7 @@ class SurveyResponseListBuilder extends EntityListBuilder {
+   /**
+    * The survey the list belongs to.
+    *
+-   * @var \Drupal\simple_survey\Entity\SimpleSurveyInterface
++   * @var SimpleSurveyInterface
+    */
+   public $simpleSurvey;
+ 
+@@ -27,9 +28,9 @@ class SurveyResponseListBuilder extends EntityListBuilder {
+   /**
+    * Constructs a new EntityListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage) {
+@@ -80,7 +81,7 @@ class SurveyResponseListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\Core\Datetime\DateFormatter $dateFormatter */
++    /** @var DateFormatter $dateFormatter */
+     $dateFormatter = \Drupal::service('date.formatter');
+ 
+     $row['id'] = $entity->id();
+diff --git a/src/Form/ConfirmCsvExportForm.php b/src/Form/ConfirmCsvExportForm.php
+index c031a0a..f4a46a0 100644
+--- a/src/Form/ConfirmCsvExportForm.php
++++ b/src/Form/ConfirmCsvExportForm.php
+@@ -18,23 +18,23 @@ class ConfirmCsvExportForm extends EntityConfirmFormBase {
+   /**
+    * Drupal date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The Drupal Time Service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * Constructs a EntityForm object.
+    *
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\Core\Datetime\DateFormatter $dateFormatter
++   * @param DateFormatter $dateFormatter
+    *   The date formatter service.
+    */
+   public function __construct(
+diff --git a/src/Form/ExportForm.php b/src/Form/ExportForm.php
+index d43b4a3..46303f0 100644
+--- a/src/Form/ExportForm.php
++++ b/src/Form/ExportForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Form;
+ 
++use Drupal\simple_survey\Entity\SimpleSurvey;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Link;
+@@ -18,7 +19,7 @@ class ExportForm extends EntityForm {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simpleSurvey */
++    /** @var SimpleSurvey $simpleSurvey */
+     $simpleSurvey = $this->entity;
+ 
+     $simpleSurvey->checkStatuses();
+@@ -110,7 +111,7 @@ class ExportForm extends EntityForm {
+    * {@inheritDoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simple_survey */
++    /** @var SimpleSurvey $simple_survey */
+     $simple_survey = $this->entity;
+     $options = [
+       'survey' => $simple_survey->id(),
+@@ -130,7 +131,7 @@ class ExportForm extends EntityForm {
+   }
+ 
+   private function createBqBatch(array $options) {
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simple_survey */
++    /** @var SimpleSurvey $simple_survey */
+     $simple_survey = $this->entity;
+ 
+     $batch = [
+@@ -159,7 +160,7 @@ class ExportForm extends EntityForm {
+   }
+ 
+   private function createCsvBatch(array $options) {
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simple_survey */
++    /** @var SimpleSurvey $simple_survey */
+     $simple_survey = $this->entity;
+     $date = new \DateTime();
+     $fileTime = $date->format('YdmHis');
+diff --git a/src/Form/ExternalServicesForm.php b/src/Form/ExternalServicesForm.php
+index af16360..4fa70dc 100644
+--- a/src/Form/ExternalServicesForm.php
++++ b/src/Form/ExternalServicesForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Form;
+ 
++use Drupal\simple_survey\Entity\SimpleSurvey;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Link;
+@@ -19,7 +20,7 @@ class ExternalServicesForm extends EntityForm {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simpleSurvey */
++    /** @var SimpleSurvey $simpleSurvey */
+     $simpleSurvey = $this->entity;
+ 
+     $simpleSurvey->checkStatuses();
+@@ -79,7 +80,7 @@ class ExternalServicesForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simpleSurvey */
++    /** @var SimpleSurvey $simpleSurvey */
+     $simpleSurvey = $this->entity;
+ 
+     $status = $simpleSurvey->save();
+diff --git a/src/Form/SimpleSurveyForm.php b/src/Form/SimpleSurveyForm.php
+index 27012b2..fd0f948 100644
+--- a/src/Form/SimpleSurveyForm.php
++++ b/src/Form/SimpleSurveyForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Form;
+ 
++use Drupal\simple_survey\Entity\SimpleSurvey;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Link;
+@@ -19,7 +20,7 @@ class SimpleSurveyForm extends EntityForm {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simpleSurvey */
++    /** @var SimpleSurvey $simpleSurvey */
+     $simpleSurvey = $this->entity;
+ 
+     $simpleSurvey->checkStatuses();
+@@ -164,7 +165,7 @@ class SimpleSurveyForm extends EntityForm {
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+ 
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simpleSurvey */
++    /** @var SimpleSurvey $simpleSurvey */
+     $simpleSurvey = $this->entity;
+ 
+     $simpleSurvey->set('basePath', $this->t('/simple-survey/api/@simple_survey', [
+diff --git a/src/Form/SurveyDisplayForm.php b/src/Form/SurveyDisplayForm.php
+index da094a3..3b67914 100644
+--- a/src/Form/SurveyDisplayForm.php
++++ b/src/Form/SurveyDisplayForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Form;
+ 
++use Drupal\simple_survey\Entity\SimpleSurvey;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Messenger\MessengerInterface;
+@@ -17,7 +18,7 @@ class SurveyDisplayForm extends EntityForm {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simpleSurvey */
++    /** @var SimpleSurvey $simpleSurvey */
+     $simpleSurvey = $this->entity;
+ 
+     $simpleSurvey->checkStatuses();
+@@ -166,7 +167,7 @@ class SurveyDisplayForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simpleSurvey */
++    /** @var SimpleSurvey $simpleSurvey */
+     $simpleSurvey = $this->entity;
+ 
+     $status = $simpleSurvey->save();
+diff --git a/src/Form/SurveyQuestionsListForm.php b/src/Form/SurveyQuestionsListForm.php
+index 786079a..d4ae7da 100644
+--- a/src/Form/SurveyQuestionsListForm.php
++++ b/src/Form/SurveyQuestionsListForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Form;
+ 
++use Drupal\simple_survey\Entity\SimpleSurvey;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Messenger\MessengerInterface;
+@@ -24,7 +25,7 @@ class SurveyQuestionsListForm extends EntityForm {
+       'closing' => 'Closing display',
+     ];
+ 
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simpleSurvey */
++    /** @var SimpleSurvey $simpleSurvey */
+     $simpleSurvey = $this->entity;
+ 
+     $simpleSurvey->checkStatuses();
+@@ -114,7 +115,7 @@ class SurveyQuestionsListForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey $simpleSurvey */
++    /** @var SimpleSurvey $simpleSurvey */
+     $simpleSurvey = $this->entity;
+ 
+     $status = $simpleSurvey->save();
+diff --git a/src/Plugin/Derivative/SurveyMenuLink.php b/src/Plugin/Derivative/SurveyMenuLink.php
+index bc03d42..92bd9c1 100644
+--- a/src/Plugin/Derivative/SurveyMenuLink.php
++++ b/src/Plugin/Derivative/SurveyMenuLink.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Plugin\Derivative;
+ 
++use Drupal\simple_survey\Entity\SimpleSurvey;
+ use Drupal\Component\Plugin\Derivative\DeriverBase;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Plugin\Discovery\ContainerDeriverInterface;
+@@ -12,7 +13,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+  */
+ class SurveyMenuLink extends DeriverBase implements ContainerDeriverInterface {
+   /**
+-   * @var Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    *   The entity type manager service.
+    */
+   protected $entityTypeManager;
+@@ -22,7 +23,7 @@ class SurveyMenuLink extends DeriverBase implements ContainerDeriverInterface {
+    *
+    * @param string $base_plugin_id
+    *   The plugin id.
+-   * @param Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct($base_plugin_id, EntityTypeManagerInterface $entity_type_manager) {
+@@ -45,7 +46,7 @@ class SurveyMenuLink extends DeriverBase implements ContainerDeriverInterface {
+   public function getDerivativeDefinitions($base_plugin_definition) {
+     $links = [];
+ 
+-    /** @var \Drupal\simple_survey\Entity\SimpleSurvey[] $surveys */
++    /** @var SimpleSurvey[] $surveys */
+     $surveys = $this->entityTypeManager->getStorage('simple_survey')->loadMultiple();
+ 
+     foreach ($surveys as $survey) {
+diff --git a/src/Plugin/QueueWorker/SurveyResponseQueueWorkerBase.php b/src/Plugin/QueueWorker/SurveyResponseQueueWorkerBase.php
+index 8eabd5e..841bc85 100644
+--- a/src/Plugin/QueueWorker/SurveyResponseQueueWorkerBase.php
++++ b/src/Plugin/QueueWorker/SurveyResponseQueueWorkerBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\simple_survey\Plugin\QueueWorker;
+ 
++use Drupal\Core\Logger\LoggerChannel;
++use Drupal\simple_survey\Entity\SurveyResponse;
+ use Drupal\Core\Queue\QueueWorkerBase;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\simple_survey\Service\SurveyState;
+@@ -23,59 +25,59 @@ class SurveyResponseQueueWorkerBase extends QueueWorkerBase implements Container
+   /**
+    * Survey state service.
+    *
+-   * @var \Drupal\simple_survey\Service\ResponseExportService
++   * @var ResponseExportService
+    */
+   private $responseExport;
+ 
+   /**
+    * Data source state service.
+    *
+-   * @var \Drupal\simple_survey\Service\SurveyState
++   * @var SurveyState
+    */
+   private $surveyState;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   private $time;
+ 
+   /**
+    * Drupal logger service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannel
++   * @var LoggerChannel
+    */
+   protected $logger;
+ 
+   /**
+    * The Entity Type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The BigQuery client.
+    *
+-   * @var \Drupal\simple_survey\Service\BigQueryConnect
++   * @var BigQueryConnect
+    */
+   protected $bigQueryClient;
+ 
+   /**
+    * Queueworker Construct.
+    *
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger factory service.
+-   * @param \Drupal\simple_survey\Service\SurveyState $surveyState
++   * @param SurveyState $surveyState
+    *   Survey state service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   Time service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity Type Manager service.
+-   * @param \Drupal\simple_survey\Service\ResponseExportService $responseExportService
++   * @param ResponseExportService $responseExportService
+    *   Response export service.
+-   * @param \Drupal\simple_survey\Service\BigQueryConnect $bigQueryClient
++   * @param BigQueryConnect $bigQueryClient
+    *   BigQuery client service.
+    */
+   public function __construct(
+@@ -137,7 +139,7 @@ class SurveyResponseQueueWorkerBase extends QueueWorkerBase implements Container
+ 
+           $this->surveyState->setLastExported($survey->id());
+ 
+-          /** @var \Drupal\simple_survey\Entity\SurveyResponse[] $responses */
++          /** @var SurveyResponse[] $responses */
+           $responses = $this->entityTypeManager->getStorage('survey_response')
+             ->loadMultiple($item['responseIds']);
+ 
+diff --git a/src/Service/BigQueryConnect.php b/src/Service/BigQueryConnect.php
+index dbd70df..cacc704 100644
+--- a/src/Service/BigQueryConnect.php
++++ b/src/Service/BigQueryConnect.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Service;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Datetime\DateFormatter;
+ use Google\Cloud\BigQuery\BigQueryClient;
+@@ -33,48 +34,48 @@ class BigQueryConnect {
+   /**
+    * The big query client object.
+    *
+-   * @var \Google\Cloud\BigQuery\BigQueryClient
++   * @var BigQueryClient
+    */
+   private $bigQueryClient;
+ 
+   /**
+    * Drupal logger service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The current survey.
+    *
+-   * @var \Drupal\simple_survey\Entity\SimpleSurvey
++   * @var SimpleSurvey
+    */
+   public $survey;
+ 
+   /**
+    * Drupal\Core\Messenger\MessengerInterface definition.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Service config and DI.
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The Drupal messenger service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   Drupal config factory service.
+-   * @param \Drupal\Core\Datetime\DateFormatter $dateFormatter
++   * @param DateFormatter $dateFormatter
+    *   Date formatter service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger factory service.
+    */
+   public function __construct(
+@@ -92,7 +93,7 @@ class BigQueryConnect {
+   /**
+    * Sets the active survey.
+    *
+-   * @param \Drupal\simple_survey\Entity\SimpleSurvey $survey
++   * @param SimpleSurvey $survey
+    *   The active survey.
+    */
+   public function setSurvey(SimpleSurvey $survey) {
+diff --git a/src/Service/ResponseExportService.php b/src/Service/ResponseExportService.php
+index d9fc7b8..cbe59a3 100644
+--- a/src/Service/ResponseExportService.php
++++ b/src/Service/ResponseExportService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Service;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+ use Drupal\Core\Messenger\MessengerInterface;
+@@ -36,49 +37,49 @@ class ResponseExportService implements ContainerInjectionInterface {
+   /**
+    * Drupal config service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   private $configFactory;
+ 
+   /**
+    * Drupal logger service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Drupal messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The Drupal Time Service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * Date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The Entity Type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The current survey.
+    *
+-   * @var \Drupal\simple_survey\Entity\SimpleSurvey
++   * @var SimpleSurvey
+    */
+   public $survey;
+ 
+@@ -111,17 +112,17 @@ class ResponseExportService implements ContainerInjectionInterface {
+   /**
+    * Service config and DI.
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Drupal Messenger service.
+-   * @param \Drupal\Core\Datetime\DateFormatter $dateFormatter
++   * @param DateFormatter $dateFormatter
+    *   Date formatter service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $loggerFactory
++   * @param LoggerChannelFactoryInterface $loggerFactory
+    *   Drupal logger service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   Drupal config factory service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity Type Manager service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   Time service.
+    */
+   public function __construct(
+@@ -560,7 +561,7 @@ class ResponseExportService implements ContainerInjectionInterface {
+         ->execute();
+     }
+ 
+-    /** @var \Drupal\simple_survey\Service\BigQueryConnect $bq */
++    /** @var BigQueryConnect $bq */
+     $bq = \Drupal::service('simple_survey.big_query');
+ 
+     $simpleSurvey = SimpleSurvey::load($survey);
+diff --git a/src/Service/SurveyState.php b/src/Service/SurveyState.php
+index 2dd3ea9..a8d0cf6 100644
+--- a/src/Service/SurveyState.php
++++ b/src/Service/SurveyState.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey\Service;
+ 
++use Drupal\Core\Logger\LoggerChannelFactory;
+ use Drupal\Core\Datetime\DateFormatter;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+@@ -31,41 +32,41 @@ class SurveyState {
+   /**
+    * Drupal logger service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactory
++   * @var LoggerChannelFactory
+    */
+   protected $logger;
+ 
+   /**
+    * Date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Date time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The State service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * Service config and DI.
+    *
+-   * @param \Drupal\Core\Datetime\DateFormatter $dateFormatter
++   * @param DateFormatter $dateFormatter
+    *   Date formatter service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger factory service.
+    * @param \Drupal\Drupal\Core\State\StateInterface $stateInterface
+    *   The state service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $timeInterface
++   * @param TimeInterface $timeInterface
+    *   The time service.
+    */
+   public function __construct(
+diff --git a/src/SurveyResponseAccessControlHandler.php b/src/SurveyResponseAccessControlHandler.php
+index e0f5e62..ceb3b25 100644
+--- a/src/SurveyResponseAccessControlHandler.php
++++ b/src/SurveyResponseAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_survey;
+ 
++use Drupal\simple_survey\Entity\SurveyResponseInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,7 +19,7 @@ class SurveyResponseAccessControlHandler extends EntityAccessControlHandler {
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\simple_survey\Entity\SurveyResponseInterface $entity */
++    /** @var SurveyResponseInterface $entity */
+     switch ($operation) {
+       case 'view':
+         return AccessResult::allowedIfHasPermission($account, 'view survey response entities');

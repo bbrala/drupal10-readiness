@@ -1,0 +1,782 @@
+diff --git a/anonymous_subscriptions.info.yml b/anonymous_subscriptions.info.yml
+index 0a37d3e..c22f91f 100644
+--- a/anonymous_subscriptions.info.yml
++++ b/anonymous_subscriptions.info.yml
+@@ -1,4 +1,4 @@
+ name: Anonymous Subscriptions
+ type: module
+ description: Provide Subscription functionality to anonymous users
+-core_version_requirement: ^8.7.7 || ^9
++core_version_requirement: ^9.3 || ^10
+diff --git a/anonymous_subscriptions.install b/anonymous_subscriptions.install
+index 9a27feb..50e11ac 100644
+--- a/anonymous_subscriptions.install
++++ b/anonymous_subscriptions.install
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\Core\Database\Schema;
++use Drupal\Core\Config\Entity\ConfigEntityStorage;
++use Drupal\views\Entity\View;
+ /**
+  * @file
+  * Install/update/uninstall functions for the anonymous subscription module.
+@@ -52,7 +55,7 @@ function anonymous_subscriptions_update_8903() {
+   $table_name = 'anonymous_subscription';
+   $database = \Drupal::database();
+ 
+-  /** @var \Drupal\Core\Database\Schema $schema */
++  /** @var Schema $schema */
+   $schema = $database->schema();
+   $messenger = Drupal::messenger();
+ 
+@@ -142,15 +145,15 @@ function anonymous_subscriptions_update_8908() {
+     return;
+   }
+ 
+-  $dir = drupal_get_path('module', 'anonymous_subscriptions');
++  $dir = \Drupal::service('extension.list.module')->getPath('anonymous_subscriptions');
+   $fileStorage = new FileStorage($dir . '/config/install');
+   $config = $fileStorage->read('views.view.anonymous_subscriptions');
+ 
+-  /** @var \Drupal\Core\Config\Entity\ConfigEntityStorage $storage */
++  /** @var ConfigEntityStorage $storage */
+   $storage = \Drupal::entityTypeManager()
+     ->getStorage('view');
+ 
+-  /** @var \Drupal\views\Entity\View $view */
++  /** @var View $view */
+   $view = $storage->create($config);
+   $view->save();
+ }
+diff --git a/anonymous_subscriptions.module b/anonymous_subscriptions.module
+index 6fa05b9..fc451d2 100644
+--- a/anonymous_subscriptions.module
++++ b/anonymous_subscriptions.module
+@@ -1,5 +1,10 @@
+ <?php
+ 
++use Drupal\node\NodeInterface;
++use Drupal\Core\Session\AccountInterface;
++use Drupal\field\FieldConfigInterface;
++use Drupal\taxonomy\TermInterface;
++use Drupal\anonymous_subscriptions\DefaultService;
+ /**
+  * @file
+  * The Anonymous Subscriptions module.
+@@ -103,12 +108,12 @@ function anonymous_subscriptions_mail($key, &$message, $params) {
+  */
+ function anonymous_subscriptions_form_node_form_alter(&$form, $form_state, $form_id) {
+   $form_object = $form_state->getFormObject();
+-  /** @var \Drupal\node\NodeInterface $node */
++  /** @var NodeInterface $node */
+   $node = $form_object->getEntity();
+   $config = \Drupal::config(SettingsForm::$configName);
+   $valid_types = $config->get('anonymous_subscriptions_node_types') ?: [];
+   if (!empty($valid_types[$node->getType()])) {
+-    /** @var \Drupal\Core\Session\AccountInterface $current_user */
++    /** @var AccountInterface $current_user */
+     $current_user = \Drupal::service('current_user');
+     $form['options']['send_emails'] = [
+       '#type' => 'checkbox',
+@@ -126,7 +131,7 @@ function anonymous_subscriptions_form_node_form_alter(&$form, $form_state, $form
+  * Custom form submit callback.
+  */
+ function anonymous_subscriptions_form_node_form_alter_submit(&$form, &$form_state) {
+-  /** @var \Drupal\node\NodeInterface $node */
++  /** @var NodeInterface $node */
+   $node = $form_state->getFormObject()->getEntity();
+   // Saving send email flag to temporary private storage.
+   $tempStore = \Drupal::service('tempstore.private')->get('anonymous_subscriptions');
+@@ -171,7 +176,7 @@ function anonymous_subscriptions_module_implements_alter(&$implementations, $hoo
+  * Implements hook_form_FORM_ID_alter().
+  */
+ function anonymous_subscriptions_form_field_config_edit_form_alter(array &$form, FormStateInterface $form_state) {
+-  /** @var \Drupal\field\FieldConfigInterface $field */
++  /** @var FieldConfigInterface $field */
+   $field = $form_state->getFormObject()->getEntity();
+   if ($field->getTargetEntityTypeId() != 'node'
+     || $field->getType() != 'entity_reference'
+@@ -199,7 +204,7 @@ function anonymous_subscriptions_form_field_config_edit_form_alter(array &$form,
+  *
+  * @param array $form
+  *   The form array.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state.
+  */
+ function anonymous_subscriptions_field_config_edit_form_submit(array $form, FormStateInterface $form_state) {
+@@ -224,9 +229,9 @@ function anonymous_subscriptions_field_config_edit_form_submit(array $form, Form
+  */
+ function anonymous_subscriptions_form_taxonomy_term_form_alter(&$form, $form_state, $form_id) {
+   $form_object = $form_state->getFormObject();
+-  /** @var Drupal\taxonomy\TermInterface $term */
++  /** @var TermInterface $term */
+   $term = $form_object->getEntity();
+-  /** @var Drupal\anonymous_subscriptions\DefaultService $service */
++  /** @var DefaultService $service */
+   $service = \Drupal::service('anonymous_subscriptions.default');
+ 
+   if (!$service->isVocabularyAllowed($term->bundle()) || empty($term->id())) {
+@@ -259,7 +264,7 @@ function anonymous_subscriptions_form_taxonomy_term_form_alter(&$form, $form_sta
+ function anonymous_subscriptions_form_taxonomy_term_form_alter_submit(&$form, &$form_state) {
+   $form_fields = &$form_state->getValues();
+ 
+-  /** @var Drupal\taxonomy\TermInterface $term */
++  /** @var TermInterface $term */
+   $term = $form_state->getFormObject()->getEntity();
+   $config = \Drupal::configFactory()->getEditable(SettingsForm::$configName);
+   $anonymous_subscription_disabled_terms = $config->get('anonymous_subscription_disabled_terms') ?: [];
+diff --git a/src/Controller/SubscriptionController.php b/src/Controller/SubscriptionController.php
+index db49eb3..38983c9 100644
+--- a/src/Controller/SubscriptionController.php
++++ b/src/Controller/SubscriptionController.php
+@@ -17,14 +17,14 @@ class SubscriptionController extends ControllerBase {
+   /**
+    * Anonymous subscription service.
+    *
+-   * @var \Drupal\anonymous_subscriptions\DefaultService
++   * @var DefaultService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * Constructs a new SubscriptionController.
+    *
+-   * @param \Drupal\anonymous_subscriptions\DefaultService $subscriptionService
++   * @param DefaultService $subscriptionService
+    *   Default subscription service.
+    */
+   public function __construct(DefaultService $subscriptionService) {
+diff --git a/src/DefaultService.php b/src/DefaultService.php
+index d739655..6cd3c22 100644
+--- a/src/DefaultService.php
++++ b/src/DefaultService.php
+@@ -2,6 +2,13 @@
+ 
+ namespace Drupal\anonymous_subscriptions;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\taxonomy\TermStorage;
++use Drupal\taxonomy\Entity\Term;
++use Drupal\Core\Theme\ThemeInitialization;
++use Drupal\Core\GeneratedUrl;
+ use Drupal\anonymous_subscriptions\Entity\Subscription;
+ use Drupal\anonymous_subscriptions\Form\SettingsForm;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -35,92 +42,92 @@ class DefaultService {
+    * directly. See \Drupal\Core\Form\ConfigFormBase::config() for an example of
+    * this.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+   /**
+    * Drupal\mailsystem\MailsystemManager definition.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+   protected $mailManager;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The logger service.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The token service.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $token;
+ 
+   /**
+    * PrivateTempStoreFactory service.
+    *
+-   * @var \Drupal\Core\TempStore\PrivateTempStoreFactory
++   * @var PrivateTempStoreFactory
+    */
+   protected $tempStore;
+ 
+   /**
+    * Anonymous subscription settings configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $settings;
+ 
+   /**
+    * Queue factory service.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The entity_type.manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity_field.manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * Constructs a new DefaultService object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Mail\MailManagerInterface $manager_mail
++   * @param MailManagerInterface $manager_mail
+    *   The Mail manager objects.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $languageManager
++   * @param LanguageManagerInterface $languageManager
+    *   The language manager object.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger service.
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   The token service.
+-   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $tempStore
++   * @param PrivateTempStoreFactory $tempStore
+    *   The logger service.
+-   * @param \Drupal\Core\Queue\QueueFactory $queueFactory
++   * @param QueueFactory $queueFactory
+    *   The Queue factory service.
+-   * @param \Drupal\Core\Entity\EntityTypeManager $entityTypeManager
++   * @param EntityTypeManager $entityTypeManager
+    *   The entity_type.manager service.
+-   * @param \Drupal\Core\Entity\EntityFieldManager $entityFieldManager
++   * @param EntityFieldManager $entityFieldManager
+    *   The entity_field.manager service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, MailManagerInterface $manager_mail, LanguageManagerInterface $languageManager, LoggerInterface $logger, Token $token, PrivateTempStoreFactory $tempStore, QueueFactory $queueFactory, EntityTypeManager $entityTypeManager, EntityFieldManager $entityFieldManager) {
+@@ -139,7 +146,7 @@ class DefaultService {
+   /**
+    * Sends confirmation mail to subscriber.
+    *
+-   * @param \Drupal\anonymous_subscriptions\Entity\Subscription $subscription
++   * @param Subscription $subscription
+    *   Subscription entity.
+    */
+   public function sendConfirmationMail(Subscription $subscription) {
+@@ -163,7 +170,7 @@ class DefaultService {
+   /**
+    * Sends verification mail to subscriber.
+    *
+-   * @param \Drupal\anonymous_subscriptions\Entity\Subscription $subscription
++   * @param Subscription $subscription
+    *   Subscription entity.
+    */
+   public function sendVerificationMail(Subscription $subscription) {
+@@ -218,7 +225,7 @@ class DefaultService {
+    *
+    * Sending email will be processed via cron at a later time.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The node object that specifies to the email.
+    */
+   public function addPendingEmails(NodeInterface $node) {
+@@ -263,11 +270,11 @@ class DefaultService {
+     $tids = [];
+     // Getting all references terms.
+     $lookup_parent_terms = $this->settings->get('anonymous_subscriptions_lookup_parent_taxonomy_terms');
+-    /** @var \Drupal\taxonomy\TermStorage $termStorage */
++    /** @var TermStorage $termStorage */
+     $termStorage = $this->entityTypeManager->getStorage('taxonomy_term');
+     foreach ($field_definitions as $field_definition) {
+       $terms = $node->get($field_definition->getName())->referencedEntities();
+-      /** @var \Drupal\taxonomy\Entity\Term $term */
++      /** @var Term $term */
+       foreach ($terms as $term) {
+         if ($lookup_parent_terms) {
+           // Getting all parents and adding them into lookup list.
+@@ -310,7 +317,7 @@ class DefaultService {
+     $body = $this->token->replace($original_body, ['node' => $node]);
+ 
+     // Setting front-end theme.
+-    /** @var \Drupal\Core\Theme\ThemeInitialization $theme_initialization */
++    /** @var ThemeInitialization $theme_initialization */
+     $theme_initialization = \Drupal::service('theme.initialization');
+     $active_theme = \Drupal::theme()->getActiveTheme();
+     $config = \Drupal::config('system.theme');
+@@ -318,7 +325,7 @@ class DefaultService {
+     \Drupal::theme()->setActiveTheme($theme_initialization->getActiveThemeByName($defaultTheme));
+ 
+     $count = 0;
+-    /** @var \Drupal\anonymous_subscriptions\Entity\Subscription $subscription */
++    /** @var Subscription $subscription */
+     foreach ($subscriptions as $subscription) {
+       $email = $subscription->email->value;
+       // Rendering content.
+@@ -365,12 +372,12 @@ class DefaultService {
+   /**
+    * Get unsubscribe url for subscription.
+    *
+-   * @param \Drupal\anonymous_subscriptions\Entity\Subscription $subscription
++   * @param Subscription $subscription
+    *   Subscription entity.
+    * @param bool $all
+    *   Flag to determine type of unsubscribe Url.
+    *
+-   * @return \Drupal\Core\GeneratedUrl|string
++   * @return GeneratedUrl|string
+    *   Unsubscribe Url.
+    */
+   public function getUnsubscribeUrl(Subscription $subscription, bool $all = FALSE) {
+@@ -390,10 +397,10 @@ class DefaultService {
+   /**
+    * Gets confirm Url for subscription.
+    *
+-   * @param \Drupal\anonymous_subscriptions\Entity\Subscription $subscription
++   * @param Subscription $subscription
+    *   Subscription entity.
+    *
+-   * @return \Drupal\Core\GeneratedUrl|string
++   * @return GeneratedUrl|string
+    *   Confirm Url.
+    */
+   public function getConfirmUrl(Subscription $subscription) {
+@@ -445,7 +452,7 @@ class DefaultService {
+   /**
+    * Checks if enabled to get subscriptions.
+    *
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   Field definition.
+    *
+    * @return bool
+@@ -464,7 +471,7 @@ class DefaultService {
+     switch ($subscription->entity_type->value) {
+       case 'node':
+         if ($subscription->entity_id->value) {
+-          /** @var \Drupal\node\NodeInterface $node */
++          /** @var NodeInterface $node */
+           $node = $this->entityTypeManager
+             ->getStorage('node')
+             ->load($subscription->entity_id->value);
+diff --git a/src/EventSubscriber/SchedulerEventSubscriber.php b/src/EventSubscriber/SchedulerEventSubscriber.php
+index 9e422a2..cc7a2f1 100644
+--- a/src/EventSubscriber/SchedulerEventSubscriber.php
++++ b/src/EventSubscriber/SchedulerEventSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\anonymous_subscriptions\EventSubscriber;
+ 
++use Drupal\node\Entity\Node;
+ use Drupal\anonymous_subscriptions\DefaultService;
+ use Drupal\scheduler\SchedulerEvent;
+ use Drupal\scheduler\SchedulerEvents;
+@@ -15,14 +16,14 @@ class SchedulerEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Anonymous subscription service.
+    *
+-   * @var \Drupal\anonymous_subscriptions\DefaultService
++   * @var DefaultService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * Constructs a new SubscriptionController.
+    *
+-   * @param \Drupal\anonymous_subscriptions\DefaultService $subscriptionService
++   * @param DefaultService $subscriptionService
+    *   Default subscription service.
+    */
+   public function __construct(DefaultService $subscriptionService) {
+@@ -38,7 +39,7 @@ class SchedulerEventSubscriber implements EventSubscriberInterface {
+    *   The event being acted on.
+    */
+   public function publish(SchedulerEvent $event) {
+-    /** @var \Drupal\node\Entity\Node $node */
++    /** @var Node $node */
+     $node = $event->getNode();
+     $this->subscriptionService->addPendingEmails($node);
+   }
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 5f69dcc..363f1dd 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -23,16 +23,16 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Constructs a \Drupal\system\ConfigFormBase object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler
++   * @param ModuleHandlerInterface $moduleHandler
+    *   The module handler.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, ModuleHandlerInterface $moduleHandler) {
+diff --git a/src/Form/SubscribeForm.php b/src/Form/SubscribeForm.php
+index 7a2f18f..23f3d40 100644
+--- a/src/Form/SubscribeForm.php
++++ b/src/Form/SubscribeForm.php
+@@ -121,7 +121,7 @@ class SubscribeForm extends SubscribeFormBase {
+     $type = $form_state->getValue('type');
+     $verification_required = $this->settings->get('anonymous_subscriptions_verify');
+ 
+-    /** @var \Drupal\anonymous_subscriptions\Entity\Subscription $subscription */
++    /** @var Subscription $subscription */
+     $subscription = Subscription::create([
+       'email' => $email,
+       'code' => Crypt::randomBytesBase64(20),
+diff --git a/src/Form/SubscribeFormBase.php b/src/Form/SubscribeFormBase.php
+index c6c2ab3..e7eadaf 100644
+--- a/src/Form/SubscribeFormBase.php
++++ b/src/Form/SubscribeFormBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\anonymous_subscriptions\Form;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\anonymous_subscriptions\DefaultService;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManager;
+@@ -18,41 +20,41 @@ abstract class SubscribeFormBase extends FormBase {
+   /**
+    * Anonymous subscription service.
+    *
+-   * @var \Drupal\anonymous_subscriptions\DefaultService
++   * @var DefaultService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * The entity_type.manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Anonymous subscription settings configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $settings;
+ 
+   /**
+    * The flood instance.
+    *
+-   * @var \Drupal\Core\Flood\FloodInterface
++   * @var FloodInterface
+    */
+   protected $flood;
+ 
+   /**
+    * Constructs a \Drupal\system\ConfigFormBase object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\anonymous_subscriptions\DefaultService $subscription_service
++   * @param DefaultService $subscription_service
+    *   The anonymous subscription service.
+-   * @param \Drupal\Core\Entity\EntityTypeManager $entityTypeManager
++   * @param EntityTypeManager $entityTypeManager
+    *   The entity_type.manager service.
+-   * @param \Drupal\Core\Flood\FloodInterface $flood
++   * @param FloodInterface $flood
+    *   The flood instance.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, DefaultService $subscription_service, EntityTypeManager $entityTypeManager, FloodInterface $flood) {
+diff --git a/src/Form/SubscribeNodeForm.php b/src/Form/SubscribeNodeForm.php
+index 00859d1..4a09af8 100644
+--- a/src/Form/SubscribeNodeForm.php
++++ b/src/Form/SubscribeNodeForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\anonymous_subscriptions\Form;
+ 
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\taxonomy\TermStorage;
+ use Drupal\anonymous_subscriptions\DefaultService;
+ use Drupal\anonymous_subscriptions\Entity\Subscription;
+ use Drupal\Component\Utility\Crypt;
+@@ -25,22 +27,22 @@ class SubscribeNodeForm extends SubscribeFormBase {
+   /**
+    * The entity_field.manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * Constructs a \Drupal\system\ConfigFormBase object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\anonymous_subscriptions\DefaultService $subscription_service
++   * @param DefaultService $subscription_service
+    *   The anonymous subscription service.
+-   * @param \Drupal\Core\Entity\EntityTypeManager $entityTypeManager
++   * @param EntityTypeManager $entityTypeManager
+    *   The entity_type.manager service.
+-   * @param \Drupal\Core\Entity\EntityFieldManager $entityFieldManager
++   * @param EntityFieldManager $entityFieldManager
+    *   The entity_field.manager service.
+-   * @param \Drupal\Core\Flood\FloodInterface $flood
++   * @param FloodInterface $flood
+    *   The flood instance.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, DefaultService $subscription_service, EntityTypeManager $entityTypeManager, EntityFieldManager $entityFieldManager, FloodInterface $flood) {
+@@ -137,13 +139,13 @@ class SubscribeNodeForm extends SubscribeFormBase {
+       return $form;
+     }
+ 
+-    /** @var \Drupal\taxonomy\TermStorage $termStorage */
++    /** @var TermStorage $termStorage */
+     $termStorage = $this->entityTypeManager->getStorage('taxonomy_term');
+     $depthClasses = [];
+     $lookup_parent_terms = $this->settings->get('anonymous_subscriptions_lookup_parent_taxonomy_terms');
+     foreach ($field_definitions as $field_definition) {
+       $terms = $node->get($field_definition->getName())->referencedEntities();
+-      /** @var \Drupal\taxonomy\Entity\Term $term */
++      /** @var Term $term */
+       foreach ($terms as $term) {
+         $termParents = $termStorage->loadAllParents($term->id());
+         if ($lookup_parent_terms) {
+@@ -227,14 +229,14 @@ class SubscribeNodeForm extends SubscribeFormBase {
+     $email = $form_state->getValue('email');
+     $node_type = $form_state->getValue('node_type');
+     $page = $form_state->getValue('page');
+-    /** @var \Drupal\node\NodeInterface $node */
++    /** @var NodeInterface $node */
+     $node = Node::load($form_state->getValue('nid'));
+     $verification_required = $this->settings->get('anonymous_subscriptions_verify');
+     $new_subscriptions = FALSE;
+ 
+     // Creating subscriptions for page.
+     if ($page && $node) {
+-      /** @var \Drupal\anonymous_subscriptions\Entity\Subscription $subscription */
++      /** @var Subscription $subscription */
+       $subscription = Subscription::create([
+         'email' => $email,
+         'code' => Crypt::randomBytesBase64(20),
+@@ -256,7 +258,7 @@ class SubscribeNodeForm extends SubscribeFormBase {
+ 
+     // Creating subscriptions for content type.
+     if ($node_type && $node) {
+-      /** @var \Drupal\anonymous_subscriptions\Entity\Subscription $subscription */
++      /** @var Subscription $subscription */
+       $subscription = Subscription::create([
+         'email' => $email,
+         'code' => Crypt::randomBytesBase64(20),
+@@ -301,9 +303,9 @@ class SubscribeNodeForm extends SubscribeFormBase {
+     }
+ 
+     $verification_required = $this->settings->get('anonymous_subscriptions_verify');
+-    /** @var \Drupal\taxonomy\Entity\Term $term */
++    /** @var Term $term */
+     foreach (Term::loadMultiple($tids) as $term) {
+-      /** @var \Drupal\anonymous_subscriptions\Entity\Subscription $subscription */
++      /** @var Subscription $subscription */
+       $subscription = Subscription::create([
+         'email' => $email,
+         'code' => Crypt::randomBytesBase64(20),
+diff --git a/src/Form/SubscribeTaxonomyTermsForm.php b/src/Form/SubscribeTaxonomyTermsForm.php
+index 64539d5..9dce952 100644
+--- a/src/Form/SubscribeTaxonomyTermsForm.php
++++ b/src/Form/SubscribeTaxonomyTermsForm.php
+@@ -147,7 +147,7 @@ class SubscribeTaxonomyTermsForm extends SubscribeFormBase {
+ 
+     $verification_required = $this->settings->get('anonymous_subscriptions_verify');
+     foreach (Term::loadMultiple($tids) as $term) {
+-      /** @var \Drupal\anonymous_subscriptions\Entity\Subscription $subscription */
++      /** @var Subscription $subscription */
+       $subscription = Subscription::create([
+         'email' => $email,
+         'code' => Crypt::randomBytesBase64(20),
+diff --git a/src/Form/SubscriptionCancelForm.php b/src/Form/SubscriptionCancelForm.php
+index 7f78fd3..73075bb 100644
+--- a/src/Form/SubscriptionCancelForm.php
++++ b/src/Form/SubscriptionCancelForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\anonymous_subscriptions\Form;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\anonymous_subscriptions\DefaultService;
+ use Drupal\anonymous_subscriptions\Entity\Subscription;
+ use Drupal\Core\Entity\EntityTypeManager;
+@@ -19,30 +20,30 @@ class SubscriptionCancelForm extends ConfirmFormBase {
+   /**
+    * Anonymous subscription service.
+    *
+-   * @var \Drupal\anonymous_subscriptions\DefaultService
++   * @var DefaultService
+    */
+   protected $subscriptionService;
+ 
+   /**
+    * Subscription entity.
+    *
+-   * @var \Drupal\anonymous_subscriptions\Entity\Subscription
++   * @var Subscription
+    */
+   protected $subscription;
+ 
+   /**
+    * The entity_type.manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a SubscriptionCancelForm object.
+    *
+-   * @param \Drupal\anonymous_subscriptions\DefaultService $subscription_service
++   * @param DefaultService $subscription_service
+    *   Subscription server.
+-   * @param \Drupal\Core\Entity\EntityTypeManager $entityTypeManager
++   * @param EntityTypeManager $entityTypeManager
+    *   The entity_type.manager service.
+    */
+   public function __construct(DefaultService $subscription_service, EntityTypeManager $entityTypeManager) {
+diff --git a/src/Plugin/Block/SubscribeBlockBase.php b/src/Plugin/Block/SubscribeBlockBase.php
+index f4f0ecf..0293871 100644
+--- a/src/Plugin/Block/SubscribeBlockBase.php
++++ b/src/Plugin/Block/SubscribeBlockBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\anonymous_subscriptions\Plugin\Block;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\anonymous_subscriptions\Form\SettingsForm;
+ use Drupal\Core\Block\BlockBase;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -15,14 +16,14 @@ abstract class SubscribeBlockBase extends BlockBase implements ContainerFactoryP
+   /**
+    * Anonymous subscription settings configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $settings;
+ 
+   /**
+    * The form builder service.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $formBuilder;
+ 
+diff --git a/src/Plugin/Block/SubscribeTaxonomyTermsBlock.php b/src/Plugin/Block/SubscribeTaxonomyTermsBlock.php
+index 0108ae6..3c68208 100644
+--- a/src/Plugin/Block/SubscribeTaxonomyTermsBlock.php
++++ b/src/Plugin/Block/SubscribeTaxonomyTermsBlock.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\anonymous_subscriptions\Plugin\Block;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\anonymous_subscriptions\DefaultService;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\taxonomy\Entity\Vocabulary;
+@@ -20,14 +22,14 @@ class SubscribeTaxonomyTermsBlock extends SubscribeBlockBase {
+   /**
+    * The entity_type.manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Anonymous subscription service.
+    *
+-   * @var \Drupal\anonymous_subscriptions\DefaultService
++   * @var DefaultService
+    */
+   protected $subscriptionService;
+ 
+diff --git a/src/Plugin/QueueWorker/AnonymousSubscriptionQueueWorker.php b/src/Plugin/QueueWorker/AnonymousSubscriptionQueueWorker.php
+index 0623a6a..af31568 100644
+--- a/src/Plugin/QueueWorker/AnonymousSubscriptionQueueWorker.php
++++ b/src/Plugin/QueueWorker/AnonymousSubscriptionQueueWorker.php
+@@ -21,7 +21,7 @@ class AnonymousSubscriptionQueueWorker extends QueueWorkerBase implements Contai
+   /**
+    * Anonymous subscription service.
+    *
+-   * @var \Drupal\anonymous_subscriptions\DefaultService
++   * @var DefaultService
+    */
+   protected $subscriptionService;
+ 
+@@ -34,7 +34,7 @@ class AnonymousSubscriptionQueueWorker extends QueueWorkerBase implements Contai
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\anonymous_subscriptions\DefaultService $subscriptionService
++   * @param DefaultService $subscriptionService
+    *   Default subscription service.
+    */
+   public function __construct(array $configuration, string $plugin_id, $plugin_definition, DefaultService $subscriptionService) {
+diff --git a/src/SubscriptionAccessControlHandler.php b/src/SubscriptionAccessControlHandler.php
+index 45aaaeb..8fdaa7c 100644
+--- a/src/SubscriptionAccessControlHandler.php
++++ b/src/SubscriptionAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\anonymous_subscriptions;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,7 +19,7 @@ class SubscriptionAccessControlHandler extends EntityAccessControlHandler {
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     switch ($operation) {
+       case 'delete':
+         return AccessResult::allowedIfHasPermission($account, 'delete anonymous_subscription entities');

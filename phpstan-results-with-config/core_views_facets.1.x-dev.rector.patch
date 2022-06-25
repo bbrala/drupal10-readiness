@@ -1,0 +1,974 @@
+diff --git a/core_views_facets.module b/core_views_facets.module
+index 286e91e..3ea371d 100644
+--- a/core_views_facets.module
++++ b/core_views_facets.module
+@@ -1,5 +1,13 @@
+ <?php
+ 
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\facets\FacetInterface;
++use Drupal\views\ViewExecutable;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\facets\FacetSource\FacetSourcePluginManager;
++use Drupal\facets\FacetManager\DefaultFacetManager;
++use Drupal\Core\Entity\EntityTypeInterface;
+ /**
+  * @file
+  * Contains core_views_facets.module.
+@@ -34,21 +42,21 @@ function core_views_facets_help($route_name, RouteMatchInterface $route_match) {
+ /**
+  * Implements hook_block_view_alter().
+  *
+- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++ * @throws PluginNotFoundException
+  *   Thrown if the entity type doesn't exist.
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++ * @throws InvalidPluginDefinitionException
+  *   Thrown if the storage handler couldn't be loaded.
+  */
+ function core_views_facets_block_view_facet_block_alter(array &$build, BlockPluginInterface $block) {
+   $facet_id = str_replace('facet_block' . PluginBase::DERIVATIVE_SEPARATOR, '', $block->getPluginId());
+-  /** @var \Drupal\facets\FacetInterface $facet */
++  /** @var FacetInterface $facet */
+   $facet = \Drupal::entityTypeManager()->getStorage('facets_facet')->load($facet_id);
+   if (!is_subclass_of($facet->getFacetSource(), CoreViewsFacetSourceBase::class)) {
+     return;
+   }
+-  /** @var \Drupal\core_views_facets\Plugin\facets\facet_source\CoreViewsFacetSourceBase $facet_source */
++  /** @var CoreViewsFacetSourceBase $facet_source */
+   $facet_source = $facet->getFacetSource();
+-  /** @var \Drupal\views\ViewExecutable $view */
++  /** @var ViewExecutable $view */
+   if ($view = $facet_source->getView()) {
+     if ($view->display_handler->ajaxEnabled()) {
+       $build['#attached']['library'][] = 'core_views_facets/core_views_facets.views.ajax';
+@@ -65,7 +73,7 @@ function core_views_facets_block_view_facet_block_alter(array &$build, BlockPlug
+  * We implement this to make sure that a facet gets removed on view updates, so
+  * we don't get broken facet blocks.
+  *
+- * @throws \Drupal\Core\Entity\EntityStorageException
++ * @throws EntityStorageException
+  *   In case of failures an exception is thrown.
+  */
+ function core_views_facets_entity_presave(EntityInterface $entity) {
+@@ -73,7 +81,7 @@ function core_views_facets_entity_presave(EntityInterface $entity) {
+   if ($entity instanceof View && !empty($entity->original)) {
+     if ($entity->original->get('display') !== $entity->get('display')) {
+ 
+-      /** @var \Drupal\facets\FacetSource\FacetSourcePluginManager $facet_source_plugin_manager */
++      /** @var FacetSourcePluginManager $facet_source_plugin_manager */
+       $facet_source_plugin_manager = \Drupal::getContainer()
+         ->get('plugin.manager.facets.facet_source');
+       $definitions = $facet_source_plugin_manager->getDefinitions();
+@@ -100,7 +108,7 @@ function core_views_facets_entity_presave(EntityInterface $entity) {
+       // Loop over all deleted sources and delete the facets that were linked to
+       // that source.
+       if (count($sources) > 0) {
+-        /** @var \Drupal\facets\FacetManager\DefaultFacetManager $fm */
++        /** @var DefaultFacetManager $fm */
+         $fm = \Drupal::getContainer()->get('facets.manager');
+         foreach ($sources as $source) {
+           $facets = $fm->getFacetsByFacetSourceId($source);
+@@ -119,6 +127,6 @@ function core_views_facets_entity_presave(EntityInterface $entity) {
+  * Implements hook_entity_type_alter().
+  */
+ function core_views_facets_entity_type_alter(array &$entity_types) {
+-  /** @var \Drupal\Core\Entity\EntityTypeInterface[] $entity_types */
++  /** @var EntityTypeInterface[] $entity_types */
+   $entity_types['facets_facet']->setFormClass('edit', ViewsFacetForm::class);
+ }
+diff --git a/src/CoreViewsFacetsFilterType.php b/src/CoreViewsFacetsFilterType.php
+index 79e2e2d..6b448dd 100644
+--- a/src/CoreViewsFacetsFilterType.php
++++ b/src/CoreViewsFacetsFilterType.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\core_views_facets;
+ 
++use Drupal\Core\Database\Query\Select;
++use Drupal\views\Plugin\views\relationship\RelationshipPluginBase;
++use Drupal\views\Plugin\views\query\Sql;
+ use Drupal\facets\Processor\ProcessorPluginBase;
+ use Drupal\facets\FacetInterface;
+ use Drupal\facets\Result\Result;
+@@ -18,7 +21,7 @@ abstract class CoreViewsFacetsFilterType extends ProcessorPluginBase implements
+   /**
+    * Entity Type Manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -31,7 +34,7 @@ abstract class CoreViewsFacetsFilterType extends ProcessorPluginBase implements
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager) {
+@@ -55,7 +58,7 @@ abstract class CoreViewsFacetsFilterType extends ProcessorPluginBase implements
+   /**
+    * Retrieves the entity type manager.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @return EntityTypeManagerInterface
+    *   The entity type manager.
+    */
+   protected function entityTypeManager() {
+@@ -65,32 +68,32 @@ abstract class CoreViewsFacetsFilterType extends ProcessorPluginBase implements
+   /**
+    * Alters the facet query before execution.
+    *
+-   * @param \Drupal\views\ViewExecutable $view
++   * @param ViewExecutable $view
+    *   The views executable the facet applies to.
+-   * @param \Drupal\views\Plugin\views\HandlerBase $handler
++   * @param HandlerBase $handler
+    *   The loaded views contextual filter handler.
+-   * @param \Drupal\facets\FacetInterface $facet
++   * @param FacetInterface $facet
+    *   The facet being executed.
+    *
+-   * @return null|\Drupal\Core\Database\Query\Select
++   * @return null|Select
+    *   The altered query object to be executed.
+    */
+   public function prepareQuery(ViewExecutable $view, HandlerBase $handler, FacetInterface $facet) {
+     $filter_table_alias = [];
+     $relationship = NULL;
+     if (!empty($handler->options['relationship']) && $handler->options['relationship'] !== 'none') {
+-      /** @var \Drupal\views\Plugin\views\relationship\RelationshipPluginBase $relationship_handler */
++      /** @var RelationshipPluginBase $relationship_handler */
+       $relationship_handler = $view->getDisplay()->getHandler('relationship', $handler->options['relationship']);
+       if ($relationship_handler) {
+         $relationship = $relationship_handler->alias;
+       }
+     }
+ 
+-    /** @var \Drupal\views\Plugin\views\query\Sql $view_query */
++    /** @var Sql $view_query */
+     $view_query = $view->query;
+     $filter_table_alias[] = $view_query->ensureTable($handler->table, $relationship);
+ 
+-    /** @var \Drupal\Core\Database\Query\Select $query */
++    /** @var Select $query */
+     $query = $view_query->query();
+ 
+     // The countQuery() method removes everything from the query, that doesn't
+@@ -151,12 +154,12 @@ abstract class CoreViewsFacetsFilterType extends ProcessorPluginBase implements
+    *
+    * @param \stdClass $row
+    *   The row as returned by fetchObject().
+-   * @param \Drupal\views\Plugin\views\HandlerBase $handler
++   * @param HandlerBase $handler
+    *   The loaded views contextual filter handler.
+-   * @param \Drupal\facets\FacetInterface $facet
++   * @param FacetInterface $facet
+    *   The facet being executed.
+    *
+-   * @return \Drupal\facets\Result\Result
++   * @return Result
+    *   A valid facet result entity.
+    */
+   public function processDatabaseRow(\stdClass $row, HandlerBase $handler, FacetInterface $facet) {
+diff --git a/src/CoreViewsFacetsFilterTypeInterface.php b/src/CoreViewsFacetsFilterTypeInterface.php
+index 3225c71..4ff2761 100644
+--- a/src/CoreViewsFacetsFilterTypeInterface.php
++++ b/src/CoreViewsFacetsFilterTypeInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\core_views_facets;
+ 
++use Drupal\Core\Database\Query\Select;
++use Drupal\facets\Result\Result;
+ use Drupal\facets\Processor\ProcessorInterface;
+ use Drupal\facets\FacetInterface;
+ use Drupal\views\ViewExecutable;
+@@ -16,14 +18,14 @@ interface CoreViewsFacetsFilterTypeInterface extends ProcessorInterface, Contain
+   /**
+    * Alters the facet query before execution.
+    *
+-   * @param \Drupal\views\ViewExecutable $view
++   * @param ViewExecutable $view
+    *   The views executable the facet applies to.
+-   * @param \Drupal\views\Plugin\views\HandlerBase $handler
++   * @param HandlerBase $handler
+    *   The loaded views contextual filter handler.
+-   * @param \Drupal\facets\FacetInterface $facet
++   * @param FacetInterface $facet
+    *   The facet being executed.
+    *
+-   * @return null|\Drupal\Core\Database\Query\Select
++   * @return null|Select
+    *   The altered query object to be executed.
+    */
+   public function prepareQuery(ViewExecutable $view, HandlerBase $handler, FacetInterface $facet);
+@@ -33,12 +35,12 @@ interface CoreViewsFacetsFilterTypeInterface extends ProcessorInterface, Contain
+    *
+    * @param \stdClass $row
+    *   The row as returned by fetchObject().
+-   * @param \Drupal\views\Plugin\views\HandlerBase $handler
++   * @param HandlerBase $handler
+    *   The loaded views contextual filter handler.
+-   * @param \Drupal\facets\FacetInterface $facet
++   * @param FacetInterface $facet
+    *   The facet being executed.
+    *
+-   * @return \Drupal\facets\Result\Result
++   * @return Result
+    *   A valid facet result entity.
+    */
+   public function processDatabaseRow(\stdClass $row, HandlerBase $handler, FacetInterface $facet);
+diff --git a/src/EventSubscriber/AjaxResponseSubscriber.php b/src/EventSubscriber/AjaxResponseSubscriber.php
+index 576ff27..f12333a 100644
+--- a/src/EventSubscriber/AjaxResponseSubscriber.php
++++ b/src/EventSubscriber/AjaxResponseSubscriber.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\core_views_facets\EventSubscriber;
+ 
++use Symfony\Component\HttpFoundation\Request;
++use Drupal\facets\Exception\InvalidProcessorException;
++use Drupal\facets\FacetInterface;
+ use Drupal\Core\Ajax\ReplaceCommand;
+ use Drupal\views\Ajax\ViewAjaxResponse;
+ use Drupal\Core\Plugin\PluginBase;
+@@ -19,23 +22,23 @@ class AjaxResponseSubscriber implements EventSubscriberInterface {
+   /**
+    * The facet manager.
+    *
+-   * @var \Drupal\facets\FacetManager\DefaultFacetManager
++   * @var DefaultFacetManager
+    */
+   protected $facetManager;
+ 
+   /**
+    * Current request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * Constructs a AjaxResponseSubscriber object.
+    *
+-   * @param \Drupal\facets\FacetManager\DefaultFacetManager $facet_manager
++   * @param DefaultFacetManager $facet_manager
+    *   The facet manager.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack used to retrieve the current request.
+    */
+   public function __construct(DefaultFacetManager $facet_manager, RequestStack $request_stack) {
+@@ -46,10 +49,10 @@ class AjaxResponseSubscriber implements EventSubscriberInterface {
+   /**
+    * Renders the ajax commands right before preparing the result.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\ResponseEvent $event
++   * @param ResponseEvent $event
+    *   The response event, which contains the possible AjaxResponse object.
+    *
+-   * @throws \Drupal\facets\Exception\InvalidProcessorException
++   * @throws InvalidProcessorException
+    */
+   public function onResponse(ResponseEvent $event) {
+     $response = $event->getResponse();
+@@ -85,7 +88,7 @@ class AjaxResponseSubscriber implements EventSubscriberInterface {
+       $contextual_filter_rendered_status = FALSE;
+     }
+ 
+-    /** @var \Drupal\facets\FacetInterface[] $facets */
++    /** @var FacetInterface[] $facets */
+     $facets = array_merge($exposed_facets, $contextual_facets);
+     foreach ($facets as $facet) {
+       $this->request->query->add($view_parameters);
+diff --git a/src/Form/ViewsFacetForm.php b/src/Form/ViewsFacetForm.php
+index 07e3bc5..176ada2 100644
+--- a/src/Form/ViewsFacetForm.php
++++ b/src/Form/ViewsFacetForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\core_views_facets\Form;
+ 
++use Drupal\facets\FacetInterface;
+ use Drupal\facets\Form\FacetForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\facets\Plugin\facets\facet_source\SearchApiDisplay;
+@@ -18,7 +19,7 @@ class ViewsFacetForm extends FacetForm {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\facets\FacetInterface $facet */
++    /** @var FacetInterface $facet */
+     $facet = $this->entity;
+ 
+     $hard_limit_options = [1, 3, 5, 10, 15, 20, 30, 40, 50, 75, 100, 250, 500];
+diff --git a/src/Plugin/facets/facet_source/CoreViewsContextualFilter.php b/src/Plugin/facets/facet_source/CoreViewsContextualFilter.php
+index a89a7b2..b331beb 100644
+--- a/src/Plugin/facets/facet_source/CoreViewsContextualFilter.php
++++ b/src/Plugin/facets/facet_source/CoreViewsContextualFilter.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\core_views_facets\Plugin\facets\facet_source;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\facets\FacetSource\FacetSourcePluginInterface;
++use Drupal\core_views_facets\CoreViewsFacetsFilterTypeInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -28,7 +33,7 @@ class CoreViewsContextualFilter extends CoreViewsFacetSourceBase {
+   /**
+    * The filter type plugin manager.
+    *
+-   * @var \Drupal\core_views_facets\CoreViewsFacetsContextualFilterTypeManager
++   * @var CoreViewsFacetsContextualFilterTypeManager
+    */
+   protected $contextualFilterTypePluginManager;
+ 
+@@ -41,25 +46,25 @@ class CoreViewsContextualFilter extends CoreViewsFacetSourceBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\facets\QueryType\QueryTypePluginManager $query_type_plugin_manager
++   * @param QueryTypePluginManager $query_type_plugin_manager
+    *   The query type plugin manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity manager.
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The master Request.
+-   * @param \Drupal\Core\Routing\RouteProviderInterface $route_provider
++   * @param RouteProviderInterface $route_provider
+    *   The route provider.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+-   * @param \Drupal\views\ViewExecutableFactory $executable_factory
++   * @param ViewExecutableFactory $executable_factory
+    *   The view executable factory.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\core_views_facets\CoreViewsFacetsContextualFilterTypeManager $contextual_filter_type_plugin_manager
++   * @param CoreViewsFacetsContextualFilterTypeManager $contextual_filter_type_plugin_manager
+    *   The filter type plugin manager.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, QueryTypePluginManager $query_type_plugin_manager, EntityTypeManagerInterface $entity_type_manager, Request $request, RouteProviderInterface $route_provider, RouteMatchInterface $route_match, ViewExecutableFactory $executable_factory, EntityFieldManagerInterface $entity_field_manager, CoreViewsFacetsContextualFilterTypeManager $contextual_filter_type_plugin_manager) {
+     parent::__construct($configuration, $plugin_id, $plugin_definition, $query_type_plugin_manager, $entity_type_manager, $request, $route_provider, $route_match, $executable_factory, $entity_field_manager);
+@@ -70,8 +75,8 @@ class CoreViewsContextualFilter extends CoreViewsFacetSourceBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition) {
+     return new static(
+@@ -105,13 +110,13 @@ class CoreViewsContextualFilter extends CoreViewsFacetSourceBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function fillFacetsWithResults(array $facets) {
+     foreach ($facets as $facet) {
+       if ($facet->getOnlyVisibleWhenFacetSourceIsVisible()) {
+         // Ignore currently unnecessary facets.
+-        /** @var \Drupal\facets\FacetSource\FacetSourcePluginInterface $facet_source */
++        /** @var FacetSourcePluginInterface $facet_source */
+         $facet_source = $facet->getFacetSource();
+         if (!$facet_source->isRenderedInCurrentRequest()) {
+           continue;
+@@ -216,7 +221,7 @@ class CoreViewsContextualFilter extends CoreViewsFacetSourceBase {
+       return FALSE;
+     }
+ 
+-    /** @var \Drupal\views\Plugin\views\argument\ArgumentPluginBase $argument */
++    /** @var ArgumentPluginBase $argument */
+     $filter = $this->view->getHandler($this->pluginDefinition['view_display'], 'argument', $argument_id);
+     return $filter ?: FALSE;
+   }
+@@ -236,13 +241,13 @@ class CoreViewsContextualFilter extends CoreViewsFacetSourceBase {
+   /**
+    * Load the core_views_facet contextual filter type or fall back to generic.
+    *
+-   * @param \Drupal\views\Plugin\views\argument\ArgumentPluginBase $argument
++   * @param ArgumentPluginBase $argument
+    *   The views filter handler.
+    *
+-   * @return \Drupal\core_views_facets\CoreViewsFacetsFilterTypeInterface
++   * @return CoreViewsFacetsFilterTypeInterface
+    *   The loaded filter type plugin or null.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    *   If the instance cannot be created, such as if the ID is invalid.
+    */
+   protected function loadFacetCoreViewsContextualFilterTypePlugin(ArgumentPluginBase $argument) {
+@@ -251,17 +256,17 @@ class CoreViewsContextualFilter extends CoreViewsFacetSourceBase {
+     $custom_filter_id = $argument->view->id() . '-' . $argument->field;
+     // Allows to handle custom scenarios.
+     if (!empty($filter_type_definitions[$custom_filter_id])) {
+-      /** @var \Drupal\core_views_facets\CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
++      /** @var CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
+       $facet_core_views_filter_plugin = $this->contextualFilterTypePluginManager->createInstance($custom_filter_id);
+     }
+     // Default filter types for specific filter plugins.
+     elseif (!empty($filter_type_definitions[$argument->pluginId])) {
+-      /** @var \Drupal\core_views_facets\CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
++      /** @var CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
+       $facet_core_views_filter_plugin = $this->contextualFilterTypePluginManager->createInstance($argument->pluginId);
+     }
+     // Generic filter type.
+     else {
+-      /** @var \Drupal\core_views_facets\CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
++      /** @var CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
+       $facet_core_views_filter_plugin = $this->contextualFilterTypePluginManager->createInstance('generic');
+     }
+ 
+@@ -271,7 +276,7 @@ class CoreViewsContextualFilter extends CoreViewsFacetSourceBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\facets\Exception\Exception
++   * @throws Exception
+    */
+   public function getDataDefinition($field_name) {
+     $this->view->build($this->pluginDefinition['view_display']);
+diff --git a/src/Plugin/facets/facet_source/CoreViewsContextualFilterDeriver.php b/src/Plugin/facets/facet_source/CoreViewsContextualFilterDeriver.php
+index 70476a4..c58177c 100644
+--- a/src/Plugin/facets/facet_source/CoreViewsContextualFilterDeriver.php
++++ b/src/Plugin/facets/facet_source/CoreViewsContextualFilterDeriver.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\core_views_facets\Plugin\facets\facet_source;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\views\Entity\View;
+ use Drupal\facets\FacetSource\FacetSourceDeriverBase;
+ use Drupal\views\Plugin\views\query\Sql;
+ use Drupal\Core\StringTranslation\TranslationInterface;
+@@ -23,7 +27,7 @@ class CoreViewsContextualFilterDeriver extends FacetSourceDeriverBase {
+   /**
+    * The view storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $viewStorage;
+ 
+@@ -32,13 +36,13 @@ class CoreViewsContextualFilterDeriver extends FacetSourceDeriverBase {
+    *
+    * @param string $base_plugin_id
+    *   The base plugin ID.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation service.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct($base_plugin_id, EntityTypeManagerInterface $entity_type_manager, TranslationInterface $string_translation) {
+     $this->basePluginId = $base_plugin_id;
+@@ -65,7 +69,7 @@ class CoreViewsContextualFilterDeriver extends FacetSourceDeriverBase {
+     if (!isset($this->derivatives[$this->basePluginId])) {
+       $plugin_derivatives = [];
+ 
+-      /** @var \Drupal\views\Entity\View[] $all_views */
++      /** @var View[] $all_views */
+       $all_views = $this->viewStorage->loadMultiple();
+       foreach ($all_views as $view) {
+         // Do not return results for disabled views.
+diff --git a/src/Plugin/facets/facet_source/CoreViewsExposedFilter.php b/src/Plugin/facets/facet_source/CoreViewsExposedFilter.php
+index cc3d6d5..70bad67 100644
+--- a/src/Plugin/facets/facet_source/CoreViewsExposedFilter.php
++++ b/src/Plugin/facets/facet_source/CoreViewsExposedFilter.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\core_views_facets\Plugin\facets\facet_source;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\facets\FacetSource\FacetSourcePluginInterface;
++use Drupal\core_views_facets\CoreViewsFacetsFilterTypeInterface;
+ use Drupal\Core\Database\DatabaseExceptionWrapper;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -29,7 +34,7 @@ class CoreViewsExposedFilter extends CoreViewsFacetSourceBase {
+   /**
+    * The filter type plugin manager.
+    *
+-   * @var \Drupal\core_views_facets\CoreViewsFacetsExposedFilterTypeManager
++   * @var CoreViewsFacetsExposedFilterTypeManager
+    */
+   protected $exposedFilterTypePluginManager;
+ 
+@@ -42,25 +47,25 @@ class CoreViewsExposedFilter extends CoreViewsFacetSourceBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\facets\QueryType\QueryTypePluginManager $query_type_plugin_manager
++   * @param QueryTypePluginManager $query_type_plugin_manager
+    *   The query type plugin manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity manager.
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The master Request.
+-   * @param \Drupal\Core\Routing\RouteProviderInterface $route_provider
++   * @param RouteProviderInterface $route_provider
+    *   The route provider.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+-   * @param \Drupal\views\ViewExecutableFactory $executable_factory
++   * @param ViewExecutableFactory $executable_factory
+    *   The view executable factory.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\core_views_facets\CoreViewsFacetsExposedFilterTypeManager $exposed_filter_type_plugin_manager
++   * @param CoreViewsFacetsExposedFilterTypeManager $exposed_filter_type_plugin_manager
+    *   The filter type plugin manager.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, QueryTypePluginManager $query_type_plugin_manager, EntityTypeManagerInterface $entity_type_manager, Request $request, RouteProviderInterface $route_provider, RouteMatchInterface $route_match, ViewExecutableFactory $executable_factory, EntityFieldManagerInterface $entity_field_manager, CoreViewsFacetsExposedFilterTypeManager $exposed_filter_type_plugin_manager) {
+     parent::__construct($configuration, $plugin_id, $plugin_definition, $query_type_plugin_manager, $entity_type_manager, $request, $route_provider, $route_match, $executable_factory, $entity_field_manager);
+@@ -71,8 +76,8 @@ class CoreViewsExposedFilter extends CoreViewsFacetSourceBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition) {
+     return new static(
+@@ -106,13 +111,13 @@ class CoreViewsExposedFilter extends CoreViewsFacetSourceBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function fillFacetsWithResults(array $facets) {
+     foreach ($facets as $facet) {
+       if ($facet->getOnlyVisibleWhenFacetSourceIsVisible()) {
+         // Ignore currently unnecessary facets.
+-        /** @var \Drupal\facets\FacetSource\FacetSourcePluginInterface $facet_source */
++        /** @var FacetSourcePluginInterface $facet_source */
+         $facet_source = $facet->getFacetSource();
+         if (!$facet_source->isRenderedInCurrentRequest()) {
+           continue;
+@@ -222,7 +227,7 @@ class CoreViewsExposedFilter extends CoreViewsFacetSourceBase {
+    * @param string|null $filter_id
+    *   The string ID of a filter.
+    *
+-   * @return \Drupal\views\Plugin\views\filter\FilterPluginBase|bool
++   * @return FilterPluginBase|bool
+    *   An array with the definition of the filter, or FALSE when the plugin
+    *   doesn't exist.
+    */
+@@ -231,7 +236,7 @@ class CoreViewsExposedFilter extends CoreViewsFacetSourceBase {
+       return FALSE;
+     }
+ 
+-    /** @var \Drupal\views\Plugin\views\filter\FilterPluginBase $filter */
++    /** @var FilterPluginBase $filter */
+     $filter = $this->view->getHandler($this->pluginDefinition['view_display'], 'filter', $filter_id);
+     return $filter ?: FALSE;
+   }
+@@ -254,13 +259,13 @@ class CoreViewsExposedFilter extends CoreViewsFacetSourceBase {
+   /**
+    * Load the core_views_facet filter type or fall back to generic.
+    *
+-   * @param \Drupal\views\Plugin\views\filter\FilterPluginBase $filter
++   * @param FilterPluginBase $filter
+    *   The views filter handler.
+    *
+-   * @return \Drupal\core_views_facets\CoreViewsFacetsFilterTypeInterface
++   * @return CoreViewsFacetsFilterTypeInterface
+    *   The loaded filter type plugin or null.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    *   If the instance cannot be created, such as if the ID is invalid.
+    */
+   protected function loadFacetCoreViewsExposedFilterTypePlugin(FilterPluginBase $filter) {
+@@ -269,17 +274,17 @@ class CoreViewsExposedFilter extends CoreViewsFacetSourceBase {
+     $custom_filter_id = $filter->view->id() . '-' . $filter->field;
+     // Allows to handle custom scenarios.
+     if (!empty($filter_type_definitions[$custom_filter_id])) {
+-      /** @var \Drupal\core_views_facets\CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
++      /** @var CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
+       $facet_core_views_filter_plugin = $this->exposedFilterTypePluginManager->createInstance($custom_filter_id);
+     }
+     // Default filter types for specific filter plugins.
+     elseif (!empty($filter_type_definitions[$filter->pluginId])) {
+-      /** @var \Drupal\core_views_facets\CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
++      /** @var CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
+       $facet_core_views_filter_plugin = $this->exposedFilterTypePluginManager->createInstance($filter->pluginId);
+     }
+     // Generic filter type.
+     else {
+-      /** @var \Drupal\core_views_facets\CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
++      /** @var CoreViewsFacetsFilterTypeInterface $facet_core_views_filter_plugin */
+       $facet_core_views_filter_plugin = $this->exposedFilterTypePluginManager->createInstance('generic');
+     }
+ 
+@@ -289,7 +294,7 @@ class CoreViewsExposedFilter extends CoreViewsFacetSourceBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\facets\Exception\Exception
++   * @throws Exception
+    */
+   public function getDataDefinition($field_name) {
+     $this->view->build($this->pluginDefinition['view_display']);
+diff --git a/src/Plugin/facets/facet_source/CoreViewsExposedFilterDeriver.php b/src/Plugin/facets/facet_source/CoreViewsExposedFilterDeriver.php
+index cb0ed1f..6d42580 100644
+--- a/src/Plugin/facets/facet_source/CoreViewsExposedFilterDeriver.php
++++ b/src/Plugin/facets/facet_source/CoreViewsExposedFilterDeriver.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\core_views_facets\Plugin\facets\facet_source;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\views\Entity\View;
+ use Drupal\facets\FacetSource\FacetSourceDeriverBase;
+ use Drupal\views\Plugin\views\query\Sql;
+ use Drupal\Core\StringTranslation\TranslationInterface;
+@@ -23,7 +27,7 @@ class CoreViewsExposedFilterDeriver extends FacetSourceDeriverBase {
+   /**
+    * The view storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $viewStorage;
+ 
+@@ -32,13 +36,13 @@ class CoreViewsExposedFilterDeriver extends FacetSourceDeriverBase {
+    *
+    * @param string $base_plugin_id
+    *   The base plugin ID.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation service.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct($base_plugin_id, EntityTypeManagerInterface $entity_type_manager, TranslationInterface $string_translation) {
+     $this->basePluginId = $base_plugin_id;
+@@ -65,7 +69,7 @@ class CoreViewsExposedFilterDeriver extends FacetSourceDeriverBase {
+     if (!isset($this->derivatives[$this->basePluginId])) {
+       $plugin_derivatives = [];
+ 
+-      /** @var \Drupal\views\Entity\View[] $all_views */
++      /** @var View[] $all_views */
+       $all_views = $this->viewStorage->loadMultiple();
+       foreach ($all_views as $view) {
+         // Do not return results for disabled views.
+diff --git a/src/Plugin/facets/facet_source/CoreViewsFacetSourceBase.php b/src/Plugin/facets/facet_source/CoreViewsFacetSourceBase.php
+index af618b2..8e1cd27 100644
+--- a/src/Plugin/facets/facet_source/CoreViewsFacetSourceBase.php
++++ b/src/Plugin/facets/facet_source/CoreViewsFacetSourceBase.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\core_views_facets\Plugin\facets\facet_source;
+ 
++use Drupal\views\ViewExecutable;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\views\ViewEntityInterface;
+ use Symfony\Component\Routing\Exception\RouteNotFoundException;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -24,14 +28,14 @@ abstract class CoreViewsFacetSourceBase extends FacetSourcePluginBase {
+   /**
+    * The current view.
+    *
+-   * @var \Drupal\views\ViewExecutable
++   * @var ViewExecutable
+    */
+   protected $view;
+ 
+   /**
+    * The entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface|null
++   * @var EntityTypeManagerInterface|null
+    */
+   protected $entityTypeManager;
+ 
+@@ -45,28 +49,28 @@ abstract class CoreViewsFacetSourceBase extends FacetSourcePluginBase {
+   /**
+    * The master request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * The route provider.
+    *
+-   * @var \Drupal\Core\Routing\RouteProviderInterface
++   * @var RouteProviderInterface
+    */
+   protected $routeProvider;
+ 
+   /**
+    * The route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+@@ -79,23 +83,23 @@ abstract class CoreViewsFacetSourceBase extends FacetSourcePluginBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\facets\QueryType\QueryTypePluginManager $query_type_plugin_manager
++   * @param QueryTypePluginManager $query_type_plugin_manager
+    *   The query type plugin manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity manager.
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The master Request.
+-   * @param \Drupal\Core\Routing\RouteProviderInterface $route_provider
++   * @param RouteProviderInterface $route_provider
+    *   The route provider.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+-   * @param \Drupal\views\ViewExecutableFactory $executable_factory
++   * @param ViewExecutableFactory $executable_factory
+    *   The view executable factory.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, QueryTypePluginManager $query_type_plugin_manager, EntityTypeManagerInterface $entity_type_manager, Request $request, RouteProviderInterface $route_provider, RouteMatchInterface $route_match, ViewExecutableFactory $executable_factory, EntityFieldManagerInterface $entity_field_manager) {
+     parent::__construct($configuration, $plugin_id, $plugin_definition, $query_type_plugin_manager);
+@@ -105,7 +109,7 @@ abstract class CoreViewsFacetSourceBase extends FacetSourcePluginBase {
+     $this->routeProvider = $route_provider;
+     $this->routeMatch = $route_match;
+     // Load the view.
+-    /** @var \Drupal\views\ViewEntityInterface $view */
++    /** @var ViewEntityInterface $view */
+     $view = $this->entityTypeManager->getStorage('view')
+       ->load($plugin_definition['view_id']);
+     $this->view = $executable_factory->get($view);
+@@ -134,7 +138,7 @@ abstract class CoreViewsFacetSourceBase extends FacetSourcePluginBase {
+   /**
+    * Return the current view.
+    *
+-   * @return \Drupal\views\ViewExecutable
++   * @return ViewExecutable
+    *   Current view.
+    */
+   public function getView() {
+@@ -333,7 +337,7 @@ abstract class CoreViewsFacetSourceBase extends FacetSourcePluginBase {
+   /**
+    * Optionally get JS settings when AJAX is enabled.
+    *
+-   * @param \Drupal\facets\FacetInterface $facet
++   * @param FacetInterface $facet
+    *   The facet to get settings for.
+    *
+    * @return array
+@@ -366,7 +370,7 @@ abstract class CoreViewsFacetSourceBase extends FacetSourcePluginBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\facets\Exception\Exception
++   * @throws Exception
+    */
+   public function getDataDefinition($field_name) {
+     throw new Exception("Field with name {$field_name} does not have a definition");
+diff --git a/src/Plugin/facets/processor/exposed_filter_type/Term.php b/src/Plugin/facets/processor/exposed_filter_type/Term.php
+index 264b7d6..1ebbaf6 100644
+--- a/src/Plugin/facets/processor/exposed_filter_type/Term.php
++++ b/src/Plugin/facets/processor/exposed_filter_type/Term.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\core_views_facets\Plugin\facets\processor\exposed_filter_type;
+ 
++use Drupal\taxonomy\TermStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\core_views_facets\CoreViewsFacetsFilterType;
+ use Drupal\facets\FacetInterface;
+ use Drupal\views\Plugin\views\HandlerBase;
+@@ -20,7 +23,7 @@ class Term extends CoreViewsFacetsFilterType {
+   /**
+    * Locality storage.
+    *
+-   * @var \Drupal\taxonomy\TermStorageInterface
++   * @var TermStorageInterface
+    */
+   protected $storage;
+ 
+@@ -33,11 +36,11 @@ class Term extends CoreViewsFacetsFilterType {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager) {
+     parent::__construct($configuration, $plugin_id, $plugin_definition, $entity_type_manager);
+diff --git a/src/Plugin/facets/url_processor/CoreViewsUrlProcessor.php b/src/Plugin/facets/url_processor/CoreViewsUrlProcessor.php
+index f72d2f6..174992c 100644
+--- a/src/Plugin/facets/url_processor/CoreViewsUrlProcessor.php
++++ b/src/Plugin/facets/url_processor/CoreViewsUrlProcessor.php
+@@ -2,6 +2,13 @@
+ 
+ namespace Drupal\core_views_facets\Plugin\facets\url_processor;
+ 
++use Drupal\views\ViewExecutable;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\facets\Exception\InvalidProcessorException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\views\ViewEntityInterface;
++use Drupal\facets\Result\ResultInterface;
+ use Drupal\facets\FacetInterface;
+ use Drupal\facets\UrlProcessor\UrlProcessorPluginBase;
+ use Drupal\core_views_facets\Plugin\facets\facet_source\CoreViewsExposedFilter;
+@@ -29,21 +36,21 @@ class CoreViewsUrlProcessor extends UrlProcessorPluginBase {
+   /**
+    * The current view.
+    *
+-   * @var \Drupal\views\ViewExecutable
++   * @var ViewExecutable
+    */
+   protected $currentView;
+ 
+   /**
+    * The factory to load a view executable with.
+    *
+-   * @var \Drupal\views\ViewExecutableFactory
++   * @var ViewExecutableFactory
+    */
+   protected $executableFactory;
+ 
+   /**
+    * The view storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $storage;
+ 
+@@ -56,16 +63,16 @@ class CoreViewsUrlProcessor extends UrlProcessorPluginBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   A request object for the current request.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The Entity Type Manager.
+-   * @param \Drupal\views\ViewExecutableFactory $executable_factory
++   * @param ViewExecutableFactory $executable_factory
+    *   The view executable factory.
+    *
+-   * @throws \Drupal\facets\Exception\InvalidProcessorException
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidProcessorException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, Request $request, EntityTypeManagerInterface $entity_type_manager, ViewExecutableFactory $executable_factory) {
+     parent::__construct($configuration, $plugin_id, $plugin_definition, $request, $entity_type_manager);
+@@ -105,7 +112,7 @@ class CoreViewsUrlProcessor extends UrlProcessorPluginBase {
+     ) {
+       $map = $source->getViewsArgumentsMap();
+       // Load the view.
+-      /** @var \Drupal\views\ViewEntityInterface $view */
++      /** @var ViewEntityInterface $view */
+       $view = $this->storage->load($source->pluginDefinition['view_id']);
+       $this->currentView = $this->executableFactory->get($view);
+       $this->currentView->setDisplay($source->pluginDefinition['view_display']);
+@@ -118,7 +125,7 @@ class CoreViewsUrlProcessor extends UrlProcessorPluginBase {
+           $views_filter = $source->getViewsFilterDefinition($facet->getFieldIdentifier());
+           $views_filter_parameter = empty($views_filter['expose']) ? $facet->getFieldIdentifier() : $views_filter['expose']['identifier'];
+ 
+-          /** @var \Drupal\facets\Result\ResultInterface $result */
++          /** @var ResultInterface $result */
+           foreach ($results as &$result) {
+             $result_get_params = clone $get_params;
+ 
+@@ -174,7 +181,7 @@ class CoreViewsUrlProcessor extends UrlProcessorPluginBase {
+           return $results;
+ 
+         case $source instanceof CoreViewsContextualFilter:
+-          /** @var \Drupal\facets\Result\ResultInterface $result */
++          /** @var ResultInterface $result */
+           foreach ($results as &$result) {
+             $request_arguments = [];
+             foreach ($map as $views_argument_id => $current_argument) {

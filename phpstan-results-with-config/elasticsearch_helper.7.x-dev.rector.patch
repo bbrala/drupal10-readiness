@@ -1,0 +1,1538 @@
+diff --git a/elasticsearch_helper.api.php b/elasticsearch_helper.api.php
+index 50fed93..dff6e26 100644
+--- a/elasticsearch_helper.api.php
++++ b/elasticsearch_helper.api.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Elasticsearch\ClientBuilder;
+ /**
+  * @file
+  * Hooks provided by the elasticsearch_helper module.
+@@ -18,7 +19,7 @@ use \Drupal\Core\Entity\Query\QueryInterface;
+  * @param \Elasticsearch\ClientBuilder
+  *   The ClientBuilder object.
+  */
+-function hook_elasticsearch_helper_client_builder_alter(\Elasticsearch\ClientBuilder $clientBuilder) {
++function hook_elasticsearch_helper_client_builder_alter(ClientBuilder $clientBuilder) {
+   // Send log entries from the client directly to Drupal's log.
+   $clientBuilder->setLogger(\Drupal::logger('elasticsearch'));
+ }
+@@ -26,7 +27,7 @@ function hook_elasticsearch_helper_client_builder_alter(\Elasticsearch\ClientBui
+ /**
+  * Alters the entity query which selects entities for reindexing.
+  *
+- * @param \Drupal\Core\Entity\Query\QueryInterface $query
++ * @param QueryInterface $query
+  *   Entity query instance.
+  * @param $entity_type
+  *   Type of entities which need to be re-indexed.
+diff --git a/elasticsearch_helper.install b/elasticsearch_helper.install
+index 00012ba..13a6931 100644
+--- a/elasticsearch_helper.install
++++ b/elasticsearch_helper.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\user\RoleInterface;
+ /**
+  * @file
+  * Installation functions for the Elasticsearch Helper module.
+@@ -129,7 +130,7 @@ function elasticsearch_helper_update_8003() {
+   $mistyped_permission = 'configured elasticsearch helper';
+   $permission = 'configure elasticsearch helper';
+ 
+-  /** @var \Drupal\user\RoleInterface $role */
++  /** @var RoleInterface $role */
+   foreach (Role::loadMultiple() as $role) {
+     if ($role->hasPermission($mistyped_permission)) {
+       $role->revokePermission($mistyped_permission);
+diff --git a/elasticsearch_helper.module b/elasticsearch_helper.module
+index 89fc659..1c69a69 100644
+--- a/elasticsearch_helper.module
++++ b/elasticsearch_helper.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexManager;
+ /**
+  * @file
+  * This module provides tools to integrate elasticsearch with Drupal.
+@@ -14,7 +15,7 @@ use Drupal\Core\Entity\Query\QueryInterface;
+ function elasticsearch_helper_entity_insert(EntityInterface $entity) {
+   $config = \Drupal::config('elasticsearch_helper.settings');
+ 
+-  /** @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexManager $index_plugin_manager */
++  /** @var ElasticsearchIndexManager $index_plugin_manager */
+   $index_plugin_manager = \Drupal::service('plugin.manager.elasticsearch_index.processor');
+ 
+   if ($config->get('defer_indexing')) {
+@@ -36,7 +37,7 @@ function elasticsearch_helper_entity_update(EntityInterface $entity) {
+  * Implements hook_entity_translation_delete().
+  */
+ function elasticsearch_helper_entity_translation_delete(EntityInterface $entity) {
+-  /** @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexManager $index_plugin_manager */
++  /** @var ElasticsearchIndexManager $index_plugin_manager */
+   $index_plugin_manager = \Drupal::service('plugin.manager.elasticsearch_index.processor');
+   $index_plugin_manager->deleteEntity($entity);
+ }
+@@ -52,7 +53,7 @@ function elasticsearch_helper_entity_delete(EntityInterface $entity) {
+  * Implements hook_modules_installed().
+  */
+ function elasticsearch_helper_modules_installed($modules) {
+-  /** @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexManager $index_plugin_manager */
++  /** @var ElasticsearchIndexManager $index_plugin_manager */
+   $index_plugin_manager = \Drupal::service('plugin.manager.elasticsearch_index.processor');
+ 
+   foreach ($index_plugin_manager->getDefinitions() as $plugin) {
+@@ -68,7 +69,7 @@ function elasticsearch_helper_modules_installed($modules) {
+  * Implements hook_module_preuninstall().
+  */
+ function elasticsearch_helper_module_preuninstall($module) {
+-  /** @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexManager $index_plugin_manager */
++  /** @var ElasticsearchIndexManager $index_plugin_manager */
+   $index_plugin_manager = \Drupal::service('plugin.manager.elasticsearch_index.processor');
+ 
+   foreach ($index_plugin_manager->getDefinitions() as $plugin) {
+diff --git a/examples/elasticsearch_helper_example/src/EventSubscriber/ReindexEventSubscriber.php b/examples/elasticsearch_helper_example/src/EventSubscriber/ReindexEventSubscriber.php
+index f430bf6..a672789 100644
+--- a/examples/elasticsearch_helper_example/src/EventSubscriber/ReindexEventSubscriber.php
++++ b/examples/elasticsearch_helper_example/src/EventSubscriber/ReindexEventSubscriber.php
+@@ -29,7 +29,7 @@ class ReindexEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Replaces the callback to dummy callback.
+    *
+-   * @param \Drupal\elasticsearch_helper\Event\ElasticsearchHelperCallbackEvent $event
++   * @param ElasticsearchHelperCallbackEvent $event
+    */
+   public function onReindex(ElasticsearchHelperCallbackEvent $event) {
+     $plugin = $event->getPluginInstance();
+diff --git a/examples/elasticsearch_helper_example/src/Plugin/ElasticsearchIndex/MultilingualContentIndex.php b/examples/elasticsearch_helper_example/src/Plugin/ElasticsearchIndex/MultilingualContentIndex.php
+index ac3bc46..7d229e4 100644
+--- a/examples/elasticsearch_helper_example/src/Plugin/ElasticsearchIndex/MultilingualContentIndex.php
++++ b/examples/elasticsearch_helper_example/src/Plugin/ElasticsearchIndex/MultilingualContentIndex.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\elasticsearch_helper_example\Plugin\ElasticsearchIndex;
+ 
++use Drupal\node\NodeInterface;
+ use Drupal\Core\Language\LanguageManagerInterface;
+ use Drupal\elasticsearch_helper\Elasticsearch\Index\FieldDefinition;
+ use Drupal\elasticsearch_helper\Elasticsearch\Index\MappingDefinition;
+@@ -24,7 +25,7 @@ use Symfony\Component\Serializer\Serializer;
+ class MultilingualContentIndex extends ElasticsearchIndexBase {
+ 
+   /**
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $language_manager;
+ 
+@@ -35,9 +36,9 @@ class MultilingualContentIndex extends ElasticsearchIndexBase {
+    * @param $plugin_id
+    * @param $plugin_definition
+    * @param \Elasticsearch\Client $client
+-   * @param \Symfony\Component\Serializer\Serializer $serializer
+-   * @param \Psr\Log\LoggerInterface $logger
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param Serializer $serializer
++   * @param LoggerInterface $logger
++   * @param LanguageManagerInterface $language_manager
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, Client $client, Serializer $serializer, LoggerInterface $logger, LanguageManagerInterface $language_manager) {
+     parent::__construct($configuration, $plugin_id, $plugin_definition, $client, $serializer, $logger);
+@@ -64,8 +65,7 @@ class MultilingualContentIndex extends ElasticsearchIndexBase {
+    * {@inheritdoc}
+    */
+   public function serialize($source, $context = []) {
+-    /** @var \Drupal\node\NodeInterface $source */
+-
++    /** @var NodeInterface $source */
+     $data = parent::serialize($source, $context);
+ 
+     // Add the language code to be used as a token.
+@@ -78,7 +78,7 @@ class MultilingualContentIndex extends ElasticsearchIndexBase {
+    * {@inheritdoc}
+    */
+   public function index($source) {
+-    /** @var \Drupal\node\NodeInterface $source */
++    /** @var NodeInterface $source */
+     foreach ($source->getTranslationLanguages() as $langcode => $language) {
+       $translation = $source->getTranslation($langcode);
+       parent::index($translation);
+@@ -89,7 +89,7 @@ class MultilingualContentIndex extends ElasticsearchIndexBase {
+    * {@inheritdoc}
+    */
+   public function delete($source) {
+-    /** @var \Drupal\node\NodeInterface $source */
++    /** @var NodeInterface $source */
+     foreach ($source->getTranslationLanguages() as $langcode => $language) {
+       $translation = $source->getTranslation($langcode);
+       parent::delete($translation);
+diff --git a/examples/elasticsearch_helper_example/src/Plugin/ElasticsearchIndex/TimeBasedIndex.php b/examples/elasticsearch_helper_example/src/Plugin/ElasticsearchIndex/TimeBasedIndex.php
+index 123c50a..90ae371 100644
+--- a/examples/elasticsearch_helper_example/src/Plugin/ElasticsearchIndex/TimeBasedIndex.php
++++ b/examples/elasticsearch_helper_example/src/Plugin/ElasticsearchIndex/TimeBasedIndex.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\elasticsearch_helper_example\Plugin\ElasticsearchIndex;
+ 
++use Drupal\node\Entity\Node;
+ use Drupal\elasticsearch_helper\Elasticsearch\Index\FieldDefinition;
+ use Drupal\elasticsearch_helper\Elasticsearch\Index\MappingDefinition;
+ use Drupal\elasticsearch_helper\ElasticsearchClientVersion;
+@@ -23,8 +24,7 @@ class TimeBasedIndex extends ElasticsearchIndexBase {
+    * {@inheritdoc}
+    */
+   public function serialize($source, $context = []) {
+-    /** @var \Drupal\node\Entity\Node $source */
+-
++    /** @var Node $source */
+     $data = parent::serialize($source);
+ 
+     // Add the creation date.
+diff --git a/examples/elasticsearch_helper_example/src/Plugin/Normalizer/NodeNormalizer.php b/examples/elasticsearch_helper_example/src/Plugin/Normalizer/NodeNormalizer.php
+index 147c5dc..7283a58 100644
+--- a/examples/elasticsearch_helper_example/src/Plugin/Normalizer/NodeNormalizer.php
++++ b/examples/elasticsearch_helper_example/src/Plugin/Normalizer/NodeNormalizer.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\elasticsearch_helper_example\Plugin\Normalizer;
+ 
++use Drupal\node\Entity\Node;
+ use Drupal\serialization\Normalizer\ContentEntityNormalizer;
+ 
+ /**
+@@ -27,8 +28,7 @@ class NodeNormalizer extends ContentEntityNormalizer {
+    * {@inheritdoc}
+    */
+   public function normalize($object, $format = NULL, array $context = []) {
+-    /** @var \Drupal\node\Entity\Node $object */
+-
++    /** @var Node $object */
+     $data = [
+       'id' => $object->id(),
+       'uuid' => $object->uuid(),
+diff --git a/src/Annotation/ElasticsearchIndex.php b/src/Annotation/ElasticsearchIndex.php
+index f0b7389..a5e5826 100644
+--- a/src/Annotation/ElasticsearchIndex.php
++++ b/src/Annotation/ElasticsearchIndex.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\elasticsearch_helper\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -24,7 +25,7 @@ class ElasticsearchIndex extends Plugin {
+   /**
+    * The label of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Commands/ElasticsearchHelperCommands.php b/src/Commands/ElasticsearchHelperCommands.php
+index b141f85..280056d 100644
+--- a/src/Commands/ElasticsearchHelperCommands.php
++++ b/src/Commands/ElasticsearchHelperCommands.php
+@@ -1,6 +1,8 @@
+ <?php
+ namespace Drupal\elasticsearch_helper\Commands;
+ 
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface;
+ use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
+ use Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexManager;
+ use Drush\Commands\DrushCommands;
+@@ -19,7 +21,7 @@ class ElasticsearchHelperCommands extends DrushCommands {
+   /**
+    * ElasticsearchHelperCommands constructor.
+    *
+-   * @param \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexManager $manager
++   * @param ElasticsearchIndexManager $manager
+    *   The Elasticsearch index plugin manager.
+    */
+   public function __construct(ElasticsearchIndexManager $manager) {
+@@ -37,7 +39,7 @@ class ElasticsearchHelperCommands extends DrushCommands {
+    * @default-fields id,label
+    * @aliases eshl,elasticsearch-helper-list
+    *
+-   * @return \Consolidation\OutputFormatters\StructuredData\RowsOfFields
++   * @return RowsOfFields
+    */
+   public function helperList() {
+     $rows = [];
+@@ -60,7 +62,7 @@ class ElasticsearchHelperCommands extends DrushCommands {
+    * @command elasticsearch:helper:setup
+    * @aliases eshs,elasticsearch-helper-setup
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function helperSetup($indices = NULL) {
+     // Indices can be specified with a comma-separate value.
+@@ -83,7 +85,7 @@ class ElasticsearchHelperCommands extends DrushCommands {
+    * @command elasticsearch:helper:drop
+    * @aliases eshd,elasticsearch-helper-drop
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function helperDrop($indices = NULL) {
+     // Indices can be specified with a comma-separate value.
+@@ -95,7 +97,7 @@ class ElasticsearchHelperCommands extends DrushCommands {
+       $plugin_id = $plugin['id'];
+ 
+       if (!$indices || in_array($plugin_id, $indices)) {
+-        /** @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface $plugin */
++        /** @var ElasticsearchIndexInterface $plugin */
+         $plugin = $this->elasticsearchPluginManager->createInstance($plugin_id);
+ 
+         $rows = [];
+@@ -134,7 +136,7 @@ class ElasticsearchHelperCommands extends DrushCommands {
+    * @command elasticsearch:helper:reindex
+    * @aliases eshr,elasticsearch-helper-reindex
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    * @throws \Exception
+    */
+   public function helperReindex($indices = NULL) {
+diff --git a/src/Elasticsearch/DataType/DataType.php b/src/Elasticsearch/DataType/DataType.php
+index 1c51094..d36baf2 100644
+--- a/src/Elasticsearch/DataType/DataType.php
++++ b/src/Elasticsearch/DataType/DataType.php
+@@ -53,7 +53,7 @@ class DataType {
+   /**
+    * Returns data type repository instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\Elasticsearch\DataType\DataTypeRepositoryInterface
++   * @return DataTypeRepositoryInterface
+    */
+   public static function getDataTypeRepository() {
+     return \Drupal::service('elasticsearch_helper.data_type_repository');
+diff --git a/src/Elasticsearch/DataType/DataTypeRepository.php b/src/Elasticsearch/DataType/DataTypeRepository.php
+index c851caa..7a1139d 100644
+--- a/src/Elasticsearch/DataType/DataTypeRepository.php
++++ b/src/Elasticsearch/DataType/DataTypeRepository.php
+@@ -18,7 +18,7 @@ class DataTypeRepository implements DataTypeRepositoryInterface {
+   use CacheableDependencyTrait;
+ 
+   /**
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+@@ -75,7 +75,7 @@ class DataTypeRepository implements DataTypeRepositoryInterface {
+   /**
+    * DataTypeRepository constructor.
+    *
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    */
+   public function __construct(EventDispatcherInterface $event_dispatcher) {
+     $this->eventDispatcher = $event_dispatcher;
+@@ -98,7 +98,7 @@ class DataTypeRepository implements DataTypeRepositoryInterface {
+ 
+         // Allow modules to alter the definitions.
+         $event = new DataTypeDefinitionBuildEvent($definitions);
+-        $this->eventDispatcher->dispatch(DataTypeEvents::BUILD, $event);
++        $this->eventDispatcher->dispatch($event, DataTypeEvents::BUILD);
+ 
+         // Store in cache.
+         $this->cacheSet($this->cacheId, $event->getDataTypeDefinitions(), Cache::PERMANENT, $this->getCacheTags());
+diff --git a/src/Elasticsearch/Index/FieldDefinition.php b/src/Elasticsearch/Index/FieldDefinition.php
+index dd2c267..c8a5c72 100644
+--- a/src/Elasticsearch/Index/FieldDefinition.php
++++ b/src/Elasticsearch/Index/FieldDefinition.php
+@@ -46,7 +46,7 @@ class FieldDefinition extends DefinitionBase {
+   /**
+    * Data type of the field.
+    *
+-   * @var \Drupal\elasticsearch_helper\Elasticsearch\DataType\DataType
++   * @var DataType
+    */
+   protected $data_type;
+ 
+@@ -67,7 +67,7 @@ class FieldDefinition extends DefinitionBase {
+   /**
+    * FieldDefinition constructor.
+    *
+-   * @param \Drupal\elasticsearch_helper\Elasticsearch\DataType\DataType $type
++   * @param DataType $type
+    * @param array $options
+    *
+    * @throws \InvalidArgumentException
+@@ -94,7 +94,7 @@ class FieldDefinition extends DefinitionBase {
+   /**
+    * Returns data type instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\Elasticsearch\DataType\DataType
++   * @return DataType
+    */
+   public function getDataType() {
+     return $this->data_type;
+diff --git a/src/Elasticsearch/Index/IndexDefinition.php b/src/Elasticsearch/Index/IndexDefinition.php
+index 82c781b..d6709bd 100644
+--- a/src/Elasticsearch/Index/IndexDefinition.php
++++ b/src/Elasticsearch/Index/IndexDefinition.php
+@@ -46,21 +46,21 @@ class IndexDefinition extends DefinitionBase {
+   /**
+    * Index mapping definition.
+    *
+-   * @var \Drupal\elasticsearch_helper\Elasticsearch\Index\MappingDefinition
++   * @var MappingDefinition
+    */
+   protected $mappingDefinition;
+ 
+   /**
+    * Index settings definition.
+    *
+-   * @var \Drupal\elasticsearch_helper\Elasticsearch\Index\SettingsDefinition
++   * @var SettingsDefinition
+    */
+   protected $settingsDefinition;
+ 
+   /**
+    * Sets mapping definition.
+    *
+-   * @param \Drupal\elasticsearch_helper\Elasticsearch\Index\MappingDefinition $mapping_definition
++   * @param MappingDefinition $mapping_definition
+    *
+    * @return self
+    */
+@@ -73,7 +73,7 @@ class IndexDefinition extends DefinitionBase {
+   /**
+    * Returns mapping definition instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\Elasticsearch\Index\MappingDefinition
++   * @return MappingDefinition
+    */
+   public function getMappingDefinition() {
+     return $this->mappingDefinition;
+@@ -82,7 +82,7 @@ class IndexDefinition extends DefinitionBase {
+   /**
+    * Sets index settings definition.
+    *
+-   * @param \Drupal\elasticsearch_helper\Elasticsearch\Index\SettingsDefinition $settings_definition
++   * @param SettingsDefinition $settings_definition
+    *
+    * @return self
+    */
+@@ -95,7 +95,7 @@ class IndexDefinition extends DefinitionBase {
+   /**
+    * Returns index settings definition instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\Elasticsearch\Index\SettingsDefinition
++   * @return SettingsDefinition
+    */
+   public function getSettingsDefinition() {
+     return $this->settingsDefinition;
+diff --git a/src/Elasticsearch/Index/MappingDefinition.php b/src/Elasticsearch/Index/MappingDefinition.php
+index 5748aa2..9308433 100644
+--- a/src/Elasticsearch/Index/MappingDefinition.php
++++ b/src/Elasticsearch/Index/MappingDefinition.php
+@@ -42,7 +42,7 @@ class MappingDefinition extends DefinitionBase {
+   /**
+    * Mapping properties.
+    *
+-   * @var \Drupal\elasticsearch_helper\Elasticsearch\Index\FieldDefinition[]
++   * @var FieldDefinition[]
+    */
+   protected $properties = [];
+ 
+@@ -52,7 +52,7 @@ class MappingDefinition extends DefinitionBase {
+    * Properties are fields of an object.
+    *
+    * @param $field_name
+-   * @param \Drupal\elasticsearch_helper\Elasticsearch\Index\FieldDefinition $field
++   * @param FieldDefinition $field
+    *
+    * @return self
+    */
+@@ -65,7 +65,7 @@ class MappingDefinition extends DefinitionBase {
+   /**
+    * Adds properties to the mapping.
+    *
+-   * @param \Drupal\elasticsearch_helper\Elasticsearch\Index\FieldDefinition[] $properties
++   * @param FieldDefinition[] $properties
+    *
+    * @return self
+    */
+@@ -80,7 +80,7 @@ class MappingDefinition extends DefinitionBase {
+    *
+    * @param $property
+    *
+-   * @return \Drupal\elasticsearch_helper\Elasticsearch\Index\FieldDefinition|null
++   * @return FieldDefinition|null
+    */
+   public function getProperty($property) {
+     return isset($this->properties[$property]) ? $this->properties[$property] : NULL;
+@@ -89,7 +89,7 @@ class MappingDefinition extends DefinitionBase {
+   /**
+    * Returns properties.
+    *
+-   * @return \Drupal\elasticsearch_helper\Elasticsearch\Index\FieldDefinition[]
++   * @return FieldDefinition[]
+    */
+   public function getProperties() {
+     return $this->properties;
+diff --git a/src/ElasticsearchClientBuilder.php b/src/ElasticsearchClientBuilder.php
+index 638f673..fc06b96 100644
+--- a/src/ElasticsearchClientBuilder.php
++++ b/src/ElasticsearchClientBuilder.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\elasticsearch_helper;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Elasticsearch\ClientBuilder;
+@@ -14,19 +16,19 @@ use Elasticsearch\ClientBuilder;
+ class ElasticsearchClientBuilder {
+ 
+   /**
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * ElasticsearchClientBuilder constructor.
+-   * @param \Drupal\Core\Config\ConfigFactory $configFactory
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler
++   * @param ConfigFactory $configFactory
++   * @param ModuleHandlerInterface $moduleHandler
+    */
+   public function __construct(ConfigFactory $configFactory, ModuleHandlerInterface $moduleHandler) {
+     $this->config = $configFactory->get('elasticsearch_helper.settings');
+diff --git a/src/ElasticsearchHelperQueueFactoryDecorator.php b/src/ElasticsearchHelperQueueFactoryDecorator.php
+index 1c3b619..0c7806e 100644
+--- a/src/ElasticsearchHelperQueueFactoryDecorator.php
++++ b/src/ElasticsearchHelperQueueFactoryDecorator.php
+@@ -17,15 +17,15 @@ class ElasticsearchHelperQueueFactoryDecorator extends QueueFactory implements C
+   /**
+    * The inner queue service.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $innerService;
+ 
+   /**
+    * ElasticsearchHelperQueueFactoryDecorator constructor.
+    *
+-   * @param \Drupal\Core\Queue\QueueFactory $inner
+-   * @param \Drupal\Core\Site\Settings $settings
++   * @param QueueFactory $inner
++   * @param Settings $settings
+    */
+   public function __construct(QueueFactory $inner, Settings $settings) {
+     parent::__construct($settings);
+diff --git a/src/ElasticsearchRequestResult.php b/src/ElasticsearchRequestResult.php
+index 5490a09..8e0b1f4 100644
+--- a/src/ElasticsearchRequestResult.php
++++ b/src/ElasticsearchRequestResult.php
+@@ -10,7 +10,7 @@ class ElasticsearchRequestResult implements ElasticsearchRequestResultInterface
+   /**
+    * Elasticsearch request wrapper instance.
+    *
+-   * @var \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface
++   * @var ElasticsearchRequestWrapperInterface
+    */
+   protected $requestWrapper;
+ 
+@@ -24,7 +24,7 @@ class ElasticsearchRequestResult implements ElasticsearchRequestResultInterface
+   /**
+    * ElasticsearchRequestResult constructor.
+    *
+-   * @param \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface $request_wrapper
++   * @param ElasticsearchRequestWrapperInterface $request_wrapper
+    * @param $result_body
+    */
+   public function __construct(ElasticsearchRequestWrapperInterface $request_wrapper, $result_body) {
+diff --git a/src/ElasticsearchRequestResultInterface.php b/src/ElasticsearchRequestResultInterface.php
+index 32c9b4f..923770c 100644
+--- a/src/ElasticsearchRequestResultInterface.php
++++ b/src/ElasticsearchRequestResultInterface.php
+@@ -10,7 +10,7 @@ interface ElasticsearchRequestResultInterface {
+   /**
+    * Returns Elasticsearch request wrapper instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface
++   * @return ElasticsearchRequestWrapperInterface
+    */
+   public function getRequestWrapper();
+ 
+diff --git a/src/ElasticsearchRequestWrapper.php b/src/ElasticsearchRequestWrapper.php
+index 0ca4a42..a3bbce6 100644
+--- a/src/ElasticsearchRequestWrapper.php
++++ b/src/ElasticsearchRequestWrapper.php
+@@ -14,7 +14,7 @@ use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+ class ElasticsearchRequestWrapper implements ElasticsearchRequestWrapperInterface {
+ 
+   /**
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+@@ -42,7 +42,7 @@ class ElasticsearchRequestWrapper implements ElasticsearchRequestWrapperInterfac
+   /**
+    * Elasticsearch index plugin instance.
+    *
+-   * @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface
++   * @var ElasticsearchIndexInterface
+    */
+   protected $pluginInstance;
+ 
+@@ -56,11 +56,11 @@ class ElasticsearchRequestWrapper implements ElasticsearchRequestWrapperInterfac
+   /**
+    * ElasticsearchRequestWrapper constructor.
+    *
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    * @param $operation
+    * @param $callback
+    * @param array $callback_parameters
+-   * @param \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface $plugin_instance
++   * @param ElasticsearchIndexInterface $plugin_instance
+    * @param mixed|null $object
+    */
+   public function __construct(EventDispatcherInterface $event_dispatcher, $operation, $callback, array $callback_parameters, ElasticsearchIndexInterface $plugin_instance, $object = NULL) {
+@@ -75,7 +75,7 @@ class ElasticsearchRequestWrapper implements ElasticsearchRequestWrapperInterfac
+   /**
+    * Returns the event dispatcher.
+    *
+-   * @return \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @return EventDispatcherInterface
+    */
+   protected function getEventDispatcher() {
+     return $this->eventDispatcher;
+@@ -123,7 +123,7 @@ class ElasticsearchRequestWrapper implements ElasticsearchRequestWrapperInterfac
+     // Create request event.
+     $request_event = new ElasticsearchOperationRequestEvent($this);
+     // Dispatch the request event.
+-    $this->getEventDispatcher()->dispatch(ElasticsearchEvents::OPERATION_REQUEST, $request_event);
++    $this->getEventDispatcher()->dispatch($request_event, ElasticsearchEvents::OPERATION_REQUEST);
+ 
+     // Execute the request.
+     $result = $this->executeCallback();
+@@ -137,7 +137,7 @@ class ElasticsearchRequestWrapper implements ElasticsearchRequestWrapperInterfac
+   /**
+    * Executes the callback and returns an instance of request result.
+    *
+-   * @return \Drupal\elasticsearch_helper\ElasticsearchRequestResultInterface
++   * @return ElasticsearchRequestResultInterface
+    */
+   protected function executeCallback() {
+     $result = call_user_func_array($this->getCallback(), $this->getCallbackParameters());
+@@ -148,11 +148,11 @@ class ElasticsearchRequestWrapper implements ElasticsearchRequestWrapperInterfac
+   /**
+    * Dispatches request result event.
+    *
+-   * @param \Drupal\elasticsearch_helper\ElasticsearchRequestResultInterface $result
++   * @param ElasticsearchRequestResultInterface $result
+    */
+   protected function dispatchRequestResultEvent(ElasticsearchRequestResultInterface $result) {
+     $result_event = new ElasticsearchOperationRequestResultEvent($result);
+-    $this->getEventDispatcher()->dispatch(ElasticsearchEvents::OPERATION_REQUEST_RESULT, $result_event);
++    $this->getEventDispatcher()->dispatch($result_event, ElasticsearchEvents::OPERATION_REQUEST_RESULT);
+   }
+ 
+   /**
+diff --git a/src/ElasticsearchRequestWrapperInterface.php b/src/ElasticsearchRequestWrapperInterface.php
+index 902143b..4eb023f 100644
+--- a/src/ElasticsearchRequestWrapperInterface.php
++++ b/src/ElasticsearchRequestWrapperInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\elasticsearch_helper;
+ 
++use Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface;
+ /**
+  * Defines Elasticsearch request wrapper interface.
+  */
+@@ -31,7 +32,7 @@ interface ElasticsearchRequestWrapperInterface {
+   /**
+    * Returns Elasticsearch index plugin instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface
++   * @return ElasticsearchIndexInterface
+    */
+   public function getPluginInstance();
+ 
+@@ -47,7 +48,7 @@ interface ElasticsearchRequestWrapperInterface {
+   /**
+    * Executes the request and returns the request result instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\ElasticsearchRequestResultInterface
++   * @return ElasticsearchRequestResultInterface
+    *
+    * @throws \Throwable
+    */
+diff --git a/src/Event/DataTypeDefinitionBuildEvent.php b/src/Event/DataTypeDefinitionBuildEvent.php
+index f6dd166..f31f2a7 100644
+--- a/src/Event/DataTypeDefinitionBuildEvent.php
++++ b/src/Event/DataTypeDefinitionBuildEvent.php
+@@ -2,7 +2,7 @@
+ 
+ namespace Drupal\elasticsearch_helper\Event;
+ 
+-use Symfony\Component\EventDispatcher\Event;
++use Symfony\Contracts\EventDispatcher\Event;
+ 
+ /**
+  * Class DataTypeDefinitionBuildEvent
+diff --git a/src/Event/ElasticsearchHelperCallbackEvent.php b/src/Event/ElasticsearchHelperCallbackEvent.php
+index c38966c..b2a11ba 100644
+--- a/src/Event/ElasticsearchHelperCallbackEvent.php
++++ b/src/Event/ElasticsearchHelperCallbackEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\elasticsearch_helper\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Elasticsearch Helper callback event.
+@@ -39,7 +39,7 @@ class ElasticsearchHelperCallbackEvent extends Event {
+   /**
+    * Elasticsearch index plugin instance.
+    *
+-   * @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface
++   * @var ElasticsearchIndexInterface
+    */
+   protected $pluginInstance;
+ 
+@@ -49,7 +49,7 @@ class ElasticsearchHelperCallbackEvent extends Event {
+    * @param $operation
+    * @param $callback
+    * @param array $callback_parameters
+-   * @param \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface $plugin_instance
++   * @param ElasticsearchIndexInterface $plugin_instance
+    */
+   public function __construct($operation, $callback, array $callback_parameters, ElasticsearchIndexInterface $plugin_instance) {
+     $this->operation = $operation;
+@@ -88,7 +88,7 @@ class ElasticsearchHelperCallbackEvent extends Event {
+   /**
+    * Returns Elasticsearch index plugin instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface
++   * @return ElasticsearchIndexInterface
+    */
+   public function getPluginInstance() {
+     return $this->pluginInstance;
+diff --git a/src/Event/ElasticsearchOperationErrorEvent.php b/src/Event/ElasticsearchOperationErrorEvent.php
+index 31bb068..4597e88 100644
+--- a/src/Event/ElasticsearchOperationErrorEvent.php
++++ b/src/Event/ElasticsearchOperationErrorEvent.php
+@@ -2,9 +2,9 @@
+ 
+ namespace Drupal\elasticsearch_helper\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface;
+ use Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Elasticsearch operation error event.
+@@ -38,7 +38,7 @@ class ElasticsearchOperationErrorEvent extends Event {
+   /**
+    * Elasticsearch index plugin instance.
+    *
+-   * @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface
++   * @var ElasticsearchIndexInterface
+    */
+   protected $pluginInstance;
+ 
+@@ -48,7 +48,7 @@ class ElasticsearchOperationErrorEvent extends Event {
+    * Request wrapper instance will only be available for errors that were
+    * thrown after request wrapper object has been created.
+    *
+-   * @var \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface|null
++   * @var ElasticsearchRequestWrapperInterface|null
+    */
+   protected $requestWrapper;
+ 
+@@ -64,8 +64,8 @@ class ElasticsearchOperationErrorEvent extends Event {
+    *
+    * @param \Throwable $error
+    * @param $operation
+-   * @param \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface $plugin_instance
+-   * @param \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface $request_wrapper
++   * @param ElasticsearchIndexInterface $plugin_instance
++   * @param ElasticsearchRequestWrapperInterface $request_wrapper
+    * @param mixed|null $object
+    */
+   public function __construct(\Throwable $error, $operation, ElasticsearchIndexInterface $plugin_instance, ElasticsearchRequestWrapperInterface $request_wrapper = NULL, $object = NULL) {
+@@ -104,7 +104,7 @@ class ElasticsearchOperationErrorEvent extends Event {
+   /**
+    * Returns Elasticsearch request wrapper instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface|null
++   * @return ElasticsearchRequestWrapperInterface|null
+    */
+   public function getRequestWrapper() {
+     return $this->requestWrapper;
+diff --git a/src/Event/ElasticsearchOperationEvent.php b/src/Event/ElasticsearchOperationEvent.php
+index 6ff9d7d..65d03bf 100644
+--- a/src/Event/ElasticsearchOperationEvent.php
++++ b/src/Event/ElasticsearchOperationEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\elasticsearch_helper\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Elasticsearch operation event.
+@@ -31,7 +31,7 @@ class ElasticsearchOperationEvent extends Event implements OperationPermissionIn
+   /**
+    * Elasticsearch index plugin instance.
+    *
+-   * @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface
++   * @var ElasticsearchIndexInterface
+    */
+   protected $pluginInstance;
+ 
+@@ -51,7 +51,7 @@ class ElasticsearchOperationEvent extends Event implements OperationPermissionIn
+    * ElasticsearchOperationEvent constructor.
+    *
+    * @param $operation
+-   * @param \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface $plugin_instance
++   * @param ElasticsearchIndexInterface $plugin_instance
+    * @param mixed|null $object
+    */
+   public function __construct($operation, ElasticsearchIndexInterface $plugin_instance, $object = NULL) {
+@@ -83,7 +83,7 @@ class ElasticsearchOperationEvent extends Event implements OperationPermissionIn
+   /**
+    * Returns Elasticsearch index plugin instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface
++   * @return ElasticsearchIndexInterface
+    */
+   public function getPluginInstance() {
+     return $this->pluginInstance;
+diff --git a/src/Event/ElasticsearchOperationRequestEvent.php b/src/Event/ElasticsearchOperationRequestEvent.php
+index 5ac7927..693dd0b 100644
+--- a/src/Event/ElasticsearchOperationRequestEvent.php
++++ b/src/Event/ElasticsearchOperationRequestEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\elasticsearch_helper\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Elasticsearch operation request event.
+@@ -18,14 +18,14 @@ class ElasticsearchOperationRequestEvent extends Event {
+   /**
+    * Elasticsearch request wrapper instance.
+    *
+-   * @var \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface
++   * @var ElasticsearchRequestWrapperInterface
+    */
+   protected $requestWrapper;
+ 
+   /**
+    * ElasticsearchOperationRequestEvent constructor.
+    *
+-   * @param \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface $request_wrapper
++   * @param ElasticsearchRequestWrapperInterface $request_wrapper
+    */
+   public function __construct(ElasticsearchRequestWrapperInterface $request_wrapper) {
+     $this->requestWrapper = $request_wrapper;
+@@ -34,7 +34,7 @@ class ElasticsearchOperationRequestEvent extends Event {
+   /**
+    * Returns Elasticsearch request wrapper instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface
++   * @return ElasticsearchRequestWrapperInterface
+    */
+   public function getRequestWrapper() {
+     return $this->requestWrapper;
+diff --git a/src/Event/ElasticsearchOperationRequestResultEvent.php b/src/Event/ElasticsearchOperationRequestResultEvent.php
+index 8c01fba..faf786d 100644
+--- a/src/Event/ElasticsearchOperationRequestResultEvent.php
++++ b/src/Event/ElasticsearchOperationRequestResultEvent.php
+@@ -2,8 +2,9 @@
+ 
+ namespace Drupal\elasticsearch_helper\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
++use Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface;
+ use Drupal\elasticsearch_helper\ElasticsearchRequestResultInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Elasticsearch operation request result event.
+@@ -16,14 +17,14 @@ class ElasticsearchOperationRequestResultEvent extends Event {
+   /**
+    * Elasticsearch request result.
+    *
+-   * @var \Drupal\elasticsearch_helper\ElasticsearchRequestResultInterface
++   * @var ElasticsearchRequestResultInterface
+    */
+   protected $requestResult;
+ 
+   /**
+    * ElasticsearchOperationRequestResultEvent constructor.
+    *
+-   * @param \Drupal\elasticsearch_helper\ElasticsearchRequestResultInterface $result
++   * @param ElasticsearchRequestResultInterface $result
+    */
+   public function __construct(ElasticsearchRequestResultInterface $result) {
+     $this->requestResult = $result;
+@@ -32,7 +33,7 @@ class ElasticsearchOperationRequestResultEvent extends Event {
+   /**
+    * Returns Elasticsearch request result body.
+    *
+-   * @return \Drupal\elasticsearch_helper\ElasticsearchRequestResultInterface
++   * @return ElasticsearchRequestResultInterface
+    */
+   public function getResult() {
+     return $this->requestResult;
+@@ -41,7 +42,7 @@ class ElasticsearchOperationRequestResultEvent extends Event {
+   /**
+    * Returns Elasticsearch request wrapper instance.
+    *
+-   * @return \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface
++   * @return ElasticsearchRequestWrapperInterface
+    */
+   public function getRequestWrapper() {
+     return $this->getResult()->getRequestWrapper();
+diff --git a/src/EventSubscriber/LoggingEventSubscriber.php b/src/EventSubscriber/LoggingEventSubscriber.php
+index 4ffd109..2a4e99a 100644
+--- a/src/EventSubscriber/LoggingEventSubscriber.php
++++ b/src/EventSubscriber/LoggingEventSubscriber.php
+@@ -16,14 +16,14 @@ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ class LoggingEventSubscriber implements EventSubscriberInterface {
+ 
+   /**
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * LoggingEventSubscriber constructor.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    */
+   public function __construct(LoggerInterface $logger) {
+     $this->logger = $logger;
+@@ -43,7 +43,7 @@ class LoggingEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Logs a message if throwable is thrown during Elasticsearch operation.
+    *
+-   * @param \Drupal\elasticsearch_helper\Event\ElasticsearchOperationErrorEvent $event
++   * @param ElasticsearchOperationErrorEvent $event
+    */
+   public function onOperationError(ElasticsearchOperationErrorEvent $event) {
+     $operation = $event->getOperation();
+@@ -125,7 +125,7 @@ class LoggingEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Logs a message upon successful Elasticsearch operation.
+    *
+-   * @param \Drupal\elasticsearch_helper\Event\ElasticsearchOperationRequestResultEvent $event
++   * @param ElasticsearchOperationRequestResultEvent $event
+    */
+   public function onRequestResult(ElasticsearchOperationRequestResultEvent $event) {
+     // Get request result body.
+diff --git a/src/EventSubscriber/MessagingEventSubscriber.php b/src/EventSubscriber/MessagingEventSubscriber.php
+index 44801ee..0a6d8fb 100644
+--- a/src/EventSubscriber/MessagingEventSubscriber.php
++++ b/src/EventSubscriber/MessagingEventSubscriber.php
+@@ -30,7 +30,7 @@ class MessagingEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Displays a message if throwable is thrown during Elasticsearch operation.
+    *
+-   * @param \Drupal\elasticsearch_helper\Event\ElasticsearchOperationErrorEvent $event
++   * @param ElasticsearchOperationErrorEvent $event
+    */
+   public function onOperationError(ElasticsearchOperationErrorEvent $event) {
+     // Do not display messages when executed in the command line.
+diff --git a/src/EventSubscriber/QueueIndexEventSubscriber.php b/src/EventSubscriber/QueueIndexEventSubscriber.php
+index db96412..4ee997e 100644
+--- a/src/EventSubscriber/QueueIndexEventSubscriber.php
++++ b/src/EventSubscriber/QueueIndexEventSubscriber.php
+@@ -27,7 +27,7 @@ class QueueIndexEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Suspends queue execution if no nodes are available.
+    *
+-   * @param \Drupal\elasticsearch_helper\Event\ElasticsearchOperationErrorEvent $event
++   * @param ElasticsearchOperationErrorEvent $event
+    */
+   public function onQueueIndexError(ElasticsearchOperationErrorEvent $event) {
+     $index_with_queue = &drupal_static(IndexingQueueWorker::QUEUE_INDEXING_VAR_NAME);
+diff --git a/src/EventSubscriber/TypeEventSubscriber.php b/src/EventSubscriber/TypeEventSubscriber.php
+index af3c207..6e36e2c 100644
+--- a/src/EventSubscriber/TypeEventSubscriber.php
++++ b/src/EventSubscriber/TypeEventSubscriber.php
+@@ -25,7 +25,7 @@ class TypeEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Removes "type" parameter from the request if Elasticsearch server is >= 7.
+    *
+-   * @param \Drupal\elasticsearch_helper\Event\ElasticsearchOperationRequestEvent $event
++   * @param ElasticsearchOperationRequestEvent $event
+    */
+   public function onOperationRequest(ElasticsearchOperationRequestEvent $event) {
+     if (ElasticsearchClientVersion::getMajorVersion() >= 7) {
+diff --git a/src/Form/ElasticsearchHelperSettingsForm.php b/src/Form/ElasticsearchHelperSettingsForm.php
+index ae1a149..e521189 100644
+--- a/src/Form/ElasticsearchHelperSettingsForm.php
++++ b/src/Form/ElasticsearchHelperSettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\elasticsearch_helper\Form;
+ 
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -25,14 +26,14 @@ class ElasticsearchHelperSettingsForm extends ConfigFormBase {
+   /**
+    * Configuration object.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * ElasticsearchHelperSettingsForm constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+    * @param \Elasticsearch\Client $elasticsearch_client
+    *   The Elasticsearch client.
+@@ -260,7 +261,7 @@ class ElasticsearchHelperSettingsForm extends ConfigFormBase {
+   /**
+    * Returns a list of host configurations.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *
+    * @return array
+    */
+@@ -279,7 +280,7 @@ class ElasticsearchHelperSettingsForm extends ConfigFormBase {
+    * Removes the host from the list.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    */
+   public function removeHost(array $form, FormStateInterface $form_state) {
+     // Store submitted host values.
+@@ -299,7 +300,7 @@ class ElasticsearchHelperSettingsForm extends ConfigFormBase {
+    * Adds new entry to the list of hosts.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    */
+   public function addHost(array $form, FormStateInterface $form_state) {
+     // Store submitted host values.
+@@ -316,7 +317,7 @@ class ElasticsearchHelperSettingsForm extends ConfigFormBase {
+   /**
+    * Stores submitted host values.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    */
+   public function copyHostValuesFromFormState(FormStateInterface $form_state) {
+     // Filter out empty hosts.
+diff --git a/src/Plugin/ElasticsearchIndexBase.php b/src/Plugin/ElasticsearchIndexBase.php
+index 92d8b43..3bb4980 100644
+--- a/src/Plugin/ElasticsearchIndexBase.php
++++ b/src/Plugin/ElasticsearchIndexBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\elasticsearch_helper\Plugin;
+ 
++use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+ use Drupal\Component\Plugin\PluginBase;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Messenger\MessengerTrait;
+@@ -37,22 +38,22 @@ abstract class ElasticsearchIndexBase extends PluginBase implements Elasticsearc
+   protected $client;
+ 
+   /**
+-   * @var \Symfony\Component\Serializer\Serializer
++   * @var Serializer
+    */
+   protected $serializer;
+ 
+   /**
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+-   * @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexManager
++   * @var ElasticsearchIndexManager
+    */
+   protected $indexPluginManager;
+ 
+@@ -81,8 +82,8 @@ abstract class ElasticsearchIndexBase extends PluginBase implements Elasticsearc
+    * @param string $plugin_id
+    * @param mixed $plugin_definition
+    * @param \Elasticsearch\Client $client
+-   * @param \Symfony\Component\Serializer\Serializer $serializer
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param Serializer $serializer
++   * @param LoggerInterface $logger
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, Client $client, Serializer $serializer, LoggerInterface $logger) {
+     parent::__construct($configuration, $plugin_id, $plugin_definition);
+@@ -93,7 +94,7 @@ abstract class ElasticsearchIndexBase extends PluginBase implements Elasticsearc
+   }
+ 
+   /**
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    * @param array $configuration
+    * @param string $plugin_id
+    * @param mixed $plugin_definition
+@@ -120,7 +121,7 @@ abstract class ElasticsearchIndexBase extends PluginBase implements Elasticsearc
+   /**
+    * Returns the event dispatcher.
+    *
+-   * @return \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @return EventDispatcherInterface
+    */
+   protected function getEventDispatcher() {
+     if (!$this->eventDispatcher) {
+@@ -133,7 +134,7 @@ abstract class ElasticsearchIndexBase extends PluginBase implements Elasticsearc
+   /**
+    * Returns Elasticsearch index plugin manager.
+    *
+-   * @return \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexManager
++   * @return ElasticsearchIndexManager
+    */
+   protected function getElasticsearchIndexPluginManager() {
+     if (!$this->indexPluginManager) {
+@@ -167,11 +168,11 @@ abstract class ElasticsearchIndexBase extends PluginBase implements Elasticsearc
+    * @param $operation
+    * @param mixed|null $source
+    *
+-   * @return \Drupal\elasticsearch_helper\Event\ElasticsearchOperationEvent
++   * @return ElasticsearchOperationEvent
+    */
+   protected function dispatchOperationEvent($operation, $source = NULL) {
+     $event = new ElasticsearchOperationEvent($operation, $this, $source);
+-    $this->getEventDispatcher()->dispatch(ElasticsearchEvents::OPERATION, $event);
++    $this->getEventDispatcher()->dispatch($event, ElasticsearchEvents::OPERATION);
+ 
+     return $event;
+   }
+@@ -181,14 +182,14 @@ abstract class ElasticsearchIndexBase extends PluginBase implements Elasticsearc
+    *
+    * @param \Throwable $error
+    * @param $operation
+-   * @param \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface|null $request_wrapper
++   * @param ElasticsearchRequestWrapperInterface|null $request_wrapper
+    * @param mixed|null $source
+    *
+-   * @return \Drupal\elasticsearch_helper\Event\ElasticsearchOperationErrorEvent
++   * @return ElasticsearchOperationErrorEvent
+    */
+   protected function dispatchOperationErrorEvent(\Throwable $error, $operation, ElasticsearchRequestWrapperInterface $request_wrapper = NULL, $source = NULL) {
+     $event = new ElasticsearchOperationErrorEvent($error, $operation, $this, $request_wrapper, $source);
+-    $this->getEventDispatcher()->dispatch(ElasticsearchEvents::OPERATION_ERROR, $event);
++    $this->getEventDispatcher()->dispatch($event, ElasticsearchEvents::OPERATION_ERROR);
+ 
+     return $event;
+   }
+@@ -201,7 +202,7 @@ abstract class ElasticsearchIndexBase extends PluginBase implements Elasticsearc
+    * @param array $request_params
+    * @param mixed|null $source
+    *
+-   * @return \Drupal\elasticsearch_helper\ElasticsearchRequestWrapperInterface
++   * @return ElasticsearchRequestWrapperInterface
+    */
+   protected function createRequest($operation, $callback, array $request_params, $source = NULL) {
+     $event_dispatcher = $this->getEventDispatcher();
+@@ -233,7 +234,7 @@ abstract class ElasticsearchIndexBase extends PluginBase implements Elasticsearc
+    * Creates a single index.
+    *
+    * @param $index_name
+-   * @param \Drupal\elasticsearch_helper\Elasticsearch\Index\IndexDefinition $index_definition
++   * @param IndexDefinition $index_definition
+    */
+   public function createIndex($index_name, IndexDefinition $index_definition) {
+     try {
+@@ -545,7 +546,7 @@ abstract class ElasticsearchIndexBase extends PluginBase implements Elasticsearc
+           $params = [$entity_type, $bundle];
+ 
+           $event = new ElasticsearchHelperCallbackEvent($operation, $callback, $params, $this);
+-          $this->getEventDispatcher()->dispatch($operation, $event);
++          $this->getEventDispatcher()->dispatch($event, $operation);
+ 
+           call_user_func_array($event->getCallback(), $event->getCallbackParameters());
+         }
+diff --git a/src/Plugin/ElasticsearchIndexInterface.php b/src/Plugin/ElasticsearchIndexInterface.php
+index 85e0812..41d49e1 100644
+--- a/src/Plugin/ElasticsearchIndexInterface.php
++++ b/src/Plugin/ElasticsearchIndexInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\elasticsearch_helper\Plugin;
+ 
++use Drupal\elasticsearch_helper\Elasticsearch\Index\IndexDefinition;
++use Drupal\elasticsearch_helper\Elasticsearch\Index\MappingDefinition;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ 
+ /**
+@@ -63,7 +65,7 @@ interface ElasticsearchIndexInterface extends PluginInspectionInterface {
+    * @param array $context
+    *   Additional context parameters.
+    *
+-   * @return \Drupal\elasticsearch_helper\Elasticsearch\Index\IndexDefinition|null
++   * @return IndexDefinition|null
+    */
+   public function getIndexDefinition(array $context = []);
+ 
+@@ -73,7 +75,7 @@ interface ElasticsearchIndexInterface extends PluginInspectionInterface {
+    * @param array $context
+    *   Additional context parameters.
+    *
+-   * @return \Drupal\elasticsearch_helper\Elasticsearch\Index\MappingDefinition|null
++   * @return MappingDefinition|null
+    */
+   public function getMappingDefinition(array $context = []);
+ 
+diff --git a/src/Plugin/ElasticsearchIndexManager.php b/src/Plugin/ElasticsearchIndexManager.php
+index 30d0190..a75d087 100644
+--- a/src/Plugin/ElasticsearchIndexManager.php
++++ b/src/Plugin/ElasticsearchIndexManager.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\elasticsearch_helper\Plugin;
+ 
++use Drupal\Core\Queue\QueueWorkerInterface;
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+@@ -20,17 +25,17 @@ class ElasticsearchIndexManager extends DefaultPluginManager {
+   use StringTranslationTrait;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+-   * @var \Drupal\Core\Queue\QueueWorkerInterface
++   * @var QueueWorkerInterface
+    */
+   protected $queue;
+ 
+   /**
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+@@ -40,15 +45,15 @@ class ElasticsearchIndexManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager instance.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   Queue factory.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   Logger factory.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler, EntityTypeManagerInterface $entity_type_manager, QueueFactory $queue_factory, LoggerChannelFactoryInterface $logger_factory) {
+@@ -64,9 +69,9 @@ class ElasticsearchIndexManager extends DefaultPluginManager {
+   /**
+    * Indexes the entity into any matching indices.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function indexEntity(EntityInterface $entity) {
+     foreach ($this->getDefinitions() as $plugin) {
+@@ -94,9 +99,9 @@ class ElasticsearchIndexManager extends DefaultPluginManager {
+   /**
+    * Deletes the entity from any matching indices.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function deleteEntity(EntityInterface $entity) {
+     foreach ($this->getDefinitions() as $plugin) {
+@@ -125,13 +130,13 @@ class ElasticsearchIndexManager extends DefaultPluginManager {
+    * @param array $indices
+    * @param array $context
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    * @throws \Exception
+    */
+   public function reindex($indices = [], array $context = []) {
+     foreach ($this->getDefinitions() as $definition) {
+       if (empty($indices) || in_array($definition['id'], $indices)) {
+-        /** @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexInterface $plugin */
++        /** @var ElasticsearchIndexInterface $plugin */
+         $plugin = $this->createInstance($definition['id']);
+         $plugin->reindex($context);
+       }
+@@ -144,8 +149,8 @@ class ElasticsearchIndexManager extends DefaultPluginManager {
+    * @param $entity_type
+    * @param $bundle
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function reindexEntities($entity_type, $bundle = NULL) {
+     $query = $this->entityTypeManager->getStorage($entity_type)->getQuery();
+diff --git a/src/Plugin/QueueWorker/IndexingQueueWorker.php b/src/Plugin/QueueWorker/IndexingQueueWorker.php
+index 4304d49..05f6314 100644
+--- a/src/Plugin/QueueWorker/IndexingQueueWorker.php
++++ b/src/Plugin/QueueWorker/IndexingQueueWorker.php
+@@ -29,14 +29,14 @@ class IndexingQueueWorker extends QueueWorkerBase implements ContainerFactoryPlu
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+    * The plugin manager for ElasticsearchIndex.
+    *
+-   * @var \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexManager
++   * @var ElasticsearchIndexManager
+    */
+   private $elasticsearchIndexManager;
+ 
+@@ -49,9 +49,9 @@ class IndexingQueueWorker extends QueueWorkerBase implements ContainerFactoryPlu
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\elasticsearch_helper\Plugin\ElasticsearchIndexManager $elasticsearch_index_manager
++   * @param ElasticsearchIndexManager $elasticsearch_index_manager
+    *   The plugin manager for our ElasticsearchIndex plugins.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, EntityTypeManagerInterface $entity_type_manager, ElasticsearchIndexManager $elasticsearch_index_manager) {
+diff --git a/tests/modules/elasticsearch_helper_test/src/Plugin/Normalizer/NodeNormalizer.php b/tests/modules/elasticsearch_helper_test/src/Plugin/Normalizer/NodeNormalizer.php
+index 9418c7c..259cb76 100644
+--- a/tests/modules/elasticsearch_helper_test/src/Plugin/Normalizer/NodeNormalizer.php
++++ b/tests/modules/elasticsearch_helper_test/src/Plugin/Normalizer/NodeNormalizer.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\elasticsearch_helper_test\Plugin\Normalizer;
+ 
++use Drupal\node\Entity\Node;
+ use Drupal\serialization\Normalizer\ContentEntityNormalizer;
+ 
+ /**
+@@ -27,8 +28,7 @@ class NodeNormalizer extends ContentEntityNormalizer {
+    * {@inheritdoc}
+    */
+   public function normalize($object, $format = NULL, array $context = []) {
+-    /** @var \Drupal\node\Entity\Node $object */
+-
++    /** @var Node $object */
+     $data = [
+       'id' => $object->id(),
+       'uuid' => $object->uuid(),
+diff --git a/tests/src/Kernel/IndexMappingTest.php b/tests/src/Kernel/IndexMappingTest.php
+index 8f5b424..deeb282 100644
+--- a/tests/src/Kernel/IndexMappingTest.php
++++ b/tests/src/Kernel/IndexMappingTest.php
+@@ -35,7 +35,7 @@ class IndexMappingTest extends EntityKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installConfig(['elasticsearch_helper']);
+@@ -89,10 +89,10 @@ class IndexMappingTest extends EntityKernelTestBase {
+       $properties = $response[$index_name]['mappings']['node']['properties'];
+     }
+ 
+-    $this->assertEqual($properties['id']['type'], 'integer', 'ID field is found');
+-    $this->assertEqual($properties['status']['type'], 'boolean', 'Status field is found');
+-    $this->assertEqual($properties['title']['type'], 'text', 'Title field is found');
+-    $this->assertEqual($properties['uuid']['type'], 'keyword', 'UUID field is found');
++    $this->assertEquals($properties['id']['type'], 'integer', 'ID field is found');
++    $this->assertEquals($properties['status']['type'], 'boolean', 'Status field is found');
++    $this->assertEquals($properties['title']['type'], 'text', 'Title field is found');
++    $this->assertEquals($properties['uuid']['type'], 'keyword', 'UUID field is found');
+   }
+ 
+   /**
+@@ -114,7 +114,7 @@ class IndexMappingTest extends EntityKernelTestBase {
+       ]
+     ];
+ 
+-    $this->assertEqual($mapping_definition->toArray(), $expected);
++    $this->assertEquals($mapping_definition->toArray(), $expected);
+   }
+ 
+ }
+diff --git a/tests/src/Kernel/IndexTest.php b/tests/src/Kernel/IndexTest.php
+index ebb3105..198b1ee 100644
+--- a/tests/src/Kernel/IndexTest.php
++++ b/tests/src/Kernel/IndexTest.php
+@@ -34,7 +34,7 @@ class IndexTest extends EntityKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installConfig(['elasticsearch_helper']);
+@@ -121,8 +121,8 @@ class IndexTest extends EntityKernelTestBase {
+ 
+     $response = $this->queryIndex($this->node->id());
+ 
+-    $this->assertEqual($response['hits']['hits'][0]['_source']['title'], $this->node->getTitle(), 'Title field is found in document');
+-    $this->assertEqual($response['hits']['hits'][0]['_source']['status'], TRUE, 'Status field is found in document');
++    $this->assertEquals($response['hits']['hits'][0]['_source']['title'], $this->node->getTitle(), 'Title field is found in document');
++    $this->assertEquals($response['hits']['hits'][0]['_source']['status'], TRUE, 'Status field is found in document');
+   }
+ 
+   /**
+@@ -137,7 +137,7 @@ class IndexTest extends EntityKernelTestBase {
+ 
+     $response = $this->queryIndex($this->node->id());
+ 
+-    $this->assertEqual($response['hits']['hits'][0]['_source']['title'], $this->node->getTitle(), 'Title field is found in document');
++    $this->assertEquals($response['hits']['hits'][0]['_source']['title'], $this->node->getTitle(), 'Title field is found in document');
+ 
+     // Update the node title.
+     $new_title = $this->randomMachineName();
+@@ -149,7 +149,7 @@ class IndexTest extends EntityKernelTestBase {
+ 
+     $response = $this->queryIndex($this->node->id());
+ 
+-    $this->assertEqual($response['hits']['hits'][0]['_source']['title'], $new_title, 'Title field is found in document');
++    $this->assertEquals($response['hits']['hits'][0]['_source']['title'], $new_title, 'Title field is found in document');
+   }
+ 
+   /**
+@@ -164,7 +164,7 @@ class IndexTest extends EntityKernelTestBase {
+ 
+     $response = $this->queryIndex($this->node->id());
+ 
+-    $this->assertEqual($response['hits']['hits'][0]['_source']['title'], $this->node->getTitle(), 'Title field is found in document');
++    $this->assertEquals($response['hits']['hits'][0]['_source']['title'], $this->node->getTitle(), 'Title field is found in document');
+ 
+     // Delete node.
+     $this->node->delete();
+diff --git a/tests/src/Kernel/QueueWorkerTest.php b/tests/src/Kernel/QueueWorkerTest.php
+index 4e56cfe..c3f3f5d 100644
+--- a/tests/src/Kernel/QueueWorkerTest.php
++++ b/tests/src/Kernel/QueueWorkerTest.php
+@@ -31,7 +31,7 @@ class QueueWorkerTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installEntitySchema('user');
+     $this->installEntitySchema('node');
+@@ -79,12 +79,12 @@ class QueueWorkerTest extends KernelTestBase {
+ 
+     // Process the queue items and ensure that index was updated too.
+     $item = $queue->claimItem();
+-    $this->assertEqual($node1->id(), $item->data['entity_id'], 'Item in the queue is not same as created node entity');
++    $this->assertEquals($node1->id(), $item->data['entity_id'], 'Item in the queue is not same as created node entity');
+     $queue_worker->processItem($item->data);
+     $queue->deleteItem($item);
+ 
+     $item = $queue->claimItem();
+-    $this->assertEqual($node2->id(), $item->data['entity_id'], 'Item in the queue is not same as created node entity');
++    $this->assertEquals($node2->id(), $item->data['entity_id'], 'Item in the queue is not same as created node entity');
+     $queue_worker->processItem($item->data);
+     $queue->deleteItem($item);
+ 
+diff --git a/tests/src/Kernel/UniqueQueueTest.php b/tests/src/Kernel/UniqueQueueTest.php
+index d67abac..7f78cd1 100644
+--- a/tests/src/Kernel/UniqueQueueTest.php
++++ b/tests/src/Kernel/UniqueQueueTest.php
+@@ -27,7 +27,7 @@ class UniqueQueueTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installConfig(['elasticsearch_helper']);
+   }
+diff --git a/tests/src/Unit/ElasticsearchClientVersionTest.php b/tests/src/Unit/ElasticsearchClientVersionTest.php
+index daff4eb..c3e2b5b 100644
+--- a/tests/src/Unit/ElasticsearchClientVersionTest.php
++++ b/tests/src/Unit/ElasticsearchClientVersionTest.php
+@@ -67,6 +67,7 @@ class ElasticsearchClientVersionTest extends UnitTestCase {
+    * @covers ::getPatchVersion
+    * @covers ::getVersionParts
+    * @covers ::getVersion
++   * @doesNotPerformAssertions
+    */
+   public function testGetPatchVersion() {
+     $result = ElasticsearchClientVersion::getPatchVersion();

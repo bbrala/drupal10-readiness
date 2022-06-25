@@ -1,0 +1,2980 @@
+diff --git a/media_acquiadam.install b/media_acquiadam.install
+index eed78a4..58b4044 100644
+--- a/media_acquiadam.install
++++ b/media_acquiadam.install
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\media\Entity\MediaType;
++use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
++use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
+ /**
+  * @file
+  * Installation related hooks and functions.
+@@ -153,7 +156,7 @@ function media_acquiadam_update_8103(&$sandbox) {
+     ->getStorage('media_type')
+     ->loadByProperties(['source' => 'acquiadam_asset']);
+ 
+-  /** @var \Drupal\media\Entity\MediaType $bundle */
++  /** @var MediaType $bundle */
+   foreach ($media_bundles as $bundle) {
+     $mapping = $bundle->getFieldMap();
+ 
+@@ -182,7 +185,7 @@ function media_acquiadam_update_8104(&$sandbox) {
+     'datemodified' => 'datemodified_unix',
+   ];
+ 
+-  /** @var \Drupal\media\Entity\MediaType $bundle */
++  /** @var MediaType $bundle */
+   foreach ($media_bundles as $bundle) {
+     $field_mapping = $bundle->getFieldMap();
+ 
+@@ -264,7 +267,7 @@ function media_acquiadam_update_8201() {
+   // Update Acquiadam Config Object.
+   // Deprecated after 9.3, module still supports 8.x.
+   /** @phpstan-ignore-next-line */
+-  $config_path = drupal_get_path('module', 'media_acquiadam') . '/config/install/media_acquiadam.settings.yml';
++  $config_path = \Drupal::service('extension.list.module')->getPath('media_acquiadam') . '/config/install/media_acquiadam.settings.yml';
+   $data = Yaml::parseFile($config_path);
+   $config_factory->getEditable('media_acquiadam.settings')->setData($data)->save(TRUE);
+ }
+@@ -297,7 +300,7 @@ function media_acquiadam_update_8202() {
+  *   The view mode, or 'default' to retrieve the 'default' display object for
+  *   this bundle.
+  *
+- * @return \Drupal\Core\Entity\Display\EntityViewDisplayInterface
++ * @return EntityViewDisplayInterface
+  *   The entity view display associated with the view mode.
+  *
+  * @see \Drupal\Core\Entity\EntityStorageInterface::create()
+@@ -341,7 +344,7 @@ function media_acquiadam_entity_get_display($entity_type, $bundle, $view_mode) {
+  * @param string $form_mode
+  *   The form mode.
+  *
+- * @return \Drupal\Core\Entity\Display\EntityFormDisplayInterface
++ * @return EntityFormDisplayInterface
+  *   The entity form display associated with the given form mode.
+  *
+  * @see \Drupal\Core\Entity\EntityStorageInterface::create()
+diff --git a/media_acquiadam.module b/media_acquiadam.module
+index 6222d47..401ee93 100644
+--- a/media_acquiadam.module
++++ b/media_acquiadam.module
+@@ -1,5 +1,10 @@
+ <?php
+ 
++use Drupal\media_acquiadam\Plugin\media\Source\AcquiadamAsset;
++use Drupal\media_acquiadam\Service\AssetMediaFactory;
++use Drupal\media\Entity\Media;
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Drupal\media_acquiadam\Service\AssetRefreshManagerInterface;
+ /**
+  * @file
+  * Integrates Drupal with Acquia DAM.
+@@ -155,13 +160,13 @@ function media_acquiadam_media_presave(MediaInterface $entity) {
+     return;
+   }
+ 
+-  /** @var \Drupal\media_acquiadam\Plugin\media\Source\AcquiadamAsset $source */
++  /** @var AcquiadamAsset $source */
+   $source = $entity->getSource();
+   if ($source->getPluginId() !== 'acquiadam_asset') {
+     return;
+   }
+ 
+-  /** @var \Drupal\media_acquiadam\Service\AssetMediaFactory $asset_media_factory */
++  /** @var AssetMediaFactory $asset_media_factory */
+   $asset_media_factory = \Drupal::service('media_acquiadam.asset_media.factory');
+   $media_helper = $asset_media_factory->get($entity);
+ 
+@@ -185,7 +190,7 @@ function media_acquiadam_media_presave(MediaInterface $entity) {
+     }
+   }
+ 
+-  /** @var \Drupal\media\Entity\Media $entity */
++  /** @var Media $entity */
+   $entity->updateQueuedThumbnail();
+ }
+ 
+@@ -202,14 +207,14 @@ function media_acquiadam_media_insert(MediaInterface $entity) {
+   }
+ 
+   // Only process the media using the Acquia DAM source.
+-  /** @var \Drupal\media_acquiadam\Plugin\media\Source\AcquiadamAsset $source */
++  /** @var AcquiadamAsset $source */
+   $source = $entity->getSource();
+   if ($source->getPluginId() !== 'acquiadam_asset') {
+     return;
+   }
+ 
+   // Only process the media which have an asset id (uuid).
+-  /** @var \Drupal\media_acquiadam\Service\AssetMediaFactory $asset_media_factory */
++  /** @var AssetMediaFactory $asset_media_factory */
+   $asset_media_factory = \Drupal::service('media_acquiadam.asset_media.factory');
+   $media_helper = $asset_media_factory->get($entity);
+   $assetID = $media_helper->getAssetId();
+@@ -233,7 +238,7 @@ function media_acquiadam_media_delete(MediaInterface $entity) {
+     return;
+   }
+ 
+-  /** @var \Drupal\media_acquiadam\Service\AssetMediaFactory $asset_media_factory */
++  /** @var AssetMediaFactory $asset_media_factory */
+   $asset_media_factory = \Drupal::service('media_acquiadam.asset_media.factory');
+   $asset_id = $asset_media_factory->get($entity)->getAssetId();
+   if (!empty($asset_id)) {
+@@ -284,7 +289,7 @@ function media_acquiadam_cron() {
+ 
+   $count = \Drupal::queue('media_acquiadam_asset_refresh')->numberOfItems();
+ 
+-  /** @var \Drupal\Core\Logger\LoggerChannelInterface $logger */
++  /** @var LoggerChannelInterface $logger */
+   $logger = \Drupal::service('logger.factory')->get('media_acquiadam');
+   $logger->info('Total items in the queue: @count.', ['@count' => $count]);
+ 
+@@ -306,7 +311,7 @@ function media_acquiadam_refresh_asset_sync_updated_date_queue() {
+     return FALSE;
+   }
+ 
+-  /** @var \Drupal\media_acquiadam\Service\AssetRefreshManagerInterface $asset_refresh_manager */
++  /** @var AssetRefreshManagerInterface $asset_refresh_manager */
+   $asset_refresh_manager = \Drupal::service('media_acquiadam.asset_refresh.manager');
+   $asset_refresh_manager->updateQueue($asset_id_fields);
+ 
+@@ -318,10 +323,10 @@ function media_acquiadam_refresh_asset_sync_updated_date_queue() {
+  */
+ function media_acquiadam_form_media_form_alter(&$form, FormStateInterface &$form_state) {
+ 
+-  /** @var \Drupal\media\Entity\Media $entity */
++  /** @var Media $entity */
+   $entity = $form_state->getFormObject()->getEntity();
+ 
+-  /** @var \Drupal\media_acquiadam\Plugin\media\Source\AcquiadamAsset $source */
++  /** @var AcquiadamAsset $source */
+   $source = $entity->getSource();
+   if ($entity->isNew() || $source->getPluginId() !== 'acquiadam_asset') {
+     return;
+diff --git a/modules/media_acquiadam_report/media_acquiadam_report.install b/modules/media_acquiadam_report/media_acquiadam_report.install
+index 41ea107..ec870c2 100644
+--- a/modules/media_acquiadam_report/media_acquiadam_report.install
++++ b/modules/media_acquiadam_report/media_acquiadam_report.install
+@@ -18,7 +18,7 @@ function media_acquiadam_report_update_8201() {
+   if ($view) {
+     // Deprecated after 9.3, module still supports 8.x.
+     /** @phpstan-ignore-next-line */
+-    $views_config_path = drupal_get_path('module', 'media_acquiadam_report') . '/config/install/views.view.acquia_dam_reporting.yml';
++    $views_config_path = \Drupal::service('extension.list.module')->getPath('media_acquiadam_report') . '/config/install/views.view.acquia_dam_reporting.yml';
+     $views_data = Yaml::parseFile($views_config_path);
+     $config_factory->getEditable('views.view.acquia_dam_reporting')->setData($views_data)->save();
+   }
+diff --git a/modules/media_acquiadam_report/src/EventSubscriber/AcquiadamUsageSubscriber.php b/modules/media_acquiadam_report/src/EventSubscriber/AcquiadamUsageSubscriber.php
+index 1284f25..1428163 100644
+--- a/modules/media_acquiadam_report/src/EventSubscriber/AcquiadamUsageSubscriber.php
++++ b/modules/media_acquiadam_report/src/EventSubscriber/AcquiadamUsageSubscriber.php
+@@ -16,14 +16,14 @@ class AcquiadamUsageSubscriber implements EventSubscriberInterface {
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a AcquiadamUsageSubscriber object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Acquiadam.php b/src/Acquiadam.php
+index 0837803..6e4374d 100644
+--- a/src/Acquiadam.php
++++ b/src/Acquiadam.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\media_acquiadam;
+ 
++use Drupal\media_acquiadam\Entity\Asset;
++use Drupal\Core\Logger\LoggerChannelInterface;
++use GuzzleHttp\Exception\GuzzleException;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+ use GuzzleHttp\Exception\ClientException;
+@@ -20,30 +23,30 @@ class Acquiadam implements AcquiadamInterface, ContainerInjectionInterface {
+    *
+    * @var array
+    *
+-   * @phpstan-var array<string, \Drupal\media_acquiadam\Entity\Asset|null>
++   * @phpstan-var array<string, (Asset | null)>
+    */
+   protected static $cachedAssets = [];
+ 
+   /**
+    * The Acquia DAM client service.
+    *
+-   * @var \Drupal\media_acquiadam\Client
++   * @var Client
+    */
+   protected $acquiaDamClient;
+ 
+   /**
+    * Acquia DAM logging service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $loggerChannel;
+ 
+   /**
+    * Acquiadam constructor.
+    *
+-   * @param \Drupal\media_acquiadam\Client $client
++   * @param Client $client
+    *   An instance of Client that we can get a acquiadam client from.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $loggerChannelFactory
++   * @param LoggerChannelFactoryInterface $loggerChannelFactory
+    *   The Drupal LoggerChannelFactory service.
+    */
+   public function __construct(Client $client, LoggerChannelFactoryInterface $loggerChannelFactory) {
+@@ -76,10 +79,10 @@ class Acquiadam implements AcquiadamInterface, ContainerInjectionInterface {
+    * @param string $assetId
+    *   The asset ID.
+    *
+-   * @return \Drupal\media_acquiadam\Entity\Asset
++   * @return Asset
+    *   The asset.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    * @throws \Exception
+    */
+   public function getAsset(string $assetId) {
+@@ -136,10 +139,10 @@ class Acquiadam implements AcquiadamInterface, ContainerInjectionInterface {
+    *   The operation to perform. One of get, set, or clear.
+    * @param string|null $assetId
+    *   The asset ID when using get or set.
+-   * @param \Drupal\media_acquiadam\Entity\Asset|null $asset
++   * @param Asset|null $asset
+    *   The data to store under the given asset ID.
+    *
+-   * @return \Drupal\media_acquiadam\Entity\Asset|null
++   * @return Asset|null
+    *   The static cache or NULL if unset.
+    */
+   public function staticAssetCache(string $op, string $assetId = NULL, $asset = NULL) {
+diff --git a/src/AcquiadamAuthService.php b/src/AcquiadamAuthService.php
+index 70ac8df..1d58441 100644
+--- a/src/AcquiadamAuthService.php
++++ b/src/AcquiadamAuthService.php
+@@ -34,7 +34,7 @@ class AcquiadamAuthService implements AcquiadamAuthServiceInterface {
+   /**
+    * Returns acquiadam setting config where it stores the authentication data.
+    *
+-   * @return \Drupal\Core\Config\ImmutableConfig
++   * @return ImmutableConfig
+    *   An immutable configuration object.
+    */
+   public static function getConfig(): ImmutableConfig {
+diff --git a/src/AssetData.php b/src/AssetData.php
+index 42b030e..f969d8e 100644
+--- a/src/AssetData.php
++++ b/src/AssetData.php
+@@ -15,14 +15,14 @@ class AssetData implements AssetDataInterface, ContainerInjectionInterface {
+   /**
+    * The database connection to use.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new asset data service.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection to use.
+    */
+   public function __construct(Connection $connection) {
+@@ -54,7 +54,7 @@ class AssetData implements AssetDataInterface, ContainerInjectionInterface {
+   /**
+    * Check if the given asset is different than what is stored.
+    *
+-   * @param \Drupal\media_acquiadam\Entity\Asset $asset
++   * @param Asset $asset
+    *   The current version of the asset.
+    *
+    * @return bool
+diff --git a/src/Client.php b/src/Client.php
+index 2ba97de..2222268 100644
+--- a/src/Client.php
++++ b/src/Client.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\media_acquiadam;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use GuzzleHttp\Exception\GuzzleException;
++use GuzzleHttp\Exception\RequestException;
++use Drupal\media_acquiadam\Exception\InvalidCredentialsException;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\media_acquiadam\Entity\Asset;
+@@ -20,7 +24,7 @@ class Client {
+   /**
+    * The Guzzle client to use for communication with the Acquia DAM API.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $client;
+ 
+@@ -41,35 +45,35 @@ class Client {
+   /**
+    * The user data factory service.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+    * Drupal config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Acquia DAM config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+@@ -83,15 +87,15 @@ class Client {
+   /**
+    * Client constructor.
+    *
+-   * @param \GuzzleHttp\ClientInterface $client
++   * @param ClientInterface $client
+    *   The Guzzle client interface.
+-   * @param \Drupal\user\UserDataInterface $user_data
++   * @param UserDataInterface $user_data
+    *   The user data interface.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account interface.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The config interface.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+    */
+   public function __construct(ClientInterface $client, UserDataInterface $user_data, AccountInterface $account, ConfigFactoryInterface $configFactory, RequestStack $request_stack) {
+@@ -184,10 +188,10 @@ class Client {
+    * @param string $categoryName
+    *   The Acquia DAM Category Name.
+    *
+-   * @return \Drupal\media_acquiadam\Entity\Category
++   * @return Category
+    *   The category object.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function getCategoryByName(string $categoryName): Category {
+     $this->checkAuth();
+@@ -206,13 +210,13 @@ class Client {
+   /**
+    * Load subcategories by Category link or parts (used in breadcrumb).
+    *
+-   * @param \Drupal\media_acquiadam\Entity\Category $category
++   * @param Category $category
+    *   Category object.
+    *
+-   * @return \Drupal\media_acquiadam\Entity\Category[]
++   * @return Category[]
+    *   A list of sub-categories (ie: child categories).
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function getCategoryData(Category $category): array {
+     $this->checkAuth();
+@@ -241,10 +245,10 @@ class Client {
+   /**
+    * Get top level categories.
+    *
+-   * @return Drupal\media_acquiadam\Entity\Category[]
++   * @return Category[]
+    *   A list of top level categories (ie: root categories).
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function getTopLevelCategories(): array {
+     $this->checkAuth();
+@@ -274,11 +278,11 @@ class Client {
+    * @param array $expands
+    *   The additional properties to be included.
+    *
+-   * @return \Drupal\media_acquiadam\Entity\Asset
++   * @return Asset
+    *   The asset entity.
+    *
+-   * @throws \GuzzleHttp\Exception\RequestException
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws RequestException
++   * @throws GuzzleException
+    */
+   public function getAsset(string $assetId, array $expands = []): Asset {
+     $this->checkAuth();
+@@ -345,8 +349,8 @@ class Client {
+    * @return array
+    *   Response Status 100 / 200
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
+-   * @throws \Drupal\media_acquiadam\Exception\InvalidCredentialsException
++   * @throws GuzzleException
++   * @throws InvalidCredentialsException
+    */
+   protected function uploadPresigned($presignedUrl, $file_uri, $file_type) {
+     $this->checkAuth();
+@@ -452,7 +456,7 @@ class Client {
+    *       pages.
+    *     - assets: an array of Asset objects.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function getAssetsByCategory(string $category_name, array $params = []): array {
+     if ($category_name) {
+@@ -500,7 +504,7 @@ class Client {
+    * @return array
+    *   A list of assets.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function searchAssets(array $params): array {
+     $this->checkAuth();
+@@ -577,8 +581,8 @@ class Client {
+    * @return array
+    *   An array of response data.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
+-   * @throws \Drupal\media_acquiadam\Exception\InvalidCredentialsException
++   * @throws GuzzleException
++   * @throws InvalidCredentialsException
+    */
+   public function queueAssetDownload($assetIDs, array $options): array {
+     $this->checkAuth();
+@@ -623,8 +627,8 @@ class Client {
+    * @return array
+    *   An array of response data.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
+-   * @throws \Drupal\media_acquiadam\Exception\InvalidCredentialsException
++   * @throws GuzzleException
++   * @throws InvalidCredentialsException
+    */
+   public function downloadFromQueue($downloadKey): array {
+     $this->checkAuth();
+@@ -663,11 +667,11 @@ class Client {
+    *                             Values: '+3 min', '+15 min', '+2 hours',
+    *                             '+1 day', '+2 weeks', 'no-expiration'.
+    *
+-   * @return \Drupal\media_acquiadam\Entity\Asset|bool
++   * @return Asset|bool
+    *   An asset object on success, or FALSE on failure.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
+-   * @throws \Drupal\media_acquiadam\Exception\InvalidCredentialsException
++   * @throws GuzzleException
++   * @throws InvalidCredentialsException
+    */
+   public function editAsset(string $assetID, array $data) {
+     $this->checkAuth();
+@@ -696,7 +700,7 @@ class Client {
+    * @return array
+    *   A list of metadata fields.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function getSpecificMetadataFields(): array {
+     if (!empty($this->specificMetadataFields)) {
+@@ -765,7 +769,7 @@ class Client {
+    * @param array $data
+    *   The body of the POST request.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function registerIntegrationLink(array $data) {
+     try {
+@@ -808,7 +812,7 @@ class Client {
+    * @return array
+    *   All the integration links which are registered on Acquia DAM.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function getIntegrationLinks(): array {
+     $this->checkAuth();
+diff --git a/src/Commands/AcquiadamCommands.php b/src/Commands/AcquiadamCommands.php
+index c6ef9d8..ce930c9 100644
+--- a/src/Commands/AcquiadamCommands.php
++++ b/src/Commands/AcquiadamCommands.php
+@@ -19,28 +19,28 @@ class AcquiadamCommands extends DrushCommands {
+   /**
+    * The acquiadam configuration.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $config;
+ 
+   /**
+    * The queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueService;
+ 
+   /**
+    * The state interface.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+@@ -84,7 +84,7 @@ class AcquiadamCommands extends DrushCommands {
+   /**
+    * Validate handler for the acquiadam:update command.
+    *
+-   * @param \Consolidation\AnnotatedCommand\CommandData $commandData
++   * @param CommandData $commandData
+    *   The command data.
+    *
+    * @hook validate acquiadam:update
+@@ -141,7 +141,7 @@ class AcquiadamCommands extends DrushCommands {
+   /**
+    * The validation handler for the acquiadam:sync command.
+    *
+-   * @param \Consolidation\AnnotatedCommand\CommandData $commandData
++   * @param CommandData $commandData
+    *   The command data.
+    *
+    * @hook validate acquiadam:sync
+diff --git a/src/Controller/AcquiadamAuthController.php b/src/Controller/AcquiadamAuthController.php
+index 343c030..2edd9d1 100644
+--- a/src/Controller/AcquiadamAuthController.php
++++ b/src/Controller/AcquiadamAuthController.php
+@@ -20,23 +20,23 @@ class AcquiadamAuthController extends ControllerBase implements ContainerInjecti
+   /**
+    * The request stack factory service.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $request;
+ 
+   /**
+    * The user data factory service.
+    *
+-   * @var \Drupal\user\UserData
++   * @var UserData
+    */
+   protected $userData;
+ 
+   /**
+    * Constructs a new AcquiadamAuthController.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack factory.
+-   * @param \Drupal\user\UserData $user_data
++   * @param UserData $user_data
+    *   The user data factory.
+    */
+   public function __construct(RequestStack $request_stack, UserData $user_data) {
+@@ -86,7 +86,7 @@ class AcquiadamAuthController extends ControllerBase implements ContainerInjecti
+    *
+    * @param string $auth_code
+    *   The authorization code provided during user creation.
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user account.
+    *
+    * @todo improve function documentation block.
+diff --git a/src/Controller/AcquiadamController.php b/src/Controller/AcquiadamController.php
+index 70da3a3..9a96747 100644
+--- a/src/Controller/AcquiadamController.php
++++ b/src/Controller/AcquiadamController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\media_acquiadam\Controller;
+ 
++use Drupal\media_acquiadam\Acquiadam;
++use Drupal\media_acquiadam\Entity\Asset;
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\media_acquiadam\AcquiadamInterface;
+@@ -19,55 +22,55 @@ class AcquiadamController extends ControllerBase {
+   /**
+    * A configured API object.
+    *
+-   * @var \Drupal\media_acquiadam\Acquiadam
++   * @var Acquiadam
+    */
+   protected $acquiadam;
+ 
+   /**
+    * The asset that we're going to render details for.
+    *
+-   * @var \Drupal\media_acquiadam\Entity\Asset
++   * @var Asset
+    */
+   protected $asset;
+ 
+   /**
+    * Drupal config service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Acquia DAM config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Acquia DAM asset image helper service.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetImageHelper
++   * @var AssetImageHelper
+    */
+   protected $assetImageHelper;
+ 
+   /**
+    * Acquia DAM asset metadata helper service.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetMetadataHelper
++   * @var AssetMetadataHelper
+    */
+   protected $assetMetadataHelper;
+ 
+   /**
+    * AcquiadamController constructor.
+    *
+-   * @param \Drupal\media_acquiadam\AcquiadamInterface $acquiadam
++   * @param AcquiadamInterface $acquiadam
+    *   The Acquiadam Interface.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   Drupal config factory.
+-   * @param \Drupal\media_acquiadam\Service\AssetImageHelper $assetImageHelper
++   * @param AssetImageHelper $assetImageHelper
+    *   Acquia DAM asset image helper service.
+-   * @param \Drupal\media_acquiadam\Service\AssetMetadataHelper $assetMetadataHelper
++   * @param AssetMetadataHelper $assetMetadataHelper
+    *   Acquia DAM asset metadata helper service.
+    */
+   public function __construct(AcquiadamInterface $acquiadam, ConfigFactoryInterface $configFactory, AssetImageHelper $assetImageHelper, AssetMetadataHelper $assetMetadataHelper) {
+@@ -115,10 +118,10 @@ class AcquiadamController extends ControllerBase {
+    * @param string $assetId
+    *   The asset ID for the asset to render details for.
+    *
+-   * @return \Drupal\media_acquiadam\Entity\Asset
++   * @return Asset
+    *   The asset or NULL on failure.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   protected function getAsset(string $assetId) {
+     if ($this->asset === NULL) {
+diff --git a/src/Form/AcquiadamConfig.php b/src/Form/AcquiadamConfig.php
+index 789fdb8..b7e40ee 100644
+--- a/src/Form/AcquiadamConfig.php
++++ b/src/Form/AcquiadamConfig.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\media_acquiadam\Form;
+ 
++use Drupal\Component\Datetime\Time;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\media_acquiadam\Plugin\QueueWorker\AssetRefresh;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Batch\BatchBuilder;
+@@ -35,35 +38,35 @@ class AcquiadamConfig extends ConfigFormBase {
+   /**
+    * The Guzzle HTTP client service.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * The Batch Builder.
+    *
+-   * @var \Drupal\Core\Batch\BatchBuilder
++   * @var BatchBuilder
+    */
+   protected $batchBuilder;
+ 
+   /**
+    * The Drupal DateTime Service.
+    *
+-   * @var \Drupal\Component\Datetime\Time
++   * @var Time
+    */
+   protected $time;
+ 
+   /**
+    * The Queue Worker Manager Service.
+    *
+-   * @var \Drupal\Core\Queue\QueueWorkerManagerInterface
++   * @var QueueWorkerManagerInterface
+    */
+   protected $queueWorkerManager;
+ 
+   /**
+    * The Drupal State Service.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+@@ -380,7 +383,7 @@ class AcquiadamConfig extends ConfigFormBase {
+    *
+    * @param array $form
+    *   A Drupal form render array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The FormState object.
+    *
+    * @return array|bool
+@@ -438,10 +441,10 @@ class AcquiadamConfig extends ConfigFormBase {
+    * @param array $context
+    *   Context.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function processBatchItems(array $media_ids, array &$context) {
+-    /** @var \Drupal\media_acquiadam\Plugin\QueueWorker\AssetRefresh $asset_refresh_queue_worker */
++    /** @var AssetRefresh $asset_refresh_queue_worker */
+     $asset_refresh_queue_worker = $this->queueWorkerManager
+       ->createInstance('media_acquiadam_asset_refresh');
+ 
+@@ -503,7 +506,7 @@ class AcquiadamConfig extends ConfigFormBase {
+    *
+    * @param array $form
+    *   Form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state.
+    *
+    * @return array
+diff --git a/src/Form/AcquiadamUpdateAssetsReference.php b/src/Form/AcquiadamUpdateAssetsReference.php
+index 76f2b74..b1b9b11 100644
+--- a/src/Form/AcquiadamUpdateAssetsReference.php
++++ b/src/Form/AcquiadamUpdateAssetsReference.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\media_acquiadam\Form;
+ 
++use Drupal\Core\Entity\EntityTypeManager;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -21,23 +22,23 @@ class AcquiadamUpdateAssetsReference extends FormBase {
+   /**
+    * Drupal entity type management service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManager
++   * @var EntityTypeManager
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * AcquiadamUpdateAssetsReference constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, MessengerInterface $messenger) {
+diff --git a/src/MediaEntityHelper.php b/src/MediaEntityHelper.php
+index 363547e..60f3edd 100644
+--- a/src/MediaEntityHelper.php
++++ b/src/MediaEntityHelper.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\media_acquiadam;
+ 
++use Drupal\file\FileInterface;
++use Drupal\media\Entity\MediaType;
++use Drupal\media_acquiadam\Entity\Asset;
++use Drupal\Core\Field\FieldItemInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\media\MediaInterface;
+ use Drupal\media_acquiadam\Service\AssetFileEntityHelper;
+@@ -19,50 +23,50 @@ class MediaEntityHelper {
+   /**
+    * Entity Type Manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Acquia DAM asset data service.
+    *
+-   * @var \Drupal\media_acquiadam\AssetData
++   * @var AssetData
+    */
+   protected $assetData;
+ 
+   /**
+    * Acquia DAM client.
+    *
+-   * @var \Drupal\media_acquiadam\Acquiadam
++   * @var Acquiadam
+    */
+   protected $acquiaDamClient;
+ 
+   /**
+    * Acquia DAM asset file helper service.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetFileEntityHelper
++   * @var AssetFileEntityHelper
+    */
+   protected $assetFileHelper;
+ 
+   /**
+    * The media entity that is being wrapped.
+    *
+-   * @var \Drupal\media\MediaInterface
++   * @var MediaInterface
+    */
+   protected $mediaEntity;
+ 
+   /**
+    * MediaEntityHelper constructor.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   The media entity to wrap.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity Type Manager service.
+-   * @param \Drupal\media_acquiadam\AssetDataInterface $assetData
++   * @param AssetDataInterface $assetData
+    *   Acquia DAM asset data service.
+-   * @param \Drupal\media_acquiadam\AcquiadamInterface $acquiaDamClient
++   * @param AcquiadamInterface $acquiaDamClient
+    *   Acquia DAM client.
+-   * @param \Drupal\media_acquiadam\Service\AssetFileEntityHelper $assetFileHelper
++   * @param AssetFileEntityHelper $assetFileHelper
+    *   Acquia DAM file entity helper service.
+    */
+   public function __construct(MediaInterface $media, EntityTypeManagerInterface $entityTypeManager, AssetDataInterface $assetData, AcquiadamInterface $acquiaDamClient, AssetFileEntityHelper $assetFileHelper) {
+@@ -77,7 +81,7 @@ class MediaEntityHelper {
+   /**
+    * Returns an associated file or creates a new one.
+    *
+-   * @return false|\Drupal\file\FileInterface
++   * @return false|FileInterface
+    *   A file entity or FALSE on failure.
+    */
+   public function getFile() {
+@@ -113,13 +117,13 @@ class MediaEntityHelper {
+   /**
+    * Attempts to load an existing file entity from the given media entity.
+    *
+-   * @return \Drupal\file\FileInterface|false
++   * @return FileInterface|false
+    *   A loaded file entity or FALSE if none could be found.
+    */
+   public function getExistingFile() {
+     try {
+       if ($fid = $this->getExistingFileId()) {
+-        /** @var \Drupal\file\FileInterface $file */
++        /** @var FileInterface $file */
+         $file = $this->entityTypeManager->getStorage('file')->load($fid);
+       }
+     }
+@@ -148,7 +152,7 @@ class MediaEntityHelper {
+    */
+   public function getAssetFileField() {
+     try {
+-      /** @var \Drupal\media\Entity\MediaType $bundle */
++      /** @var MediaType $bundle */
+       $bundle = $this->entityTypeManager->getStorage('media_type')
+         ->load($this->mediaEntity->bundle());
+       $field_map = !empty($bundle) ? $bundle->getFieldMap() : FALSE;
+@@ -163,7 +167,7 @@ class MediaEntityHelper {
+   /**
+    * Get the asset from a media entity.
+    *
+-   * @return \Drupal\media_acquiadam\Entity\Asset|null
++   * @return Asset|null
+    *   The asset or NULL on failure.
+    */
+   public function getAsset() {
+@@ -209,7 +213,7 @@ class MediaEntityHelper {
+    */
+   protected function getFieldPropertyValue($fieldName) {
+     if ($this->mediaEntity->hasField($fieldName)) {
+-      /** @var \Drupal\Core\Field\FieldItemInterface $item */
++      /** @var FieldItemInterface $item */
+       $item = $this->mediaEntity->{$fieldName}->first();
+       if (!empty($item)) {
+         $property_name = $item->mainPropertyName();
+diff --git a/src/Plugin/QueueWorker/AssetRefresh.php b/src/Plugin/QueueWorker/AssetRefresh.php
+index 02b6578..4117c79 100644
+--- a/src/Plugin/QueueWorker/AssetRefresh.php
++++ b/src/Plugin/QueueWorker/AssetRefresh.php
+@@ -31,28 +31,28 @@ class AssetRefresh extends QueueWorkerBase implements ContainerFactoryPluginInte
+   /**
+    * Drupal logger channel service.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $loggerChannel;
+ 
+   /**
+    * Drupal entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Acquia DAM Asset Media Factory service.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetMediaFactory
++   * @var AssetMediaFactory
+    */
+   protected $assetMediaFactory;
+ 
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+diff --git a/src/Plugin/QueueWorker/IntegrationLinkReport.php b/src/Plugin/QueueWorker/IntegrationLinkReport.php
+index ea85dc4..3885878 100644
+--- a/src/Plugin/QueueWorker/IntegrationLinkReport.php
++++ b/src/Plugin/QueueWorker/IntegrationLinkReport.php
+@@ -22,14 +22,14 @@ class IntegrationLinkReport extends QueueWorkerBase implements ContainerFactoryP
+   /**
+    * Acquia DAM client factory.
+    *
+-   * @var \Drupal\media_acquiadam\Client
++   * @var Client
+    */
+   protected $client;
+ 
+   /**
+    * Drupal logger channel service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $loggerChannel;
+ 
+diff --git a/src/Plugin/media/Source/AcquiadamAsset.php b/src/Plugin/media/Source/AcquiadamAsset.php
+index 149990a..d6c00cc 100644
+--- a/src/Plugin/media/Source/AcquiadamAsset.php
++++ b/src/Plugin/media/Source/AcquiadamAsset.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\media_acquiadam\Plugin\media\Source;
+ 
++use Drupal\media_acquiadam\Entity\Asset;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -32,28 +33,28 @@ class AcquiadamAsset extends MediaSourceBase {
+   /**
+    * The asset that we're going to render details for.
+    *
+-   * @var \Drupal\media_acquiadam\Entity\Asset|null
++   * @var Asset|null
+    */
+   protected $currentAsset;
+ 
+   /**
+    * Acquia DAM asset image helper service.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetImageHelper
++   * @var AssetImageHelper
+    */
+   protected $assetImageHelper;
+ 
+   /**
+    * Acquia DAM asset metadata helper service.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetMetadataHelper
++   * @var AssetMetadataHelper
+    */
+   protected $assetMetadataHelper;
+ 
+   /**
+    * Acquia DAM Asset Media Factory service.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetMediaFactory
++   * @var AssetMediaFactory
+    */
+   protected $assetMediaFactory;
+ 
+@@ -172,7 +173,7 @@ class AcquiadamAsset extends MediaSourceBase {
+   /**
+    * Gets the metadata for the given entity.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   The media entity to get metadata from.
+    * @param string $name
+    *   The metadata item to get the value of.
+diff --git a/src/Service/AssetFileEntityHelper.php b/src/Service/AssetFileEntityHelper.php
+index 2d25b53..7f245d1 100644
+--- a/src/Service/AssetFileEntityHelper.php
++++ b/src/Service/AssetFileEntityHelper.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\media_acquiadam\Service;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Logger\LoggerChannelInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+@@ -27,102 +29,102 @@ class AssetFileEntityHelper implements ContainerInjectionInterface {
+   /**
+    * Entity Type Manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Entity Field Manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * Drupal config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Acquia DAM config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Drupal filesystem service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * Drupal token service.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $token;
+ 
+   /**
+    * Acquia DAM asset image helper service.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetImageHelper
++   * @var AssetImageHelper
+    */
+   protected $assetImageHelper;
+ 
+   /**
+    * Acquia DAM client.
+    *
+-   * @var \Drupal\media_acquiadam\AcquiadamInterface
++   * @var AcquiadamInterface
+    */
+   protected $acquiaDamClient;
+ 
+   /**
+    * Acquia DAM factory for wrapping media entities.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetMediaFactory
++   * @var AssetMediaFactory
+    */
+   protected $assetMediaFactory;
+ 
+   /**
+    * Acquia DAM logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $loggerChannel;
+ 
+   /**
+    * The HTTP client.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $httpClient;
+ 
+   /**
+    * AssetFileEntityHelper constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity Type Manager service.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entityFieldManager
++   * @param EntityFieldManagerInterface $entityFieldManager
+    *   Entity Field Manager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   Drupal config factory.
+-   * @param \Drupal\Core\File\FileSystemInterface $fileSystem
++   * @param FileSystemInterface $fileSystem
+    *   Drupal filesystem service.
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   Drupal token service.
+-   * @param \Drupal\media_acquiadam\Service\AssetImageHelper $assetImageHelper
++   * @param AssetImageHelper $assetImageHelper
+    *   Acquia DAM asset image helper service.
+-   * @param \Drupal\media_acquiadam\AcquiadamInterface $acquiaDamClient
++   * @param AcquiadamInterface $acquiaDamClient
+    *   Acquia DAM client.
+-   * @param \Drupal\media_acquiadam\Service\AssetMediaFactory $assetMediaFactory
++   * @param AssetMediaFactory $assetMediaFactory
+    *   Acquia DAM Asset Media Factory service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $loggerChannelFactory
++   * @param LoggerChannelFactoryInterface $loggerChannelFactory
+    *   The Drupal LoggerChannelFactory service.
+-   * @param \GuzzleHttp\Client $client
++   * @param Client $client
+    *   The HTTP client.
+    */
+   public function __construct(
+@@ -170,7 +172,7 @@ class AssetFileEntityHelper implements ContainerInjectionInterface {
+   /**
+    * Get a destination uri from the given entity and field combo.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to check the field configuration on.
+    * @param string $fileField
+    *   The name of the file field.
+@@ -205,12 +207,12 @@ class AssetFileEntityHelper implements ContainerInjectionInterface {
+   /**
+    * Creates a new file for an asset.
+    *
+-   * @param \Drupal\media_acquiadam\Entity\Asset $asset
++   * @param Asset $asset
+    *   The asset to save a new file for.
+    * @param string $destination_folder
+    *   The path to save the asset into.
+    *
+-   * @return bool|\Drupal\file\FileInterface
++   * @return bool|FileInterface
+    *   The created file or FALSE on failure.
+    */
+   public function createNewFile(Asset $asset, $destination_folder) {
+@@ -259,7 +261,7 @@ class AssetFileEntityHelper implements ContainerInjectionInterface {
+   /**
+    * Fetches binary asset data from a remote source.
+    *
+-   * @param \Drupal\media_acquiadam\Entity\Asset $asset
++   * @param Asset $asset
+    *   The asset to fetch data for.
+    * @param string $filename
+    *   The filename as a reference so it can be overridden.
+@@ -365,14 +367,14 @@ class AssetFileEntityHelper implements ContainerInjectionInterface {
+   /**
+    * Replaces the binary contents of the given file entity.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   The file entity to replace the binary contents of.
+    * @param mixed $data
+    *   The contents to save.
+    * @param string $destination
+    *   The destination uri to save to.
+    *
+-   * @return \Drupal\file\FileInterface
++   * @return FileInterface
+    *   The file entity that was updated.
+    */
+   protected function replaceExistingFile(FileInterface $file, $data, $destination) {
+@@ -397,13 +399,13 @@ class AssetFileEntityHelper implements ContainerInjectionInterface {
+    *   generated and the file will be saved using Drupal's default files scheme,
+    *   usually "public://".
+    *
+-   * @return \Drupal\file\FileInterface|false
++   * @return FileInterface|false
+    *   A file entity, or FALSE on error.
+    */
+   protected function drupalFileSaveData($data, $destination = NULL) {
+     // Deprecated after 9.3, module still supports 8.x.
+     // @phpstan-ignore-next-line
+-    return file_save_data($data, $destination, FileSystemInterface::EXISTS_REPLACE);
++    return \Drupal::service('file.repository')->writeData($data, $destination, FileSystemInterface::EXISTS_REPLACE);
+   }
+ 
+ }
+diff --git a/src/Service/AssetImageHelper.php b/src/Service/AssetImageHelper.php
+index c51991b..80742e5 100644
+--- a/src/Service/AssetImageHelper.php
++++ b/src/Service/AssetImageHelper.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\media_acquiadam\Service;
+ 
++use GuzzleHttp\Client;
++use Drupal\Core\Image\Image;
++use Drupal\image\Entity\ImageStyle;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -25,59 +28,59 @@ class AssetImageHelper implements ContainerInjectionInterface {
+   /**
+    * Guzzle HTTP Client.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $httpClient;
+ 
+   /**
+    * Drupal config service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Drupal filesystem wrapper.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * Drupal MIME type guesser.
+    *
+-   * @var \Drupal\Core\File\MimeType\MimeTypeGuesser
++   * @var MimeTypeGuesser
+    */
+   protected $mimeTypeGuesser;
+ 
+   /**
+    * Drupal ImageFactory service.
+    *
+-   * @var \Drupal\Core\Image\ImageFactory
++   * @var ImageFactory
+    */
+   protected $imageFactory;
+ 
+   /**
+    * Entity manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * AssetImageHelper constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   Drupal config service.
+-   * @param \Drupal\Core\File\FileSystemInterface $fileSystem
++   * @param FileSystemInterface $fileSystem
+    *   Drupal filesystem wrapper.
+-   * @param \GuzzleHttp\ClientInterface $httpClient
++   * @param ClientInterface $httpClient
+    *   Guzzle HTTP Client.
+-   * @param \Drupal\Core\File\MimeType\MimeTypeGuesser $mimeTypeGuesser
++   * @param MimeTypeGuesser $mimeTypeGuesser
+    *   Drupal MIME type guesser.
+-   * @param \Drupal\Core\Image\ImageFactory $imageFactory
++   * @param ImageFactory $imageFactory
+    *   Drupal ImageFactory service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+    */
+   // phpcs:ignore
+@@ -107,7 +110,7 @@ class AssetImageHelper implements ContainerInjectionInterface {
+   /**
+    * Get the URL to the DAM-provided thumbnail if possible.
+    *
+-   * @param \Drupal\media_acquiadam\Entity\Asset $asset
++   * @param Asset $asset
+    *   The asset to get the thumbnail size from.
+    * @param int $thumbnailSize
+    *   Find the closest thumbnail size without going over when multiple
+@@ -163,7 +166,7 @@ class AssetImageHelper implements ContainerInjectionInterface {
+   /**
+    * Get the thumbnail for the given asset.
+    *
+-   * @param \Drupal\file\FileInterface|false $file
++   * @param FileInterface|false $file
+    *   The file entity to create a thumbnail uri from.
+    *
+    * @return string|false
+@@ -290,7 +293,7 @@ class AssetImageHelper implements ContainerInjectionInterface {
+    */
+   protected function getAcquiaDamModulePath() {
+     // @phpstan-ignore-next-line
+-    return drupal_get_path('module', 'media_acquiadam');
++    return \Drupal::service('extension.list.module')->getPath('media_acquiadam');
+   }
+ 
+   /**
+@@ -311,21 +314,21 @@ class AssetImageHelper implements ContainerInjectionInterface {
+   /**
+    * Get an image path from a file.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   The image file to get the image path for.
+    *
+    * @return false|string
+    *   The image path to use or FALSE on failure.
+    */
+   public function getImageThumbnail(FileInterface $file) {
+-    /** @var \Drupal\Core\Image\Image $image */
++    /** @var Image $image */
+     $image = $this->imageFactory->get($file->getFileUri());
+ 
+     if ($image->isValid()) {
+       // Pre-create all image styles.
+       $styles = $this->entityTypeManager->getStorage('image_style')->loadMultiple();
+       foreach ($styles as $style) {
+-        /** @var \Drupal\image\Entity\ImageStyle $style */
++        /** @var ImageStyle $style */
+         $style->flush($file->getFileUri());
+       }
+       return $file->getFileUri();
+diff --git a/src/Service/AssetMediaFactory.php b/src/Service/AssetMediaFactory.php
+index 503e82b..d315972 100644
+--- a/src/Service/AssetMediaFactory.php
++++ b/src/Service/AssetMediaFactory.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\media_acquiadam\Service;
+ 
++use Drupal\media\MediaStorage;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\media\MediaSourceInterface;
++use Drupal\media\Entity\MediaType;
++use Drupal\file\FileInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\media\MediaInterface;
+@@ -19,14 +25,14 @@ class AssetMediaFactory implements ContainerInjectionInterface {
+   /**
+    * Drupal entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Entity storage for Media types.
+    *
+-   * @var \Drupal\media\MediaStorage
++   * @var MediaStorage
+    */
+   protected $mediaStorage;
+ 
+@@ -40,11 +46,11 @@ class AssetMediaFactory implements ContainerInjectionInterface {
+   /**
+    * AssetMediaFactory constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity Type Manager service.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(EntityTypeManagerInterface $entityTypeManager) {
+     $this->entityTypeManager = $entityTypeManager;
+@@ -76,7 +82,7 @@ class AssetMediaFactory implements ContainerInjectionInterface {
+    * @param string $bundle
+    *   A specific bundle to fetch the media entity from.
+    *
+-   * @return false|\Drupal\media\MediaSourceInterface
++   * @return false|MediaSourceInterface
+    *   The media source for the given asset or FALSE.
+    */
+   public function getMediaSource($assetId, $bundle = NULL) {
+@@ -92,7 +98,7 @@ class AssetMediaFactory implements ContainerInjectionInterface {
+    * @param string $bundle
+    *   A specific bundle to fetch the media entity from.
+    *
+-   * @return \Drupal\media\MediaInterface|false
++   * @return MediaInterface|false
+    *   The media entity the given asset is associated with or FALSE.
+    *
+    * @BUG: Only returns the first media entity it finds.
+@@ -116,7 +122,7 @@ class AssetMediaFactory implements ContainerInjectionInterface {
+    * @param string $bundle
+    *   A specific bundle to fetch the media entity from.
+    *
+-   * @return \Drupal\media\MediaInterface[]|false
++   * @return MediaInterface[]|false
+    *   An array of media entities keyed by their bundles or FALSE on failure.
+    */
+   public function getMediaEntities($assetId, $bundle = NULL) {
+@@ -205,7 +211,7 @@ class AssetMediaFactory implements ContainerInjectionInterface {
+     }
+ 
+     $asset_id_fields = [];
+-    /** @var \Drupal\media\Entity\MediaType $bundle */
++    /** @var MediaType $bundle */
+     foreach ($media_bundles as $name => $bundle) {
+       $asset_id_fields[$name] = $bundle->getSource()
+         ->getSourceFieldDefinition($bundle)
+@@ -223,7 +229,7 @@ class AssetMediaFactory implements ContainerInjectionInterface {
+    * @param string $bundle
+    *   A specific bundle to fetch the media entity from.
+    *
+-   * @return \Drupal\file\FileInterface|false
++   * @return FileInterface|false
+    *   An existing file entity for the asset or FALSE.
+    */
+   public function getFileEntity($assetId, $bundle = NULL) {
+@@ -235,10 +241,10 @@ class AssetMediaFactory implements ContainerInjectionInterface {
+   /**
+    * Wrap a media entity with a helper to enable asset functionality.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   The media entity to wrap.
+    *
+-   * @return \Drupal\media_acquiadam\MediaEntityHelper
++   * @return MediaEntityHelper
+    *   A media entity wrapped with a helper class.
+    */
+   public function get(MediaInterface $media) {
+diff --git a/src/Service/AssetMetadataHelper.php b/src/Service/AssetMetadataHelper.php
+index dc98c1e..7036511 100644
+--- a/src/Service/AssetMetadataHelper.php
++++ b/src/Service/AssetMetadataHelper.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\media_acquiadam\Service;
+ 
++use Drupal\media_acquiadam\Client;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+@@ -21,14 +22,14 @@ class AssetMetadataHelper implements ContainerInjectionInterface {
+   /**
+    * Drupal date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * A configured API object.
+    *
+-   * @var \Drupal\media_acquiadam\AcquiadamInterface|\Drupal\media_acquiadam\Client
++   * @var AcquiadamInterface|Client
+    *   $acquiadam
+    */
+   protected $acquiadam;
+@@ -43,9 +44,9 @@ class AssetMetadataHelper implements ContainerInjectionInterface {
+   /**
+    * AssetImageHelper constructor.
+    *
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $dateFormatter
++   * @param DateFormatterInterface $dateFormatter
+    *   A Drupal date formatter service.
+-   * @param \Drupal\media_acquiadam\AcquiadamInterface|\Drupal\media_acquiadam\Client $acquiadam
++   * @param AcquiadamInterface|Client $acquiadam
+    *   A configured API object.
+    */
+   public function __construct(DateFormatterInterface $dateFormatter, AcquiadamInterface $acquiadam) {
+@@ -142,7 +143,7 @@ class AssetMetadataHelper implements ContainerInjectionInterface {
+   /**
+    * Gets a metadata item from the given asset.
+    *
+-   * @param \Drupal\media_acquiadam\Entity\Asset $asset
++   * @param Asset $asset
+    *   The asset to get metadata from.
+    * @param string $name
+    *   The name of the metadata item to retrieve.
+diff --git a/src/Service/AssetRefreshManager.php b/src/Service/AssetRefreshManager.php
+index 76976a0..bb61d87 100644
+--- a/src/Service/AssetRefreshManager.php
++++ b/src/Service/AssetRefreshManager.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\media_acquiadam\Service;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Drupal\Core\Queue\QueueInterface;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Datetime\DrupalDateTime;
+@@ -30,49 +36,49 @@ class AssetRefreshManager implements AssetRefreshManagerInterface, ContainerInje
+   /**
+    * The Acquiadam Service.
+    *
+-   * @var \Drupal\media_acquiadam\AcquiadamInterface
++   * @var AcquiadamInterface
+    */
+   protected $acquiadam;
+ 
+   /**
+    * The Drupal State Service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The Logger Factory Service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The Queue Worker.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+   /**
+    * The media storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $mediaStorage;
+ 
+   /**
+    * The config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+@@ -86,23 +92,23 @@ class AssetRefreshManager implements AssetRefreshManagerInterface, ContainerInje
+   /**
+    * AssetRefreshManager constructor.
+    *
+-   * @param \Drupal\media_acquiadam\AcquiadamInterface $acquiadam
++   * @param AcquiadamInterface $acquiadam
+    *   The Acquiadam Service.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The Drupal State Service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The Logger Factory Service.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   The Queue Factory Service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The EntityTypeManager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(AcquiadamInterface $acquiadam, StateInterface $state, LoggerChannelFactoryInterface $logger_factory, QueueFactory $queue_factory, EntityTypeManagerInterface $entity_type_manager, ConfigFactoryInterface $config_factory, TimeInterface $time) {
+     $this->acquiadam = $acquiadam;
+diff --git a/tests/modules/media_acquiadam_test/src/TestClient.php b/tests/modules/media_acquiadam_test/src/TestClient.php
+index 9ad1a70..8d8d65e 100644
+--- a/tests/modules/media_acquiadam_test/src/TestClient.php
++++ b/tests/modules/media_acquiadam_test/src/TestClient.php
+@@ -19,7 +19,7 @@ class TestClient {
+   /**
+    * Add or modify a test asset.
+    *
+-   * @param \Drupal\media_acquiadam\Entity\Asset $asset
++   * @param Asset $asset
+    *   The asset to add/modify.
+    */
+   public function addAsset(Asset $asset) {
+@@ -32,7 +32,7 @@ class TestClient {
+    * @param int $assetId
+    *   The test Asset ID.
+    *
+-   * @return \Drupal\media_acquiadam\Entity\Asset
++   * @return Asset
+    *   The test asset.
+    */
+   public function getAsset($assetId) {
+diff --git a/tests/src/Kernel/AcquiadamKernelTestBase.php b/tests/src/Kernel/AcquiadamKernelTestBase.php
+index 5e86e8b..1d9e31b 100644
+--- a/tests/src/Kernel/AcquiadamKernelTestBase.php
++++ b/tests/src/Kernel/AcquiadamKernelTestBase.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Kernel;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\KernelTests\Core\Entity\EntityKernelTestBase;
+ use Drupal\media\Entity\Media;
+ use Drupal\media\MediaInterface;
+@@ -38,7 +41,7 @@ abstract class AcquiadamKernelTestBase extends EntityKernelTestBase {
+   /**
+    * The test client.
+    *
+-   * @var \Drupal\media_acquiadam_test\TestClient
++   * @var TestClient
+    */
+   protected $testClient;
+ 
+@@ -47,7 +50,7 @@ abstract class AcquiadamKernelTestBase extends EntityKernelTestBase {
+    *
+    * Mocked to have a fixed set/get.
+    *
+-   * @var \Drupal\media_acquiadam\AssetData|\PHPUnit\Framework\MockObject\MockObject
++   * @var AssetData|MockObject
+    */
+   protected $acquiaAssetData;
+ 
+@@ -73,9 +76,7 @@ abstract class AcquiadamKernelTestBase extends EntityKernelTestBase {
+   protected function setTestClient() {
+     $this->testClient = new TestClient();
+ 
+-    $acquiadam_client_factory = $this->getMockBuilder(Client::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $acquiadam_client_factory = $this->createMock(Client::class);
+     $acquiadam_client_factory->expects($this->any())
+       ->method('getAsset')
+       ->willReturnCallback(function ($assetId) {
+@@ -135,10 +136,10 @@ abstract class AcquiadamKernelTestBase extends EntityKernelTestBase {
+    * @param string $bundle
+    *   The media entity.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|\Drupal\media\Entity\Media
++   * @return EntityInterface|Media
+    *   The created media entity.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   protected function createMedia(string $asset_id, string $bundle = self::DEFAULT_BUNDLE) {
+     $media = Media::create([
+@@ -152,7 +153,7 @@ abstract class AcquiadamKernelTestBase extends EntityKernelTestBase {
+   /**
+    * Get asset file entity from Media entity.
+    *
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   The media entity to get the file from.
+    *
+    * @return mixed
+@@ -167,9 +168,9 @@ abstract class AcquiadamKernelTestBase extends EntityKernelTestBase {
+   /**
+    * Get the URI from a given asset.
+    *
+-   * @param \Drupal\media_acquiadam\Entity\Asset $asset
++   * @param Asset $asset
+    *   The asset to generate the URI.
+-   * @param \Drupal\media\MediaInterface $media
++   * @param MediaInterface $media
+    *   The media entity for this asset.
+    *
+    * @return string
+diff --git a/tests/src/Kernel/AcquiadamMediaTest.php b/tests/src/Kernel/AcquiadamMediaTest.php
+index 9380f89..24ed90a 100644
+--- a/tests/src/Kernel/AcquiadamMediaTest.php
++++ b/tests/src/Kernel/AcquiadamMediaTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Kernel;
+ 
++use Drupal\media_acquiadam\Entity\Asset;
++use Drupal\media\Entity\Media;
++use Drupal\media_acquiadam\Service\AssetFileEntityHelper;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\File\FileSystem;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\media_acquiadam\Acquiadam;
+@@ -17,14 +21,14 @@ class AcquiadamMediaTest extends AcquiadamKernelTestBase {
+   /**
+    * The initial asset for this test.
+    *
+-   * @var \Drupal\media_acquiadam\Entity\Asset
++   * @var Asset
+    */
+   protected $asset;
+ 
+   /**
+    * The media entity with mocked asset data.
+    *
+-   * @var \Drupal\media\Entity\Media
++   * @var Media
+    */
+   protected $media;
+ 
+@@ -58,7 +62,7 @@ class AcquiadamMediaTest extends AcquiadamKernelTestBase {
+     $dir_path = 'public://acquiadam/';
+     $contents = 'test';
+     $this->container->get('file_system')->prepareDirectory($dir_path, FileSystemInterface::CREATE_DIRECTORY);
+-    file_save_data($contents, $dir_path . $this->asset->filename);
++    \Drupal::service('file.repository')->writeData($contents, $dir_path . $this->asset->filename);
+ 
+     $this->testClient->addAsset($this->asset);
+     $this->media = $this->createMedia($this->asset->id);
+@@ -95,9 +99,9 @@ class AcquiadamMediaTest extends AcquiadamKernelTestBase {
+    * Tests that version is only updated when file is saved correctly.
+    */
+   public function testFailedFileSave() {
+-    /** @var \Drupal\media_acquiadam\Service\AssetFileEntityHelper $asset_file_helper */
++    /** @var AssetFileEntityHelper $asset_file_helper */
+     $asset_file_helper = $this->container->get('media_acquiadam.asset_file.helper');
+-    /** @var \Drupal\Core\File\FileSystem $file_system */
++    /** @var FileSystem $file_system */
+     $file_system = $this->container->get('file_system');
+ 
+     // Makes directory read only so file save fails.
+@@ -154,7 +158,7 @@ class AcquiadamMediaTest extends AcquiadamKernelTestBase {
+   /**
+    * Re-saves media to generate new revision.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   protected function createNewMediaRevision() {
+     $this->media->setName('test');
+@@ -187,7 +191,7 @@ class AcquiadamMediaTest extends AcquiadamKernelTestBase {
+   /**
+    * Clears source current asset so we can simulate updates from the API.
+    *
+-   * @param \Drupal\media_acquiadam\Plugin\media\Source\AcquiadamAsset $source
++   * @param AcquiadamAsset $source
+    *   The source to clear.
+    */
+   protected function clearCurrentAssetFromSource(AcquiadamAsset $source) {
+diff --git a/tests/src/Traits/AcquiadamAssetDataTrait.php b/tests/src/Traits/AcquiadamAssetDataTrait.php
+index cf4563b..a5aed41 100644
+--- a/tests/src/Traits/AcquiadamAssetDataTrait.php
++++ b/tests/src/Traits/AcquiadamAssetDataTrait.php
+@@ -15,7 +15,7 @@ trait AcquiadamAssetDataTrait {
+    * @param array $values
+    *   Extra values for the asset.
+    *
+-   * @return \Drupal\media_acquiadam\Entity\Asset
++   * @return Asset
+    *   A hard-coded Asset item.
+    */
+   protected function getAssetData(array $values = []) {
+@@ -133,10 +133,10 @@ trait AcquiadamAssetDataTrait {
+   /**
+    * Create a new version of a given asset.
+    *
+-   * @param \Drupal\media_acquiadam\Entity\Asset $asset
++   * @param Asset $asset
+    *   The asset to be updated.
+    *
+-   * @return \Drupal\media_acquiadam\Entity\Asset
++   * @return Asset
+    *   The updated asset.
+    */
+   protected function generateNewVersion(Asset $asset) {
+diff --git a/tests/src/Traits/AcquiadamAssetImageHelperTrait.php b/tests/src/Traits/AcquiadamAssetImageHelperTrait.php
+index bf32d38..750ceba 100644
+--- a/tests/src/Traits/AcquiadamAssetImageHelperTrait.php
++++ b/tests/src/Traits/AcquiadamAssetImageHelperTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Traits;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\media_acquiadam\Service\AssetImageHelper;
+ 
+ /**
+@@ -12,13 +13,11 @@ trait AcquiadamAssetImageHelperTrait {
+   /**
+    * Create a stub AssetImageHelper that implements some basic functions.
+    *
+-   * @return \Drupal\media_acquiadam\Service\AssetImageHelper|\PHPUnit\Framework\MockObject\MockObject
++   * @return AssetImageHelper|MockObject
+    *   The stubbed service.
+    */
+   public function getAssetImageHelperStub() {
+-    $asset_image_helper = $this->getMockBuilder(AssetImageHelper::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $asset_image_helper = $this->createMock(AssetImageHelper::class);
+     $asset_image_helper->method('getMimeTypeFromFileUri')->willReturnMap([
+       ['public://test.jpg', ['discrete' => 'image', 'sub' => 'jpg']],
+       ['public://test.mov', ['discrete' => 'quicktime', 'sub' => 'mov']],
+diff --git a/tests/src/Traits/AcquiadamLoggerFactoryTrait.php b/tests/src/Traits/AcquiadamLoggerFactoryTrait.php
+index 5359050..feaf26e 100644
+--- a/tests/src/Traits/AcquiadamLoggerFactoryTrait.php
++++ b/tests/src/Traits/AcquiadamLoggerFactoryTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Traits;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+ use Drupal\Core\Logger\LoggerChannelInterface;
+ 
+@@ -13,17 +14,13 @@ trait AcquiadamLoggerFactoryTrait {
+   /**
+    * Gets a stubbed out Logger factory for Acquia DAM test usage.
+    *
+-   * @return \PHPUnit\Framework\MockObject\MockObject|\Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @return MockObject|LoggerChannelFactoryInterface
+    *   A mock LoggerChannelFactoryInstance with a acquiadam channel.
+    */
+   protected function getLoggerFactoryStub() {
+-    $logger_channel = $this->getMockBuilder(LoggerChannelInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $logger_channel = $this->createMock(LoggerChannelInterface::class);
+ 
+-    $logger_factory = $this->getMockBuilder(LoggerChannelFactoryInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $logger_factory = $this->createMock(LoggerChannelFactoryInterface::class);
+     $logger_factory->method('get')
+       ->with('media_acquiadam')
+       ->willReturn($logger_channel);
+diff --git a/tests/src/Traits/AcquiadamMockedMediaEntityTrait.php b/tests/src/Traits/AcquiadamMockedMediaEntityTrait.php
+index 5009abd..1a84ca0 100644
+--- a/tests/src/Traits/AcquiadamMockedMediaEntityTrait.php
++++ b/tests/src/Traits/AcquiadamMockedMediaEntityTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Traits;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\file\FileInterface;
+ use Drupal\media\MediaInterface;
+@@ -23,35 +24,25 @@ trait AcquiadamMockedMediaEntityTrait {
+    * @param int $mediaEntityId
+    *   The ID to assign to the media entity.
+    *
+-   * @return \Drupal\media\MediaInterface|\PHPUnit\Framework\MockObject\MockObject
++   * @return MediaInterface|MockObject
+    *   The mocked MediaInterface entity.
+    */
+   protected function getMockedMediaEntity($assetId, $sourceField = NULL, $mediaEntityId = 47247625) {
+     $sourceField = $sourceField ?? 'phpunit_asset_id_field';
+ 
+-    $source_field_definition = $this->getMockBuilder(FieldDefinitionInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $source_field_definition = $this->createMock(FieldDefinitionInterface::class);
+     $source_field_definition->method('getName')
+       ->willReturn($sourceField);
+ 
+-    $media_source = $this->getMockBuilder(MediaSourceInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $media_source = $this->createMock(MediaSourceInterface::class);
+     $media_source->method('getSourceFieldDefinition')
+       ->willReturn($source_field_definition);
+ 
+-    $media_bundle = $this->getMockBuilder(MediaTypeInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
+-    $bundle_definition = $this->getMockBuilder(EntityReferenceFieldItemListInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $media_bundle = $this->createMock(MediaTypeInterface::class);
++    $bundle_definition = $this->createMock(EntityReferenceFieldItemListInterface::class);
+     $bundle_definition->entity = $media_bundle;
+ 
+-    $media = $this->getMockBuilder(MediaInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $media = $this->createMock(MediaInterface::class);
+ 
+     $media->method('getSource')->willReturn($media_source);
+     $media->method('uuid')->willReturn('e63ce44d-4cfe-44d4-af7d-0692821d52cc');
+@@ -94,13 +85,11 @@ trait AcquiadamMockedMediaEntityTrait {
+   /**
+    * Return a consistent, barebones file entity.
+    *
+-   * @return \Drupal\file\FileInterface|\PHPUnit\Framework\MockObject\MockObject
++   * @return FileInterface|MockObject
+    *   A mocked file entity.
+    */
+   protected function getMockedFileEntity() {
+-    $file_entity = $this->getMockBuilder(FileInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $file_entity = $this->createMock(FileInterface::class);
+     $file_entity->method('id')->willReturn(894782578);
+ 
+     return $file_entity;
+diff --git a/tests/src/Unit/AcquiadamAssetTest.php b/tests/src/Unit/AcquiadamAssetTest.php
+index 140100a..d74d02a 100644
+--- a/tests/src/Unit/AcquiadamAssetTest.php
++++ b/tests/src/Unit/AcquiadamAssetTest.php
+@@ -28,14 +28,14 @@ class AcquiadamAssetTest extends UnitTestCase {
+   /**
+    * Container builder helper.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+   /**
+    * Acquia DAM media source.
+    *
+-   * @var \Drupal\media_acquiadam\Plugin\media\Source\AcquiadamAsset
++   * @var AcquiadamAsset
+    */
+   protected $acquiadamMediaSource;
+ 
+@@ -57,36 +57,22 @@ class AcquiadamAssetTest extends UnitTestCase {
+   protected function setUp(): void {
+     parent::setUp();
+ 
+-    $entity_type_manager = $this->getMockBuilder(EntityTypeManagerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $entity_type_manager = $this->createMock(EntityTypeManagerInterface::class);
+ 
+-    $entity_field_manager = $this->getMockBuilder(EntityFieldManagerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $entity_field_manager = $this->createMock(EntityFieldManagerInterface::class);
+ 
+-    $field_type_plugin_manager = $this->getMockBuilder(FieldTypePluginManagerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $field_type_plugin_manager = $this->createMock(FieldTypePluginManagerInterface::class);
+ 
+-    $asset_image_helper = $this->getMockBuilder(AssetImageHelper::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $asset_image_helper = $this->createMock(AssetImageHelper::class);
+ 
+-    $asset_metadata_helper = $this->getMockBuilder(AssetMetadataHelper::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $asset_metadata_helper = $this->createMock(AssetMetadataHelper::class);
+ 
+-    $asset_media_helper = $this->getMockBuilder(MediaEntityHelper::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $asset_media_helper = $this->createMock(MediaEntityHelper::class);
+     $asset_media_helper->method('getAsset')->willReturn($this->getAssetData());
+     $asset_media_helper->method('getFile')
+       ->willReturn($this->getMockedFileEntity());
+ 
+-    $asset_media_factory = $this->getMockBuilder(AssetMediaFactory::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $asset_media_factory = $this->createMock(AssetMediaFactory::class);
+     $asset_media_factory->method('get')->willReturn($asset_media_helper);
+ 
+     $this->container = new ContainerBuilder();
+diff --git a/tests/src/Unit/AcquiadamAuthTest.php b/tests/src/Unit/AcquiadamAuthTest.php
+index f93a1fa..521eb18 100644
+--- a/tests/src/Unit/AcquiadamAuthTest.php
++++ b/tests/src/Unit/AcquiadamAuthTest.php
+@@ -29,7 +29,7 @@ class AcquiadamAuthTest extends UnitTestCase {
+   /**
+    * Acquia DAM Auth service.
+    *
+-   * @var \Drupal\media_acquiadam\AcquiadamAuthService
++   * @var AcquiadamAuthService
+    */
+   protected $acquidamAuth;
+ 
+@@ -84,9 +84,7 @@ class AcquiadamAuthTest extends UnitTestCase {
+     parent::setUp();
+ 
+     $acquidamAuth = new AcquiadamAuthService();
+-    $response = $this->getMockBuilder(ResponseInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $response = $this->createMock(ResponseInterface::class);
+     $response->expects($this->any())
+       ->method('getBody')
+       ->willReturn('{"access_token":"subdomain/l0p94ab7m05646d0a7f2dc023b94nm90", "username":"abc@abc.com"}');
+@@ -101,9 +99,7 @@ class AcquiadamAuthTest extends UnitTestCase {
+       ->getMock();
+     $http_client->expects($this->any())->method('post')->willReturn($response);
+ 
+-    $messenger = $this->getMockBuilder(Messenger::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $messenger = $this->createMock(Messenger::class);
+ 
+     $this->container = new ContainerBuilder();
+     \Drupal::setContainer($this->container);
+diff --git a/tests/src/Unit/AcquiadamClientTest.php b/tests/src/Unit/AcquiadamClientTest.php
+index 0b4cf4d..7db1629 100644
+--- a/tests/src/Unit/AcquiadamClientTest.php
++++ b/tests/src/Unit/AcquiadamClientTest.php
+@@ -23,14 +23,14 @@ class AcquiadamClientTest extends UnitTestCase {
+   /**
+    * Container builder helper.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+   /**
+    * Acquia DAM client factory.
+    *
+-   * @var \Drupal\media_acquiadam\Client
++   * @var Client
+    */
+   protected $client;
+ 
+@@ -54,21 +54,13 @@ class AcquiadamClientTest extends UnitTestCase {
+   protected function setUp(): void {
+     parent::setUp();
+ 
+-    $current_user = $this->getMockBuilder(AccountProxyInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $current_user = $this->createMock(AccountProxyInterface::class);
+ 
+-    $http_client = $this->getMockBuilder(ClientInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $http_client = $this->createMock(ClientInterface::class);
+ 
+-    $user_data = $this->getMockBuilder(UserDataInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $user_data = $this->createMock(UserDataInterface::class);
+ 
+-    $request_stack = $this->getMockBuilder(RequestStack::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $request_stack = $this->createMock(RequestStack::class);
+ 
+     $client = new Client($http_client, $user_data, $current_user, $this->getDefaultConfigFactoryStub(), $request_stack);
+ 
+diff --git a/tests/src/Unit/AcquiadamConfigFormTest.php b/tests/src/Unit/AcquiadamConfigFormTest.php
+index cea8b18..ba125cc 100644
+--- a/tests/src/Unit/AcquiadamConfigFormTest.php
++++ b/tests/src/Unit/AcquiadamConfigFormTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Unit;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
++use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Component\Datetime\Time;
+ use Drupal\Core\Batch\BatchBuilder;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+@@ -30,7 +32,7 @@ class AcquiadamConfigFormTest extends UnitTestCase {
+   /**
+    * Container builder helper.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+@@ -44,14 +46,14 @@ class AcquiadamConfigFormTest extends UnitTestCase {
+   /**
+    * Drupal State service.
+    *
+-   * @var \Drupal\Core\State\State|\PHPUnit\Framework\MockObject\MockObject
++   * @var State|MockObject
+    */
+   protected $state;
+ 
+   /**
+    * Queue Worker.
+    *
+-   * @var \Drupal\media_acquiadam\Plugin\QueueWorker\AssetRefresh|\PHPUnit\Framework\MockObject\MockObject
++   * @var AssetRefresh|MockObject
+    */
+   protected $queueWorker;
+ 
+@@ -103,8 +105,7 @@ class AcquiadamConfigFormTest extends UnitTestCase {
+    */
+   public function testPerformManualSync() {
+     $form = [];
+-    $form_state = $this->getMockBuilder(FormStateInterface::class)
+-      ->getMock();
++    $form_state = $this->createMock(FormStateInterface::class);
+ 
+     $this->assertFalse($this->acquiaDamConfig->performManualSync($form, $form_state));
+ 
+@@ -118,7 +119,7 @@ class AcquiadamConfigFormTest extends UnitTestCase {
+    * @covers ::processBatchItems
+    * @covers ::finishBatchOperation
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function testProcessBatchItems() {
+     // Generate a set of test media entity ids.
+@@ -186,28 +187,18 @@ class AcquiadamConfigFormTest extends UnitTestCase {
+   protected function setUp(): void {
+     parent::setUp();
+ 
+-    $http_client = $this->getMockBuilder(ClientInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
+-    $time = $this->getMockBuilder(Time::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $http_client = $this->createMock(ClientInterface::class);
++    $time = $this->createMock(Time::class);
+     $time->method('getRequestTime')
+       ->willReturn(1560000000);
+ 
+-    $this->queueWorker = $this->getMockBuilder(AssetRefresh::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
+-    $queue_worker_manager = $this->getMockBuilder(QueueWorkerManager::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->queueWorker = $this->createMock(AssetRefresh::class);
++    $queue_worker_manager = $this->createMock(QueueWorkerManager::class);
+     $queue_worker_manager->expects($this->any())
+       ->method('createInstance')
+       ->willReturn($this->queueWorker);
+ 
+-    $this->state = $this->getMockBuilder(State::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->state = $this->createMock(State::class);
+ 
+     $this->container = new ContainerBuilder();
+     $this->container->set('string_translation',
+@@ -226,7 +217,7 @@ class AcquiadamConfigFormTest extends UnitTestCase {
+   /**
+    * Get a partially mocked AcquiadamConfig object.
+    *
+-   * @return \PHPUnit\Framework\MockObject\MockObject|\Drupal\media_acquiadam\Form\AcquiadamConfig
++   * @return MockObject|AcquiadamConfig
+    *   A mocked version of the AcquiadamConfig form class.
+    *
+    * @throws \Exception
+diff --git a/tests/src/Unit/AcquiadamServiceTest.php b/tests/src/Unit/AcquiadamServiceTest.php
+index 7d5f3bc..cd0f943 100644
+--- a/tests/src/Unit/AcquiadamServiceTest.php
++++ b/tests/src/Unit/AcquiadamServiceTest.php
+@@ -24,14 +24,14 @@ class AcquiadamServiceTest extends UnitTestCase {
+   /**
+    * Container builder helper.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+   /**
+    * Acquia DAM client.
+    *
+-   * @var \Drupal\media_acquiadam\Acquiadam
++   * @var Acquiadam
+    */
+   protected $acquiaDamClient;
+ 
+@@ -85,9 +85,7 @@ class AcquiadamServiceTest extends UnitTestCase {
+   protected function setUp() :void {
+     parent::setUp();
+ 
+-    $dam_client = $this->getMockBuilder(Client::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $dam_client = $this->createMock(Client::class);
+     $dam_client->expects($this->any())
+       ->method('getCategoryData')
+       ->willReturnCallback(function ($category) {
+@@ -99,9 +97,7 @@ class AcquiadamServiceTest extends UnitTestCase {
+       ->willReturnCallback(function () {
+         return $this->getAssetData();
+       });
+-    $acquiadam_asset_data = $this->getMockBuilder(AssetDataInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $acquiadam_asset_data = $this->createMock(AssetDataInterface::class);
+ 
+     $this->container = new ContainerBuilder();
+     $this->container->set('logger.factory', $this->getLoggerFactoryStub());
+diff --git a/tests/src/Unit/AssetDataTest.php b/tests/src/Unit/AssetDataTest.php
+index baa64fc..d166993 100644
+--- a/tests/src/Unit/AssetDataTest.php
++++ b/tests/src/Unit/AssetDataTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Unit;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\media_acquiadam\AssetData;
+@@ -20,7 +21,7 @@ class AssetDataTest extends UnitTestCase {
+   /**
+    * Container builder helper.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+@@ -29,7 +30,7 @@ class AssetDataTest extends UnitTestCase {
+    *
+    * Mocked to have a fixed set/get.
+    *
+-   * @var \Drupal\media_acquiadam\AssetData|\PHPUnit\Framework\MockObject\MockObject
++   * @var AssetData|MockObject
+    */
+   protected $acquiaAssetData;
+ 
+@@ -49,9 +50,7 @@ class AssetDataTest extends UnitTestCase {
+   protected function setUp() :void {
+     parent::setUp();
+ 
+-    $connection = $this->getMockBuilder(Connection::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $connection = $this->createMock(Connection::class);
+ 
+     $asset_data = $this->getMockBuilder(AssetData::class)
+       ->disableOriginalConstructor()
+diff --git a/tests/src/Unit/AssetFileEntityHelperTest.php b/tests/src/Unit/AssetFileEntityHelperTest.php
+index 42b370c..d0480c0 100644
+--- a/tests/src/Unit/AssetFileEntityHelperTest.php
++++ b/tests/src/Unit/AssetFileEntityHelperTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Unit;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -35,21 +36,21 @@ class AssetFileEntityHelperTest extends UnitTestCase {
+   /**
+    * Container builder helper.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+   /**
+    * A mocked AssetFileEntityHelper.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetFileEntityHelper|\PHPUnit\Framework\MockObject\MockObject
++   * @var AssetFileEntityHelper|MockObject
+    */
+   protected $assetFileEntityHelper;
+ 
+   /**
+    * A mocked file entity.
+    *
+-   * @var \Drupal\file\FileInterface|\PHPUnit\Framework\MockObject\MockObject
++   * @var FileInterface|MockObject
+    */
+   protected $mockedFileEntity;
+ 
+@@ -92,13 +93,9 @@ class AssetFileEntityHelperTest extends UnitTestCase {
+       ->getMockForAbstractClass();
+     $this->mockedFileEntity->method('id')->willReturn(333);
+ 
+-    $acquiadam = $this->getMockBuilder(Acquiadam::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $acquiadam = $this->createMock(Acquiadam::class);
+ 
+-    $asset_media_factory = $this->getMockBuilder(AssetMediaFactory::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $asset_media_factory = $this->createMock(AssetMediaFactory::class);
+     $asset_media_factory->method('getFileEntity')
+       ->willReturn($this->mockedFileEntity->id());
+ 
+@@ -119,13 +116,11 @@ class AssetFileEntityHelperTest extends UnitTestCase {
+   /**
+    * Sets Drupal mocked services into a container.
+    *
+-   * @param \Drupal\Core\DependencyInjection\ContainerBuilder $container
++   * @param ContainerBuilder $container
+    *   The container to set mocks into.
+    */
+   protected function setMockedDrupalServices(ContainerBuilder $container) {
+-    $file_storage = $this->getMockBuilder(EntityStorageInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $file_storage = $this->createMock(EntityStorageInterface::class);
+     $file_storage->method('load')
+       ->with($this->mockedFileEntity->id())
+       ->willReturn($this->mockedFileEntity);
+@@ -141,37 +136,27 @@ class AssetFileEntityHelperTest extends UnitTestCase {
+       ],
+     ]);
+ 
+-    $entity_type_manager = $this->getMockBuilder(EntityTypeManagerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $entity_type_manager = $this->createMock(EntityTypeManagerInterface::class);
+     $entity_type_manager->method('getStorage')->willReturnMap([
+       ['file', $file_storage],
+     ]);
+ 
+-    $data_definition = $this->getMockBuilder(DataDefinitionInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $data_definition = $this->createMock(DataDefinitionInterface::class);
+     $data_definition->method('getSetting')->willReturnMap([
+       ['uri_scheme', 'private'],
+       ['file_directory', 'assets/[token]'],
+     ]);
+ 
+-    $field_definition = $this->getMockBuilder(FieldDefinitionInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $field_definition = $this->createMock(FieldDefinitionInterface::class);
+     $field_definition->method('getItemDefinition')
+       ->willReturn($data_definition);
+ 
+-    $entity_field_manager = $this->getMockBuilder(EntityFieldManagerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $entity_field_manager = $this->createMock(EntityFieldManagerInterface::class);
+     $entity_field_manager->method('getFieldDefinitions')->willReturnMap([
+       ['media', 'media_acquiadam', ['phpunit_file_field' => $field_definition]],
+     ]);
+ 
+-    $token = $this->getMockBuilder(Token::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $token = $this->createMock(Token::class);
+     $token->method('replace')
+       ->willReturnCallback(function ($string, $a, $b, $c) {
+         return ('assets/[token]' == $string) ? 'assets/replaced' : $string;
+@@ -199,7 +184,7 @@ class AssetFileEntityHelperTest extends UnitTestCase {
+   /**
+    * Get a mocked AssetFileEntityHelper that stubs file operations.
+    *
+-   * @return \Drupal\media_acquiadam\Service\AssetFileEntityHelper|\PHPUnit\Framework\MockObject\MockObject
++   * @return AssetFileEntityHelper|MockObject
+    *   The mocked AssetFileEntityHelper class.
+    */
+   protected function getMockedAssetFileEntityHelper() {
+diff --git a/tests/src/Unit/AssetImageHelperTest.php b/tests/src/Unit/AssetImageHelperTest.php
+index 5b47ccb..fff793c 100644
+--- a/tests/src/Unit/AssetImageHelperTest.php
++++ b/tests/src/Unit/AssetImageHelperTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Unit;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\File\FileSystem;
+@@ -26,14 +27,14 @@ class AssetImageHelperTest extends UnitTestCase {
+   /**
+    * Container builder helper.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+   /**
+    * A mocked version of the AssetImageHelper service.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetImageHelper|\PHPUnit\Framework\MockObject\MockObject
++   * @var AssetImageHelper|MockObject
+    */
+   protected $assetImageHelper;
+ 
+@@ -195,7 +196,7 @@ class AssetImageHelperTest extends UnitTestCase {
+    * This is used to provide some implemented methods that would normally be
+    * an issue to test.
+    *
+-   * @return \Drupal\media_acquiadam\Service\AssetImageHelper|\PHPUnit\Framework\MockObject\MockObject
++   * @return AssetImageHelper|MockObject
+    *   A mocked AssetImageHelper object.
+    */
+   protected function getMockedAssetImageHelper() {
+@@ -228,9 +229,7 @@ class AssetImageHelperTest extends UnitTestCase {
+   protected function setUp(): void {
+     parent::setUp();
+ 
+-    $http_client = $this->getMockBuilder(GuzzleClient::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $http_client = $this->createMock(GuzzleClient::class);
+ 
+     $file_system = $this->getMockBuilder(FileSystem::class)
+       ->disableOriginalConstructor()
+@@ -241,9 +240,7 @@ class AssetImageHelperTest extends UnitTestCase {
+         return is_string($target) ? $target . '_copy' : $target . '_blah';
+       });
+ 
+-    $mime_type_guesser = $this->getMockBuilder(MimeTypeGuesser::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $mime_type_guesser = $this->createMock(MimeTypeGuesser::class);
+     $mime_type_guesser->method('guessMimeType')->willReturnCallback(function ($uri) {
+       $map = [
+         'public://test.jpg' => 'image/jpg',
+@@ -254,13 +251,9 @@ class AssetImageHelperTest extends UnitTestCase {
+       return $map[$uri] ?? '';
+     });
+ 
+-    $image_factory = $this->getMockBuilder(ImageFactory::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $image_factory = $this->createMock(ImageFactory::class);
+ 
+-    $url_assembler = $this->getMockBuilder(UnroutedUrlAssemblerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $url_assembler = $this->createMock(UnroutedUrlAssemblerInterface::class);
+ 
+     $url_assembler
+       ->expects($this->any())
+@@ -274,9 +267,7 @@ class AssetImageHelperTest extends UnitTestCase {
+         ['https://demo.widen.net/content/demoextid/original/theHumanRaceMakesSense.jpg?u=lv0nkk&download=true', ['query' => ['h' => 650, 'q' => 80], 'external' => TRUE], FALSE, 'https://demo.widen.net/content/demoextid/original/theHumanRaceMakesSense.jpg?u=lv0nkk&download=true&h=650&q=80'],
+       ]);
+ 
+-    $entity_type_manager = $this->getMockBuilder(EntityTypeManagerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $entity_type_manager = $this->createMock(EntityTypeManagerInterface::class);
+ 
+     $this->container = new ContainerBuilder();
+     $this->container->set('http_client', $http_client);
+diff --git a/tests/src/Unit/AssetMediaFactoryTest.php b/tests/src/Unit/AssetMediaFactoryTest.php
+index 07ab509..8aba721 100644
+--- a/tests/src/Unit/AssetMediaFactoryTest.php
++++ b/tests/src/Unit/AssetMediaFactoryTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Unit;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -33,21 +34,21 @@ class AssetMediaFactoryTest extends UnitTestCase {
+   /**
+    * Container builder helper.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+   /**
+    * The asset media factory.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetMediaFactory|\PHPUnit\Framework\MockObject\MockObject
++   * @var AssetMediaFactory|MockObject
+    */
+   protected $assetMediaFactory;
+ 
+   /**
+    * A mock media entity.
+    *
+-   * @var \Drupal\media\MediaInterface|\PHPUnit\Framework\MockObject\MockObject
++   * @var MediaInterface|MockObject
+    */
+   protected $mediaEntity;
+ 
+@@ -193,16 +194,12 @@ class AssetMediaFactoryTest extends UnitTestCase {
+ 
+     $this->mediaEntity = $this->getMockedMediaEntity($asset->id);
+ 
+-    $media_bundle = $this->getMockBuilder(MediaTypeInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $media_bundle = $this->createMock(MediaTypeInterface::class);
+     $media_bundle->method('getSource')->willReturn($this->mediaEntity->getSource());
+     $media_bundle->method('getFieldMap')
+       ->willReturn(['file' => 'phpunit_file_field']);
+ 
+-    $entity_storage = $this->getMockBuilder(EntityStorageInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $entity_storage = $this->createMock(EntityStorageInterface::class);
+     $entity_storage->method('loadByProperties')
+       ->with(['source' => 'acquiadam_asset'])
+       ->willReturn([
+@@ -215,26 +212,18 @@ class AssetMediaFactoryTest extends UnitTestCase {
+       ['media_acquiadam', $media_bundle],
+     ]);
+ 
+-    $entity_type_manager = $this->getMockBuilder(EntityTypeManagerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $entity_type_manager = $this->createMock(EntityTypeManagerInterface::class);
+     $entity_type_manager->method('getStorage')->willReturnMap([
+       ['media_type', $entity_storage],
+       ['media', $entity_storage],
+       ['file', $entity_storage],
+     ]);
+ 
+-    $asset_data = $this->getMockBuilder(AssetDataInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $asset_data = $this->createMock(AssetDataInterface::class);
+ 
+-    $acquiadam_client = $this->getMockBuilder(AcquiadamInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $acquiadam_client = $this->createMock(AcquiadamInterface::class);
+ 
+-    $asset_file_helper = $this->getMockBuilder(AssetFileEntityHelper::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $asset_file_helper = $this->createMock(AssetFileEntityHelper::class);
+ 
+     $this->container = new ContainerBuilder();
+     $this->container->set('entity_type.manager', $entity_type_manager);
+diff --git a/tests/src/Unit/AssetMetadataHelperTest.php b/tests/src/Unit/AssetMetadataHelperTest.php
+index b5750e5..5ddd573 100644
+--- a/tests/src/Unit/AssetMetadataHelperTest.php
++++ b/tests/src/Unit/AssetMetadataHelperTest.php
+@@ -21,14 +21,14 @@ class AssetMetadataHelperTest extends UnitTestCase {
+   /**
+    * Container builder helper.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+   /**
+    * Acquia DAM asset metadata helper service.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetMetadataHelper
++   * @var AssetMetadataHelper
+    */
+   protected $assetMetadataHelper;
+ 
+@@ -123,9 +123,7 @@ class AssetMetadataHelperTest extends UnitTestCase {
+   protected function setUp(): void {
+     parent::setUp();
+ 
+-    $date_formatter = $this->getMockBuilder(DateFormatterInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $date_formatter = $this->createMock(DateFormatterInterface::class);
+     $date_formatter->method('format')
+       ->willReturnCallback(function ($timestamp, $type, $format) {
+         if ('custom' == $type) {
+@@ -136,9 +134,7 @@ class AssetMetadataHelperTest extends UnitTestCase {
+         return FALSE;
+       });
+ 
+-    $acquiadam_client = $this->getMockBuilder(Acquiadam::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $acquiadam_client = $this->createMock(Acquiadam::class);
+ 
+     $this->container = new ContainerBuilder();
+     $this->container->set('string_translation',
+diff --git a/tests/src/Unit/AssetRefreshManagerTest.php b/tests/src/Unit/AssetRefreshManagerTest.php
+index 833f934..7713c24 100644
+--- a/tests/src/Unit/AssetRefreshManagerTest.php
++++ b/tests/src/Unit/AssetRefreshManagerTest.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Unit;
+ 
++use Drupal\media_acquiadam\Service\AssetRefreshManagerInterface;
++use Drupal\Core\Queue\QueueInterface;
++use PHPUnit\Framework\MockObject\MockObject;
++use Drupal\Core\Entity\Query\QueryInterface;
++use Drupal\media_acquiadam\AcquiadamInterface;
++use Drupal\Core\State\StateInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -38,42 +44,42 @@ class AssetRefreshManagerTest extends UnitTestCase {
+   /**
+    * DI container.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+   /**
+    * AssetRefreshManager service.
+    *
+-   * @var \Drupal\media_acquiadam\Service\AssetRefreshManagerInterface
++   * @var AssetRefreshManagerInterface
+    */
+   protected $assetRefreshManager;
+ 
+   /**
+    * The Queue Worker.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface|\PHPUnit\Framework\MockObject\MockObject
++   * @var QueueInterface|MockObject
+    */
+   protected $queue;
+ 
+   /**
+    * The media entity query.
+    *
+-   * @var \Drupal\Core\Entity\Query\QueryInterface|\PHPUnit\Framework\MockObject\MockObject
++   * @var QueryInterface|MockObject
+    */
+   protected $entityQuery;
+ 
+   /**
+    * The Acquiadam Service.
+    *
+-   * @var \Drupal\media_acquiadam\AcquiadamInterface|\PHPUnit\Framework\MockObject\MockObject
++   * @var AcquiadamInterface|MockObject
+    */
+   protected $acquiadamClient;
+ 
+   /**
+    * The Drupal State Service.
+    *
+-   * @var \Drupal\Core\State\StateInterface|\PHPUnit\Framework\MockObject\MockObject
++   * @var StateInterface|MockObject
+    */
+   protected $state;
+ 
+@@ -170,15 +176,11 @@ class AssetRefreshManagerTest extends UnitTestCase {
+     $real_time = new \DateTime('now');
+     $sync_time = new \DateTime('now');
+     $sync_time->modify($last_sync_offset);
+-    $state = $this->getMockBuilder(State::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $state = $this->createMock(State::class);
+     $state->method('get')
+       ->with('media_acquiadam.last_sync')
+       ->willReturn($sync_time->getTimestamp());
+-    $time = $this->getMockBuilder(TimeInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $time = $this->createMock(TimeInterface::class);
+     $time->method('getCurrentTime')
+       ->willReturn($real_time->getTimestamp());
+     $asset_before_time = $real_time->modify('-1 hour');
+@@ -508,21 +510,15 @@ class AssetRefreshManagerTest extends UnitTestCase {
+       ->disableOriginalConstructor()
+       ->getMock();
+ 
+-    $this->state = $this->getMockBuilder(State::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->state = $this->createMock(State::class);
+     $this->state->method('get')
+       ->with('media_acquiadam.last_sync')
+       // 2022-05-24T09:14:42Z UTC.
+       ->willReturn('1653383682');
+ 
+-    $this->queue = $this->getMockBuilder(DatabaseQueue::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
+-    /** @var \Drupal\Core\Queue\QueueFactory|\PHPUnit\Framework\MockObject\MockObject $queue_factory */
+-    $queue_factory = $this->getMockBuilder(QueueFactory::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->queue = $this->createMock(DatabaseQueue::class);
++    /** @var QueueFactory|MockObject $queue_factory */
++    $queue_factory = $this->createMock(QueueFactory::class);
+     $queue_factory->method('get')
+       ->willReturn($this->queue);
+ 
+@@ -531,27 +527,19 @@ class AssetRefreshManagerTest extends UnitTestCase {
+       ->disableOriginalConstructor()
+       ->getMock();
+ 
+-    $entity_storage = $this->getMockBuilder(EntityStorageInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $entity_storage = $this->createMock(EntityStorageInterface::class);
+     $entity_storage->method('getQuery')->willReturn($this->entityQuery);
+ 
+-    $entity_type_manager = $this->getMockBuilder(EntityTypeManagerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $entity_type_manager = $this->createMock(EntityTypeManagerInterface::class);
+     $entity_type_manager->method('getStorage')->willReturnMap([
+       ['media', $entity_storage],
+     ]);
+ 
+-    $language_manager = $this->getMockBuilder(LanguageManagerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $language_manager = $this->createMock(LanguageManagerInterface::class);
+     $language_manager->method('getCurrentLanguage')
+       ->willReturn(new Language(Language::$defaultValues));
+ 
+-    $time = $this->getMockBuilder(TimeInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $time = $this->createMock(TimeInterface::class);
+     $time->method('getCurrentTime')
+       // 2022-05-24T15:17:00Z UTC.
+       ->willReturn('1653405420');
+diff --git a/tests/src/Unit/MediaEntityHelperTest.php b/tests/src/Unit/MediaEntityHelperTest.php
+index 420f405..b5c5990 100644
+--- a/tests/src/Unit/MediaEntityHelperTest.php
++++ b/tests/src/Unit/MediaEntityHelperTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\media_acquiadam\Unit;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -28,7 +29,7 @@ class MediaEntityHelperTest extends UnitTestCase {
+   /**
+    * Container builder helper.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ContainerBuilder
++   * @var ContainerBuilder
+    */
+   protected $container;
+ 
+@@ -48,11 +49,9 @@ class MediaEntityHelperTest extends UnitTestCase {
+     $this->assertInstanceOf(FileInterface::class,
+       $this->getNewMediaEntityHelper()->getExistingFile());
+ 
+-    $media = $this->getMockBuilder(MediaInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $media = $this->createMock(MediaInterface::class);
+ 
+-    /** @var \Drupal\media\MediaInterface|\PHPUnit\Framework\MockObject\MockObject $media */
++    /** @var MediaInterface|MockObject $media */
+     $this->assertFalse($this->getNewMediaEntityHelper($media)
+       ->getExistingFile());
+   }
+@@ -64,10 +63,8 @@ class MediaEntityHelperTest extends UnitTestCase {
+     $this->assertEquals($this->getMockedFileEntity()->id(),
+       $this->getNewMediaEntityHelper()->getExistingFileId());
+ 
+-    /** @var \Drupal\media\MediaInterface|\PHPUnit\Framework\MockObject\MockObject $media */
+-    $media = $this->getMockBuilder(MediaInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    /** @var MediaInterface|MockObject $media */
++    $media = $this->createMock(MediaInterface::class);
+ 
+     $this->assertFalse($this->getNewMediaEntityHelper($media)
+       ->getExistingFileId());
+@@ -80,10 +77,8 @@ class MediaEntityHelperTest extends UnitTestCase {
+     $this->assertEquals('phpunit_file_field',
+       $this->getNewMediaEntityHelper()->getAssetFileField());
+ 
+-    /** @var \Drupal\media\MediaInterface|\PHPUnit\Framework\MockObject\MockObject $media */
+-    $media = $this->getMockBuilder(MediaInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    /** @var MediaInterface|MockObject $media */
++    $media = $this->createMock(MediaInterface::class);
+ 
+     $this->assertFalse($this->getNewMediaEntityHelper($media)
+       ->getAssetFileField());
+@@ -153,10 +148,10 @@ class MediaEntityHelperTest extends UnitTestCase {
+   /**
+    * Gets an instance of the MediaEntityHelper class.
+    *
+-   * @param \Drupal\media\MediaInterface|null $media
++   * @param MediaInterface|null $media
+    *   The media entity to wrap.
+    *
+-   * @return \Drupal\media_acquiadam\MediaEntityHelper
++   * @return MediaEntityHelper
+    *   An instance of the MediaEntityHelper class.
+    */
+   protected function getNewMediaEntityHelper(MediaInterface $media = NULL) {
+@@ -174,7 +169,7 @@ class MediaEntityHelperTest extends UnitTestCase {
+   /**
+    * Sets Drupal mocked services into a container.
+    *
+-   * @param \Drupal\Core\DependencyInjection\ContainerBuilder $container
++   * @param ContainerBuilder $container
+    *   The container to set mocks into.
+    */
+   protected function setMockedDrupalServices(ContainerBuilder $container) {
+@@ -185,9 +180,7 @@ class MediaEntityHelperTest extends UnitTestCase {
+     $media_bundle->method('getFieldMap')
+       ->willReturn(['file' => 'phpunit_file_field']);
+ 
+-    $entity_storage = $this->getMockBuilder(EntityStorageInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $entity_storage = $this->createMock(EntityStorageInterface::class);
+     $entity_storage->method('load')->willReturnMap([
+       [$this->getMockedFileEntity()->id(), $this->getMockedFileEntity()],
+       ['media_acquiadam', $media_bundle],
+@@ -203,9 +196,7 @@ class MediaEntityHelperTest extends UnitTestCase {
+       ],
+     ]);
+ 
+-    $entity_type_manager = $this->getMockBuilder(EntityTypeManagerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $entity_type_manager = $this->createMock(EntityTypeManagerInterface::class);
+     $entity_type_manager->method('getStorage')->willReturnMap([
+       ['file', $entity_storage],
+       ['media_type', $entity_storage],
+@@ -217,26 +208,20 @@ class MediaEntityHelperTest extends UnitTestCase {
+   /**
+    * Sets Acquia DAM mocked services into a container.
+    *
+-   * @param \Drupal\Core\DependencyInjection\ContainerBuilder $container
++   * @param ContainerBuilder $container
+    *   The container to set mocks into.
+    */
+   protected function setMockedAcquiaDamServices(ContainerBuilder $container) {
+-    $asset_data = $this->getMockBuilder(AssetData::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $asset_data = $this->createMock(AssetData::class);
+     $asset_data->method('isUpdatedAsset')->willReturnOnConsecutiveCalls(FALSE,
+       TRUE);
+ 
+-    $acquiadam = $this->getMockBuilder(Acquiadam::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $acquiadam = $this->createMock(Acquiadam::class);
+     $acquiadam->method('getAsset')->willReturnMap([
+       [$this->getAssetData()->id, TRUE, $this->getAssetData()],
+     ]);
+ 
+-    $asset_file_helper = $this->getMockBuilder(AssetFileEntityHelper::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $asset_file_helper = $this->createMock(AssetFileEntityHelper::class);
+     $asset_file_helper->method('getDestinationFromEntity')
+       ->willReturn('private://assets/replaced');
+     $asset_file_helper->method('createNewFile')->with($this->anything(),

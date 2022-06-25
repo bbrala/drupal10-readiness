@@ -1,0 +1,417 @@
+diff --git a/cms_content_sync.install b/cms_content_sync.install
+index c80e044..c247b92 100644
+--- a/cms_content_sync.install
++++ b/cms_content_sync.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Config\CachedStorage;
+ /**
+  * @file
+  * Install file for cms_content_sync.
+@@ -50,7 +51,7 @@ function _cms_content_sync_set_module_weight()
+  */
+ function _cms_content_sync_update_config($configsNames)
+ {
+-    $config_path = drupal_get_path('module', 'cms_content_sync').'/config/install';
++    $config_path = \Drupal::service('extension.list.module')->getPath('cms_content_sync').'/config/install';
+     $source = new FileStorage($config_path);
+     $config_storage = Drupal::service('config.storage');
+ 
+@@ -68,7 +69,7 @@ function _cms_content_sync_update_config($configsNames)
+  */
+ function cms_content_sync_install()
+ {
+-    $config_path = drupal_get_path('module', 'cms_content_sync').'/config/install';
++    $config_path = \Drupal::service('extension.list.module')->getPath('cms_content_sync').'/config/install';
+     $source = new FileStorage($config_path);
+     $config_storage = Drupal::service('config.storage');
+ 
+@@ -85,7 +86,7 @@ function cms_content_sync_install()
+     Drupal::moduleHandler()->alter('cms_content_sync_username', $username);
+     $data = [
+         'userName' => $username,
+-        'userPass' => user_password(64),
++        'userPass' => \Drupal::service('password_generator')->generate(64),
+     ];
+ 
+     $user = User::create();
+@@ -131,7 +132,7 @@ function cms_content_sync_uninstall()
+     }
+ 
+     /**
+-     * @var \Drupal\Core\Config\CachedStorage $config_storage
++     * @var CachedStorage $config_storage
+      */
+     $config_storage = Drupal::service('config.storage');
+ 
+diff --git a/cms_content_sync.module b/cms_content_sync.module
+index c682e79..c489a4a 100644
+--- a/cms_content_sync.module
++++ b/cms_content_sync.module
+@@ -1,5 +1,16 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityTypeBundleInfoInterface;
++use Drupal\Core\Entity\EntityFieldManager;
++use Drupal\Core\Field\FieldDefinitionInterface;
++use Drupal\group\Entity\GroupContent;
++use Drupal\group\Entity\Group;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\Core\Menu\MenuLinkManager;
++use Drupal\Core\Routing\RedirectDestinationInterface;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ /**
+  * @file
+  * Module file for cms_content_sync.
+@@ -186,17 +197,17 @@ function _cms_content_sync_display_entity_type_differences_recursively(&$result,
+     $result[$entity_type][$bundle] = empty($self) ? '' : $self;
+ 
+     /**
+-     * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface $bundleInfoService
++     * @var EntityTypeBundleInfoInterface $bundleInfoService
+      */
+     $bundleInfoService = Drupal::service('entity_type.bundle.info');
+ 
+     /**
+-     * @var \Drupal\Core\Entity\EntityFieldManager $entityFieldManager
++     * @var EntityFieldManager $entityFieldManager
+      */
+     $entityFieldManager = Drupal::service('entity_field.manager');
+ 
+     /**
+-     * @var \Drupal\Core\Field\FieldDefinitionInterface[] $fields
++     * @var FieldDefinitionInterface[] $fields
+      */
+     $fields = $entityFieldManager->getFieldDefinitions($entity_type, $bundle);
+ 
+@@ -241,7 +252,7 @@ function _cms_content_sync_display_entity_type_differences_recursively(&$result,
+ /**
+  * Get HTML for a list of the usage for the given entity.
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  *
+  * @throws Exception
+  *
+@@ -361,7 +372,7 @@ function _cms_content_sync_get_group_wizard_entity(FormStateInterface $form_stat
+         // so we have to load it manually.
+         if ('group_entity' === $wizard_id) {
+             $unknown_entity = $form_state->getformObject()->getEntity();
+-            if ($unknown_entity instanceof \Drupal\group\Entity\GroupContent) {
++            if ($unknown_entity instanceof GroupContent) {
+                 return $unknown_entity->getEntity();
+             }
+ 
+@@ -369,10 +380,10 @@ function _cms_content_sync_get_group_wizard_entity(FormStateInterface $form_stat
+         }
+         if ('group_creator' === $wizard_id) {
+             $unknown_entity = $form_state->getformObject()->getEntity();
+-            if ($unknown_entity instanceof \Drupal\group\Entity\Group) {
++            if ($unknown_entity instanceof Group) {
+                 return $unknown_entity;
+             }
+-            if ($unknown_entity instanceof \Drupal\group\Entity\GroupContent) {
++            if ($unknown_entity instanceof GroupContent) {
+                 return $unknown_entity->getGroup();
+             }
+         }
+@@ -393,7 +404,7 @@ function _cms_content_sync_get_group_wizard_entity(FormStateInterface $form_stat
+  *
+  * @param array $form
+  *   The form definition
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state
+  * @param string $form_id
+  *   he ID of the form
+@@ -580,11 +591,11 @@ function _cms_content_sync_form_alter_for_entity(&$form, $form_state, $entity)
+  * Only allow pushing of entities which have not been pulled before and
+  * do not have been configured as "forbid updating" or "allow overwrite".
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  *   The current entity
+  *
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++ * @throws InvalidPluginDefinitionException
++ * @throws PluginNotFoundException
+  */
+ function _prevent_entity_export(EntityInterface $entity)
+ {
+@@ -791,12 +802,12 @@ function _cms_content_sync_submit_cache($entity_type, $entity_uuid, $values = nu
+ 
+ /**
+  * @param array $form
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  */
+ function _cms_content_sync_cache_submit_values($form, $form_state)
+ {
+     /**
+-     * @var \Drupal\Core\Entity\EntityInterface $entity
++     * @var EntityInterface $entity
+      */
+     $entity = $form_state->getFormObject()->getEntity();
+ 
+@@ -823,7 +834,7 @@ function _cms_content_sync_add_version_mismatches_form(&$form, $form_state)
+     $user = Drupal::currentUser();
+     if ($user->hasPermission('show entity type differences')) {
+         /**
+-         * @var \Drupal\Core\Entity\EntityInterface $entity
++         * @var EntityInterface $entity
+          */
+         $entity = $form_state->getFormObject()->getEntity();
+ 
+@@ -876,7 +887,7 @@ function _cms_content_sync_display_entity_type_differences_recursively_render($m
+  * Replace the "Show version mismatches" button with the actual information.
+  *
+  * @param array $form
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *
+  * @throws Exception
+  *
+@@ -910,7 +921,7 @@ function _cms_content_sync_display_version_mismatches($form, &$form_state)
+  * Add a button "Show usage" to show all sites using this content.
+  *
+  * @param array $form
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  */
+ function _cms_content_sync_add_usage_form(&$form, $entity)
+ {
+@@ -940,7 +951,7 @@ function _cms_content_sync_add_usage_form(&$form, $entity)
+  * Replace the "Show usage" button with the actual usage information.
+  *
+  * @param array $form
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *
+  * @throws Exception
+  *
+@@ -1177,7 +1188,7 @@ function _cms_content_sync_set_entity_push_pools(array $form, FormStateInterface
+     }
+ 
+     /**
+-     * @var \Drupal\Core\Entity\EntityInterface $entity
++     * @var EntityInterface $entity
+      */
+     $entity = $form_state
+         ->getFormObject()
+@@ -1187,7 +1198,7 @@ function _cms_content_sync_set_entity_push_pools(array $form, FormStateInterface
+ 
+     if ($entity instanceof FieldableEntityInterface) {
+         $entityFieldManager = Drupal::service('entity_field.manager');
+-        /** @var \Drupal\Core\Field\FieldDefinitionInterface[] $fields */
++        /** @var FieldDefinitionInterface[] $fields */
+         $fields = $entityFieldManager->getFieldDefinitions($entity->getEntityTypeId(), $entity->bundle());
+ 
+         _cms_content_sync_set_entity_push_subform($entity, $form, $form_state, $fields);
+@@ -1195,7 +1206,7 @@ function _cms_content_sync_set_entity_push_pools(array $form, FormStateInterface
+ }
+ 
+ /**
+- * @param \Drupal\Core\Field\FieldDefinitionInterface[] $fields
++ * @param FieldDefinitionInterface[] $fields
+  * @param array $tree_position
+  */
+ function _cms_content_sync_set_entity_push_subform(FieldableEntityInterface $entity, array $form, FormStateInterface $form_state, array $fields, $tree_position = [])
+@@ -1216,7 +1227,7 @@ function _cms_content_sync_set_entity_push_subform(FieldableEntityInterface $ent
+                 if (!empty($subform[$i]['subform'])) {
+                     $entity_type = $definition->getSetting('target_type');
+                     $bundle = $subform[$i]['#paragraph_type'];
+-                    /** @var \Drupal\Core\Field\FieldDefinitionInterface[] $fields */
++                    /** @var FieldDefinitionInterface[] $fields */
+                     $fields = $entityFieldManager->getFieldDefinitions($entity_type, $bundle);
+ 
+                     _cms_content_sync_set_entity_push_subform($entity, $subform[$i]['subform'], $form_state, $fields, array_merge($tree_position, [$name, $i, 'subform']));
+@@ -1233,7 +1244,7 @@ function _cms_content_sync_update_pool_selector(array $form, FormStateInterface
+ {
+     $form_object = $form_state->getFormObject();
+     /**
+-     * @var \Drupal\Core\Entity\EntityInterface $entity
++     * @var EntityInterface $entity
+      */
+     $entity = $form_object->getEntity();
+     $bundle = $entity->bundle();
+@@ -1294,8 +1305,8 @@ function _cms_content_sync_report_domains(?EntityInterface $deleted = null)
+ /**
+  * Push the entity automatically if configured to do so.
+  *
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++ * @throws InvalidPluginDefinitionException
++ * @throws PluginNotFoundException
+  */
+ function cms_content_sync_entity_insert(EntityInterface $entity)
+ {
+@@ -1440,7 +1451,7 @@ function cms_content_sync_entity_delete(EntityInterface $entity)
+     $not_pushed = PushIntent::getNoPushReason($entity);
+     if (!empty($not_pushed) && $not_pushed instanceof SyncException) {
+         /**
+-         * @var \Drupal\cms_content_sync\Exception\SyncException $not_pushed
++         * @var SyncException $not_pushed
+          */
+         if (SyncException::CODE_INTERNAL_ERROR === $not_pushed->errorCode
+       || SyncException::CODE_ENTITY_API_FAILURE === $not_pushed->errorCode
+@@ -1563,7 +1574,7 @@ function cms_content_sync_encrypt_values(array $values)
+  * Disable all form elements if the content has been pulled and the user
+  * should not be able to alter pulled content.
+  *
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state to get default values from
+  *
+  * @see \cms_content_sync_form_alter()
+@@ -1630,7 +1641,7 @@ function _cms_content_sync_form_alter_disabled_fields(array &$form, FormStateInt
+             $pull_deletion = boolval($config['import_deletion_settings']['import_deletion']);
+ 
+             if (EntityHandlerPluginManager::isEntityTypeFieldable($entity->getEntityTypeId())) {
+-                /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $entityFieldManager */
++                /** @var EntityFieldManagerInterface $entityFieldManager */
+                 $entityFieldManager = Drupal::service('entity_field.manager');
+                 $type = $entity->getEntityTypeId();
+                 $bundle = $entity->bundle();
+@@ -1687,7 +1698,7 @@ function _cms_content_sync_form_alter_disabled_fields(array &$form, FormStateInt
+ 
+                         $menu_link_manager = Drupal::service('plugin.manager.menu.link');
+                         /**
+-                         * @var \Drupal\Core\Menu\MenuLinkManager $menu_link_manager
++                         * @var MenuLinkManager $menu_link_manager
+                          */
+                         $menu_items = $menu_link_manager->loadLinksByRoute('entity.'.$entity->getEntityTypeId().'.canonical', [$entity->getEntityTypeId() => $entity->id()]);
+                         foreach ($menu_items as $menu_item) {
+@@ -1811,7 +1822,7 @@ function _cms_content_sync_override_entity_submit(array $form, FormStateInterfac
+     $value = boolval($form_state->getValue('cms_content_sync_edit_override'));
+ 
+     /**
+-     * @var \Drupal\Core\Entity\EntityInterface $entity
++     * @var EntityInterface $entity
+      */
+     $entity = $form_state
+         ->getFormObject()
+@@ -1845,11 +1856,11 @@ function _cms_content_sync_override_entity_submit(array $form, FormStateInterfac
+ }
+ 
+ /**
+- * @param \Drupal\Core\Entity\EntityInterface $entity
+- * @param \Drupal\cms_content_sync\Entity\EntityStatus $status
++ * @param EntityInterface $entity
++ * @param EntityStatus $status
+  *
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++ * @throws InvalidPluginDefinitionException
++ * @throws PluginNotFoundException
+  */
+ function _cms_content_sync_reset_entity($entity, $status)
+ {
+@@ -1948,7 +1959,7 @@ function _cms_content_sync_override_embedded_entity_submit(array $form, FormStat
+     $value = boolval($form_state->getValue('cms_content_sync_edit_override'));
+ 
+     /**
+-     * @var \Drupal\Core\Entity\EntityInterface $entity
++     * @var EntityInterface $entity
+      */
+     $entity = $form_state
+         ->getFormObject()
+@@ -1966,7 +1977,7 @@ function _cms_content_sync_override_embedded_entity_submit(array $form, FormStat
+ function _cms_content_sync_override_embedded_entity_save_status_entity(FieldableEntityInterface $entity, array $form, FormStateInterface $form_state, $tree_position = [], $force_disable = false)
+ {
+     $entityFieldManager = Drupal::service('entity_field.manager');
+-    /** @var \Drupal\Core\Field\FieldDefinitionInterface[] $fields */
++    /** @var FieldDefinitionInterface[] $fields */
+     $fields = $entityFieldManager->getFieldDefinitions($entity->getEntityTypeId(), $entity->bundle());
+     foreach ($fields as $name => $definition) {
+         if ('entity_reference_revisions' == $definition->getType()) {
+@@ -2077,7 +2088,7 @@ function cms_content_sync_get_publish_changes_operations(EntityInterface $entity
+ 
+     $operations = [];
+ 
+-    /** @var \Drupal\Core\Routing\RedirectDestinationInterface $redirect_destination */
++    /** @var RedirectDestinationInterface $redirect_destination */
+     $redirect_destination = Drupal::service('redirect.destination');
+ 
+     $flows = PushIntent::getFlowsForEntity($entity, PushIntent::PUSH_MANUALLY);
+@@ -2226,7 +2237,7 @@ function cms_content_sync_form_menu_edit_form_alter(&$form, FormStateInterface $
+     foreach ($links as $link_key) {
+         $link = $form['links']['links'][$link_key];
+ 
+-        /** @var \Drupal\menu_link_content\Plugin\Menu\MenuLinkContent $menu_link */
++        /** @var MenuLinkContent $menu_link */
+         $menu_link = $link['#item']->link;
+         if (!method_exists($menu_link, 'getEntity')) {
+             continue;
+@@ -2258,7 +2269,7 @@ function cms_content_sync_local_tasks_alter(&$local_tasks)
+ /**
+  * Name the manual pull tab and entity edit settings tab.
+  *
+- * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++ * @return TranslatableMarkup
+  */
+ function _cms_content_sync_get_repository_name()
+ {
+diff --git a/cms_content_sync.tokens.inc b/cms_content_sync.tokens.inc
+index b58e158..d809f0b 100644
+--- a/cms_content_sync.tokens.inc
++++ b/cms_content_sync.tokens.inc
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\node\NodeInterface;
+ /**
+  * @file
+  * Builds placeholder replacement tokens for cms_content_sync-related data.
+@@ -72,7 +73,7 @@ function _cms_content_sync_tokens_source_url($data, $translated = false)
+ {
+     // Only support node entities.
+     if (!empty($data['node'])) {
+-        /** @var \Drupal\node\NodeInterface $node */
++        /** @var NodeInterface $node */
+         $node = $data['node'];
+ 
+         $status_entities = EntityStatus::getInfosForEntity('node', $node->uuid());
+diff --git a/modules/cms_content_sync_developer/src/Cli/CliService.php b/modules/cms_content_sync_developer/src/Cli/CliService.php
+index 295693c..55fc9a0 100644
+--- a/modules/cms_content_sync_developer/src/Cli/CliService.php
++++ b/modules/cms_content_sync_developer/src/Cli/CliService.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\cms_content_sync_developer\Cli;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\cms_content_sync\Entity\Flow;
+ use Drush\Exceptions\UserAbortException;
+ 
+@@ -14,8 +17,8 @@ class CliService
+      *
+      * @param $io
+      *
+-     * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-     * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++     * @throws InvalidPluginDefinitionException
++     * @throws PluginNotFoundException
+      */
+     public function configuration_export($io)
+     {
+@@ -36,10 +39,10 @@ class CliService
+      * @param $entity_type
+      * @param $options
+      *
+-     * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-     * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-     * @throws \Drupal\Core\Entity\EntityStorageException
+-     * @throws \Drush\Exceptions\UserAbortException
++     * @throws InvalidPluginDefinitionException
++     * @throws PluginNotFoundException
++     * @throws EntityStorageException
++     * @throws UserAbortException
+      */
+     public function force_entity_deletion($io, $entity_type, $options)
+     {

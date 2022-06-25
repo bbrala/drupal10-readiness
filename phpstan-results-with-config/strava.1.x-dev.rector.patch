@@ -1,0 +1,1054 @@
+diff --git a/modules/strava_activities/src/ActivityAccessControlHandler.php b/modules/strava_activities/src/ActivityAccessControlHandler.php
+index 5d1c462..ba693ba 100644
+--- a/modules/strava_activities/src/ActivityAccessControlHandler.php
++++ b/modules/strava_activities/src/ActivityAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\strava_activities;
+ 
++use Drupal\strava_activities\Entity\ActivityInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,7 +19,7 @@ class ActivityAccessControlHandler extends EntityAccessControlHandler {
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\strava_activities\Entity\ActivityInterface $entity */
++    /** @var ActivityInterface $entity */
+     switch ($operation) {
+       case 'view':
+         if (!$entity->isPublished()) {
+diff --git a/modules/strava_activities/src/ActivityHtmlRouteProvider.php b/modules/strava_activities/src/ActivityHtmlRouteProvider.php
+index 19db2e8..82c96f3 100644
+--- a/modules/strava_activities/src/ActivityHtmlRouteProvider.php
++++ b/modules/strava_activities/src/ActivityHtmlRouteProvider.php
+@@ -36,10 +36,10 @@ class ActivityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the collection route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getCollectionRoute(EntityTypeInterface $entity_type) {
+@@ -61,10 +61,10 @@ class ActivityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/modules/strava_activities/src/Form/ActivityRefreshForm.php b/modules/strava_activities/src/Form/ActivityRefreshForm.php
+index e671f03..d23f777 100644
+--- a/modules/strava_activities/src/Form/ActivityRefreshForm.php
++++ b/modules/strava_activities/src/Form/ActivityRefreshForm.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\strava_activities\Form;
+ 
++use Drupal\strava_activities\Entity\Activity;
++use Strava\API\Client;
++use Drupal\strava_activities\Manager\ActivityManager;
+ use Drupal\Core\Entity\ContentEntityConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Url;
+@@ -54,19 +57,19 @@ class ActivityRefreshForm extends ContentEntityConfirmFormBase {
+    * Refresh entity info from Strava API.
+    */
+   public function refreshEntity() {
+-    /** @var \Drupal\strava_activities\Entity\Activity $entity */
++    /** @var Activity $entity */
+     $entity = $this->getEntity();
+ 
+     $strava = new Strava();
+     $athlete = $entity->get('strava_athlete')->getValue();
+     if ($athlete) {
+       $athlete = $athlete[0]['target_id'];
+-      /** @var \Strava\API\Client $client */
++      /** @var Client $client */
+       $client = $strava->getApiClientForAthlete($athlete);
+       if ($client) {
+         try {
+           $activity_details = $client->getActivity($entity->id());
+-          /** @var \Drupal\strava_activities\Manager\ActivityManager */
++          /** @var ActivityManager */
+           \Drupal::service('strava.activity_manager')
+             ->updateActivity($activity_details);
+         }
+diff --git a/modules/strava_activities/src/Form/ActivitySettingsForm.php b/modules/strava_activities/src/Form/ActivitySettingsForm.php
+index b5e398c..b66b371 100644
+--- a/modules/strava_activities/src/Form/ActivitySettingsForm.php
++++ b/modules/strava_activities/src/Form/ActivitySettingsForm.php
+@@ -29,7 +29,7 @@ class ActivitySettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -41,7 +41,7 @@ class ActivitySettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/modules/strava_activities/src/Manager/ActivityManager.php b/modules/strava_activities/src/Manager/ActivityManager.php
+index 04f5fa2..62ba572 100644
+--- a/modules/strava_activities/src/Manager/ActivityManager.php
++++ b/modules/strava_activities/src/Manager/ActivityManager.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\strava_activities\Manager;
+ 
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Database\Driver\mysql\Connection;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+@@ -10,17 +14,17 @@ use Drupal\strava_activities\Entity\Activity;
+ class ActivityManager {
+ 
+   /**
+-   * @var \Drupal\Core\Database\Driver\mysql\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -28,9 +32,9 @@ class ActivityManager {
+   /**
+    * ActivityManager constructor.
+    *
+-   * @param \Drupal\Core\Database\Driver\mysql\Connection $connection
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param Connection $connection
++   * @param LoggerChannelFactoryInterface $logger_factory
++   * @param EntityTypeManagerInterface $entity_type_manager
+    */
+   public function __construct(Connection $connection, LoggerChannelFactoryInterface $logger_factory, EntityTypeManagerInterface $entity_type_manager) {
+     $this->connection = $connection;
+@@ -41,7 +45,7 @@ class ActivityManager {
+   /**
+    * @param array $activity
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|static
++   * @return EntityInterface|static
+    */
+   public function createActivity($activity) {
+ 
+@@ -99,7 +103,7 @@ class ActivityManager {
+   /**
+    * @param $activity
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null|static
++   * @return EntityInterface|null|static
+    */
+   public function updateActivity($activity) {
+ 
+@@ -163,7 +167,7 @@ class ActivityManager {
+    * @param $id
+    *
+    * @return mixed
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function deleteActivity($id) {
+     $activity = Activity::load($id);
+@@ -180,11 +184,11 @@ class ActivityManager {
+    * @param string $value
+    *   Value to search for.
+    *
+-   * @return \Drupal\strava_activities\Entity\Activity|false
++   * @return Activity|false
+    *   Stored Strava activity object if found
+    *   False otherwise
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function loadActivityByProperty($field, $value) {
+     $activities = $this->entityTypeManager
+diff --git a/modules/strava_activities/src/Plugin/Field/FieldFormatter/StravaMapPolylineFormatter.php b/modules/strava_activities/src/Plugin/Field/FieldFormatter/StravaMapPolylineFormatter.php
+index 35bb611..b6206e7 100644
+--- a/modules/strava_activities/src/Plugin/Field/FieldFormatter/StravaMapPolylineFormatter.php
++++ b/modules/strava_activities/src/Plugin/Field/FieldFormatter/StravaMapPolylineFormatter.php
+@@ -49,21 +49,21 @@ class StravaMapPolylineFormatter extends GeofieldGoogleMapFormatter implements C
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $config;
+ 
+   /**
+    * Entity manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+@@ -71,35 +71,35 @@ class StravaMapPolylineFormatter extends GeofieldGoogleMapFormatter implements C
+   /**
+    * The Link generator Service.
+    *
+-   * @var \Drupal\Core\Utility\LinkGeneratorInterface
++   * @var LinkGeneratorInterface
+    */
+   protected $link;
+ 
+   /**
+    * The EntityField Manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The geoPhpWrapper service.
+    *
+-   * @var \Drupal\geofield\GeoPHP\GeoPHPInterface
++   * @var GeoPHPInterface
+    */
+   protected $geoPhpWrapper;
+ 
+   /**
+    * The Renderer service property.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The Icon Managed File Service.
+    *
+-   * @var \Drupal\geofield_map\Services\MarkerIconService
++   * @var MarkerIconService
+    */
+   protected $markerIcon;
+ 
+@@ -110,7 +110,7 @@ class StravaMapPolylineFormatter extends GeofieldGoogleMapFormatter implements C
+    *   The plugin_id for the formatter.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The definition of the field to which the formatter is associated.
+    * @param array $settings
+    *   The formatter settings.
+@@ -120,29 +120,29 @@ class StravaMapPolylineFormatter extends GeofieldGoogleMapFormatter implements C
+    *   The view mode.
+    * @param array $third_party_settings
+    *   Any third party settings settings.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   A config factory for retrieving required config objects.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The Translation service.
+-   * @param \Drupal\Core\Utility\LinkGeneratorInterface $link_generator
++   * @param LinkGeneratorInterface $link_generator
+    *   The Link Generator service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager service.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
++   * @param EntityDisplayRepositoryInterface $entity_display_repository
+    *   Entity display repository service.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The Entity Field Manager.
+-   * @param \Drupal\geofield\GeoPHP\GeoPHPInterface $geophp_wrapper
++   * @param GeoPHPInterface $geophp_wrapper
+    *   The The geoPhpWrapper.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The Renderer service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    * @param \Drupal\core\Utility\Token $token
+    *   The token service.
+-   * @param \Drupal\geofield_map\Services\GoogleMapsService $google_maps_service
++   * @param GoogleMapsService $google_maps_service
+    *   The Google Maps service.
+-   * @param \Drupal\geofield_map\Services\MarkerIconService $marker_icon_service
++   * @param MarkerIconService $marker_icon_service
+    *   The Marker Icon Service.
+    */
+   public function __construct(
+diff --git a/modules/strava_activities/src/Plugin/QueueWorker/StravaActivitiesQueue.php b/modules/strava_activities/src/Plugin/QueueWorker/StravaActivitiesQueue.php
+index ca680fe..3866ebc 100644
+--- a/modules/strava_activities/src/Plugin/QueueWorker/StravaActivitiesQueue.php
++++ b/modules/strava_activities/src/Plugin/QueueWorker/StravaActivitiesQueue.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\strava_activities\Plugin\QueueWorker;
+ 
++use Drupal\strava_activities\Entity\Activity;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+@@ -24,7 +25,7 @@ class StravaActivitiesQueue extends QueueWorkerBase implements ContainerFactoryP
+   /**
+    * The queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+@@ -44,7 +45,7 @@ class StravaActivitiesQueue extends QueueWorkerBase implements ContainerFactoryP
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Queue\QueueInterface $queue
++   * @param QueueInterface $queue
+    *   The queue object.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, QueueInterface $queue) {
+@@ -72,7 +73,7 @@ class StravaActivitiesQueue extends QueueWorkerBase implements ContainerFactoryP
+    */
+   public function processItem($data) {
+     $activity_manager = \Drupal::service('strava.activity_manager');
+-    /** @var \Drupal\strava_activities\Entity\Activity $activity */
++    /** @var Activity $activity */
+     $activity = $activity_manager->loadActivityByProperty('id', $data['id']);
+ 
+     // Update the activity details after given time.
+diff --git a/modules/strava_athletes/src/AthleteAccessControlHandler.php b/modules/strava_athletes/src/AthleteAccessControlHandler.php
+index 178ad31..2051288 100644
+--- a/modules/strava_athletes/src/AthleteAccessControlHandler.php
++++ b/modules/strava_athletes/src/AthleteAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\strava_athletes;
+ 
++use Drupal\strava_athletes\Entity\AthleteInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,7 +19,7 @@ class AthleteAccessControlHandler extends EntityAccessControlHandler {
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\strava_athletes\Entity\AthleteInterface $entity */
++    /** @var AthleteInterface $entity */
+     switch ($operation) {
+       case 'view':
+         if (!$entity->isPublished()) {
+diff --git a/modules/strava_athletes/src/AthleteHtmlRouteProvider.php b/modules/strava_athletes/src/AthleteHtmlRouteProvider.php
+index 9e42a16..40ef28e 100644
+--- a/modules/strava_athletes/src/AthleteHtmlRouteProvider.php
++++ b/modules/strava_athletes/src/AthleteHtmlRouteProvider.php
+@@ -36,10 +36,10 @@ class AthleteHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the collection route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getCollectionRoute(EntityTypeInterface $entity_type) {
+@@ -61,10 +61,10 @@ class AthleteHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/modules/strava_athletes/src/AthleteUserHandler.php b/modules/strava_athletes/src/AthleteUserHandler.php
+index afb8fde..4f25727 100644
+--- a/modules/strava_athletes/src/AthleteUserHandler.php
++++ b/modules/strava_athletes/src/AthleteUserHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\strava_athletes;
+ 
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Messenger\MessengerTrait;
+ use Drupal\strava\Api\Strava;
+@@ -18,7 +19,7 @@ class AthleteUserHandler implements ContainerInjectionInterface {
+   /**
+    * Strava client.
+    *
+-   * @var \Drupal\strava\Api\Strava
++   * @var Strava
+    */
+   protected $strava;
+ 
+@@ -32,28 +33,28 @@ class AthleteUserHandler implements ContainerInjectionInterface {
+   /**
+    * The user manager service.
+    *
+-   * @var \Drupal\strava\Manager\UserManager
++   * @var UserManager
+    */
+   protected $userManager;
+ 
+   /**
+    * The user entity.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   public $user;
+ 
+   /**
+    * The athlete manager service.
+    *
+-   * @var \Drupal\strava_athletes\Manager\AthleteManager
++   * @var AthleteManager
+    */
+   protected $athleteManager;
+ 
+   /**
+    * The athlete entity.
+    *
+-   * @var \Drupal\strava_athletes\Entity\Athlete
++   * @var Athlete
+    */
+   public $athlete;
+ 
+@@ -61,8 +62,8 @@ class AthleteUserHandler implements ContainerInjectionInterface {
+   /**
+    * AthleteUserHandler constructor.
+    *
+-   * @param \Drupal\strava\Manager\UserManager $user_manager
+-   * @param \Drupal\strava_athletes\Manager\AthleteManager $athlete_manager
++   * @param UserManager $user_manager
++   * @param AthleteManager $athlete_manager
+    */
+   public function __construct(UserManager $user_manager, AthleteManager $athlete_manager) {
+     $this->userManager = $user_manager;
+@@ -108,14 +109,14 @@ class AthleteUserHandler implements ContainerInjectionInterface {
+   }
+ 
+   /**
+-   * @return \Drupal\user\Entity\User
++   * @return User
+    */
+   public function getUser() {
+     return $this->user;
+   }
+ 
+   /**
+-   * @param \Drupal\user\Entity\User $user
++   * @param User $user
+    */
+   public function setUser(User $user = NULL) {
+     if (is_null($user)) {
+@@ -142,7 +143,7 @@ class AthleteUserHandler implements ContainerInjectionInterface {
+   }
+ 
+   /**
+-   * @return \Drupal\Core\Entity\EntityInterface|\Drupal\user\Entity\User|FALSE
++   * @return EntityInterface|User|FALSE
+    */
+   public function userCreate() {
+     // If the user doesn't exist yet create a new user.
+@@ -152,14 +153,14 @@ class AthleteUserHandler implements ContainerInjectionInterface {
+   }
+ 
+   /**
+-   * @return \Drupal\strava_athletes\Entity\Athlete
++   * @return Athlete
+    */
+   public function getAthlete() {
+     return $this->athlete;
+   }
+ 
+   /**
+-   * @param \Drupal\strava_athletes\Entity\Athlete $athlete
++   * @param Athlete $athlete
+    */
+   public function setAthlete(Athlete $athlete) {
+     $this->athlete = $athlete;
+diff --git a/modules/strava_athletes/src/Form/AthleteRefreshForm.php b/modules/strava_athletes/src/Form/AthleteRefreshForm.php
+index 6574fbc..40348bf 100644
+--- a/modules/strava_athletes/src/Form/AthleteRefreshForm.php
++++ b/modules/strava_athletes/src/Form/AthleteRefreshForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\strava_athletes\Form;
+ 
++use Drupal\strava_athletes\Entity\Athlete;
++use Strava\API\Client;
+ use Drupal\Core\Entity\ContentEntityConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Url;
+@@ -53,14 +55,14 @@ class AthleteRefreshForm extends ContentEntityConfirmFormBase {
+   /**
+    * Refresh entity info from Strava API.
+    *
+-   * @throws \Strava\API\Exception
++   * @throws Exception
+    */
+   public function refreshEntity() {
+-    /** @var \Drupal\strava_athletes\Entity\Athlete $entity */
++    /** @var Athlete $entity */
+     $entity = $this->getEntity();
+ 
+     $strava = new Strava();
+-    /** @var \Strava\API\Client $client */
++    /** @var Client $client */
+     $client = $strava->getApiClientForAthlete($entity);
+     if ($client) {
+       $athlete_details = $client->getAthlete($entity->id());
+diff --git a/modules/strava_athletes/src/Form/AthleteSettingsForm.php b/modules/strava_athletes/src/Form/AthleteSettingsForm.php
+index 5e4b6ef..7ee5b51 100644
+--- a/modules/strava_athletes/src/Form/AthleteSettingsForm.php
++++ b/modules/strava_athletes/src/Form/AthleteSettingsForm.php
+@@ -29,7 +29,7 @@ class AthleteSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -41,7 +41,7 @@ class AthleteSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/modules/strava_athletes/src/Manager/AthleteManager.php b/modules/strava_athletes/src/Manager/AthleteManager.php
+index 6fd92b3..07e781b 100644
+--- a/modules/strava_athletes/src/Manager/AthleteManager.php
++++ b/modules/strava_athletes/src/Manager/AthleteManager.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\strava_athletes\Manager;
+ 
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Database\Driver\mysql\Connection;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+@@ -54,11 +58,11 @@ class AthleteManager {
+   }
+ 
+   /**
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    * @param array $athlete
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|static
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @return EntityInterface|static
++   * @throws EntityStorageException
+    */
+   public function createAthlete(UserInterface $user, $athlete) {
+     $new_athlete = Athlete::create(
+@@ -86,8 +90,8 @@ class AthleteManager {
+   /**
+    * @param $athlete
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null|static
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @return EntityInterface|null|static
++   * @throws EntityStorageException
+    */
+   public function updateAthlete($athlete) {
+     $updated_athlete = Athlete::load($athlete['id']);
+@@ -133,11 +137,11 @@ class AthleteManager {
+    * @param string $value
+    *   Value to search for.
+    *
+-   * @return \Drupal\strava_athletes\Entity\Athlete|false
++   * @return Athlete|false
+    *   Stored Strava athlete object if found
+    *   False otherwise
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function loadAthleteByProperty($field, $value) {
+     $athletes = $this->entityTypeManager
+diff --git a/modules/strava_clubs/src/ClubAccessControlHandler.php b/modules/strava_clubs/src/ClubAccessControlHandler.php
+index e16565a..1693b21 100644
+--- a/modules/strava_clubs/src/ClubAccessControlHandler.php
++++ b/modules/strava_clubs/src/ClubAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\strava_clubs;
+ 
++use Drupal\strava_clubs\Entity\ClubInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,7 +19,7 @@ class ClubAccessControlHandler extends EntityAccessControlHandler {
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\strava_clubs\Entity\ClubInterface $entity */
++    /** @var ClubInterface $entity */
+     switch ($operation) {
+       case 'view':
+         if (!$entity->isPublished()) {
+diff --git a/modules/strava_clubs/src/ClubHtmlRouteProvider.php b/modules/strava_clubs/src/ClubHtmlRouteProvider.php
+index 420d6ad..2e66608 100644
+--- a/modules/strava_clubs/src/ClubHtmlRouteProvider.php
++++ b/modules/strava_clubs/src/ClubHtmlRouteProvider.php
+@@ -36,10 +36,10 @@ class ClubHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the collection route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getCollectionRoute(EntityTypeInterface $entity_type) {
+@@ -61,10 +61,10 @@ class ClubHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/modules/strava_clubs/src/Form/ClubRefreshForm.php b/modules/strava_clubs/src/Form/ClubRefreshForm.php
+index de9e826..ce94584 100644
+--- a/modules/strava_clubs/src/Form/ClubRefreshForm.php
++++ b/modules/strava_clubs/src/Form/ClubRefreshForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\strava_clubs\Form;
+ 
++use Drupal\strava_clubs\Entity\Club;
+ use Drupal\Core\Entity\ContentEntityConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Url;
+@@ -55,10 +56,10 @@ class ClubRefreshForm extends ContentEntityConfirmFormBase {
+   /**
+    * Refresh entity info from Strava API.
+    *
+-   * @throws \Strava\API\Exception
++   * @throws Exception
+    */
+   public function refreshEntity() {
+-    /** @var \Drupal\strava_clubs\Entity\Club $entity */
++    /** @var Club $entity */
+     $entity = $this->getEntity();
+ 
+     // Get the first club member we can get an API client for.
+@@ -70,7 +71,7 @@ class ClubRefreshForm extends ContentEntityConfirmFormBase {
+       foreach ($club_members as $member) {
+         // Load the complete athlete object for the member.
+         $athlete = Athlete::load($member);
+-        /** @var \Strava\API\Client $client */
++        /** @var Client $client */
+         $client = $strava->getApiClientForAthlete($athlete);
+         if ($client instanceof Client) {
+           // If we have a working client. Try to refresh the club details.
+diff --git a/modules/strava_clubs/src/Form/ClubSettingsForm.php b/modules/strava_clubs/src/Form/ClubSettingsForm.php
+index 2d964f9..554fc2b 100644
+--- a/modules/strava_clubs/src/Form/ClubSettingsForm.php
++++ b/modules/strava_clubs/src/Form/ClubSettingsForm.php
+@@ -29,7 +29,7 @@ class ClubSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -41,7 +41,7 @@ class ClubSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/modules/strava_clubs/src/Manager/ClubManager.php b/modules/strava_clubs/src/Manager/ClubManager.php
+index 5c58a57..7cbe43b 100644
+--- a/modules/strava_clubs/src/Manager/ClubManager.php
++++ b/modules/strava_clubs/src/Manager/ClubManager.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\strava_clubs\Manager;
+ 
++use Drupal\user\Entity\User;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Database\Driver\mysql\Connection;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+@@ -10,26 +13,26 @@ use Drupal\strava_clubs\Entity\Club;
+ class ClubManager {
+ 
+   /**
+-   * @var \Drupal\Core\Database\Driver\mysql\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * AthleteManager constructor.
+    *
+-   * @param \Drupal\Core\Database\Driver\mysql\Connection $connection
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param Connection $connection
++   * @param LoggerChannelFactoryInterface $logger_factory
++   * @param EntityTypeManagerInterface $entity_type_manager
+    */
+   public function __construct(Connection $connection, LoggerChannelFactoryInterface $logger_factory, EntityTypeManagerInterface $entity_type_manager) {
+     $this->connection = $connection;
+@@ -114,11 +117,11 @@ class ClubManager {
+    * @param string $value
+    *   Value to search for.
+    *
+-   * @return \Drupal\user\Entity\User|false
++   * @return User|false
+    *   Drupal user account if found
+    *   False otherwise
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function loadClubByProperty($field, $value) {
+     $clubs = $this->entityTypeManager
+diff --git a/src/Api/Strava.php b/src/Api/Strava.php
+index 3ba2b4d..a156c7d 100644
+--- a/src/Api/Strava.php
++++ b/src/Api/Strava.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\strava\Api;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Strava\API\OAuth;
++use Strava\API\Client;
++use Drupal\core\TempStore\PrivateTempStore;
+ use Drupal\Core\Messenger\MessengerTrait;
+ use Drupal\Core\Url;
+ use Drupal\Core\TempStore\TempStoreException;
+@@ -25,14 +29,14 @@ class Strava implements StravaInterface {
+   /**
+    * Strava module configuration.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Oauth2 client.
+    *
+-   * @var \Strava\API\OAuth
++   * @var OAuth
+    */
+   protected $provider;
+ 
+@@ -42,12 +46,12 @@ class Strava implements StravaInterface {
+   protected $accessToken;
+ 
+   /**
+-   * @var \Strava\API\Factory
++   * @var Factory
+    */
+   protected $factory;
+ 
+   /**
+-   * @var \Strava\API\Client
++   * @var Client
+    */
+   protected $apiClient;
+ 
+@@ -123,7 +127,7 @@ class Strava implements StravaInterface {
+   /**
+    * @param $athlete
+    *
+-   * @return \Drupal\strava\Api\OAuth|\Strava\API\Client
++   * @return \Drupal\strava\Api\OAuth|Client
+    */
+   public function getApiClientforAthlete($athlete) {
+     if (is_numeric($athlete)) {
+@@ -137,7 +141,7 @@ class Strava implements StravaInterface {
+   /**
+    * @param int $uid
+    *
+-   * @return \Drupal\strava\Api\OAuth|\Strava\API\Client
++   * @return \Drupal\strava\Api\OAuth|Client
+    */
+   public function getApiClientForUser($uid) {
+     if ($token = $this->getUserAccessToken($uid)) {
+@@ -209,7 +213,7 @@ class Strava implements StravaInterface {
+    * @return bool
+    */
+   public function checkAccessToken() {
+-    /** @var \Drupal\core\TempStore\PrivateTempStore $session_data */
++    /** @var PrivateTempStore $session_data */
+     $session_data = \Drupal::service('tempstore.private')->get('strava');
+     $this->accessToken = $session_data->get('strava_access_token');
+ 
+@@ -268,7 +272,7 @@ class Strava implements StravaInterface {
+       if ($token instanceof AccessToken) {
+         $token = $token->getToken();
+       }
+-      /** @var \Drupal\core\TempStore\PrivateTempStore $session_data */
++      /** @var PrivateTempStore $session_data */
+       $session_data = \Drupal::service('tempstore.private')->get('strava');
+       $session_data->set('strava_access_token', $token);
+     }
+@@ -283,7 +287,7 @@ class Strava implements StravaInterface {
+    */
+   public function deleteAccessToken() {
+     try {
+-      /** @var \Drupal\core\TempStore\PrivateTempStore $session_data */
++      /** @var PrivateTempStore $session_data */
+       $session_data = \Drupal::service('tempstore.private')->get('strava');
+       $session_data->delete('strava_access_token');
+     }
+diff --git a/src/Api/StravaInterface.php b/src/Api/StravaInterface.php
+index b7b4f28..d1e0ec3 100644
+--- a/src/Api/StravaInterface.php
++++ b/src/Api/StravaInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\strava\Api;
+ 
++use League\OAuth2\Client\Token\AccessToken;
+ interface StravaInterface {
+ 
+   /**
+@@ -31,7 +32,7 @@ interface StravaInterface {
+    *
+    * @param $code
+    *
+-   * @return \League\OAuth2\Client\Token\AccessToken
++   * @return AccessToken
+    */
+   public function getAccessToken($code);
+ 
+diff --git a/src/Controller/StravaController.php b/src/Controller/StravaController.php
+index 238438e..09cb90a 100644
+--- a/src/Controller/StravaController.php
++++ b/src/Controller/StravaController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\strava\Controller;
+ 
++use Drupal\Core\Logger\LoggerChannelFactory;
++use Drupal\strava_athletes\AthleteUserHandler;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Link;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+@@ -14,27 +16,27 @@ use Symfony\Component\HttpFoundation\RequestStack;
+ class StravaController extends ControllerBase {
+ 
+   /**
+-   * @var \Drupal\Core\Logger\LoggerChannelFactory
++   * @var LoggerChannelFactory
+    */
+   protected $loggerFactory;
+ 
+   /**
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * Strava
+    *
+-   * @var \Drupal\strava\Api\Strava
++   * @var Strava
+    */
+   private $strava;
+ 
+   /**
+    * Constructs the StravaController.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param RequestStack $request_stack
++   * @param LoggerChannelFactoryInterface $logger_factory
+    */
+   public function __construct(RequestStack $request_stack, LoggerChannelFactoryInterface $logger_factory) {
+     $this->requestStack = $request_stack;
+@@ -89,7 +91,7 @@ class StravaController extends ControllerBase {
+   /**
+    * The Strava login callback.
+    *
+-   * @param \Drupal\Core\Url|null $url
++   * @param Url|null $url
+    *   Optional: Url where app should redirect after access token is
+    *   successfully fetched.
+    *
+@@ -125,7 +127,7 @@ class StravaController extends ControllerBase {
+ 
+           // Also try to create an athlete entity if the submodule is enabled.
+           if (\Drupal::moduleHandler()->moduleExists('strava_athletes')) {
+-            /** @var \Drupal\strava_athletes\AthleteUserHandler $athlete_user_handler */
++            /** @var AthleteUserHandler $athlete_user_handler */
+             $athlete_user_handler = \Drupal::service('strava.athlete_user_handler');
+             $athlete_user_handler->setStravaDetails($athlete);
+             $athlete_user_handler->connect();
+diff --git a/src/Manager/UserManager.php b/src/Manager/UserManager.php
+index 2e12777..5869f14 100644
+--- a/src/Manager/UserManager.php
++++ b/src/Manager/UserManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\strava\Manager;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -90,7 +91,7 @@ class UserManager {
+       'name' => $this->generateUniqueUsername($username),
+       'mail' => $email,
+       'init' => $email,
+-      'pass' => user_password(48),
++      'pass' => \Drupal::service('password_generator')->generate(48),
+       'status' => $this->getNewUserStatus(),
+       'user_picture' => $this->getImageForUser($picture),
+     ];
+@@ -216,7 +217,7 @@ class UserManager {
+    * @param string $value
+    *   Value to search for.
+    *
+-   * @return \Drupal\user\Entity\User|false
++   * @return User|false
+    *   Drupal user account if found
+    *   False otherwise
+    */
+diff --git a/src/Plugin/Block/StravaLoginBlock.php b/src/Plugin/Block/StravaLoginBlock.php
+index 25e253b..0b5f811 100644
+--- a/src/Plugin/Block/StravaLoginBlock.php
++++ b/src/Plugin/Block/StravaLoginBlock.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\strava\Plugin\Block;
+ 
++use Drupal\strava_athletes\Manager\AthleteManager;
+ use Drupal\Core\Block\BlockBase;
+ use Drupal\Core\Messenger\MessengerTrait;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -72,7 +73,7 @@ class StravaLoginBlock extends BlockBase implements ContainerFactoryPluginInterf
+ 
+         // Try to get Strava athlete details from the database.
+         if (\Drupal::moduleHandler()->moduleExists('strava_athletes')) {
+-          /** @var \Drupal\strava_athletes\Manager\AthleteManager $athlete_manager */
++          /** @var AthleteManager $athlete_manager */
+           $athlete_manager = \Drupal::service('strava.athlete_manager');
+           $athlete = $athlete_manager->loadAthleteByProperty('uid', \Drupal::currentUser()
+             ->id());
+diff --git a/strava.module b/strava.module
+index 5fd2115..cbe9f10 100644
+--- a/strava.module
++++ b/strava.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\user\Entity\User;
+ use Drupal\strava\Api\Strava;
+ use Drupal\strava_athletes\Entity\Athlete;
+ 
+@@ -17,7 +18,7 @@ function strava_page_attachments(array &$attachments) {
+ /**
+  * Implements hook_user_login().
+  *
+- * @param \Drupal\user\Entity\User $account
++ * @param User $account
+  */
+ function strava_user_login($account) {
+   // Check if there's an active Strava session and if it matches the Drupal user
+@@ -28,7 +29,7 @@ function strava_user_login($account) {
+   if ($strava->checkAccessToken()) {
+     $athlete = $strava->getApiClient()->getAthlete();
+     $athlete = Athlete::load($athlete['id']);
+-    /** @var \Drupal\user\Entity\User $account */
++    /** @var User $account */
+     if ($account->id() !== $athlete->getUid()) {
+       // If the user id does not match the athlete uid, destroy the stored
+       // Strava access token for the current Drupal user.

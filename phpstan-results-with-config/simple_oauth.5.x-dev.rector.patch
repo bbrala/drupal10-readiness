@@ -1,0 +1,2006 @@
+diff --git a/simple_oauth.api.php b/simple_oauth.api.php
+index 2079397..a758068 100644
+--- a/simple_oauth.api.php
++++ b/simple_oauth.api.php
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\simple_oauth\Entities\AccessTokenEntity;
++use Drupal\user\Entity\User;
+ /**
+  * @file
+  * Hooks specific to the Simple OAuth module.
+@@ -17,13 +19,13 @@ use Drupal\user\UserInterface;
+  *
+  * @param $private_claims
+  *   The private claims array to be altered.
+- * @param \Drupal\simple_oauth\Entities\AccessTokenEntity $access_token_entity
++ * @param AccessTokenEntity $access_token_entity
+  *
+  * @see \Drupal\simple_oauth\Entities\AccessTokenEntity::convertToJWT()
+  */
+-function hook_simple_oauth_private_claims_alter(&$private_claims, \Drupal\simple_oauth\Entities\AccessTokenEntity $access_token_entity) {
++function hook_simple_oauth_private_claims_alter(&$private_claims, AccessTokenEntity $access_token_entity) {
+   $user_id = $access_token_entity->getUserIdentifier();
+-  $user = \Drupal\user\Entity\User::load($user_id);
++  $user = User::load($user_id);
+   $private_claims = [
+     'mail' => $user->getEmail(),
+     'username' => $user->getAccountName(),
+diff --git a/simple_oauth.install b/simple_oauth.install
+index 21da80f..015002b 100644
+--- a/simple_oauth.install
++++ b/simple_oauth.install
+@@ -53,7 +53,7 @@ function simple_oauth_update_8403() {
+ function simple_oauth_update_8404() {
+   $use_implicit = \Drupal::config('simple_oauth_extras.settings')->get('use_implicit');
+   if ($use_implicit === NULL) {
+-    $config_path = drupal_get_path('module', 'simple_oauth') . '/config/install';
++    $config_path = \Drupal::service('extension.list.module')->getPath('simple_oauth') . '/config/install';
+     // Because of custom config_path, we don't call service here.
+     $source = new FileStorage($config_path);
+     $config_default = $source->read('simple_oauth.settings');
+diff --git a/simple_oauth.module b/simple_oauth.module
+index 04fc84d..18e2996 100644
+--- a/simple_oauth.module
++++ b/simple_oauth.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\simple_oauth\ExpiredCollector;
+ /**
+  * @file
+  * Contains simple_oauth.module.
+@@ -21,7 +22,7 @@ use Drupal\Core\Link;
+  * Implements hook_cron().
+  */
+ function simple_oauth_cron() {
+-  /** @var \Drupal\simple_oauth\ExpiredCollector $collector */
++  /** @var ExpiredCollector $collector */
+   $collector = \Drupal::service('simple_oauth.expired_collector');
+   $config = \Drupal::config('simple_oauth.settings');
+   $logger = \Drupal::logger('simple_oauth');
+@@ -39,7 +40,7 @@ function simple_oauth_cron() {
+  * Implements hook_entity_update().
+  */
+ function simple_oauth_entity_update(EntityInterface $entity) {
+-  /** @var \Drupal\simple_oauth\ExpiredCollector $collector */
++  /** @var ExpiredCollector $collector */
+   $collector = \Drupal::service('simple_oauth.expired_collector');
+   // Collect the affected tokens and expire them.
+   if ($entity instanceof AccountInterface) {
+@@ -195,7 +196,7 @@ function simple_oauth_form_consumer_form_alter(array &$form, FormStateInterface
+  *
+  * @param array $form
+  *   The form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The state.
+  */
+ function simple_oauth_form_consumer_form_submit($entity_type_id, Consumer $entity, array &$form, FormStateInterface $form_state) {
+diff --git a/src/Annotation/Oauth2Grant.php b/src/Annotation/Oauth2Grant.php
+index 2846f3b..5d28dbf 100644
+--- a/src/Annotation/Oauth2Grant.php
++++ b/src/Annotation/Oauth2Grant.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_oauth\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -24,7 +25,7 @@ class Oauth2Grant extends Plugin {
+   /**
+    * The label of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Authentication/Provider/SimpleOauthAuthenticationProvider.php b/src/Authentication/Provider/SimpleOauthAuthenticationProvider.php
+index b55b3ce..b9a03b5 100644
+--- a/src/Authentication/Provider/SimpleOauthAuthenticationProvider.php
++++ b/src/Authentication/Provider/SimpleOauthAuthenticationProvider.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\simple_oauth\Authentication\Provider;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Authentication\AuthenticationProviderInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\simple_oauth\Authentication\TokenAuthUser;
+@@ -17,28 +20,28 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
+ class SimpleOauthAuthenticationProvider implements AuthenticationProviderInterface {
+ 
+   /**
+-   * @var \Drupal\simple_oauth\Server\ResourceServerInterface
++   * @var ResourceServerInterface
+    */
+   protected $resourceServer;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+-   * @var \Drupal\simple_oauth\PageCache\SimpleOauthRequestPolicyInterface
++   * @var SimpleOauthRequestPolicyInterface
+    */
+   protected $oauthPageCacheRequestPolicy;
+ 
+   /**
+    * Constructs a HTTP basic authentication provider object.
+    *
+-   * @param \Drupal\simple_oauth\Server\ResourceServerInterface $resource_server
++   * @param ResourceServerInterface $resource_server
+    *   The resource server object.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\simple_oauth\PageCache\SimpleOauthRequestPolicyInterface $page_cache_request_policy
++   * @param SimpleOauthRequestPolicyInterface $page_cache_request_policy
+    *   The page cache request policy.
+    */
+   public function __construct(
+@@ -64,10 +67,10 @@ class SimpleOauthAuthenticationProvider implements AuthenticationProviderInterfa
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
+-   * @throws \League\OAuth2\Server\Exception\OAuthServerException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
++   * @throws OAuthServerException
+    */
+   public function authenticate(Request $request) {
+     // Update the request with the OAuth information.
+diff --git a/src/Authentication/TokenAuthUser.php b/src/Authentication/TokenAuthUser.php
+index 280f3ab..4a407d9 100644
+--- a/src/Authentication/TokenAuthUser.php
++++ b/src/Authentication/TokenAuthUser.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\simple_oauth\Authentication;
+ 
++use Drupal\consumers\Entity\Consumer;
++use Drupal\user\RoleStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -20,31 +23,31 @@ class TokenAuthUser implements TokenAuthUserInterface {
+   /**
+    * The decorator subject.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $subject;
+ 
+   /**
+    * The bearer token.
+    *
+-   * @var \Drupal\simple_oauth\Entity\Oauth2TokenInterface
++   * @var Oauth2TokenInterface
+    */
+   protected $token;
+ 
+   /**
+    * The activated consumer instance.
+    *
+-   * @var \Drupal\consumers\Entity\Consumer
++   * @var Consumer
+    */
+   protected $consumer;
+ 
+   /**
+    * Constructs a TokenAuthUser object.
+    *
+-   * @param \Drupal\simple_oauth\Entity\Oauth2TokenInterface $token
++   * @param Oauth2TokenInterface $token
+    *   The underlying token.
+    *
+-   * @throws \League\OAuth2\Server\Exception\OAuthServerException
++   * @throws OAuthServerException
+    *   When there is no user.
+    */
+   public function __construct(Oauth2TokenInterface $token) {
+@@ -99,13 +102,13 @@ class TokenAuthUser implements TokenAuthUserInterface {
+   /**
+    * Returns the role storage object.
+    *
+-   * @return \Drupal\user\RoleStorageInterface
++   * @return RoleStorageInterface
+    *   The role storage object.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   protected function getRoleStorage() {
+-    /** @var \Drupal\user\RoleStorageInterface $storage */
++    /** @var RoleStorageInterface $storage */
+     $storage = \Drupal::entityTypeManager()->getStorage('user_role');
+     return $storage;
+   }
+@@ -314,7 +317,7 @@ class TokenAuthUser implements TokenAuthUserInterface {
+    * {@inheritdoc}
+    */
+   public function urlInfo($rel = 'canonical', array $options = []) {
+-    return $this->subject->urlInfo($rel, $options);
++    return $this->subject->toUrl($rel, $options);
+   }
+ 
+   /**
+@@ -328,7 +331,9 @@ class TokenAuthUser implements TokenAuthUserInterface {
+    * {@inheritdoc}
+    */
+   public function link($text = NULL, $rel = 'canonical', array $options = []) {
+-    return $this->subject->link($text, $rel, $options);
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Please confirm that `$subject` is an instance of `\Drupal\Core\Entity\EntityInterface`. Only the method name and not the class name was checked for this replacement, so this may be a false positive.
++    return $this->subject->toLink($text, $rel, $options)->toString();
+   }
+ 
+   /**
+diff --git a/src/Authentication/TokenAuthUserInterface.php b/src/Authentication/TokenAuthUserInterface.php
+index bf9b900..3734d25 100644
+--- a/src/Authentication/TokenAuthUserInterface.php
++++ b/src/Authentication/TokenAuthUserInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\simple_oauth\Authentication;
+ 
++use Drupal\simple_oauth\Entity\Oauth2TokenInterface;
++use Drupal\consumers\Entity\Consumer;
+ use Drupal\user\UserInterface;
+ 
+ /**
+@@ -12,7 +14,7 @@ interface TokenAuthUserInterface extends \IteratorAggregate, UserInterface {
+   /**
+    * Get the token.
+    *
+-   * @return \Drupal\simple_oauth\Entity\Oauth2TokenInterface
++   * @return Oauth2TokenInterface
+    *   The provided OAuth2 token.
+    */
+   public function getToken();
+@@ -20,7 +22,7 @@ interface TokenAuthUserInterface extends \IteratorAggregate, UserInterface {
+   /**
+    * Get the activated consumer.
+    *
+-   * @return \Drupal\consumers\Entity\Consumer
++   * @return Consumer
+    *   The activated consumer after authentication.
+    */
+   public function getConsumer();
+diff --git a/src/Commands/SimpleOauthCommands.php b/src/Commands/SimpleOauthCommands.php
+index 3a53822..ce2743a 100644
+--- a/src/Commands/SimpleOauthCommands.php
++++ b/src/Commands/SimpleOauthCommands.php
+@@ -16,14 +16,14 @@ class SimpleOauthCommands extends DrushCommands {
+   /**
+    * The key generator.
+    *
+-   * @var \Drupal\simple_oauth\Service\KeyGeneratorService
++   * @var KeyGeneratorService
+    */
+   private $keygen;
+ 
+   /**
+    * The file system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   private $fileSystem;
+ 
+diff --git a/src/Controller/DebugController.php b/src/Controller/DebugController.php
+index 9090081..29bf8be 100644
+--- a/src/Controller/DebugController.php
++++ b/src/Controller/DebugController.php
+@@ -16,14 +16,14 @@ class DebugController extends ControllerBase {
+   /**
+    * The user permissions.
+    *
+-   * @var \Drupal\user\PermissionHandlerInterface
++   * @var PermissionHandlerInterface
+    */
+   protected $userPermissions;
+ 
+   /**
+    * Oauth2Token constructor.
+    *
+-   * @param \Drupal\user\PermissionHandlerInterface $user_permissions
++   * @param PermissionHandlerInterface $user_permissions
+    *   The user permissions.
+    */
+   public function __construct(PermissionHandlerInterface $user_permissions) {
+diff --git a/src/Controller/Jwks.php b/src/Controller/Jwks.php
+index 546761b..59c97db 100644
+--- a/src/Controller/Jwks.php
++++ b/src/Controller/Jwks.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\simple_oauth\Controller;
+ 
++use Drupal\Core\Session\AccountInterface;
++use Drupal\Core\Config\ImmutableConfig;
++use Symfony\Component\HttpFoundation\Response;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Session\AccountProxyInterface;
+@@ -20,23 +23,23 @@ class Jwks implements ContainerInjectionInterface {
+   /**
+    * The authenticated user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   private $user;
+ 
+   /**
+    * The configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   private $config;
+ 
+   /**
+    * Jwks constructor.
+    *
+-   * @param \Drupal\Core\Session\AccountProxyInterface $user
++   * @param AccountProxyInterface $user
+    *   The user.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+    */
+   private function __construct(AccountProxyInterface $user, ConfigFactoryInterface $config_factory) {
+@@ -57,7 +60,7 @@ class Jwks implements ContainerInjectionInterface {
+   /**
+    * The controller.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   The response.
+    */
+   public function handle() {
+diff --git a/src/Controller/Oauth2AuthorizeController.php b/src/Controller/Oauth2AuthorizeController.php
+index 6646036..c7fc293 100644
+--- a/src/Controller/Oauth2AuthorizeController.php
++++ b/src/Controller/Oauth2AuthorizeController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_oauth\Controller;
+ 
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -29,41 +30,41 @@ class Oauth2AuthorizeController extends ControllerBase {
+   /**
+    * The message factory.
+    *
+-   * @var \Symfony\Bridge\PsrHttpMessage\HttpMessageFactoryInterface
++   * @var HttpMessageFactoryInterface
+    */
+   protected $messageFactory;
+ 
+   /**
+    * The grant manager.
+    *
+-   * @var \Drupal\simple_oauth\Plugin\Oauth2GrantManagerInterface
++   * @var Oauth2GrantManagerInterface
+    */
+   protected $grantManager;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The known client repository service.
+    *
+-   * @var \Drupal\simple_oauth\KnownClientsRepositoryInterface
++   * @var KnownClientsRepositoryInterface
+    */
+   protected $knownClientRepository;
+ 
+   /**
+    * Oauth2AuthorizeController construct.
+    *
+-   * @param \Symfony\Bridge\PsrHttpMessage\HttpMessageFactoryInterface $message_factory
++   * @param HttpMessageFactoryInterface $message_factory
+    *   The PSR-7 converter.
+-   * @param \Drupal\simple_oauth\Plugin\Oauth2GrantManagerInterface $grant_manager
++   * @param Oauth2GrantManagerInterface $grant_manager
+    *   The plugin.manager.oauth2_grant.processor service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\simple_oauth\KnownClientsRepositoryInterface $known_clients_repository
++   * @param KnownClientsRepositoryInterface $known_clients_repository
+    *   The known client repository service.
+    */
+   public function __construct(
+@@ -93,13 +94,13 @@ class Oauth2AuthorizeController extends ControllerBase {
+   /**
+    * Authorizes the code generation or prints the confirmation form.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The incoming request.
+    *
+    * @return mixed
+    *   The response.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws PluginNotFoundException
+    */
+   public function authorize(Request $request) {
+     $client_uuid = $request->get('client_id');
+@@ -178,21 +179,21 @@ class Oauth2AuthorizeController extends ControllerBase {
+   /**
+    * Generates a redirection response to the consumer callback.
+    *
+-   * @param \League\OAuth2\Server\RequestTypes\AuthorizationRequest $auth_request
++   * @param AuthorizationRequest $auth_request
+    *   The auth request.
+-   * @param \League\OAuth2\Server\AuthorizationServer $server
++   * @param AuthorizationServer $server
+    *   The authorization server.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The user to be logged in.
+    * @param bool $can_grant_codes
+    *   Weather or not the user can grant codes.
+    * @param bool $remembers_clients
+    *   Weather or not the sites remembers consumers that were previously
+    *   granted access.
+-   * @param \Drupal\simple_oauth\KnownClientsRepositoryInterface|null $known_clients_repository
++   * @param KnownClientsRepositoryInterface|null $known_clients_repository
+    *   The known clients repository.
+    *
+-   * @return \Drupal\Core\Routing\TrustedRedirectResponse
++   * @return TrustedRedirectResponse
+    *   The response.
+    */
+   public static function redirectToCallback(
+diff --git a/src/Controller/Oauth2AuthorizeForm.php b/src/Controller/Oauth2AuthorizeForm.php
+index 5929824..47bcdb8 100644
+--- a/src/Controller/Oauth2AuthorizeForm.php
++++ b/src/Controller/Oauth2AuthorizeForm.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\simple_oauth\Controller;
+ 
++use League\OAuth2\Server\AuthorizationServer;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\simple_oauth\Entities\ScopeEntityNameInterface;
+ use Drupal\Core\Cache\CacheableMetadata;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -22,66 +26,66 @@ class Oauth2AuthorizeForm extends FormBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The message factory.
+    *
+-   * @var \Symfony\Bridge\PsrHttpMessage\HttpMessageFactoryInterface
++   * @var HttpMessageFactoryInterface
+    */
+   protected $messageFactory;
+ 
+   /**
+    * The foundation factory.
+    *
+-   * @var \Symfony\Bridge\PsrHttpMessage\HttpFoundationFactoryInterface
++   * @var HttpFoundationFactoryInterface
+    */
+   protected $foundationFactory;
+ 
+   /**
+    * The authorization server.
+    *
+-   * @var \League\OAuth2\Server\AuthorizationServer
++   * @var AuthorizationServer
+    */
+   protected $server;
+ 
+   /**
+    * The grant plugin manager.
+    *
+-   * @var \Drupal\simple_oauth\Plugin\Oauth2GrantManagerInterface
++   * @var Oauth2GrantManagerInterface
+    */
+   protected $grantManager;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The known client repository service.
+    *
+-   * @var \Drupal\simple_oauth\KnownClientsRepositoryInterface
++   * @var KnownClientsRepositoryInterface
+    */
+   protected $knownClientRepository;
+ 
+   /**
+    * Oauth2AuthorizeForm constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Symfony\Bridge\PsrHttpMessage\HttpMessageFactoryInterface $message_factory
++   * @param HttpMessageFactoryInterface $message_factory
+    *   The message factory.
+-   * @param \Symfony\Bridge\PsrHttpMessage\HttpFoundationFactoryInterface $foundation_factory
++   * @param HttpFoundationFactoryInterface $foundation_factory
+    *   The foundation factory.
+-   * @param \Drupal\simple_oauth\Plugin\Oauth2GrantManagerInterface $grant_manager
++   * @param Oauth2GrantManagerInterface $grant_manager
+    *   The grant manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\simple_oauth\KnownClientsRepositoryInterface $known_clients_repository
++   * @param KnownClientsRepositoryInterface $known_clients_repository
+    *   The known client repository service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, HttpMessageFactoryInterface $message_factory, HttpFoundationFactoryInterface $foundation_factory, Oauth2GrantManagerInterface $grant_manager, ConfigFactoryInterface $config_factory, KnownClientsRepositoryInterface $known_clients_repository) {
+@@ -122,15 +126,15 @@ class Oauth2AuthorizeForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+    *   The form structure.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \League\OAuth2\Server\Exception\OAuthServerException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws OAuthServerException
+    */
+   public function buildForm(array $form, FormStateInterface $form_state) {
+     $request = $this->getRequest();
+@@ -187,7 +191,7 @@ class Oauth2AuthorizeForm extends FormBase {
+       $client_roles[$role_item->target_id] = $role_item->entity;
+     }
+ 
+-    /** @var \Drupal\simple_oauth\Entities\ScopeEntityNameInterface $scope */
++    /** @var ScopeEntityNameInterface $scope */
+     foreach ($auth_request->getScopes() as $scope) {
+       $cacheablity_metadata->addCacheableDependency($scope);
+       $form['scopes']['#items'][] = $scope->getName();
+@@ -222,7 +226,7 @@ class Oauth2AuthorizeForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+diff --git a/src/Controller/Oauth2GenerateKey.php b/src/Controller/Oauth2GenerateKey.php
+index d171f13..33453fb 100755
+--- a/src/Controller/Oauth2GenerateKey.php
++++ b/src/Controller/Oauth2GenerateKey.php
+@@ -21,7 +21,7 @@ class Oauth2GenerateKey extends ControllerBase {
+   /**
+    * Oauth2GenerateKey constructor.
+    *
+-   * @param \Drupal\Core\Form\FormBuilderInterface $form_builder
++   * @param FormBuilderInterface $form_builder
+    */
+   public function __construct(FormBuilderInterface $form_builder) {
+     $this->formBuilder = $form_builder;
+diff --git a/src/Controller/Oauth2Token.php b/src/Controller/Oauth2Token.php
+index 1341fc8..45c0aa4 100644
+--- a/src/Controller/Oauth2Token.php
++++ b/src/Controller/Oauth2Token.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_oauth\Controller;
+ 
++use Psr\Http\Message\ResponseInterface;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\simple_oauth\Plugin\Oauth2GrantManagerInterface;
+ use GuzzleHttp\Psr7\Response;
+@@ -13,14 +14,14 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class Oauth2Token extends ControllerBase {
+ 
+   /**
+-   * @var \Drupal\simple_oauth\Plugin\Oauth2GrantManagerInterface
++   * @var Oauth2GrantManagerInterface
+    */
+   protected $grantManager;
+ 
+   /**
+    * Oauth2Token constructor.
+    *
+-   * @param \Drupal\simple_oauth\Plugin\Oauth2GrantManagerInterface $grant_manager
++   * @param Oauth2GrantManagerInterface $grant_manager
+    *   The grant manager.
+    */
+   public function __construct(Oauth2GrantManagerInterface $grant_manager) {
+@@ -72,15 +73,15 @@ class Oauth2Token extends ControllerBase {
+   /**
+    * Handles the token processing.
+    *
+-   * @param \Psr\Http\Message\ServerRequestInterface $psr7_request
++   * @param ServerRequestInterface $psr7_request
+    *   The psr request.
+-   * @param \League\OAuth2\Server\AuthorizationServer $auth_server
++   * @param AuthorizationServer $auth_server
+    *   The authorization server.
+    *
+-   * @return \Psr\Http\Message\ResponseInterface
++   * @return ResponseInterface
+    *   The response.
+    *
+-   * @throws \League\OAuth2\Server\Exception\OAuthServerException
++   * @throws OAuthServerException
+    */
+   protected function handleToken(ServerRequestInterface $psr7_request, AuthorizationServer $auth_server) {
+     // Instantiate a new PSR-7 response object so the library can fill it.
+diff --git a/src/Controller/UserInfo.php b/src/Controller/UserInfo.php
+index 7aee477..137d01a 100644
+--- a/src/Controller/UserInfo.php
++++ b/src/Controller/UserInfo.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\simple_oauth\Controller;
+ 
++use Drupal\Core\Session\AccountInterface;
++use Drupal\Core\Config\ImmutableConfig;
++use Symfony\Component\HttpFoundation\Response;
++use Symfony\Component\Serializer\Exception\ExceptionInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Session\AccountProxyInterface;
+@@ -22,32 +26,32 @@ class UserInfo implements ContainerInjectionInterface {
+   /**
+    * The authenticated user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   private $user;
+ 
+   /**
+    * The serializer.
+    *
+-   * @var \Symfony\Component\Serializer\SerializerInterface
++   * @var SerializerInterface
+    */
+   private $serializer;
+ 
+   /**
+    * The configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   private $config;
+ 
+   /**
+    * UserInfo constructor.
+    *
+-   * @param \Drupal\Core\Session\AccountProxyInterface $user
++   * @param AccountProxyInterface $user
+    *   The user.
+-   * @param \Symfony\Component\Serializer\SerializerInterface $serializer
++   * @param SerializerInterface $serializer
+    *   The serializer service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+    */
+   private function __construct(AccountProxyInterface $user, SerializerInterface $serializer, ConfigFactoryInterface $config_factory) {
+@@ -71,10 +75,10 @@ class UserInfo implements ContainerInjectionInterface {
+   /**
+    * The controller.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   The response.
+    *
+-   * @throws \Symfony\Component\Serializer\Exception\ExceptionInterface
++   * @throws ExceptionInterface
+    */
+   public function handle() {
+     if (!$this->user instanceof TokenAuthUser) {
+diff --git a/src/Entities/ClientEntity.php b/src/Entities/ClientEntity.php
+index 19dfb7c..70c4a8f 100644
+--- a/src/Entities/ClientEntity.php
++++ b/src/Entities/ClientEntity.php
+@@ -11,14 +11,14 @@ class ClientEntity implements ClientEntityInterface {
+   use EntityTrait, ClientTrait;
+ 
+   /**
+-   * @var \Drupal\consumers\Entity\Consumer
++   * @var Consumer
+    */
+   protected $entity;
+ 
+   /**
+    * ClientEntity constructor.
+    *
+-   * @param \Drupal\consumers\Entity\Consumer $entity
++   * @param Consumer $entity
+    *   The Drupal entity.
+    */
+   public function __construct(Consumer $entity) {
+diff --git a/src/Entities/ClientEntityInterface.php b/src/Entities/ClientEntityInterface.php
+index d579461..b345ceb 100644
+--- a/src/Entities/ClientEntityInterface.php
++++ b/src/Entities/ClientEntityInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_oauth\Entities;
+ 
++use Drupal\consumers\Entity\Consumer;
+ use League\OAuth2\Server\Entities\ClientEntityInterface as LeagueClientEntityInterface;
+ 
+ interface ClientEntityInterface extends LeagueClientEntityInterface {
+@@ -17,7 +18,7 @@ interface ClientEntityInterface extends LeagueClientEntityInterface {
+   /**
+    * Returns the associated Drupal entity.
+    *
+-   * @return \Drupal\consumers\Entity\Consumer
++   * @return Consumer
+    *   The Drupal entity.
+    */
+   public function getDrupalEntity();
+diff --git a/src/Entity/Form/Oauth2GenerateKeyForm.php b/src/Entity/Form/Oauth2GenerateKeyForm.php
+index a51b22a..88c3a48 100755
+--- a/src/Entity/Form/Oauth2GenerateKeyForm.php
++++ b/src/Entity/Form/Oauth2GenerateKeyForm.php
+@@ -17,14 +17,14 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class Oauth2GenerateKeyForm extends FormBase {
+ 
+   /**
+-   * @var \Drupal\simple_oauth\Service\KeyGeneratorService
++   * @var KeyGeneratorService
+    */
+   private $keyGen;
+ 
+   /**
+    * Oauth2GenerateKeyForm constructor.
+    *
+-   * @param \Drupal\simple_oauth\Service\KeyGeneratorService $key_generator_service
++   * @param KeyGeneratorService $key_generator_service
+    */
+   public function __construct(KeyGeneratorService $key_generator_service) {
+     $this->keyGen = $key_generator_service;
+@@ -103,9 +103,9 @@ class Oauth2GenerateKeyForm extends FormBase {
+    * Generate public and private keys.
+    *
+    * @param $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    */
+   public function generateKeys(&$form, FormStateInterface $form_state) {
+     $response = new AjaxResponse();
+diff --git a/src/Entity/Form/Oauth2TokenDeleteForm.php b/src/Entity/Form/Oauth2TokenDeleteForm.php
+index c4d61e8..2ed0e9d 100644
+--- a/src/Entity/Form/Oauth2TokenDeleteForm.php
++++ b/src/Entity/Form/Oauth2TokenDeleteForm.php
+@@ -21,20 +21,20 @@ class Oauth2TokenDeleteForm extends ContentEntityConfirmFormBase {
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Constructs a ContentEntityForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository service.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+    */
+   public function __construct(EntityRepositoryInterface $entity_repository, EntityTypeBundleInfoInterface $entity_type_bundle_info = NULL, TimeInterface $time = NULL, MessengerInterface $messenger) {
+diff --git a/src/Entity/Form/Oauth2TokenSettingsForm.php b/src/Entity/Form/Oauth2TokenSettingsForm.php
+index 11ec705..15536c4 100644
+--- a/src/Entity/Form/Oauth2TokenSettingsForm.php
++++ b/src/Entity/Form/Oauth2TokenSettingsForm.php
+@@ -20,25 +20,25 @@ class Oauth2TokenSettingsForm extends ConfigFormBase {
+   /**
+    * The file system checker.
+    *
+-   * @var \Drupal\simple_oauth\Service\Filesystem\FileSystemChecker
++   * @var FileSystemChecker
+    */
+   protected $fileSystemChecker;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Oauth2TokenSettingsForm constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The factory for configuration objects.
+-   * @param \Drupal\simple_oauth\Service\Filesystem\FileSystemChecker $file_system_checker
++   * @param FileSystemChecker $file_system_checker
+    *   The simple_oauth.filesystem service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+    */
+   public function __construct(ConfigFactoryInterface $configFactory, FileSystemChecker $file_system_checker, MessengerInterface $messenger) {
+@@ -50,7 +50,7 @@ class Oauth2TokenSettingsForm extends ConfigFormBase {
+   /**
+    * Creates the form.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The container.
+    *
+    * @return \Drupal\simple_oauth\Entity\Form\Oauth2TokenSettingsForm
+@@ -86,7 +86,7 @@ class Oauth2TokenSettingsForm extends ConfigFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -108,7 +108,7 @@ class Oauth2TokenSettingsForm extends ConfigFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+@@ -216,7 +216,7 @@ class Oauth2TokenSettingsForm extends ConfigFormBase {
+    *
+    * @param array $element
+    *   The element being processed.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    * @param array $complete_form
+    *   The complete form structure.
+diff --git a/src/ExpiredCollector.php b/src/ExpiredCollector.php
+index 296f794..e828c3e 100644
+--- a/src/ExpiredCollector.php
++++ b/src/ExpiredCollector.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\simple_oauth;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\simple_oauth\Entity\Oauth2TokenInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Entity\Query\QueryException;
+@@ -16,33 +19,33 @@ class ExpiredCollector {
+   /**
+    * The token storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $tokenStorage;
+ 
+   /**
+    * The client storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $clientStorage;
+ 
+   /**
+    * The date time to collect tokens.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $dateTime;
+ 
+   /**
+    * ExpiredCollector constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Component\Datetime\TimeInterface $date_time
++   * @param TimeInterface $date_time
+    *   The date time service.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, TimeInterface $date_time) {
+     $this->clientStorage = $entity_type_manager->getStorage('consumer');
+@@ -56,7 +59,7 @@ class ExpiredCollector {
+    * @param int $limit
+    *   Number of tokens to fetch.
+    *
+-   * @return \Drupal\simple_oauth\Entity\Oauth2TokenInterface[]
++   * @return Oauth2TokenInterface[]
+    *   The expired tokens.
+    */
+   public function collect($limit = 0) {
+@@ -75,10 +78,10 @@ class ExpiredCollector {
+   /**
+    * Collect all the tokens associated with the provided account.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account.
+    *
+-   * @return \Drupal\simple_oauth\Entity\Oauth2TokenInterface[]
++   * @return Oauth2TokenInterface[]
+    *   The tokens.
+    */
+   public function collectForAccount(AccountInterface $account) {
+@@ -115,10 +118,10 @@ class ExpiredCollector {
+   /**
+    * Collect all the tokens associated a particular client.
+    *
+-   * @param \Drupal\consumers\Entity\Consumer $client
++   * @param Consumer $client
+    *   The account.
+    *
+-   * @return \Drupal\simple_oauth\Entity\Oauth2TokenInterface[]
++   * @return Oauth2TokenInterface[]
+    *   The tokens.
+    */
+   public function collectForClient(Consumer $client) {
+@@ -127,7 +130,7 @@ class ExpiredCollector {
+     if (!$entity_ids = $query->execute()) {
+       return [];
+     }
+-    /** @var \Drupal\simple_oauth\Entity\Oauth2TokenInterface[] $results */
++    /** @var Oauth2TokenInterface[] $results */
+     $results = $this->tokenStorage->loadMultiple(array_values($entity_ids));
+     return array_values($results);
+   }
+@@ -135,7 +138,7 @@ class ExpiredCollector {
+   /**
+    * Deletes multiple tokens based on ID.
+    *
+-   * @param \Drupal\simple_oauth\Entity\Oauth2TokenInterface[] $tokens
++   * @param Oauth2TokenInterface[] $tokens
+    *   The token entity IDs.
+    */
+   public function deleteMultipleTokens(array $tokens = []) {
+diff --git a/src/Form/OpenIdConnectSettingsForm.php b/src/Form/OpenIdConnectSettingsForm.php
+index 04a26c5..2fc7745 100644
+--- a/src/Form/OpenIdConnectSettingsForm.php
++++ b/src/Form/OpenIdConnectSettingsForm.php
+@@ -25,7 +25,7 @@ class OpenIdConnectSettingsForm extends ConfigFormBase {
+   /**
+    * Oauth2TokenSettingsForm constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+    * @param string[] $claim_names
+    *   The names of the claims.
+@@ -38,7 +38,7 @@ class OpenIdConnectSettingsForm extends ConfigFormBase {
+   /**
+    * Creates the form.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The container.
+    *
+    * @return \Drupal\simple_oauth\Form\OpenIdConnectSettingsForm
+@@ -73,7 +73,7 @@ class OpenIdConnectSettingsForm extends ConfigFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Grant/ClientCredentialsOverrideGrant.php b/src/Grant/ClientCredentialsOverrideGrant.php
+index 2925a8c..d82cc6e 100644
+--- a/src/Grant/ClientCredentialsOverrideGrant.php
++++ b/src/Grant/ClientCredentialsOverrideGrant.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\simple_oauth\Grant;
+ 
++use Drupal\Component\Plugin\Exception\PluginException;
++use League\OAuth2\Server\Exception\UniqueTokenIdentifierConstraintViolationException;
++use Drupal\user\Entity\User;
+ use League\OAuth2\Server\Entities\ClientEntityInterface;
+ use League\OAuth2\Server\Exception\OAuthServerException;
+ use League\OAuth2\Server\Grant\ClientCredentialsGrant;
+@@ -16,9 +19,9 @@ class ClientCredentialsOverrideGrant extends ClientCredentialsGrant {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
+-   * @throws \League\OAuth2\Server\Exception\OAuthServerException
+-   * @throws \League\OAuth2\Server\Exception\UniqueTokenIdentifierConstraintViolationException
++   * @throws PluginException
++   * @throws OAuthServerException
++   * @throws UniqueTokenIdentifierConstraintViolationException
+    */
+   public function respondToAccessTokenRequest(
+     ServerRequestInterface $request,
+@@ -49,13 +52,13 @@ class ClientCredentialsOverrideGrant extends ClientCredentialsGrant {
+   /**
+    * Finds the default user for the client.
+    *
+-   * @param \League\OAuth2\Server\Entities\ClientEntityInterface $client
++   * @param ClientEntityInterface $client
+    *   The League's client.
+    *
+-   * @return \Drupal\user\Entity\User
++   * @return User
+    *   The default user.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   protected function getDefaultUser(ClientEntityInterface $client) {
+     $client_drupal_entities = \Drupal::entityTypeManager()
+diff --git a/src/HttpMiddleware/BasicAuthSwap.php b/src/HttpMiddleware/BasicAuthSwap.php
+index 03f6660..ac6f3af 100644
+--- a/src/HttpMiddleware/BasicAuthSwap.php
++++ b/src/HttpMiddleware/BasicAuthSwap.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_oauth\HttpMiddleware;
+ 
++use Symfony\Component\HttpFoundation\Response;
+ use Symfony\Component\HttpFoundation\Request;
+ use Symfony\Component\HttpKernel\HttpKernelInterface;
+ 
+@@ -13,14 +14,14 @@ class BasicAuthSwap implements HttpKernelInterface {
+   /**
+    * The wrapped HTTP kernel.
+    *
+-   * @var \Symfony\Component\HttpKernel\HttpKernelInterface
++   * @var HttpKernelInterface
+    */
+   protected $httpKernel;
+ 
+   /**
+    * Constructs a BasicAuthSwap object.
+    *
+-   * @param \Symfony\Component\HttpKernel\HttpKernelInterface $http_kernel
++   * @param HttpKernelInterface $http_kernel
+    *   The decorated kernel.
+    */
+   public function __construct(HttpKernelInterface $http_kernel) {
+@@ -35,7 +36,7 @@ class BasicAuthSwap implements HttpKernelInterface {
+    * Basic Auth credentials from the request so that core authentication is
+    * not performed later.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The input request.
+    * @param int $type
+    *   The type of the request. One of HttpKernelInterface::MASTER_REQUEST or
+@@ -46,7 +47,7 @@ class BasicAuthSwap implements HttpKernelInterface {
+    * @throws \Exception
+    *   When an Exception occurs during processing.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   A Response instance
+    */
+   public function handle(Request $request, $type = self::MASTER_REQUEST, $catch = TRUE) {
+diff --git a/src/KnownClientsRepository.php b/src/KnownClientsRepository.php
+index c64409f..d9612e4 100644
+--- a/src/KnownClientsRepository.php
++++ b/src/KnownClientsRepository.php
+@@ -12,14 +12,14 @@ class KnownClientsRepository implements KnownClientsRepositoryInterface {
+   /**
+    * The user data service.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * KnownClientsRepository constructor.
+    *
+-   * @param \Drupal\user\UserDataInterface $user_data
++   * @param UserDataInterface $user_data
+    *   The user data service.
+    */
+   public function __construct(UserDataInterface $user_data) {
+diff --git a/src/Normalizer/RefreshTokenEntityNormalizer.php b/src/Normalizer/RefreshTokenEntityNormalizer.php
+index 54d7693..1db44b3 100644
+--- a/src/Normalizer/RefreshTokenEntityNormalizer.php
++++ b/src/Normalizer/RefreshTokenEntityNormalizer.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_oauth\Normalizer;
+ 
++use League\OAuth2\Server\Entities\TokenInterface;
+ use Drupal\serialization\Normalizer\NormalizerBase;
+ 
+ class RefreshTokenEntityNormalizer extends NormalizerBase implements TokenEntityNormalizerInterface {
+@@ -17,7 +18,7 @@ class RefreshTokenEntityNormalizer extends NormalizerBase implements TokenEntity
+    * {@inheritdoc}
+    */
+   public function normalize($token_entity, $format = NULL, array $context = []) {
+-    /** @var \League\OAuth2\Server\Entities\TokenInterface $token_entity */
++    /** @var TokenInterface $token_entity */
+     return [
+       'value' => $token_entity->getIdentifier(),
+       'expire' => $token_entity->getExpiryDateTime()->format('U'),
+diff --git a/src/Normalizer/TokenEntityNormalizer.php b/src/Normalizer/TokenEntityNormalizer.php
+index 29d7b86..c4b8819 100644
+--- a/src/Normalizer/TokenEntityNormalizer.php
++++ b/src/Normalizer/TokenEntityNormalizer.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\simple_oauth\Normalizer;
+ 
++use League\OAuth2\Server\Entities\TokenInterface;
++use League\OAuth2\Server\Entities\ScopeEntityInterface;
++use Drupal\simple_oauth\Entities\ClientEntityInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\serialization\Normalizer\NormalizerBase;
+ 
+@@ -15,7 +18,7 @@ class TokenEntityNormalizer extends NormalizerBase implements TokenEntityNormali
+   protected $supportedInterfaceOrClass = '\League\OAuth2\Server\Entities\TokenInterface';
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -30,14 +33,13 @@ class TokenEntityNormalizer extends NormalizerBase implements TokenEntityNormali
+    * {@inheritdoc}
+    */
+   public function normalize($token_entity, $format = NULL, array $context = []) {
+-    /** @var \League\OAuth2\Server\Entities\TokenInterface $token_entity */
+-
++    /** @var TokenInterface $token_entity */
+     $scopes = array_map(function ($scope_entity) {
+-      /** @var \League\OAuth2\Server\Entities\ScopeEntityInterface $scope_entity */
++      /** @var ScopeEntityInterface $scope_entity */
+       return ['target_id' => $scope_entity->getIdentifier()];
+     }, $token_entity->getScopes());
+ 
+-    /** @var \Drupal\simple_oauth\Entities\ClientEntityInterface $client */
++    /** @var ClientEntityInterface $client */
+     $client = $token_entity->getClient();
+     $client_drupal_entity = $client->getDrupalEntity();
+ 
+diff --git a/src/Normalizer/UserClaimsNormalizer.php b/src/Normalizer/UserClaimsNormalizer.php
+index 441c1eb..e1b98b8 100644
+--- a/src/Normalizer/UserClaimsNormalizer.php
++++ b/src/Normalizer/UserClaimsNormalizer.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\simple_oauth\Normalizer;
+ 
++use Drupal\user\UserStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Entity\EntityChangedInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+@@ -22,7 +25,7 @@ class UserClaimsNormalizer extends NormalizerBase implements NormalizerInterface
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\user\UserStorageInterface
++   * @var UserStorageInterface
+    */
+   protected $userStorage;
+ 
+@@ -36,22 +39,22 @@ class UserClaimsNormalizer extends NormalizerBase implements NormalizerInterface
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * UserClaimsNormalizer constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    * @param string[] $claims
+    *   The list of claims being selected.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, array $claims, ModuleHandlerInterface $module_handler) {
+     $this->userStorage = $entity_type_manager->getStorage('user');
+@@ -76,7 +79,7 @@ class UserClaimsNormalizer extends NormalizerBase implements NormalizerInterface
+   /**
+    * Gets the claims for a given user.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user account.
+    *
+    * @return array
+diff --git a/src/Oauth2TokenListBuilder.php b/src/Oauth2TokenListBuilder.php
+index a3fb7d7..81d454a 100644
+--- a/src/Oauth2TokenListBuilder.php
++++ b/src/Oauth2TokenListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_oauth;
+ 
++use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ use Drupal\user\RoleInterface;
+@@ -43,7 +44,7 @@ class Oauth2TokenListBuilder extends EntityListBuilder {
+     if (($client = $entity->get('client')) && $client->entity) {
+       $row['client'] = $client->entity->toLink($client->entity->label(), 'edit-form');
+     }
+-    /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface $scopes */
++    /** @var EntityReferenceFieldItemListInterface $scopes */
+     if ($scopes = $entity->get('scopes')) {
+       $row['scopes'] = implode(', ', array_map(function (RoleInterface $role) {
+         return $role->label();
+diff --git a/src/OpenIdConnect/OpenIdConnectScopeRepository.php b/src/OpenIdConnect/OpenIdConnectScopeRepository.php
+index d3be74b..19f2dcc 100644
+--- a/src/OpenIdConnect/OpenIdConnectScopeRepository.php
++++ b/src/OpenIdConnect/OpenIdConnectScopeRepository.php
+@@ -18,14 +18,14 @@ class OpenIdConnectScopeRepository implements ScopeRepositoryInterface {
+   /**
+    * The inner scope repository.
+    *
+-   * @var \League\OAuth2\Server\Repositories\ScopeRepositoryInterface
++   * @var ScopeRepositoryInterface
+    */
+   protected $innerScopeRepository;
+ 
+   /**
+    * OpenIdConnectScopeRepository constructor.
+    *
+-   * @param \League\OAuth2\Server\Repositories\ScopeRepositoryInterface $inner_scope_repository
++   * @param ScopeRepositoryInterface $inner_scope_repository
+    *   The inner scope repository.
+    */
+   public function __construct(ScopeRepositoryInterface $inner_scope_repository) {
+@@ -87,12 +87,12 @@ class OpenIdConnectScopeRepository implements ScopeRepositoryInterface {
+   /**
+    * Add an additional scope if it's not present.
+    *
+-   * @param \League\OAuth2\Server\Entities\ScopeEntityInterface[] $scopes
++   * @param ScopeEntityInterface[] $scopes
+    *   The list of scopes.
+-   * @param \League\OAuth2\Server\Entities\ScopeEntityInterface $new_scope
++   * @param ScopeEntityInterface $new_scope
+    *   The additional scope.
+    *
+-   * @return \League\OAuth2\Server\Entities\ScopeEntityInterface[]
++   * @return ScopeEntityInterface[]
+    *   The modified list of scopes.
+    */
+   protected function addRoleToScopes(array $scopes, ScopeEntityInterface $new_scope) {
+diff --git a/src/OpenIdConnect/UserIdentityProvider.php b/src/OpenIdConnect/UserIdentityProvider.php
+index 63d4ae2..895a8f8 100644
+--- a/src/OpenIdConnect/UserIdentityProvider.php
++++ b/src/OpenIdConnect/UserIdentityProvider.php
+@@ -15,14 +15,14 @@ class UserIdentityProvider implements IdentityProviderInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * UserIdentityProvider constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/PageCache/SimpleOauthRequestPolicyInterface.php b/src/PageCache/SimpleOauthRequestPolicyInterface.php
+index 1646c7e..2b66692 100644
+--- a/src/PageCache/SimpleOauthRequestPolicyInterface.php
++++ b/src/PageCache/SimpleOauthRequestPolicyInterface.php
+@@ -20,7 +20,7 @@ interface SimpleOauthRequestPolicyInterface extends RequestPolicyInterface {
+   /**
+    * Returns a state whether the request has an OAuth2 access token.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The incoming request object.
+    *
+    * @return bool
+diff --git a/src/Plugin/Oauth2Grant/AuthorizationCode.php b/src/Plugin/Oauth2Grant/AuthorizationCode.php
+index c85a5df..448de42 100644
+--- a/src/Plugin/Oauth2Grant/AuthorizationCode.php
++++ b/src/Plugin/Oauth2Grant/AuthorizationCode.php
+@@ -22,14 +22,14 @@ class AuthorizationCode extends Oauth2GrantBase {
+   /**
+    * The authorization code repository.
+    *
+-   * @var \League\OAuth2\Server\Repositories\AuthCodeRepositoryInterface
++   * @var AuthCodeRepositoryInterface
+    */
+   protected $authCodeRepository;
+ 
+   /**
+    * The refresh token repository.
+    *
+-   * @var \League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface
++   * @var RefreshTokenRepositoryInterface
+    */
+   protected $refreshTokenRepository;
+ 
+diff --git a/src/Plugin/Oauth2Grant/Password.php b/src/Plugin/Oauth2Grant/Password.php
+index 9f15a0a..9673ce5 100644
+--- a/src/Plugin/Oauth2Grant/Password.php
++++ b/src/Plugin/Oauth2Grant/Password.php
+@@ -18,19 +18,19 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class Password extends Oauth2GrantBase {
+ 
+   /**
+-   * @var \League\OAuth2\Server\Repositories\UserRepositoryInterface
++   * @var UserRepositoryInterface
+    */
+   protected $userRepository;
+ 
+   /**
+-   * @var \League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface
++   * @var RefreshTokenRepositoryInterface
+    */
+   protected $refreshTokenRepository;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+diff --git a/src/Plugin/Oauth2Grant/RefreshToken.php b/src/Plugin/Oauth2Grant/RefreshToken.php
+index 1d4f541..d54b796 100644
+--- a/src/Plugin/Oauth2Grant/RefreshToken.php
++++ b/src/Plugin/Oauth2Grant/RefreshToken.php
+@@ -21,14 +21,14 @@ class RefreshToken extends Oauth2GrantBase {
+   /**
+    * The refresh token repository.
+    *
+-   * @var \League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface
++   * @var RefreshTokenRepositoryInterface
+    */
+   protected $refreshTokenRepository;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+diff --git a/src/Plugin/Oauth2GrantInterface.php b/src/Plugin/Oauth2GrantInterface.php
+index 06082f4..37860ec 100644
+--- a/src/Plugin/Oauth2GrantInterface.php
++++ b/src/Plugin/Oauth2GrantInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_oauth\Plugin;
+ 
++use League\OAuth2\Server\Grant\GrantTypeInterface;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ 
+@@ -13,7 +14,7 @@ interface Oauth2GrantInterface extends PluginInspectionInterface, ContainerFacto
+   /**
+    * Gets the grant object.
+    *
+-   * @return League\OAuth2\Server\Grant\GrantTypeInterface
++   * @return GrantTypeInterface
+    *   The grant type.
+    */
+   public function getGrantType();
+diff --git a/src/Plugin/Oauth2GrantManager.php b/src/Plugin/Oauth2GrantManager.php
+index adc53cb..91fe56f 100644
+--- a/src/Plugin/Oauth2GrantManager.php
++++ b/src/Plugin/Oauth2GrantManager.php
+@@ -28,27 +28,27 @@ use League\OAuth2\Server\ResponseTypes\ResponseTypeInterface;
+ class Oauth2GrantManager extends DefaultPluginManager implements Oauth2GrantManagerInterface {
+ 
+   /**
+-   * @var \League\OAuth2\Server\Repositories\ClientRepositoryInterface
++   * @var ClientRepositoryInterface
+    */
+   protected $clientRepository;
+ 
+   /**
+-   * @var \League\OAuth2\Server\Repositories\ScopeRepositoryInterface
++   * @var ScopeRepositoryInterface
+    */
+   protected $scopeRepository;
+ 
+   /**
+-   * @var \League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface
++   * @var AccessTokenRepositoryInterface
+    */
+   protected $accessTokenRepository;
+ 
+   /**
+-   * @var \League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface
++   * @var RefreshTokenRepositoryInterface
+    */
+   protected $refreshTokenRepository;
+ 
+   /**
+-   * @var \League\OAuth2\Server\ResponseTypes\ResponseTypeInterface
++   * @var ResponseTypeInterface
+    */
+   protected $responseType;
+ 
+@@ -68,14 +68,14 @@ class Oauth2GrantManager extends DefaultPluginManager implements Oauth2GrantMana
+   protected $expiration;
+ 
+   /**
+-   * @var \League\OAuth2\Server\AuthorizationServer
++   * @var AuthorizationServer
+    */
+   protected $server;
+ 
+   /**
+    * The file system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+@@ -85,21 +85,21 @@ class Oauth2GrantManager extends DefaultPluginManager implements Oauth2GrantMana
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+-   * @param \League\OAuth2\Server\Repositories\ClientRepositoryInterface $client_repository
++   * @param ClientRepositoryInterface $client_repository
+    *   The client repository.
+-   * @param \League\OAuth2\Server\Repositories\ScopeRepositoryInterface $scope_repository
++   * @param ScopeRepositoryInterface $scope_repository
+    *   The scope repository.
+-   * @param \League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface $access_token_repository
++   * @param AccessTokenRepositoryInterface $access_token_repository
+    *   The access token repository.
+-   * @param \League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface $refresh_token_repository
++   * @param RefreshTokenRepositoryInterface $refresh_token_repository
+    *   The refresh token repository.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \League\OAuth2\Server\ResponseTypes\ResponseTypeInterface $response_type
++   * @param ResponseTypeInterface $response_type
+    *   The authorization server response type.
+    *
+    * @throws \Exception
+@@ -135,7 +135,7 @@ class Oauth2GrantManager extends DefaultPluginManager implements Oauth2GrantMana
+    */
+   public function getAuthorizationServer($grant_type, Consumer $client = NULL) {
+     try {
+-      /** @var \Drupal\simple_oauth\Plugin\Oauth2GrantInterface $plugin */
++      /** @var Oauth2GrantInterface $plugin */
+       $plugin = $this->createInstance($grant_type);
+     }
+     catch (PluginNotFoundException $exception) {
+@@ -185,7 +185,7 @@ class Oauth2GrantManager extends DefaultPluginManager implements Oauth2GrantMana
+   /**
+    * Set the public and private key paths.
+    *
+-   * @param \Drupal\Core\Config\ImmutableConfig $settings
++   * @param ImmutableConfig $settings
+    *   The Simple OAuth settings configuration object.
+    */
+   protected function setKeyPaths(ImmutableConfig $settings) {
+@@ -194,7 +194,7 @@ class Oauth2GrantManager extends DefaultPluginManager implements Oauth2GrantMana
+   }
+ 
+   /**
+-   * @throws \League\OAuth2\Server\Exception\OAuthServerException
++   * @throws OAuthServerException
+    *   If one or both keys are not set properly.
+    */
+   protected function checkKeyPaths() {
+@@ -206,7 +206,7 @@ class Oauth2GrantManager extends DefaultPluginManager implements Oauth2GrantMana
+   /**
+    * Lazy loads the file system.
+    *
+-   * @return \Drupal\Core\File\FileSystemInterface
++   * @return FileSystemInterface
+    *   The file system service.
+    */
+   protected function fileSystem(): FileSystemInterface {
+diff --git a/src/Plugin/Oauth2GrantManagerInterface.php b/src/Plugin/Oauth2GrantManagerInterface.php
+index 14e2026..7d59e57 100644
+--- a/src/Plugin/Oauth2GrantManagerInterface.php
++++ b/src/Plugin/Oauth2GrantManagerInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\simple_oauth\Plugin;
+ 
++use League\OAuth2\Server\Exception\OAuthServerException;
++use League\OAuth2\Server\AuthorizationServer;
+ use Drupal\consumers\Entity\Consumer;
+ 
+ interface Oauth2GrantManagerInterface {
+@@ -11,13 +13,13 @@ interface Oauth2GrantManagerInterface {
+    *
+    * @param string $grant_type
+    *   The grant type used as plugin ID.
+-   * @param \Drupal\consumers\Entity\Consumer|null $client
++   * @param Consumer|null $client
+    *   The consumer entity. May be NULL for BC.
+    *
+-   * @throws \League\OAuth2\Server\Exception\OAuthServerException
++   * @throws OAuthServerException
+    *   When the grant cannot be found.
+    *
+-   * @return \League\OAuth2\Server\AuthorizationServer
++   * @return AuthorizationServer
+    *   The authorization server.
+    */
+   public function getAuthorizationServer($grant_type, Consumer $client = NULL);
+diff --git a/src/Repositories/ClientRepository.php b/src/Repositories/ClientRepository.php
+index edf2971..28e7312 100644
+--- a/src/Repositories/ClientRepository.php
++++ b/src/Repositories/ClientRepository.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_oauth\Repositories;
+ 
++use Drupal\consumers\Entity\Consumer;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Password\PasswordInterface;
+ use League\OAuth2\Server\Repositories\ClientRepositoryInterface;
+@@ -10,12 +11,12 @@ use Drupal\simple_oauth\Entities\ClientEntity;
+ class ClientRepository implements ClientRepositoryInterface {
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+-   * @var \Drupal\Core\Password\PasswordInterface
++   * @var PasswordInterface
+    */
+   protected $passwordChecker;
+ 
+@@ -40,7 +41,7 @@ class ClientRepository implements ClientRepositoryInterface {
+    * @param string $client_identifier
+    *   Client ID.
+    *
+-   * @return \Drupal\consumers\Entity\Consumer
++   * @return Consumer
+    *   The loaded drupal consumer (client) entity.
+    */
+   public function getClientDrupalEntity(string $client_identifier) {
+diff --git a/src/Repositories/RevocableTokenRepositoryTrait.php b/src/Repositories/RevocableTokenRepositoryTrait.php
+index 9e46190..b5ca6e0 100644
+--- a/src/Repositories/RevocableTokenRepositoryTrait.php
++++ b/src/Repositories/RevocableTokenRepositoryTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_oauth\Repositories;
+ 
++use Drupal\simple_oauth\Entity\Oauth2TokenInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use League\OAuth2\Server\Entities\RefreshTokenEntityInterface;
+ use Symfony\Component\Serializer\SerializerInterface;
+@@ -21,23 +22,23 @@ trait RevocableTokenRepositoryTrait {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The serializer.
+    *
+-   * @var \Symfony\Component\Serializer\SerializerInterface
++   * @var SerializerInterface
+    */
+   protected $serializer;
+ 
+   /**
+    * Construct a revocable token.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Symfony\Component\Serializer\SerializerInterface $serializer
++   * @param SerializerInterface $serializer
+    *   The normalizer for tokens.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, SerializerInterface $serializer) {
+@@ -76,7 +77,7 @@ trait RevocableTokenRepositoryTrait {
+       ->loadByProperties(['value' => $token_id])) {
+       return;
+     }
+-    /** @var \Drupal\simple_oauth\Entity\Oauth2TokenInterface $token */
++    /** @var Oauth2TokenInterface $token */
+     $token = reset($tokens);
+     $token->revoke();
+     $token->save();
+@@ -92,7 +93,7 @@ trait RevocableTokenRepositoryTrait {
+       ->loadByProperties(['value' => $token_id])) {
+       return TRUE;
+     }
+-    /** @var \Drupal\simple_oauth\Entity\Oauth2TokenInterface $token */
++    /** @var Oauth2TokenInterface $token */
+     $token = reset($tokens);
+ 
+     return $token->isRevoked();
+diff --git a/src/Repositories/ScopeRepository.php b/src/Repositories/ScopeRepository.php
+index 4817ff5..176ef9e 100644
+--- a/src/Repositories/ScopeRepository.php
++++ b/src/Repositories/ScopeRepository.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\simple_oauth\Repositories;
+ 
++use Drupal\user\UserInterface;
++use Drupal\consumers\Entity\Consumer;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\user\RoleInterface;
+ use League\OAuth2\Server\Entities\ClientEntityInterface;
+@@ -17,14 +19,14 @@ class ScopeRepository implements ScopeRepositoryInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * ScopeRepository constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -59,7 +61,7 @@ class ScopeRepository implements ScopeRepositoryInterface {
+     catch (\InvalidArgumentException $e) {
+       // Do nothing.
+     }
+-    /** @var \Drupal\user\UserInterface $user */
++    /** @var UserInterface $user */
+     $user = $user_identifier
+       ? $this->entityTypeManager->getStorage('user')->load($user_identifier)
+       : $default_user;
+@@ -77,7 +79,7 @@ class ScopeRepository implements ScopeRepositoryInterface {
+     // Make sure that the Authenticated role is added as well.
+     $scopes = $this->addRoleToScopes($scopes, RoleInterface::AUTHENTICATED_ID);
+     // Make sure that the client roles are added to the scopes as well.
+-    /** @var \Drupal\consumers\Entity\Consumer $client_drupal_entity */
++    /** @var Consumer $client_drupal_entity */
+     $client_drupal_entity = $client_entity->getDrupalEntity();
+     $scopes = array_reduce($client_drupal_entity->get('roles')->getValue(), function ($scopes, $role_id) {
+       return $this->addRoleToScopes($scopes, $role_id['target_id']);
+@@ -89,10 +91,10 @@ class ScopeRepository implements ScopeRepositoryInterface {
+   /**
+    * Build a scope entity.
+    *
+-   * @param \Drupal\user\RoleInterface $role
++   * @param RoleInterface $role
+    *   The associated role.
+    *
+-   * @return \League\OAuth2\Server\Entities\ScopeEntityInterface
++   * @return ScopeEntityInterface
+    *   The initialized scope entity.
+    */
+   protected function scopeFactory(RoleInterface $role) {
+@@ -102,12 +104,12 @@ class ScopeRepository implements ScopeRepositoryInterface {
+   /**
+    * Add an additional scope if it's not present.
+    *
+-   * @param \League\OAuth2\Server\Entities\ScopeEntityInterface[] $scopes
++   * @param ScopeEntityInterface[] $scopes
+    *   The list of scopes.
+    * @param string $additional_role_id
+    *   The role ID to add as a scope.
+    *
+-   * @return \League\OAuth2\Server\Entities\ScopeEntityInterface[]
++   * @return ScopeEntityInterface[]
+    *   The modified list of scopes.
+    */
+   protected function addRoleToScopes(array $scopes, $additional_role_id) {
+diff --git a/src/Repositories/UserRepository.php b/src/Repositories/UserRepository.php
+index 50f4073..0f51ff0 100644
+--- a/src/Repositories/UserRepository.php
++++ b/src/Repositories/UserRepository.php
+@@ -11,14 +11,14 @@ use Drupal\simple_oauth\Entities\UserEntity;
+ class UserRepository implements UserRepositoryInterface {
+ 
+   /**
+-   * @var \Drupal\user\UserAuthInterface
++   * @var UserAuthInterface
+    */
+   protected $userAuth;
+ 
+   /**
+    * UserRepository constructor.
+    *
+-   * @param \Drupal\user\UserAuthInterface $user_auth
++   * @param UserAuthInterface $user_auth
+    *   The service to check the user authentication.
+    */
+   public function __construct(UserAuthInterface $user_auth) {
+diff --git a/src/Server/ResourceServer.php b/src/Server/ResourceServer.php
+index bd8eac6..ca1c5e9 100644
+--- a/src/Server/ResourceServer.php
++++ b/src/Server/ResourceServer.php
+@@ -27,21 +27,21 @@ class ResourceServer implements ResourceServerInterface {
+   /**
+    * The message factory.
+    *
+-   * @var \Symfony\Bridge\PsrHttpMessage\HttpMessageFactoryInterface
++   * @var HttpMessageFactoryInterface
+    */
+   protected $messageFactory;
+ 
+   /**
+    * The HTTP foundation factory.
+    *
+-   * @var \Symfony\Bridge\PsrHttpMessage\HttpFoundationFactoryInterface
++   * @var HttpFoundationFactoryInterface
+    */
+   protected $foundationFactory;
+ 
+   /**
+    * The file system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+@@ -81,7 +81,7 @@ class ResourceServer implements ResourceServerInterface {
+   /**
+    * Lazy loads the file system.
+    *
+-   * @return \Drupal\Core\File\FileSystemInterface
++   * @return FileSystemInterface
+    *   The file system service.
+    */
+   protected function fileSystem(): FileSystemInterface {
+diff --git a/src/Server/ResourceServerInterface.php b/src/Server/ResourceServerInterface.php
+index 42eae9f..d2ad649 100644
+--- a/src/Server/ResourceServerInterface.php
++++ b/src/Server/ResourceServerInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simple_oauth\Server;
+ 
++use League\OAuth2\Server\Exception\OAuthServerException;
+ use Symfony\Component\HttpFoundation\Request;
+ 
+ interface ResourceServerInterface {
+@@ -9,12 +10,12 @@ interface ResourceServerInterface {
+   /**
+    * Determine the access token validity.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The request object.
+    *
+-   * @throws \League\OAuth2\Server\Exception\OAuthServerException
++   * @throws OAuthServerException
+    *
+-   * @return \Symfony\Component\HttpFoundation\Request
++   * @return Request
+    *   The request object augmented with the token information.
+    */
+   public function validateAuthenticatedRequest(Request $request);
+diff --git a/src/Service/Filesystem/FilesystemValidator.php b/src/Service/Filesystem/FilesystemValidator.php
+index bc12b16..8569bb3 100755
+--- a/src/Service/Filesystem/FilesystemValidator.php
++++ b/src/Service/Filesystem/FilesystemValidator.php
+@@ -11,14 +11,14 @@ use Drupal\simple_oauth\Service\Exception\ExtensionNotLoadedException;
+ class FilesystemValidator {
+ 
+   /**
+-   * @var \Drupal\simple_oauth\Service\Filesystem\FileSystemChecker
++   * @var FileSystemChecker
+    */
+   private $fileSystemChecker;
+ 
+   /**
+    * FilesystemValidator constructor.
+    *
+-   * @param \Drupal\simple_oauth\Service\Filesystem\FileSystemChecker $file_system_checker
++   * @param FileSystemChecker $file_system_checker
+    */
+   public function __construct(FileSystemChecker $file_system_checker) {
+     $this->fileSystemChecker = $file_system_checker;
+@@ -30,7 +30,7 @@ class FilesystemValidator {
+    * @param string $ext_name
+    *   extension name.
+    *
+-   * @throws \Drupal\simple_oauth\Service\Exception\ExtensionNotLoadedException
++   * @throws ExtensionNotLoadedException
+    */
+   public function validateOpensslExtensionExist($ext_name) {
+     if (!$this->fileSystemChecker->isExtensionEnabled($ext_name)) {
+@@ -46,7 +46,7 @@ class FilesystemValidator {
+    * @param array $paths
+    *   List of URIs.
+    *
+-   * @throws \Drupal\simple_oauth\Service\Exception\FilesystemValidationException
++   * @throws FilesystemValidationException
+    */
+   public function validateAreDirs($paths) {
+     foreach ($paths as $path) {
+@@ -64,7 +64,7 @@ class FilesystemValidator {
+    * @param array $paths
+    *   List of URIs.
+    *
+-   * @throws \Drupal\simple_oauth\Service\Exception\FilesystemValidationException
++   * @throws FilesystemValidationException
+    */
+   public function validateAreWritable($paths) {
+     foreach ($paths as $path) {
+diff --git a/src/Service/KeyGeneratorService.php b/src/Service/KeyGeneratorService.php
+index 6c0f0fe..f357c77 100755
+--- a/src/Service/KeyGeneratorService.php
++++ b/src/Service/KeyGeneratorService.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\simple_oauth\Service;
+ 
++use Drupal\simple_oauth\Service\Exception\ExtensionNotLoadedException;
++use Drupal\simple_oauth\Service\Exception\FilesystemValidationException;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\simple_oauth\Service\Filesystem\FileSystemChecker;
+ use Drupal\simple_oauth\Service\Filesystem\FilesystemValidator;
+@@ -16,30 +18,30 @@ class KeyGeneratorService {
+   /**
+    * The filesystem service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   private $fileSystem;
+ 
+   /**
+    * The filesystem checker.
+    *
+-   * @var \Drupal\simple_oauth\Service\Filesystem\FileSystemChecker
++   * @var FileSystemChecker
+    */
+   private $fileSystemChecker;
+ 
+   /**
+    * The filesystem validator.
+    *
+-   * @var \Drupal\simple_oauth\Service\Filesystem\FilesystemValidator
++   * @var FilesystemValidator
+    */
+   private $validator;
+ 
+   /**
+    * KeyGeneratorService constructor.
+    *
+-   * @param \Drupal\simple_oauth\Service\Filesystem\FileSystemChecker $file_system_checker
++   * @param FileSystemChecker $file_system_checker
+    *   The file system checker.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   The file system service.
+    */
+   public function __construct(FileSystemChecker $file_system_checker, FileSystemInterface $file_system) {
+@@ -57,8 +59,8 @@ class KeyGeneratorService {
+    * @param string $dir_path
+    *   Private key path.
+    *
+-   * @throws \Drupal\simple_oauth\Service\Exception\ExtensionNotLoadedException
+-   * @throws \Drupal\simple_oauth\Service\Exception\FilesystemValidationException
++   * @throws ExtensionNotLoadedException
++   * @throws FilesystemValidationException
+    */
+   public function generateKeys($dir_path) {
+     // Create path array.
+diff --git a/tests/simple_oauth_test/src/Controller/RedirectDebug.php b/tests/simple_oauth_test/src/Controller/RedirectDebug.php
+index 8ef9cf9..ca76c21 100644
+--- a/tests/simple_oauth_test/src/Controller/RedirectDebug.php
++++ b/tests/simple_oauth_test/src/Controller/RedirectDebug.php
+@@ -14,10 +14,10 @@ class RedirectDebug extends ControllerBase {
+   /**
+    * Debug the token response for the implicit grant.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The request.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   The response.
+    */
+   public function token(Request $request) {

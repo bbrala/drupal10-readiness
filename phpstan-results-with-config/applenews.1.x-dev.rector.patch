@@ -1,0 +1,2180 @@
+diff --git a/applenews.info.yml b/applenews.info.yml
+index 086b138..3557dac 100644
+--- a/applenews.info.yml
++++ b/applenews.info.yml
+@@ -1,8 +1,7 @@
+ name: Apple News
+ description: Push content to Apple News.
+ type: module
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ package: Apple News
+ configure: applenews.settings
+ dependencies:
+diff --git a/applenews.install b/applenews.install
+index eca7ac8..90c685d 100644
+--- a/applenews.install
++++ b/applenews.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityFieldManagerInterface;
+ /**
+  * @file
+  * Apple News module install file.
+@@ -22,7 +23,7 @@ function applenews_requirements() {
+  * Fix the entity storage schema for any applenews_default field types.
+  */
+ function applenews_update_8001(&$sandbox) {
+-  /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager */
++  /** @var EntityFieldManagerInterface $entity_field_manager */
+   $entity_field_manager = \Drupal::service('entity_field.manager');
+   $entity_storage_schema = \Drupal::keyValue('entity.storage_schema.sql');
+   foreach ($entity_field_manager->getFieldMapByFieldType('applenews_default') as $entity_type_id => $info) {
+diff --git a/applenews.module b/applenews.module
+index cb1cab7..897bcd3 100644
+--- a/applenews.module
++++ b/applenews.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\applenews\ApplenewsManager;
+ /**
+  * @file
+  * Apple News module file.
+@@ -47,7 +48,7 @@ function applenews_entity_presave(EntityInterface $entity) {
+     return;
+   }
+ 
+-  /** @var \Drupal\applenews\ApplenewsManager $manager */
++  /** @var ApplenewsManager $manager */
+   $manager = \Drupal::service('applenews.manager');
+   $manager->entityPreSave($entity);
+ }
+@@ -60,7 +61,7 @@ function applenews_entity_insert(EntityInterface $entity) {
+     return;
+   }
+ 
+-  /** @var \Drupal\applenews\ApplenewsManager $manager */
++  /** @var ApplenewsManager $manager */
+   $manager = \Drupal::service('applenews.manager');
+   $manager->entitySave($entity);
+ }
+@@ -73,7 +74,7 @@ function applenews_entity_update(EntityInterface $entity) {
+     return;
+   }
+ 
+-  /** @var \Drupal\applenews\ApplenewsManager $manager */
++  /** @var ApplenewsManager $manager */
+   $manager = \Drupal::service('applenews.manager');
+   $manager->entitySave($entity);
+ }
+@@ -87,7 +88,7 @@ function applenews_entity_delete(EntityInterface $entity) {
+   }
+ 
+   try {
+-    /** @var \Drupal\applenews\ApplenewsManager $manager */
++    /** @var ApplenewsManager $manager */
+     $manager = \Drupal::service('applenews.manager');
+     // On successful post, save response details on entity.
+     $manager->delete($entity);
+diff --git a/src/Annotation/ApplenewsComponentType.php b/src/Annotation/ApplenewsComponentType.php
+index 1306f8f..f0cb151 100644
+--- a/src/Annotation/ApplenewsComponentType.php
++++ b/src/Annotation/ApplenewsComponentType.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -41,7 +42,7 @@ class ApplenewsComponentType extends Plugin {
+   /**
+    * The human-readable name of the data source plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -50,7 +51,7 @@ class ApplenewsComponentType extends Plugin {
+   /**
+    * The description of the data source.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/ApplenewsManager.php b/src/ApplenewsManager.php
+index 32920f8..23f7bfd 100644
+--- a/src/ApplenewsManager.php
++++ b/src/ApplenewsManager.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\applenews;
+ 
++use Drupal\Core\Config\Config;
++use Symfony\Component\Serializer\SerializerInterface;
++use Symfony\Component\HttpFoundation\Request;
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use ChapterThree\AppleNewsAPI\Document;
+ use ChapterThree\AppleNewsAPI\Document\Components\Text;
+ use Drupal\applenews\Entity\ApplenewsArticle;
+ use Drupal\applenews\Exception\ApplenewsInvalidResponseException;
+@@ -31,79 +37,79 @@ class ApplenewsManager {
+   /**
+    * The entity manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The applenews settings config object.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * The serializer.
+    *
+-   * @var \Symfony\Component\Serializer\SerializerInterface
++   * @var SerializerInterface
+    */
+   protected $serializer;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\applenews\PublisherInterface
++   * @var PublisherInterface
+    */
+   protected $publisher;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Messenger service for showing messages to the user.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Current request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request|null
++   * @var Request|null
+    */
+   protected $request;
+ 
+   /**
+    * ApplenewsManager constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation service.
+-   * @param \Symfony\Component\Serializer\Serializer $serializer
++   * @param Serializer $serializer
+    *   Serializer.
+-   * @param \Drupal\applenews\PublisherInterface $publisher
++   * @param PublisherInterface $publisher
+    *   Apple news publisher.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger service for showing messages to the user.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   Request stack.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, ConfigFactoryInterface $config_factory, TranslationInterface $string_translation, Serializer $serializer, PublisherInterface $publisher, LoggerInterface $logger, MessengerInterface $messenger, RequestStack $request_stack) {
+@@ -121,7 +127,7 @@ class ApplenewsManager {
+   /**
+    * Callback for hook_entity_insert and hook_entity_update.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being inserted or updated.
+    */
+   public function entitySave(EntityInterface $entity) {
+@@ -141,13 +147,13 @@ class ApplenewsManager {
+    * Enforce properties of the Apple News field(s) based on published status if
+    * known.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity being saved.
+    */
+   public function entityPreSave(EntityInterface $entity) {
+     $fields = $this->getFields($entity->getEntityTypeId(), $entity);
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity $fields */
++    /** @var ContentEntityInterface $entity $fields */
+     foreach (array_keys($fields) as $field_name) {
+       $field = $entity->get($field_name);
+       // Force set preview when we can determine that the entity is unpublished.
+@@ -173,7 +179,7 @@ class ApplenewsManager {
+    *
+    * @param string $entity_type_id
+    *   Entity type id.
+-   * @param \Drupal\Core\Entity\EntityInterface|null $entity
++   * @param EntityInterface|null $entity
+    *   Entity which the Apple News fields should be present on.
+    *
+    * @return array
+@@ -183,7 +189,7 @@ class ApplenewsManager {
+    *   - bundles: An associative array of the bundles in which the field
+    *     appears, where the keys and values are both the bundle's machine name.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws PluginNotFoundException
+    *   When the given entity type id does not exist.
+    */
+   public function getFields($entity_type_id, EntityInterface $entity = NULL) {
+@@ -212,7 +218,7 @@ class ApplenewsManager {
+    * entity (e.g. node) UI to create an entity without publishing to Apple News
+    * and decide to publish on entity update.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity associated with AppleNews.
+    *
+    * @return bool
+@@ -232,13 +238,13 @@ class ApplenewsManager {
+   /**
+    * Sync the entity to Apple News.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to be sync'd.
+    */
+   protected function syncToAppleNews(EntityInterface $entity) {
+     $fields = $this->getFields($entity->getEntityTypeId(), $entity);
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity $fields */
++    /** @var ContentEntityInterface $entity $fields */
+     foreach (array_keys($fields) as $field_name) {
+       $field = $entity->get($field_name);
+       $article = self::getArticle($entity, $field->getName());
+@@ -264,9 +270,9 @@ class ApplenewsManager {
+   /**
+    * Save the given entity for the given Apple News field to Apple News.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity to save to Apple News.
+-   * @param \Drupal\Core\Field\FieldItemListInterface $field
++   * @param FieldItemListInterface $field
+    *   Apple News field with the details for saving to Apple News.
+    */
+   protected function saveToAppleNews(EntityInterface $entity, FieldItemListInterface $field) {
+@@ -333,12 +339,12 @@ class ApplenewsManager {
+   /**
+    * Retrieve article.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity associated with AppleNews.
+    * @param string $field_name
+    *   String applenews field name.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null
++   * @return EntityInterface|null
+    *   Apple News Article entity if exist, NULL otherwise.
+    */
+   public static function getArticle(EntityInterface $entity, $field_name) {
+@@ -368,7 +374,7 @@ class ApplenewsManager {
+   /**
+    * Delete an article from given entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity associated with AppleNews.
+    */
+   public function delete(EntityInterface $entity) {
+@@ -386,9 +392,9 @@ class ApplenewsManager {
+   /**
+    * Delete the article for the given entity and Apple News field pair.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to delete the Apple News article for.
+-   * @param \Drupal\Core\Field\FieldItemListInterface $field
++   * @param FieldItemListInterface $field
+    *   The Apple News field to delete the article for.
+    */
+   public function deleteByField(EntityInterface $entity, FieldItemListInterface $field) {
+@@ -402,7 +408,7 @@ class ApplenewsManager {
+   /**
+    * Delete an article.
+    *
+-   * @param \Drupal\applenews\Entity\ApplenewsArticle $article
++   * @param ApplenewsArticle $article
+    *   Apple news article entity.
+    *
+    * @return object
+@@ -436,7 +442,7 @@ class ApplenewsManager {
+    * @return object
+    *   Response object.
+    *
+-   * @throws \Drupal\applenews\Exception\ApplenewsInvalidResponseException
++   * @throws ApplenewsInvalidResponseException
+    */
+   protected function doUpdate($article_id, array $data) {
+     return $this->publisher->updateArticle($article_id, $data);
+@@ -460,7 +466,7 @@ class ApplenewsManager {
+   /**
+    * Generates document from entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity associated with AppleNews.
+    * @param string $template
+    *   String template ID.
+@@ -470,10 +476,10 @@ class ApplenewsManager {
+    */
+   public function getDocumentDataFromEntity(EntityInterface $entity, $template) {
+     $context['template_id'] = $template;
+-    /** @var \ChapterThree\AppleNewsAPI\Document $document */
++    /** @var Document $document */
+     $document = $this->serializer->normalize($entity, 'applenews', $context);
+ 
+-    /** @var \ChapterThree\AppleNewsAPI\Document\Components\Text $component */
++    /** @var Text $component */
+     if (!empty($document['components'])) {
+       foreach ($document['components'] as $index => $component) {
+         if (!$component instanceof Text) {
+diff --git a/src/ApplenewsPreviewBuilder.php b/src/ApplenewsPreviewBuilder.php
+index 1a87ed8..659657c 100644
+--- a/src/ApplenewsPreviewBuilder.php
++++ b/src/ApplenewsPreviewBuilder.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\applenews;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\File\FileSystem;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Core\StreamWrapper\StreamWrapperManagerInterface;
+@@ -96,32 +98,32 @@ class ApplenewsPreviewBuilder {
+   /**
+    * Config object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * File system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * Stream wrapper.
+    *
+-   * @var \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface
++   * @var StreamWrapperManagerInterface
+    */
+   protected $streamWrapperManager;
+ 
+   /**
+    * ApplenewsPreviewBuilder constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   File system.
+-   * @param \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface $stream_wrapper_manager
++   * @param StreamWrapperManagerInterface $stream_wrapper_manager
+    *   Stream wrapper.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, FileSystemInterface $file_system, StreamWrapperManagerInterface $stream_wrapper_manager) {
+@@ -145,13 +147,13 @@ class ApplenewsPreviewBuilder {
+    * @return $this
+    */
+   public function setEntity($entity_id, $filename, $entity_archive = FALSE, array $data = []) {
+-    /** @var \Drupal\Core\File\FileSystem $filesystem */
++    /** @var FileSystem $filesystem */
+     $filesystem = $this->fileSystem;
+     $this->directory = 'applenews_preview/';
+     $this->archive = !empty($filename) ? 'applenews-' . $filename . '.zip' : 'applenews.zip';
+     $this->archiveRealPath = $filesystem->realpath($this->fileBuildUri($this->directory));
+     $this->archiveFile = $filesystem->realpath($this->fileBuildUri($this->directory . $this->archive));
+-    $this->archiveUrl = file_create_url($this->fileBuildUri($this->directory . $this->archive));
++    $this->archiveUrl = \Drupal::service('file_url_generator')->generateAbsoluteString($this->fileBuildUri($this->directory . $this->archive));
+ 
+     if ($entity_id) {
+       $drupal_entity_directory = $this->fileBuildUri($this->directory . $entity_id);
+diff --git a/src/ApplenewsTextStyleInterface.php b/src/ApplenewsTextStyleInterface.php
+index d5b02e1..3901213 100644
+--- a/src/ApplenewsTextStyleInterface.php
++++ b/src/ApplenewsTextStyleInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews;
+ 
++use ChapterThree\AppleNewsAPI\Document\Styles\TextStyle;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ 
+ /**
+@@ -26,7 +27,7 @@ interface ApplenewsTextStyleInterface extends ConfigEntityInterface {
+   /**
+    * Generates the TextStyle object.
+    *
+-   * @return \ChapterThree\AppleNewsAPI\Document\Styles\TextStyle
++   * @return TextStyle
+    *   Text style object with style data.
+    */
+   public function toObject();
+diff --git a/src/ArticleListBuilder.php b/src/ArticleListBuilder.php
+index ba8bba5..fcdeb98 100644
+--- a/src/ArticleListBuilder.php
++++ b/src/ArticleListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews;
+ 
++use Drupal\applenews\Entity\ApplenewsArticle;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ 
+@@ -28,7 +29,7 @@ class ArticleListBuilder extends EntityListBuilder {
+   public function buildRow(EntityInterface $entity) {
+     $channel_id = $entity->getChannelId();
+     $sections = $entity->getSections();
+-    /** @var \Drupal\applenews\Entity\ApplenewsArticle $entity */
++    /** @var ApplenewsArticle $entity */
+     $row['name'] = $entity->getName();
+     $row['id'] = $channel_id;
+     $row['sections']['data'] = [
+diff --git a/src/ChannelListBuilder.php b/src/ChannelListBuilder.php
+index c87a130..72099de 100644
+--- a/src/ChannelListBuilder.php
++++ b/src/ChannelListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews;
+ 
++use Drupal\applenews\Entity\ApplenewsChannel;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ 
+@@ -42,7 +43,7 @@ class ChannelListBuilder extends EntityListBuilder {
+   public function buildRow(EntityInterface $entity) {
+     $channel_id = $entity->getChannelId();
+     $sections = $entity->getSections();
+-    /** @var \Drupal\applenews\Entity\ApplenewsChannel $entity */
++    /** @var ApplenewsChannel $entity */
+     $row['name'] = $entity->getName();
+     $row['id'] = $channel_id;
+     $row['sections']['data'] = [
+diff --git a/src/Commands/ApplenewsCommands.php b/src/Commands/ApplenewsCommands.php
+index 67c10ee..a3fb771 100644
+--- a/src/Commands/ApplenewsCommands.php
++++ b/src/Commands/ApplenewsCommands.php
+@@ -13,14 +13,14 @@ class ApplenewsCommands extends DrushCommands {
+   /**
+    * The settings instance.
+    *
+-   * @var \Drupal\Core\Site\Settings
++   * @var Settings
+    */
+   protected $settings;
+ 
+   /**
+    * ChannelImporter constructor.
+    *
+-   * @param \Drupal\Core\Site\Settings $settings
++   * @param Settings $settings
+    *   The settings instance.
+    */
+   public function __construct(Settings $settings) {
+diff --git a/src/Controller/ApplenewsChannelController.php b/src/Controller/ApplenewsChannelController.php
+index e434538..db90ff2 100644
+--- a/src/Controller/ApplenewsChannelController.php
++++ b/src/Controller/ApplenewsChannelController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews\Controller;
+ 
++use Drupal\Core\Routing\LocalRedirectResponse;
+ use Drupal\applenews\Entity\ApplenewsChannel;
+ use Drupal\Core\Controller\ControllerBase;
+ use Psr\Log\LoggerInterface;
+@@ -16,14 +17,14 @@ class ApplenewsChannelController extends ControllerBase {
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * ApplenewsPreviewController constructor.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger object.
+    */
+   public function __construct(LoggerInterface $logger) {
+@@ -42,10 +43,10 @@ class ApplenewsChannelController extends ControllerBase {
+   /**
+    * Refresh channel details from Apple News.
+    *
+-   * @param \Drupal\applenews\Entity\ApplenewsChannel $applenews_channel
++   * @param ApplenewsChannel $applenews_channel
+    *   Apple News entity.
+    *
+-   * @return \Drupal\Core\Routing\LocalRedirectResponse
++   * @return LocalRedirectResponse
+    *   Redirect response.
+    */
+   public function refresh(ApplenewsChannel $applenews_channel) {
+diff --git a/src/Controller/ApplenewsPreviewController.php b/src/Controller/ApplenewsPreviewController.php
+index 708608d..4425d94 100644
+--- a/src/Controller/ApplenewsPreviewController.php
++++ b/src/Controller/ApplenewsPreviewController.php
+@@ -21,41 +21,41 @@ class ApplenewsPreviewController extends ControllerBase {
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Serializer.
+    *
+-   * @var \Symfony\Component\Serializer\Serializer
++   * @var Serializer
+    */
+   protected $serializer;
+ 
+   /**
+    * Preview builder.
+    *
+-   * @var \Drupal\applenews\ApplenewsPreviewBuilder
++   * @var ApplenewsPreviewBuilder
+    */
+   protected $previewBuilder;
+ 
+   /**
+    * Apple News Manager.
+    *
+-   * @var \Drupal\applenews\ApplenewsManager
++   * @var ApplenewsManager
+    */
+   protected $applenewsManager;
+ 
+   /**
+    * ApplenewsPreviewController constructor.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger object.
+-   * @param \Symfony\Component\Serializer\Serializer $serializer
++   * @param Serializer $serializer
+    *   Serializer object.
+-   * @param \Drupal\applenews\ApplenewsPreviewBuilder $preview_builder
++   * @param ApplenewsPreviewBuilder $preview_builder
+    *   Preview builder object.
+-   * @param \Drupal\applenews\ApplenewsManager $manager
++   * @param ApplenewsManager $manager
+    *   Apple news manager.
+    */
+   public function __construct(LoggerInterface $logger, Serializer $serializer, ApplenewsPreviewBuilder $preview_builder, ApplenewsManager $manager) {
+@@ -82,14 +82,14 @@ class ApplenewsPreviewController extends ControllerBase {
+    *
+    * @param string $entity_type
+    *   String entity type.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity object.
+    * @param int $revision_id
+    *   revision ID.
+    * @param string $template_id
+    *   String template ID.
+    *
+-   * @return \Symfony\Component\HttpFoundation\BinaryFileResponse
++   * @return BinaryFileResponse
+    *   Response object.
+    */
+   public function preview($entity_type, EntityInterface $entity, $revision_id, $template_id) {
+@@ -117,7 +117,7 @@ class ApplenewsPreviewController extends ControllerBase {
+   /**
+    * Provides article data array.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity article attached to.
+    * @param string $template_id
+    *   String template ID.
+diff --git a/src/Entity/ApplenewsArticle.php b/src/Entity/ApplenewsArticle.php
+index b9a0771..7a6ff80 100644
+--- a/src/Entity/ApplenewsArticle.php
++++ b/src/Entity/ApplenewsArticle.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews\Entity;
+ 
++use Drupal\Core\Datetime\DateFormatter;
+ use Drupal\Core\Datetime\DrupalDateTime;
+ use Drupal\Core\Entity\ContentEntityBase;
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -170,7 +171,7 @@ class ApplenewsArticle extends ContentEntityBase {
+     if (!$date) {
+       return NULL;
+     }
+-    /** @var \Drupal\Core\Datetime\DateFormatter $date_formatter */
++    /** @var DateFormatter $date_formatter */
+     $date_formatter = \Drupal::service('date.formatter');
+     $created = DrupalDateTime::createFromFormat('Y-m-d\TH:i:s\Z', $date);
+     return $date_formatter->format($created->getTimestamp(), $type, $format);
+@@ -180,7 +181,7 @@ class ApplenewsArticle extends ContentEntityBase {
+    * {@inheritdoc}
+    */
+   public static function baseFieldDefinitions(EntityTypeInterface $entity_type) {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition[] $fields */
++    /** @var BaseFieldDefinition[] $fields */
+     $fields = parent::baseFieldDefinitions($entity_type);
+ 
+     $fields['uuid']->setDescription(new TranslatableMarkup('The article UUID.'));
+diff --git a/src/Entity/ApplenewsChannel.php b/src/Entity/ApplenewsChannel.php
+index dd87898..1148e6a 100644
+--- a/src/Entity/ApplenewsChannel.php
++++ b/src/Entity/ApplenewsChannel.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews\Entity;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\applenews\ChannelInterface;
+ use Drupal\Core\Entity\ContentEntityBase;
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -197,7 +198,7 @@ class ApplenewsChannel extends ContentEntityBase implements ChannelInterface {
+    * @return \Drupal\applenews\Entity\ApplenewsChannel|null
+    *   Apple News Channel entity if exist. NULL otherwise.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   public static function loadByChannelId($channel_id) {
+     $query = \Drupal::entityQuery('applenews_channel');
+@@ -214,7 +215,7 @@ class ApplenewsChannel extends ContentEntityBase implements ChannelInterface {
+    * {@inheritdoc}
+    */
+   public static function baseFieldDefinitions(EntityTypeInterface $entity_type) {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition[] $fields */
++    /** @var BaseFieldDefinition[] $fields */
+     $fields = parent::baseFieldDefinitions($entity_type);
+ 
+     $fields['uuid']->setDescription(new TranslatableMarkup('The channel UUID.'));
+diff --git a/src/Event/DocumentPostTransformEvent.php b/src/Event/DocumentPostTransformEvent.php
+index 89ca5d4..c83b70a 100644
+--- a/src/Event/DocumentPostTransformEvent.php
++++ b/src/Event/DocumentPostTransformEvent.php
+@@ -2,10 +2,10 @@
+ 
+ namespace Drupal\applenews\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use ChapterThree\AppleNewsAPI\Document;
+ use Drupal\applenews\Entity\ApplenewsTemplate;
+ use Drupal\Core\Entity\ContentEntityInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Event fires after an entity has been transformed into a Apple News Document.
+@@ -20,32 +20,32 @@ class DocumentPostTransformEvent extends Event {
+   /**
+    * Some content entity, currently only nodes are supported.
+    *
+-   * @var \Drupal\Core\Entity\ContentEntityInterface
++   * @var ContentEntityInterface
+    */
+   protected $entity;
+ 
+   /**
+    * The transformed entity as an Apple News document.
+    *
+-   * @var \ChapterThree\AppleNewsAPI\Document
++   * @var Document
+    */
+   protected $document;
+ 
+   /**
+    * The Apple News template entity.
+    *
+-   * @var \Drupal\applenews\Entity\ApplenewsTemplate
++   * @var ApplenewsTemplate
+    */
+   protected $template;
+ 
+   /**
+    * DocumentPostTransformEvent constructor.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   Some content entity, currently only nodes are supported.
+-   * @param \ChapterThree\AppleNewsAPI\Document $document
++   * @param Document $document
+    *   The transformed entity as an Apple News document.
+-   * @param \Drupal\applenews\Entity\ApplenewsTemplate $template
++   * @param ApplenewsTemplate $template
+    *   The Apple News template entity.
+    */
+   public function __construct(ContentEntityInterface $entity, Document $document, ApplenewsTemplate $template) {
+@@ -57,7 +57,7 @@ class DocumentPostTransformEvent extends Event {
+   /**
+    * Return the content entity that was transformed.
+    *
+-   * @return \Drupal\Core\Entity\ContentEntityInterface
++   * @return ContentEntityInterface
+    *   The content entity that was transformed.
+    */
+   public function getEntity(): ContentEntityInterface {
+@@ -67,7 +67,7 @@ class DocumentPostTransformEvent extends Event {
+   /**
+    * Return the Apple News formatted document.
+    *
+-   * @return \ChapterThree\AppleNewsAPI\Document
++   * @return Document
+    *   The Apple News formatted document.
+    */
+   public function getDocument(): Document {
+@@ -77,7 +77,7 @@ class DocumentPostTransformEvent extends Event {
+   /**
+    * Return the Apple News template used to transform the entity.
+    *
+-   * @return \Drupal\applenews\Entity\ApplenewsTemplate
++   * @return ApplenewsTemplate
+    *   The Apple News template used to transform the entity.
+    */
+   public function getTemplate(): ApplenewsTemplate {
+diff --git a/src/Form/AppleNewsArticleDeleteForm.php b/src/Form/AppleNewsArticleDeleteForm.php
+index 8f68bd0..303104f 100644
+--- a/src/Form/AppleNewsArticleDeleteForm.php
++++ b/src/Form/AppleNewsArticleDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews\Form;
+ 
++use Drupal\applenews\ApplenewsManager;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -16,7 +17,7 @@ class AppleNewsArticleDeleteForm extends ConfirmFormBase {
+   /**
+    * Entity associated with the Apple News article being deleted.
+    *
+-   * @var \Drupal\Core\Entity\ContentEntityInterface
++   * @var ContentEntityInterface
+    */
+   protected $entity;
+ 
+@@ -61,7 +62,7 @@ class AppleNewsArticleDeleteForm extends ConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\applenews\ApplenewsManager $applenews_manager */
++    /** @var ApplenewsManager $applenews_manager */
+     $applenews_manager = \Drupal::service('applenews.manager');
+     $applenews_manager->delete($this->entity);
+ 
+diff --git a/src/Form/ApplenewsTemplateForm.php b/src/Form/ApplenewsTemplateForm.php
+index 9834b96..12a1b8c 100644
+--- a/src/Form/ApplenewsTemplateForm.php
++++ b/src/Form/ApplenewsTemplateForm.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\applenews\Form;
+ 
++use Drupal\Core\Entity\EntityTypeManager;
++use Drupal\applenews\Entity\ApplenewsTemplate;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\applenews\Plugin\ApplenewsComponentTypeManager;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Entity\EntityForm;
+@@ -18,32 +22,32 @@ class ApplenewsTemplateForm extends EntityForm {
+   /**
+    * Component type manager.
+    *
+-   * @var \Drupal\applenews\Plugin\ApplenewsComponentTypeManager
++   * @var ApplenewsComponentTypeManager
+    */
+   protected $applenewsComponentTypeManager;
+ 
+   /**
+    * Entity manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManager
++   * @var EntityTypeManager
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * Constructs an ApplenewsTemplateForm object.
+    *
+-   * @param \Drupal\applenews\Plugin\ApplenewsComponentTypeManager $component_type_manager
++   * @param ApplenewsComponentTypeManager $component_type_manager
+    *   Component type manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+    */
+   public function __construct(ApplenewsComponentTypeManager $component_type_manager, EntityTypeManagerInterface $entity_type_manager, RendererInterface $renderer) {
+@@ -69,7 +73,7 @@ class ApplenewsTemplateForm extends EntityForm {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\applenews\Entity\ApplenewsTemplate $template */
++    /** @var ApplenewsTemplate $template */
+     $template = $this->entity;
+     $node_types = $this->entityTypeManager->getStorage('node_type')->loadMultiple();
+ 
+@@ -314,7 +318,7 @@ class ApplenewsTemplateForm extends EntityForm {
+    *
+    * @param array $form
+    *   An array of from definition.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state array.
+    */
+   public function setComponentFormStep(array &$form, FormStateInterface $form_state) {
+@@ -328,7 +332,7 @@ class ApplenewsTemplateForm extends EntityForm {
+    *
+    * @param array $form
+    *   An array of from definition.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state array.
+    */
+   public function resetTempFormValues(array &$form, FormStateInterface $form_state) {
+@@ -344,7 +348,7 @@ class ApplenewsTemplateForm extends EntityForm {
+    *
+    * @param array $form
+    *   An array of from definition.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state array.
+    *
+    * @return mixed
+@@ -362,7 +366,7 @@ class ApplenewsTemplateForm extends EntityForm {
+    *
+    * @param array $form
+    *   An array of from definition.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state array.
+    *
+    * @return mixed
+@@ -379,10 +383,10 @@ class ApplenewsTemplateForm extends EntityForm {
+    *
+    * @param array $form
+    *   An array of from definition.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state array.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function addComponent(array &$form, FormStateInterface $form_state) {
+     $form_state->set('sub_form_component_type', NULL);
+@@ -402,7 +406,7 @@ class ApplenewsTemplateForm extends EntityForm {
+    *
+    * @param array $form
+    *   An array of from definition.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state array.
+    *
+    * @return array
+@@ -420,7 +424,7 @@ class ApplenewsTemplateForm extends EntityForm {
+    *
+    * @param array $form
+    *   An array of from definition.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state array.
+    *
+    * @return mixed
+@@ -435,10 +439,10 @@ class ApplenewsTemplateForm extends EntityForm {
+    *
+    * @param array $form
+    *   An array of from definition.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state array.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function setDeleteComponentForm(array &$form, FormStateInterface $form_state) {
+     $this->saveComponentOrder($form_state);
+@@ -472,7 +476,7 @@ class ApplenewsTemplateForm extends EntityForm {
+    *
+    * @todo Replace with a value object
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state object.
+    *
+    * @return array
+@@ -549,10 +553,10 @@ class ApplenewsTemplateForm extends EntityForm {
+   /**
+    * Sorts the components based on their new weights from the draggable table.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state array.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   protected function saveComponentOrder(FormStateInterface $form_state) {
+     $component_table = $form_state->getValue('components_table');
+@@ -683,7 +687,7 @@ class ApplenewsTemplateForm extends EntityForm {
+    *
+    * @param array $component
+    *   Component object.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state.
+    * @param null|string $parent_id
+    *   Parent id, if available.
+@@ -759,7 +763,7 @@ class ApplenewsTemplateForm extends EntityForm {
+    *
+    * @param array $component
+    *   Component object.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state.
+    * @param int $depth
+    *   Depth.
+@@ -767,7 +771,7 @@ class ApplenewsTemplateForm extends EntityForm {
+    * @return array
+    *   An array of row definition.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   protected function getChildComponentRows(array $component, FormStateInterface $form_state, $depth = 1) {
+     $rows = [];
+diff --git a/src/Form/ChannelForm.php b/src/Form/ChannelForm.php
+index bde9b2d..1f91c5f 100644
+--- a/src/Form/ChannelForm.php
++++ b/src/Form/ChannelForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews\Form;
+ 
++use Drupal\contact\MessageInterface;
+ use Drupal\applenews\PublisherInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+@@ -22,45 +23,45 @@ class ChannelForm extends ContentEntityForm {
+   /**
+    * The channel being used by this form.
+    *
+-   * @var \Drupal\contact\MessageInterface
++   * @var MessageInterface
+    */
+   protected $entity;
+ 
+   /**
+    * The language manager service.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\applenews\PublisherInterface
++   * @var PublisherInterface
+    */
+   protected $publisher;
+ 
+   /**
+    * Constructs a MessageForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager service.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date service.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\applenews\PublisherInterface $publisher
++   * @param PublisherInterface $publisher
+    *   The time service.
+    */
+   public function __construct(EntityRepositoryInterface $entity_repository, LanguageManagerInterface $language_manager, DateFormatterInterface $date_formatter, EntityTypeBundleInfoInterface $entity_type_bundle_info = NULL, TimeInterface $time = NULL, PublisherInterface $publisher = NULL) {
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 10bcc18..7772baf 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -20,10 +20,10 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Constructs a \Drupal\applenews\SettingsForm object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+    *   The aggregator processor plugin manager.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, TranslationInterface $string_translation) {
+diff --git a/src/Form/TextStyleForm.php b/src/Form/TextStyleForm.php
+index 7e238a0..8ff7d6d 100644
+--- a/src/Form/TextStyleForm.php
++++ b/src/Form/TextStyleForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews\Form;
+ 
++use Drupal\applenews\Entity\ApplenewsTextStyle;
+ use Drupal\applenews\AppleNewsRequestDataTrait;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -18,21 +19,21 @@ class TextStyleForm extends EntityForm {
+   /**
+    * The entity being used by this form.
+    *
+-   * @var \Drupal\applenews\Entity\ApplenewsTextStyle
++   * @var ApplenewsTextStyle
+    */
+   protected $entity;
+ 
+   /**
+    * The text style entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $storage;
+ 
+   /**
+    * Constructs a class for apple news text style add and edit forms.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The text style entity storage.
+    */
+   public function __construct(EntityStorageInterface $storage) {
+@@ -52,7 +53,7 @@ class TextStyleForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function form(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\applenews\Entity\ApplenewsTextStyle $entity */
++    /** @var ApplenewsTextStyle $entity */
+     $entity = $this->entity;
+     $form['label'] = [
+       '#type' => 'textfield',
+diff --git a/src/Normalizer/ApplenewsComponentNormalizerBase.php b/src/Normalizer/ApplenewsComponentNormalizerBase.php
+index bdd4d5d..bc5f127 100644
+--- a/src/Normalizer/ApplenewsComponentNormalizerBase.php
++++ b/src/Normalizer/ApplenewsComponentNormalizerBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews\Normalizer;
+ 
++use Drupal\Component\Plugin\Exception\PluginException;
+ use ChapterThree\AppleNewsAPI\Document\Layouts\ComponentLayout;
+ use ChapterThree\AppleNewsAPI\Document\Margin;
+ use Drupal\applenews\Plugin\ApplenewsComponentTypeManager;
+@@ -27,14 +28,14 @@ abstract class ApplenewsComponentNormalizerBase extends ApplenewsNormalizerBase
+   /**
+    * Component type manager.
+    *
+-   * @var \Drupal\applenews\Plugin\ApplenewsComponentTypeManager
++   * @var ApplenewsComponentTypeManager
+    */
+   protected $applenewsComponentTypeManager;
+ 
+   /**
+    * Constructs a normalizer object.
+    *
+-   * @param \Drupal\applenews\Plugin\ApplenewsComponentTypeManager $component_type_manager
++   * @param ApplenewsComponentTypeManager $component_type_manager
+    *   Component type manager.
+    */
+   public function __construct(ApplenewsComponentTypeManager $component_type_manager) {
+@@ -64,7 +65,7 @@ abstract class ApplenewsComponentNormalizerBase extends ApplenewsNormalizerBase
+    * @return string
+    *   The fully-qualified name of the underlying Component class to use.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   protected function getComponentClass($plugin_id) {
+     $component = $this->applenewsComponentTypeManager->createInstance($plugin_id);
+@@ -77,7 +78,7 @@ abstract class ApplenewsComponentNormalizerBase extends ApplenewsNormalizerBase
+    * @param array $component_layout
+    *   An array of component layout.
+    *
+-   * @return \ChapterThree\AppleNewsAPI\Document\Layouts\ComponentLayout
++   * @return ComponentLayout
+    *   Layout object.
+    */
+   protected function getComponentLayout(array $component_layout) {
+diff --git a/src/Normalizer/ApplenewsContentEntityNormalizer.php b/src/Normalizer/ApplenewsContentEntityNormalizer.php
+index 6259dc6..9687834 100644
+--- a/src/Normalizer/ApplenewsContentEntityNormalizer.php
++++ b/src/Normalizer/ApplenewsContentEntityNormalizer.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews\Normalizer;
+ 
++use Drupal\applenews\Entity\ApplenewsTextStyle;
+ use ChapterThree\AppleNewsAPI\Document\Layouts\Layout;
+ use ChapterThree\AppleNewsAPI\Document;
+ use Drupal\applenews\Entity\ApplenewsTemplate;
+@@ -25,41 +26,41 @@ class ApplenewsContentEntityNormalizer extends ApplenewsNormalizerBase {
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Apple news template repository.
+    *
+-   * @var \Drupal\applenews\Repository\ApplenewsTemplateRepository
++   * @var ApplenewsTemplateRepository
+    */
+   protected $templateRepository;
+ 
+   /**
+    * Event dispatcher service.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Constructs an ApplenewsTemplateSelection object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   Language manager service.
+-   * @param \Drupal\applenews\Repository\ApplenewsTemplateRepository $template_repository
++   * @param ApplenewsTemplateRepository $template_repository
+    *   Apple news template repository.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   Event dispatcher service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, LanguageManagerInterface $language_manager, ApplenewsTemplateRepository $template_repository, EventDispatcherInterface $event_dispatcher) {
+@@ -106,12 +107,12 @@ class ApplenewsContentEntityNormalizer extends ApplenewsNormalizerBase {
+     // @todo Load only default and used custom styles.
+     $text_styles = $this->entityTypeManager->getStorage('applenews_text_style')->loadMultiple();
+     foreach ($text_styles as $text_style) {
+-      /** @var \Drupal\applenews\Entity\ApplenewsTextStyle $text_style */
++      /** @var ApplenewsTextStyle $text_style */
+       $document->addTextStyle($text_style->id(), $text_style->toObject());
+     }
+ 
+     $event = new DocumentPostTransformEvent($object, $document, $template);
+-    $this->eventDispatcher->dispatch(DocumentPostTransformEvent::DOCUMENT_POST_TRANSFORM_EVENT, $event);
++    $this->eventDispatcher->dispatch($event, DocumentPostTransformEvent::DOCUMENT_POST_TRANSFORM_EVENT);
+ 
+     // @todo It's atypical for a normalizer service to end this way. Typically
+     //   the normalizer would leave it completely in the normalized format, here
+@@ -128,7 +129,7 @@ class ApplenewsContentEntityNormalizer extends ApplenewsNormalizerBase {
+   /**
+    * Helper to get the appropriate langcode for the given entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   A content entity.
+    *
+    * @return string
+@@ -146,10 +147,10 @@ class ApplenewsContentEntityNormalizer extends ApplenewsNormalizerBase {
+   /**
+    * Get a Layout object from the configured properties in the template.
+    *
+-   * @param \Drupal\applenews\Entity\ApplenewsTemplate $template
++   * @param ApplenewsTemplate $template
+    *   Apple news template entity.
+    *
+-   * @return \ChapterThree\AppleNewsAPI\Document\Layouts\Layout
++   * @return Layout
+    *   Apple News document layout object.
+    */
+   protected function getLayoutFromTemplate(ApplenewsTemplate $template): Layout {
+diff --git a/src/Normalizer/ApplenewsImageComponentNormalizer.php b/src/Normalizer/ApplenewsImageComponentNormalizer.php
+index 90bd232..499f908 100644
+--- a/src/Normalizer/ApplenewsImageComponentNormalizer.php
++++ b/src/Normalizer/ApplenewsImageComponentNormalizer.php
+@@ -49,7 +49,7 @@ class ApplenewsImageComponentNormalizer extends ApplenewsComponentNormalizerBase
+    * @return string
+    *   String URL of the given normalized file field, otherwise NULL.
+    *
+-   * @throws \Drupal\Core\TypedData\Exception\MissingDataException
++   * @throws MissingDataException
+    *   When we could not find a valid image URL from the given normalized file
+    *   field.
+    */
+@@ -74,7 +74,7 @@ class ApplenewsImageComponentNormalizer extends ApplenewsComponentNormalizerBase
+    *   Return value from file_create_url.
+    */
+   public function fileCreateUrl($uri) {
+-    return file_create_url($uri);
++    return \Drupal::service('file_url_generator')->generateAbsoluteString($uri);
+   }
+ 
+ }
+diff --git a/src/Plugin/ApplenewsComponentTypeBase.php b/src/Plugin/ApplenewsComponentTypeBase.php
+index d1daa8a..824c3b5 100644
+--- a/src/Plugin/ApplenewsComponentTypeBase.php
++++ b/src/Plugin/ApplenewsComponentTypeBase.php
+@@ -39,7 +39,7 @@ abstract class ApplenewsComponentTypeBase extends PluginBase implements Applenew
+   /**
+    * Field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $fieldManager;
+ 
+@@ -235,7 +235,7 @@ abstract class ApplenewsComponentTypeBase extends PluginBase implements Applenew
+    * Get a field selection element that will have all fields on the selected
+    * content type as an option, and allow dynamic selection of their properties.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state object.
+    * @param string $name
+    *   String name.
+@@ -299,7 +299,7 @@ abstract class ApplenewsComponentTypeBase extends PluginBase implements Applenew
+   /**
+    * Get all the properties of a field as a selection element.
+    *
+-   * @param \Drupal\field\FieldStorageConfigInterface $config
++   * @param FieldStorageConfigInterface $config
+    *   Field storage config.
+    *
+    * @return array
+diff --git a/src/Plugin/ApplenewsComponentTypeInterface.php b/src/Plugin/ApplenewsComponentTypeInterface.php
+index ae86b20..4b6da31 100644
+--- a/src/Plugin/ApplenewsComponentTypeInterface.php
++++ b/src/Plugin/ApplenewsComponentTypeInterface.php
+@@ -53,7 +53,7 @@ interface ApplenewsComponentTypeInterface extends PluginInspectionInterface, Der
+    *
+    * @param array $form
+    *   An array of form definition.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form state object.
+    *
+    * @return array
+diff --git a/src/Plugin/ApplenewsComponentTypeManager.php b/src/Plugin/ApplenewsComponentTypeManager.php
+index 5d2ca54..11504aa 100644
+--- a/src/Plugin/ApplenewsComponentTypeManager.php
++++ b/src/Plugin/ApplenewsComponentTypeManager.php
+@@ -17,9 +17,9 @@ class ApplenewsComponentTypeManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces,
+diff --git a/src/Plugin/Field/FieldWidget/Applenews.php b/src/Plugin/Field/FieldWidget/Applenews.php
+index 01d61a9..b4556d3 100644
+--- a/src/Plugin/Field/FieldWidget/Applenews.php
++++ b/src/Plugin/Field/FieldWidget/Applenews.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\applenews\Plugin\Field\FieldWidget;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\applenews\Entity\ApplenewsArticle;
++use Drupal\applenews\Entity\ApplenewsTemplate;
+ use Drupal\applenews\ApplenewsManager;
+ use Drupal\applenews\Repository\ApplenewsChannelRepository;
+ use Drupal\applenews\Repository\ApplenewsTemplateRepository;
+@@ -30,14 +33,14 @@ class Applenews extends WidgetBase {
+   /**
+    * Apple news channel repository.
+    *
+-   * @var \Drupal\applenews\Repository\ApplenewsChannelRepository
++   * @var ApplenewsChannelRepository
+    */
+   protected $channelRepository;
+ 
+   /**
+    * Apple news template repository.
+    *
+-   * @var \Drupal\applenews\Repository\ApplenewsTemplateRepository
++   * @var ApplenewsTemplateRepository
+    */
+   protected $templateRepository;
+ 
+@@ -48,15 +51,15 @@ class Applenews extends WidgetBase {
+    *   The plugin_id for the widget.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The definition of the field to which the widget is associated.
+    * @param array $settings
+    *   The widget settings.
+    * @param array $third_party_settings
+    *   Any third party settings.
+-   * @param \Drupal\applenews\Repository\ApplenewsChannelRepository $channel_repository
++   * @param ApplenewsChannelRepository $channel_repository
+    *   Apple news channel repository.
+-   * @param \Drupal\applenews\Repository\ApplenewsTemplateRepository $template_repository
++   * @param ApplenewsTemplateRepository $template_repository
+    *   Apple news channel repository.
+    */
+   public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, array $third_party_settings, ApplenewsChannelRepository $channel_repository, ApplenewsTemplateRepository $template_repository) {
+@@ -85,7 +88,7 @@ class Applenews extends WidgetBase {
+    */
+   public function formElement(FieldItemListInterface $items, $delta, array $element, array &$form, FormStateInterface $form_state) {
+     $channels = $this->channelRepository->getChannels();
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = $items->getEntity();
+     $templates = $this->templateRepository->getTemplatesForEntity($entity);
+ 
+@@ -110,7 +113,7 @@ class Applenews extends WidgetBase {
+    *
+    * Renders a message prompting the user to configure Apple News templates.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $items
++   * @param FieldItemListInterface $items
+    *   Array of default values for this field.
+    * @param int $delta
+    *   The order of this item in the array of sub-elements (0, 1, 2, etc.).
+@@ -119,14 +122,14 @@ class Applenews extends WidgetBase {
+    * @param array $form
+    *   The form structure where widgets are being attached to. This might be a
+    *   full form structure, or a sub-element of a larger form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+    *   Apple News widget element.
+    */
+   protected function formElementNoTemplates(FieldItemListInterface $items, $delta, array $element, array &$form, FormStateInterface $form_state): array {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = $items->getEntity();
+     $element['message'] = [
+       '#type' => 'item',
+@@ -146,7 +149,7 @@ class Applenews extends WidgetBase {
+    * renders a list of links to download the Apple News format article in the
+    * various configured templates, if any.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $items
++   * @param FieldItemListInterface $items
+    *   Array of default values for this field.
+    * @param int $delta
+    *   The order of this item in the array of sub-elements (0, 1, 2, etc.).
+@@ -155,7 +158,7 @@ class Applenews extends WidgetBase {
+    * @param array $form
+    *   The form structure where widgets are being attached to. This might be a
+    *   full form structure, or a sub-element of a larger form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+@@ -173,7 +176,7 @@ class Applenews extends WidgetBase {
+   /**
+    * The Apple News widget when everything is fully configured.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $items
++   * @param FieldItemListInterface $items
+    *   Array of default values for this field.
+    * @param int $delta
+    *   The order of this item in the array of sub-elements (0, 1, 2, etc.).
+@@ -182,7 +185,7 @@ class Applenews extends WidgetBase {
+    * @param array $form
+    *   The form structure where widgets are being attached to. This might be a
+    *   full form structure, or a sub-element of a larger form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+@@ -191,11 +194,11 @@ class Applenews extends WidgetBase {
+   protected function formElementFullyConfigured(FieldItemListInterface $items, $delta, array $element, array &$form, FormStateInterface $form_state): array {
+     $field_name = $items->getName();
+     $default_channels = unserialize($items[$delta]->channels);
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = $items->getEntity();
+     $templates = $this->getOptionsFromTemplates($this->templateRepository->getTemplatesForEntity($entity));
+     // @todo Dependency injection.
+-    /** @var \Drupal\applenews\Entity\ApplenewsArticle $article */
++    /** @var ApplenewsArticle $article */
+     $article = ApplenewsManager::getArticle($entity, $field_name);
+ 
+     $element += [
+@@ -307,7 +310,7 @@ class Applenews extends WidgetBase {
+   /**
+    * If the form has an advanced tab-set, move the Apple News widget there.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $items
++   * @param FieldItemListInterface $items
+    *   Array of default values for this field.
+    * @param int $delta
+    *   The order of this item in the array of sub-elements (0, 1, 2, etc.).
+@@ -316,14 +319,14 @@ class Applenews extends WidgetBase {
+    * @param array $form
+    *   The form structure where widgets are being attached to. This might be a
+    *   full form structure, or a sub-element of a larger form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+    *   Apple News widget element.
+    */
+   protected function moveToAdvancedSettings(FieldItemListInterface $items, $delta, array $element, array &$form, FormStateInterface $form_state): array {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = $items->getEntity();
+ 
+     // If the advanced settings tabs-set is available (normally rendered in the
+@@ -351,7 +354,7 @@ class Applenews extends WidgetBase {
+    *
+    * Download the entity in the generated Apple News format.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $items
++   * @param FieldItemListInterface $items
+    *   Array of default values for this field.
+    * @param int $delta
+    *   The order of this item in the array of sub-elements (0, 1, 2, etc.).
+@@ -360,7 +363,7 @@ class Applenews extends WidgetBase {
+    * @param array $form
+    *   The form structure where widgets are being attached to. This might be a
+    *   full form structure, or a sub-element of a larger form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+@@ -368,7 +371,7 @@ class Applenews extends WidgetBase {
+    */
+   protected function addDownloadLinks(FieldItemListInterface $items, $delta, array $element, array &$form, FormStateInterface $form_state): array {
+     $channels = $this->channelRepository->getChannels();
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = $items->getEntity();
+     $templates = $this->templateRepository->getTemplatesForEntity($entity);
+ 
+@@ -428,7 +431,7 @@ class Applenews extends WidgetBase {
+    *
+    * @param array $element
+    *   The form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    */
+   public static function validateFormElement(array $element, FormStateInterface $form_state) {
+@@ -509,7 +512,7 @@ class Applenews extends WidgetBase {
+   /**
+    * Turn an array of Apple News templates into form options.
+    *
+-   * @param \Drupal\applenews\Entity\ApplenewsTemplate[] $templates
++   * @param ApplenewsTemplate[] $templates
+    *   Array of Apple News template entities.
+    *
+    * @return array
+diff --git a/src/Plugin/migrate/process/FieldName.php b/src/Plugin/migrate/process/FieldName.php
+index d215f4c..3a10315 100644
+--- a/src/Plugin/migrate/process/FieldName.php
++++ b/src/Plugin/migrate/process/FieldName.php
+@@ -30,7 +30,7 @@ class FieldName extends ProcessPluginBase implements ContainerFactoryPluginInter
+   /**
+    * The applenews manager service.
+    *
+-   * @var \Drupal\applenews\ApplenewsManager
++   * @var ApplenewsManager
+    */
+   protected $applenewsManager;
+ 
+@@ -43,7 +43,7 @@ class FieldName extends ProcessPluginBase implements ContainerFactoryPluginInter
+    *   The plugin ID.
+    * @param mixed $plugin_definition
+    *   The plugin definition.
+-   * @param \Drupal\applenews\ApplenewsManager $applenews_manager
++   * @param ApplenewsManager $applenews_manager
+    *   The applenews manager service.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, ApplenewsManager $applenews_manager) {
+diff --git a/src/Publisher.php b/src/Publisher.php
+index 0da5c07..71b6005 100644
+--- a/src/Publisher.php
++++ b/src/Publisher.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews;
+ 
++use Drupal\Core\Config\Config;
+ use ChapterThree\AppleNewsAPI\PublisherAPI;
+ use Drupal\applenews\Exception\ApplenewsInvalidResponseException;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -16,14 +17,14 @@ class Publisher implements PublisherInterface {
+   /**
+    * The applenews settings config object.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * Construct the PublisherManager object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory) {
+@@ -97,7 +98,7 @@ class Publisher implements PublisherInterface {
+    * @return mixed
+    *   Returns response.
+    *
+-   * @throws \Drupal\applenews\Exception\ApplenewsInvalidResponseException
++   * @throws ApplenewsInvalidResponseException
+    */
+   protected function handleResponse($response) {
+     if (isset($response->errors) && is_array($response->errors)) {
+@@ -111,7 +112,7 @@ class Publisher implements PublisherInterface {
+   /**
+    * Provides publisher object.
+    *
+-   * @return \ChapterThree\AppleNewsAPI\PublisherAPI
++   * @return PublisherAPI
+    *   Publisher object.
+    */
+   protected function getPublisher() {
+diff --git a/src/PublisherInterface.php b/src/PublisherInterface.php
+index 06fe90d..a0adb3b 100644
+--- a/src/PublisherInterface.php
++++ b/src/PublisherInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews;
+ 
++use Drupal\applenews\Exception\ApplenewsInvalidResponseException;
+ /**
+  * Applenews publisher manager.
+  *
+@@ -18,7 +19,7 @@ interface PublisherInterface {
+    * @return mixed
+    *   Channel details.
+    *
+-   * @throws \Drupal\applenews\Exception\ApplenewsInvalidResponseException
++   * @throws ApplenewsInvalidResponseException
+    *
+    * @see vendor/chapter-three/apple-news-api/examples/PublisherAPI/GetChannel.php
+    */
+@@ -33,7 +34,7 @@ interface PublisherInterface {
+    * @return mixed
+    *   An article object.
+    *
+-   * @throws \Drupal\applenews\Exception\ApplenewsInvalidResponseException
++   * @throws ApplenewsInvalidResponseException
+    *
+    * @see vendor/chapter-three/apple-news-api/examples/PublisherAPI/GetArticle.php
+    */
+@@ -48,7 +49,7 @@ interface PublisherInterface {
+    * @return mixed
+    *   Section details, if available. NULL otherwise.
+    *
+-   * @throws \Drupal\applenews\Exception\ApplenewsInvalidResponseException
++   * @throws ApplenewsInvalidResponseException
+    *
+    * @see vendor/chapter-three/apple-news-api/examples/PublisherAPI/GetSection.php
+    */
+@@ -63,7 +64,7 @@ interface PublisherInterface {
+    * @return mixed
+    *   Sections.
+    *
+-   * @throws \Drupal\applenews\Exception\ApplenewsInvalidResponseException
++   * @throws ApplenewsInvalidResponseException
+    *
+    * @see vendor/chapter-three/apple-news-api/examples/PublisherAPI/GetSections.php
+    */
+@@ -80,7 +81,7 @@ interface PublisherInterface {
+    * @return object
+    *   Response object if successful. NULL otherwise.
+    *
+-   * @throws \Drupal\applenews\Exception\ApplenewsInvalidResponseException
++   * @throws ApplenewsInvalidResponseException
+    *
+    * @see vendor/chapter-three/apple-news-api/examples/PublisherAPI/PostArticle.php
+    */
+@@ -97,7 +98,7 @@ interface PublisherInterface {
+    * @return mixed
+    *   Response object if update successful. NULL otherwise.
+    *
+-   * @throws \Drupal\applenews\Exception\ApplenewsInvalidResponseException
++   * @throws ApplenewsInvalidResponseException
+    *
+    * @see vendor/chapter-three/apple-news-api/examples/PublisherAPI/UpdateArticle.php
+    */
+@@ -112,7 +113,7 @@ interface PublisherInterface {
+    * @return mixed
+    *   Mixed deleted status.
+    *
+-   * @throws \Drupal\applenews\Exception\ApplenewsInvalidResponseException
++   * @throws ApplenewsInvalidResponseException
+    *
+    * @see vendor/chapter-three/apple-news-api/examples/PublisherAPI/UeleteArticle.php
+    */
+diff --git a/src/Repository/ApplenewsChannelRepository.php b/src/Repository/ApplenewsChannelRepository.php
+index 1b7557c..f012a8f 100644
+--- a/src/Repository/ApplenewsChannelRepository.php
++++ b/src/Repository/ApplenewsChannelRepository.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews\Repository;
+ 
++use Drupal\applenews\Entity\ApplenewsChannel;
+ /**
+  * Apple news channel repository.
+  *
+@@ -12,7 +13,7 @@ class ApplenewsChannelRepository extends ApplenewsRepositoryBase {
+   /**
+    * Get all configured Apple News channels.
+    *
+-   * @return \Drupal\applenews\Entity\ApplenewsChannel[]
++   * @return ApplenewsChannel[]
+    *   An array of Apple News channels indexed by id.
+    */
+   public function getChannels(): array {
+diff --git a/src/Repository/ApplenewsRepositoryBase.php b/src/Repository/ApplenewsRepositoryBase.php
+index 1b212ce..7f7baba 100644
+--- a/src/Repository/ApplenewsRepositoryBase.php
++++ b/src/Repository/ApplenewsRepositoryBase.php
+@@ -13,23 +13,23 @@ class ApplenewsRepositoryBase {
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Apple news channel logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * ApplenewsConfigRepository constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Apple news channel logger.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, LoggerInterface $logger) {
+diff --git a/src/Repository/ApplenewsTemplateRepository.php b/src/Repository/ApplenewsTemplateRepository.php
+index 6bcbac8..a5c28cd 100644
+--- a/src/Repository/ApplenewsTemplateRepository.php
++++ b/src/Repository/ApplenewsTemplateRepository.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\applenews\Repository;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\applenews\Entity\ApplenewsTemplate;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\TypedData\Exception\MissingDataException;
+@@ -16,10 +18,10 @@ class ApplenewsTemplateRepository extends ApplenewsRepositoryBase {
+   /**
+    * Get all configured Apple News templates for the given entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   An entity.
+    *
+-   * @return \Drupal\applenews\Entity\ApplenewsTemplate[]
++   * @return ApplenewsTemplate[]
+    *   An array of Apple News templates indexed by id.
+    */
+   public function getTemplatesForEntity(EntityInterface $entity): array {
+@@ -48,16 +50,16 @@ class ApplenewsTemplateRepository extends ApplenewsRepositoryBase {
+    * @param string $template_id
+    *   A template id.
+    *
+-   * @return \Drupal\applenews\Entity\ApplenewsTemplate
++   * @return ApplenewsTemplate
+    *   The Apple News template for the given id.
+    *
+-   * @throws \Drupal\Core\TypedData\Exception\MissingDataException
++   * @throws MissingDataException
+    *   When we could not find a template by the given id.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function getTemplateByTemplateId(string $template_id): ApplenewsTemplate {
+-    /** @var \Drupal\applenews\Entity\ApplenewsTemplate $template */
++    /** @var ApplenewsTemplate $template */
+     $template = $this->entityTypeManager->getStorage('applenews_template')->load($template_id);
+     if (empty($template)) {
+       throw new MissingDataException(sprintf('Could not find a template by id %s.', $template_id));
+diff --git a/tests/modules/applenews_test/src/EventSubscriber/DocumentPostTransformEventSubscriber.php b/tests/modules/applenews_test/src/EventSubscriber/DocumentPostTransformEventSubscriber.php
+index db1b1fd..af3f9e6 100644
+--- a/tests/modules/applenews_test/src/EventSubscriber/DocumentPostTransformEventSubscriber.php
++++ b/tests/modules/applenews_test/src/EventSubscriber/DocumentPostTransformEventSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\applenews_test\EventSubscriber;
+ 
++use Drupal\Core\Entity\EntityMalformedException;
+ use ChapterThree\AppleNewsAPI\Document\Metadata;
+ use Drupal\applenews\Event\DocumentPostTransformEvent;
+ use Drupal\Core\Entity\EntityChangedInterface;
+@@ -17,10 +18,10 @@ class DocumentPostTransformEventSubscriber implements EventSubscriberInterface {
+   /**
+    * After an entity has been transformed into an Apple News document, alter it.
+    *
+-   * @param \Drupal\applenews\Event\DocumentPostTransformEvent $event
++   * @param DocumentPostTransformEvent $event
+    *   Document post transform event.
+    *
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws EntityMalformedException
+    */
+   public function documentPostTransform(DocumentPostTransformEvent $event) {
+     $document = $event->getDocument();
+diff --git a/tests/src/Functional/AppleNewsWidgetTest.php b/tests/src/Functional/AppleNewsWidgetTest.php
+index 73101de..6827fbd 100644
+--- a/tests/src/Functional/AppleNewsWidgetTest.php
++++ b/tests/src/Functional/AppleNewsWidgetTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\applenews\Functional;
+ 
++use Drupal\field\Entity\FieldStorageConfig;
++use Drupal\field\Entity\FieldConfig;
++use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ use Drupal\applenews_test\Publisher;
+ use Drupal\node\Entity\Node;
+ use Drupal\Tests\applenews\Traits\AppleNewsTestTrait;
+@@ -27,14 +30,14 @@ class AppleNewsWidgetTest extends ApplenewsTestBase {
+   /**
+    * Apple news field storage.
+    *
+-   * @var \Drupal\field\Entity\FieldStorageConfig
++   * @var FieldStorageConfig
+    */
+   protected $applenewsFieldStorage;
+ 
+   /**
+    * Apple news field config.
+    *
+-   * @var \Drupal\field\Entity\FieldConfig
++   * @var FieldConfig
+    */
+   protected $applenewsFieldConfig;
+ 
+@@ -57,7 +60,7 @@ class AppleNewsWidgetTest extends ApplenewsTestBase {
+       $this->applenewsFieldConfig,
+     ] = $this->createAppleNewsField('node', 'article');
+ 
+-    /** @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository */
++    /** @var EntityDisplayRepositoryInterface $entity_display_repository */
+     $entity_display_repository = \Drupal::service('entity_display.repository');
+     $entity_display_repository
+       ->getFormDisplay('node', 'article')
+@@ -116,7 +119,7 @@ class AppleNewsWidgetTest extends ApplenewsTestBase {
+     $assert_session->pageTextContains('No channels available');
+     $assert_session->pageTextContains('Download the Apple News generated document');
+     $assert_session->pageTextContains($template->label());
+-    $this->assertRaw(sprintf('admin/config/services/applenews/node/%s/%s/%s/download', $node->id(), $node->getLoadedRevisionId(), $template->id()));
++    $this->assertSession()->responseContains(sprintf('admin/config/services/applenews/node/%s/%s/%s/download', $node->id(), $node->getLoadedRevisionId(), $template->id()));
+   }
+ 
+   /**
+diff --git a/tests/src/Functional/ApplenewsAdminTest.php b/tests/src/Functional/ApplenewsAdminTest.php
+index 0540795..8a43f19 100644
+--- a/tests/src/Functional/ApplenewsAdminTest.php
++++ b/tests/src/Functional/ApplenewsAdminTest.php
+@@ -80,7 +80,7 @@ class ApplenewsAdminTest extends ApplenewsTestBase {
+     $edit['api_secret'] = '';
+     $this->submitForm($edit, 'Save configuration');
+     $assert_session->pageTextContains('The configuration options have been saved.');
+-    $this->assertEqual(\Drupal::config('applenews.settings')->get('api_secret'), $api_secret);
++    $this->assertEquals(\Drupal::config('applenews.settings')->get('api_secret'), $api_secret);
+   }
+ 
+ }
+diff --git a/tests/src/Functional/ApplenewsTestBase.php b/tests/src/Functional/ApplenewsTestBase.php
+index 772033f..a5d8b35 100644
+--- a/tests/src/Functional/ApplenewsTestBase.php
++++ b/tests/src/Functional/ApplenewsTestBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\applenews\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -24,14 +25,14 @@ abstract class ApplenewsTestBase extends BrowserTestBase {
+   /**
+    * A user with permission to bypass access content.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+   /**
+    * A normal user with permission to bypass node access content.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $baseUser;
+ 
+diff --git a/tests/src/Kernel/ApplenewsManagerTest.php b/tests/src/Kernel/ApplenewsManagerTest.php
+index b1ece85..26f8f13 100644
+--- a/tests/src/Kernel/ApplenewsManagerTest.php
++++ b/tests/src/Kernel/ApplenewsManagerTest.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\Tests\applenews\Kernel;
+ 
++use Drupal\field\Entity\FieldStorageConfig;
++use Drupal\applenews\Entity\ApplenewsChannel;
++use Drupal\applenews\Entity\ApplenewsTemplate;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\applenews_test\Publisher;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\node\Entity\NodeType;
+@@ -41,28 +47,28 @@ class ApplenewsManagerTest extends KernelTestBase {
+   /**
+    * User entity we are testing with.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $account;
+ 
+   /**
+    * Apple news field storage.
+    *
+-   * @var \Drupal\field\Entity\FieldStorageConfig
++   * @var FieldStorageConfig
+    */
+   protected $applenewsFieldStorage;
+ 
+   /**
+    * Apple News channel for testing.
+    *
+-   * @var \Drupal\applenews\Entity\ApplenewsChannel
++   * @var ApplenewsChannel
+    */
+   protected $applenewsChannel;
+ 
+   /**
+    * Apple News template for testing.
+    *
+-   * @var \Drupal\applenews\Entity\ApplenewsTemplate
++   * @var ApplenewsTemplate
+    */
+   protected $applenewsTemplate;
+ 
+@@ -108,9 +114,9 @@ class ApplenewsManagerTest extends KernelTestBase {
+    * corresponding Apple News article should be deleted when the article already
+    * was deleted in the Apple News UI.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function testDeleteNotFound() {
+     // Create the node.
+@@ -138,9 +144,9 @@ class ApplenewsManagerTest extends KernelTestBase {
+    * using the status flag, that Apple News article should be removed even when
+    * the article has already been removed upstream.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function testDeleteNotFoundUnpublish() {
+     // Create the node.
+diff --git a/tests/src/Kernel/Normalizer/ApplenewsContentEntityNormalizerTest.php b/tests/src/Kernel/Normalizer/ApplenewsContentEntityNormalizerTest.php
+index 87362fe..49ec950 100644
+--- a/tests/src/Kernel/Normalizer/ApplenewsContentEntityNormalizerTest.php
++++ b/tests/src/Kernel/Normalizer/ApplenewsContentEntityNormalizerTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\applenews\Kernel\Normalizer;
+ 
++use Symfony\Component\Serializer\Serializer;
+ use ChapterThree\AppleNewsAPI\Document\Components\Body;
+ use ChapterThree\AppleNewsAPI\Document\Components\Title;
+ use Drupal\field\Entity\FieldConfig;
+@@ -41,7 +42,7 @@ class ApplenewsContentEntityNormalizerTest extends KernelTestBase {
+   /**
+    * Serializer service.
+    *
+-   * @var \Symfony\Component\Serializer\Serializer
++   * @var Serializer
+    */
+   protected $serializer;
+ 
+@@ -55,7 +56,7 @@ class ApplenewsContentEntityNormalizerTest extends KernelTestBase {
+   /**
+    * User entity we are testing with.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $account;
+ 
+diff --git a/tests/src/Kernel/Normalizer/ApplenewsImageComponentNormalizerTest.php b/tests/src/Kernel/Normalizer/ApplenewsImageComponentNormalizerTest.php
+index 352be98..fdbb7a5 100644
+--- a/tests/src/Kernel/Normalizer/ApplenewsImageComponentNormalizerTest.php
++++ b/tests/src/Kernel/Normalizer/ApplenewsImageComponentNormalizerTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\applenews\Kernel\Normalizer;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
++use Symfony\Component\Serializer\SerializerInterface;
+ use ChapterThree\AppleNewsAPI\Document\Components\Photo;
+ use Drupal\applenews\Normalizer\ApplenewsImageComponentNormalizer;
+ use Drupal\Core\Entity\FieldableEntityInterface;
+@@ -28,14 +30,14 @@ class ApplenewsImageComponentNormalizerTest extends KernelTestBase {
+   /**
+    * Applenews image component normalizer under test.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject|\Drupal\applenews\Normalizer\ApplenewsImageComponentNormalizer
++   * @var MockObject|ApplenewsImageComponentNormalizer
+    */
+   protected $applenewsImageComponentNormalizer;
+ 
+   /**
+    * Mock serializer object.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject|\Symfony\Component\Serializer\SerializerInterface
++   * @var MockObject|SerializerInterface
+    */
+   protected $serializer;
+ 
+@@ -54,8 +56,7 @@ class ApplenewsImageComponentNormalizerTest extends KernelTestBase {
+     $this->applenewsImageComponentNormalizer
+       ->method('fileCreateUrl')
+       ->willReturn('http://example.com/test/example.jpg');
+-    $this->serializer = $this->getMockBuilder(Serializer::class)
+-      ->getMock();
++    $this->serializer = $this->createMock(Serializer::class);
+     $this->applenewsImageComponentNormalizer->setSerializer($this->serializer);
+   }
+ 
+@@ -96,7 +97,7 @@ class ApplenewsImageComponentNormalizerTest extends KernelTestBase {
+     // Mock a normalized file field and empty caption return.
+     $this->serializer->method('normalize')
+       ->willReturnOnConsecutiveCalls($normalized_file_field, NULL);
+-    /** @var \ChapterThree\AppleNewsAPI\Document\Components\Photo $component */
++    /** @var Photo $component */
+     $component = $this->applenewsImageComponentNormalizer->normalize($data, 'applenews', $context);
+     $this->assertInstanceOf(Photo::class, $component);
+     $this->assertEquals('http://example.com/test/example.jpg', $component->getUrl());
+diff --git a/tests/src/Traits/AppleNewsTestTrait.php b/tests/src/Traits/AppleNewsTestTrait.php
+index 56ab02c..4fd45c4 100644
+--- a/tests/src/Traits/AppleNewsTestTrait.php
++++ b/tests/src/Traits/AppleNewsTestTrait.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\applenews\Traits;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\applenews\Entity\ApplenewsArticle;
+ use Drupal\applenews\Entity\ApplenewsChannel;
+ use Drupal\applenews\Entity\ApplenewsTemplate;
+@@ -19,7 +21,7 @@ trait AppleNewsTestTrait {
+   /**
+    * Create an Apple News channel for testing.
+    *
+-   * @return \Drupal\applenews\Entity\ApplenewsChannel
++   * @return ApplenewsChannel
+    *   The Apple News channel entity created.
+    */
+   protected function createApplenewsChannel(): ApplenewsChannel {
+@@ -46,7 +48,7 @@ trait AppleNewsTestTrait {
+    * @param array $component_layout
+    *   Array of component layout properties.
+    *
+-   * @return \Drupal\applenews\Entity\ApplenewsTemplate
++   * @return ApplenewsTemplate
+    *   The Apple News template that was created.
+    */
+   protected function createApplenewsTemplate(string $bundle = 'article', array $components = [], array $component_layout = []): ApplenewsTemplate {
+@@ -151,14 +153,14 @@ trait AppleNewsTestTrait {
+    *
+    * Created node will be linked to the given channel and template.
+    *
+-   * @param \Drupal\applenews\Entity\ApplenewsChannel $channel
++   * @param ApplenewsChannel $channel
+    *   Apple news channel entity.
+-   * @param \Drupal\applenews\Entity\ApplenewsTemplate $template
++   * @param ApplenewsTemplate $template
+    *   Apple news template entity.
+-   * @param \Drupal\field\Entity\FieldStorageConfig $applenews_field
++   * @param FieldStorageConfig $applenews_field
+    *   Apple news field name.
+    *
+-   * @return \Drupal\node\NodeInterface
++   * @return NodeInterface
+    *   Returns the created node.
+    */
+   protected function createNodePublishedToAppleNews(ApplenewsChannel $channel, ApplenewsTemplate $template, FieldStorageConfig $applenews_field): NodeInterface {
+@@ -183,11 +185,11 @@ trait AppleNewsTestTrait {
+   /**
+    * Assert that an Apple News article entity exists for the given entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   An entity.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function assertAppleNewsArticleExistsForEntity(EntityInterface $entity) {
+     $storage = \Drupal::entityTypeManager()->getStorage('applenews_article');
+@@ -200,11 +202,11 @@ trait AppleNewsTestTrait {
+   /**
+    * Assert that Apple News article entity DOES NOT exist for the given entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   An entity.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function assertAppleNewsArticleNotExistsForEntity(EntityInterface $entity) {
+     $storage = \Drupal::entityTypeManager()->getStorage('applenews_article');

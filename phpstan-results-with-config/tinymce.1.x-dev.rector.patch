@@ -1,0 +1,196 @@
+diff --git a/src/Controller/TinyMCEController.php b/src/Controller/TinyMCEController.php
+index e5e8234..51251a8 100644
+--- a/src/Controller/TinyMCEController.php
++++ b/src/Controller/TinyMCEController.php
+@@ -38,11 +38,11 @@ class TinyMCEController extends ControllerBase {
+ 
+     // Attempt to save the file and the folder if it does not exist.
+     if (\Drupal::service('file_system')->prepareDirectory($destinationFolder, FileSystemInterface::CREATE_DIRECTORY)) {
+-      $file = file_save_data($data, $destinationFile, FILE_EXISTS_REPLACE);
++      $file = \Drupal::service('file.repository')->writeData($data, $destinationFile, FileSystemInterface::EXISTS_REPLACE);
+     }
+ 
+     // Prepare the json output for the editor.
+-    $path = file_create_url($destinationFile);
++    $path = \Drupal::service('file_url_generator')->generateAbsoluteString($destinationFile);
+     $response['location'] = $path;
+ 
+     return new JsonResponse($response);
+diff --git a/src/Form/TinymceSettingsForm.php b/src/Form/TinymceSettingsForm.php
+index 95e14ed..ed8e49c 100644
+--- a/src/Form/TinymceSettingsForm.php
++++ b/src/Form/TinymceSettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\tinymce\Form;
+ 
++use Drupal\Core\Cache\CacheTagsInvalidatorInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -65,7 +66,7 @@ class TinymceSettingsForm extends ConfigFormBase {
+ 
+     parent::submitForm($form, $form_state);
+ 
+-    /** @var \Drupal\Core\Cache\CacheTagsInvalidatorInterface $tagInvalidator */
++    /** @var CacheTagsInvalidatorInterface $tagInvalidator */
+     $tagInvalidator = \Drupal::service('cache_tags.invalidator');
+     $tagInvalidator->invalidateTags(['library_info']);
+   }
+diff --git a/src/Plugin/Editor/TinyMCE.php b/src/Plugin/Editor/TinyMCE.php
+index 6bdbb94..25ea4cc 100644
+--- a/src/Plugin/Editor/TinyMCE.php
++++ b/src/Plugin/Editor/TinyMCE.php
+@@ -29,7 +29,7 @@ class TinyMCE extends EditorBase implements ContainerFactoryPluginInterface {
+   /**
+    * The configuration factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+@@ -43,7 +43,7 @@ class TinyMCE extends EditorBase implements ContainerFactoryPluginInterface {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, ConfigFactoryInterface $config_factory) {
+diff --git a/tests/src/Functional/TinyMCELoadingTest.php b/tests/src/Functional/TinyMCELoadingTest.php
+index c3c3283..0d5a66a 100644
+--- a/tests/src/Functional/TinyMCELoadingTest.php
++++ b/tests/src/Functional/TinyMCELoadingTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\tinymce\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\editor\Entity\Editor;
+ use Drupal\filter\Entity\FilterFormat;
+ use Drupal\Tests\BrowserTestBase;
+@@ -28,14 +29,14 @@ class TinyMCELoadingTest extends BrowserTestBase {
+   /**
+    * An untrusted user with access to only the 'plain_text' format.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $untrustedUser;
+ 
+   /**
+    * A normal user with access to the 'plain_text' and 'filtered_html' formats.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $normalUser;
+ 
+@@ -101,11 +102,11 @@ class TinyMCELoadingTest extends BrowserTestBase {
+     $hidden_input = $this->xpath('//input[@type="hidden" and contains(@class, "editor")]');
+     $this->assertCount(0, $hidden_input, 'A single text format hidden input does not exist on the page.');
+     // Verify that TinyMCE glue JS is absent.
+-    $this->assertSession()->responseNotContains(drupal_get_path('module', 'tinymce') . '/js/tinymce.js');
++    $this->assertSession()->responseNotContains(\Drupal::service('extension.list.module')->getPath('tinymce') . '/js/tinymce.js');
+ 
+     // On pages where there would never be a text editor, TinyMCE JS is absent.
+     $this->drupalGet('user');
+-    $this->assertSession()->responseNotContains(drupal_get_path('module', 'tinymce') . '/js/tinymce.js');
++    $this->assertSession()->responseNotContains(\Drupal::service('extension.list.module')->getPath('tinymce') . '/js/tinymce.js');
+     $this->drupalLogout();
+ 
+     // The normal user:
+diff --git a/tests/src/FunctionalJavascript/TinyMCEIntegrationTest.php b/tests/src/FunctionalJavascript/TinyMCEIntegrationTest.php
+index e2ef1d2..c4da3ff 100644
+--- a/tests/src/FunctionalJavascript/TinyMCEIntegrationTest.php
++++ b/tests/src/FunctionalJavascript/TinyMCEIntegrationTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\tinymce\FunctionalJavascript;
+ 
++use Drupal\user\UserInterface;
++use Drupal\filter\FilterFormatInterface;
+ use Drupal\Core\Entity\Entity\EntityFormDisplay;
+ use Drupal\editor\Entity\Editor;
+ use Drupal\field\Entity\FieldConfig;
+@@ -25,14 +27,14 @@ class TinyMCEIntegrationTest extends WebDriverTestBase {
+   /**
+    * The account.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $account;
+ 
+   /**
+    * The FilterFormat config entity used for testing.
+    *
+-   * @var \Drupal\filter\FilterFormatInterface
++   * @var FilterFormatInterface
+    */
+   protected $filterFormat;
+ 
+diff --git a/tests/src/Kernel/TinyMCETest.php b/tests/src/Kernel/TinyMCETest.php
+index 5b59286..d5e10a0 100644
+--- a/tests/src/Kernel/TinyMCETest.php
++++ b/tests/src/Kernel/TinyMCETest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\tinymce\Kernel;
+ 
++use Drupal\tinymce\Plugin\Editor\TinyMCE;
++use Drupal\editor\Plugin\EditorManager;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\editor\Entity\Editor;
+@@ -31,14 +33,14 @@ class TinyMCETest extends KernelTestBase {
+   /**
+    * An instance of the "TinyMCE" text editor plugin.
+    *
+-   * @var \Drupal\tinymce\Plugin\Editor\TinyMCE
++   * @var TinyMCE
+    */
+   protected $tinymce;
+ 
+   /**
+    * The Editor Plugin Manager.
+    *
+-   * @var \Drupal\editor\Plugin\EditorManager;
++   * @var EditorManager ;
+    */
+   protected $manager;
+ 
+diff --git a/tinymce.info.yml b/tinymce.info.yml
+index 68acac3..2f424c7 100644
+--- a/tinymce.info.yml
++++ b/tinymce.info.yml
+@@ -1,6 +1,6 @@
+ name: TinyMCE
+ description: "The most popular WYSIWYG editor for advanced content editing."
+-core_version_requirement: ^8.8 || ^9
++core_version_requirement: ^9.3 || ^10
+ type: module
+ dependencies:
+   - drupal:editor
+diff --git a/tinymce.module b/tinymce.module
+index 29b0d25..5a6f4ae 100644
+--- a/tinymce.module
++++ b/tinymce.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Routing\RouteMatchInterface;
+ /**
+  * @file
+  * Integrate the TinyMCE editor (https://www.tiny.cloud/) into Drupal.
+@@ -34,7 +35,7 @@ function tinymce_library_info_build() {
+ /**
+  * Implementation of hook_help().
+  */
+-function tinymce_help($route_name, \Drupal\Core\Routing\RouteMatchInterface $route_match) {
++function tinymce_help($route_name, RouteMatchInterface $route_match) {
+   switch ($route_name) {
+     case 'help.page.tinymce' :
+       $output = '';

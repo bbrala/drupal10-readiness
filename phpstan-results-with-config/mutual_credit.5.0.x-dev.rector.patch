@@ -1,0 +1,971 @@
+diff --git a/mcapi.install b/mcapi.install
+index a9a614a3..88915e3a 100644
+--- a/mcapi.install
++++ b/mcapi.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\views\Entity\View;
+ /**
+  * @file
+  * Install, update and uninstall functions for the transactions module.
+@@ -221,7 +222,7 @@ function mcapi_update_9000() {
+   $wallet_views = \Drupal::entityTypeManager()->getStorage('view')
+     ->loadByProperties(['base_table' => 'mcapi_wallet']);
+   foreach ($wallet_views as $view) {
+-    /** @var \Drupal\views\Entity\View $view */
++    /** @var View $view */
+     $displays = $view->get('display');
+     foreach ($displays as $display_id => $display) {
+       $display = &$view->getDisplay($display_id);
+diff --git a/mcapi.module b/mcapi.module
+index 6b27165d..b87e3cf3 100644
+--- a/mcapi.module
++++ b/mcapi.module
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\Core\Render\Element;
++use Drupal\Core\Access\AccessResult;
++use Drupal\views\ViewExecutable;
++use Drupal\views\Plugin\views\query\QueryPluginBase;
+ /**
+  * @file
+  * Hooks and common functions for Community Accounting.
+@@ -556,7 +560,7 @@ function mcapi_form_field_config_edit_form_alter(&$form, &$form_state) {
+   }
+   if ($field_config->getName() == 'holder') {
+     unset($form['required']);
+-    foreach (\Drupal\Core\Render\Element::Children($form['settings']) as $entity_type_id) {
++    foreach (Element::Children($form['settings']) as $entity_type_id) {
+       if ($form['settings'][$entity_type_id]['handler']) {
+         $form['settings'][$entity_type_id]['handler']['autowallet'] = [
+           '#type' => 'checkbox',
+@@ -578,7 +582,7 @@ function mcapi_form_field_config_edit_form_alter(&$form, &$form_state) {
+  */
+ function mcapi_field_config_access($entity, $operation, $account) {
+   if ($entity->id() == 'mcapi_wallet.mcapi_wallet.holder' and $operation == 'delete') {
+-    return \Drupal\Core\Access\AccessResult::forbidden('Field cannot be deleted');
++    return AccessResult::forbidden('Field cannot be deleted');
+   }
+ }
+ 
+@@ -589,7 +593,7 @@ function mcapi_field_config_access($entity, $operation, $account) {
+  * children in the larger ones, and views loses track of them, so filter them
+  * out of all views, except aggregated views
+  */
+-function mcapi_views_query_alter(\Drupal\views\ViewExecutable $view, \Drupal\views\Plugin\views\query\QueryPluginBase $query) {
++function mcapi_views_query_alter(ViewExecutable $view, QueryPluginBase $query) {
+   $base_tables = $view->getBaseTables();
+   // There's probably a better way to do this but altering $query->query() has no effect.
+   if (isset($base_tables['mcapi_transaction'])) {
+@@ -619,7 +623,7 @@ function mcapi_views_query_alter(\Drupal\views\ViewExecutable $view, \Drupal\vie
+  * Implements hook_views_pre_render().
+  * Set the title of all views with a wallet argument
+  */
+-function mcapi_views_pre_render(Drupal\views\ViewExecutable $view) {
++function mcapi_views_pre_render(ViewExecutable $view) {
+   foreach (['payer', 'payee', 'wallet_id'] as $tok) {
+     if (isset($view->argument[$tok])) {
+       $pos = array_search($tok, $view->argument);
+diff --git a/mcapi.theme.inc b/mcapi.theme.inc
+index 2d8922ba..9573a56e 100644
+--- a/mcapi.theme.inc
++++ b/mcapi.theme.inc
+@@ -115,7 +115,7 @@ function _mcapi_get_axis_max($val) {
+ function template_preprocess_mcapi_transaction(&$vars, $hook, $info) {
+   $elements = $vars['elements'];
+   foreach (Element::children($vars['elements']) as $key) {
+-    $vars[$key] = render($vars['elements'][$key]);
++    $vars[$key] = \Drupal::service('renderer')->render($vars['elements'][$key]);
+   }
+   if (isset($elements['#watermark'])) {
+     // to add a watermark to the render array, add #watermark => blah
+diff --git a/mcapi.tokens.inc b/mcapi.tokens.inc
+index 0fd91872..390deb0b 100644
+--- a/mcapi.tokens.inc
++++ b/mcapi.tokens.inc
+@@ -49,11 +49,11 @@ function mcapi_tokens($type, $tokens, array $data, array $options, $bubbleable_m
+           break;
+ 
+         case 'created':
+-          $replacements[$original] = format_date($transaction->created->value, 'medium');
++          $replacements[$original] = \Drupal::service('date.formatter')->format($transaction->created->value, 'medium');
+           break;
+ 
+         case 'changed':
+-          $replacements[$original] = format_date($transaction->changed->value, 'medium');
++          $replacements[$original] = \Drupal::service('date.formatter')->format($transaction->changed->value, 'medium');
+           break;
+ 
+         case 'url':
+diff --git a/modules/bursers/mcapi_bursers.module b/modules/bursers/mcapi_bursers.module
+index 3f857aba..ad051573 100644
+--- a/modules/bursers/mcapi_bursers.module
++++ b/modules/bursers/mcapi_bursers.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Form\FormState;
+ /**
+  * Implements hook_entity_info_alter().
+  */
+@@ -25,7 +26,7 @@ function mcapi_bursers_entity_base_field_info_alter(&$fields, $entity_type) {
+  *
+  * Remove the default values field from the bursers field config form.
+  */
+-function mcapi_bursers_form_field_config_edit_form_alter(&$form, Drupal\Core\Form\FormState $form_state) {
++function mcapi_bursers_form_field_config_edit_form_alter(&$form, FormState $form_state) {
+   if ($form_state->getFormObject()->getEntity()->getType() == 'burser_reference') {
+     unset($form['default_value']);
+   }
+diff --git a/modules/bursers/src/BurserTransactionAccessControlHandler.php b/modules/bursers/src/BurserTransactionAccessControlHandler.php
+index 84da0789..0f0915dc 100644
+--- a/modules/bursers/src/BurserTransactionAccessControlHandler.php
++++ b/modules/bursers/src/BurserTransactionAccessControlHandler.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\mcapi_bursers;
+ 
++use Drupal\mcapi\Entity\Query\WalletQuery;
++use Drupal\Core\Messenger\Messenger;
+ use Drupal\mcapi\Entity\Storage\WalletStorage;
+ use Drupal\user\Entity\User;
+ use Drupal\mcapi\Entity\Access\TransactionAccessControlHandler;
+@@ -14,12 +16,12 @@ use Drupal\Core\Access\AccessResult;
+ class BurserTransactionAccessControlHandler extends TransactionAccessControlHandler {
+ 
+   /**
+-   * @var Drupal\mcapi\Entity\Query\WalletQuery
++   * @var WalletQuery
+    */
+   protected $walletQuery;
+ 
+   /**
+-   * @var Drupal\Core\Messenger\Messenger
++   * @var Messenger
+    */
+   protected $messenger;
+ 
+diff --git a/modules/clearingcentral/mcapi_cc.module b/modules/clearingcentral/mcapi_cc.module
+index ff6ee469..7e2dfa08 100644
+--- a/modules/clearingcentral/mcapi_cc.module
++++ b/modules/clearingcentral/mcapi_cc.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Database\Query\Select;
++use Drupal\Core\Access\AccessResultNeutral;
+ /**
+  * @file
+  * Define remote transactions and handle operations with clearing central.
+@@ -222,7 +224,7 @@ function mcapi_cc_mcapi_type_load($entities) {
+ 
+ /**
+  * Implements hook_query_entity_query_MCAPI_WALLET_alter().
+- * @param Drupal\Core\Database\Query\Select $query
++ * @param Select $query
+  *
+  * Ensure the intertrading wallet is never listed unless expressly demanded.
+  */
+@@ -273,7 +275,7 @@ function mcapi_cc_mcapi_currency_build_defaults_alter(&$build, $currency, $view_
+  */
+ function mcapi_cc_mcapi_transaction_access($entity, $operation, AccountInterface $account) {
+   if ($entity->type->target_id == 'remote') {
+-    $access = new Drupal\Core\Access\AccessResultNeutral();
++    $access = new AccessResultNeutral();
+     if ($operation == 'delete' or $operation == 'erase') {
+       $access = AccessResult::forbiddenif($account->id() <> 1)->cachePerUser();
+     }
+diff --git a/modules/clearingcentral/src/ClearingCentral.php b/modules/clearingcentral/src/ClearingCentral.php
+index a65227fc..8cf36610 100644
+--- a/modules/clearingcentral/src/ClearingCentral.php
++++ b/modules/clearingcentral/src/ClearingCentral.php
+@@ -38,7 +38,7 @@ class ClearingCentral implements IntertradingInterface {
+   private $currencyId;
+ 
+   /**
+-   * @var Drupal\user\Entity\User
++   * @var User
+    */
+   private $localWalletOwner;
+ 
+diff --git a/modules/clearingcentral/src/Entity/WalletQueryFactory.php b/modules/clearingcentral/src/Entity/WalletQueryFactory.php
+index b9f62981..048fdfc7 100644
+--- a/modules/clearingcentral/src/Entity/WalletQueryFactory.php
++++ b/modules/clearingcentral/src/Entity/WalletQueryFactory.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi_cc\Entity;
+ 
++use Drupal\mcapi\Entity\WalletQuery;
+ use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Entity\Query\Sql\QueryFactory as QueryFactoryBase;
+ 
+@@ -13,6 +14,6 @@ use Drupal\Core\Entity\Query\Sql\QueryFactory as QueryFactoryBase;
+ class WalletQueryFactory extends QueryFactoryBase {
+ 
+   public function get(EntityTypeInterface $entity_type, $conjunction) {
+-    return new \Drupal\mcapi\Entity\WalletQuery($entity_type, $conjunction, $this->connection, $this->namespaces);
++    return new WalletQuery($entity_type, $conjunction, $this->connection, $this->namespaces);
+   }
+ }
+diff --git a/modules/clearingcentral/src/Form/RemoteTransactionForm.php b/modules/clearingcentral/src/Form/RemoteTransactionForm.php
+index 3744ded1..75a6f849 100644
+--- a/modules/clearingcentral/src/Form/RemoteTransactionForm.php
++++ b/modules/clearingcentral/src/Form/RemoteTransactionForm.php
+@@ -169,7 +169,7 @@ class RemoteTransactionForm extends ContentEntityForm {
+    * Convert from the 2 decimal places value provided by clearing central to the
+    * currency's raw format
+    * @param float $val
+-   * @param \Drupal\mcapi\Entity\Currency $currency
++   * @param Currency $currency
+    */
+   function backFormat($val, $currency) {
+     $parts = [];
+diff --git a/modules/clearingcentral/src/Form/SettingsForm.php b/modules/clearingcentral/src/Form/SettingsForm.php
+index 25328e56..08b376ca 100644
+--- a/modules/clearingcentral/src/Form/SettingsForm.php
++++ b/modules/clearingcentral/src/Form/SettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi_cc\Form;
+ 
++use Drupal\Core\Url;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -59,7 +60,7 @@ class SettingsForm extends ConfigFormBase {
+         'Network Identifier in the Community Exchange Network. For example: cen0123. You can check your account at %link.',
+         ['%link' => Link::fromTextAndUrl(
+           t('Clearing Central'),
+-          \Drupal\Core\Url::fromUri(ClearingCentral::CLEARING_CENTRAL_URL)
++          Url::fromUri(ClearingCentral::CLEARING_CENTRAL_URL)
+         )->toString()]
+       ),
+       '#size' => 15,
+diff --git a/modules/clearingcentral/src/IntertradingInterface.php b/modules/clearingcentral/src/IntertradingInterface.php
+index 19e2637b..b1896083 100644
+--- a/modules/clearingcentral/src/IntertradingInterface.php
++++ b/modules/clearingcentral/src/IntertradingInterface.php
+@@ -12,7 +12,7 @@ interface IntertradingInterface  {
+   /**
+    * Send a transaction to Clearing Central server.
+    *
+-   * @param \Drupal\mcapi\Entity\TransactionInterface $transaction
++   * @param TransactionInterface $transaction
+    * @param string $remote_exchange_id
+    * @param string $remote_user_id
+    *
+diff --git a/modules/credit_commons/src/Access/HashChecker.php b/modules/credit_commons/src/Access/HashChecker.php
+index 20060827..329e648c 100644
+--- a/modules/credit_commons/src/Access/HashChecker.php
++++ b/modules/credit_commons/src/Access/HashChecker.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\mcapi_credcom_leaf\Access;
+ 
++use Drupal\Core\Routing\Access\AccessInterface;
++use Drupal\Core\Access\AccessResultInterface;
+ use Symfony\Component\HttpFoundation\RequestStack;
+ use Symfony\Component\HttpKernel\Exception\UnauthorizedHttpException;
+ use Drupal\Core\Access\AccessResult;
+@@ -9,7 +11,7 @@ use Drupal\Core\Access\AccessResult;
+ /**
+  * Access check for requests from rootwards nodes.
+  */
+-class HashChecker implements \Drupal\Core\Routing\Access\AccessInterface{
++class HashChecker implements AccessInterface{
+ 
+   /**
+    * Checks access.
+@@ -17,7 +19,7 @@ class HashChecker implements \Drupal\Core\Routing\Access\AccessInterface{
+    * @param RequestStack $request_stack
+    *   The currently logged in account.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function access(RequestStack $request_stack) {
+diff --git a/modules/forms/mcapi_forms.install b/modules/forms/mcapi_forms.install
+index 28446a53..68eecc3c 100644
+--- a/modules/forms/mcapi_forms.install
++++ b/modules/forms/mcapi_forms.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\Entity\EntityFormMode;
+ use Drupal\Core\Entity\Entity\EntityFormDisplay;
+ 
+ /**
+@@ -33,7 +34,7 @@ function mcapi_forms_8002() {
+     unset($values['uuid'], $values['dependencies']);
+     $values['id'] .= '_designed';
+     $values['label'] .= ' (designed)';
+-    $new = \Drupal\Core\Entity\Entity\EntityFormMode::create($values);
++    $new = EntityFormMode::create($values);
+     $new->save();
+     $form_mode->delete();
+ 
+@@ -45,4 +46,4 @@ function mcapi_forms_8002() {
+     $new = EntityFormDisplay::create($values)->save();
+ 
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/modules/forms/mcapi_forms.module b/modules/forms/mcapi_forms.module
+index a2a86276..d6cb3d04 100644
+--- a/modules/forms/mcapi_forms.module
++++ b/modules/forms/mcapi_forms.module
+@@ -268,7 +268,7 @@ function mcapi_form_redirect_form_mode($form, $form_state) {
+   \Drupal::messenger()->addStatus(t('Now edit your new transaction form'));
+   $form_mode_name = substr($form_state->getValue('id'), 18);
+   $form_state->setRedirectUrl(
+-    \Drupal\Core\Url::fromRoute('entity.entity_form_display.mcapi_transaction.form_mode',
++    Url::fromRoute('entity.entity_form_display.mcapi_transaction.form_mode',
+     ['form_mode_name' => $form_mode_name])
+   );
+ }
+diff --git a/modules/greco/mcapi_greco.module b/modules/greco/mcapi_greco.module
+index 26cafa1e..8c8aa4d1 100644
+--- a/modules/greco/mcapi_greco.module
++++ b/modules/greco/mcapi_greco.module
+@@ -61,7 +61,7 @@ function mcapi_index_views_cron() {
+     }
+ 
+     \Drupal::database()->insert('mcapi_greco')
+-      ->fields(array('curr_id' => $curr_id, 'timestamp' => REQUEST_TIME, 'value' => $indicator))
++      ->fields(array('curr_id' => $curr_id, 'timestamp' => \Drupal::time()->getRequestTime(), 'value' => $indicator))
+       ->execute();
+   }
+ }
+diff --git a/modules/limits/mcapi_limits.inc b/modules/limits/mcapi_limits.inc
+index 40c3a83d..656bcc85 100644
+--- a/modules/limits/mcapi_limits.inc
++++ b/modules/limits/mcapi_limits.inc
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\mcapi_limits\Plugin\McapiLimitsInterface;
+ /**
+  * @file
+  * Helper functions.
+@@ -149,7 +150,7 @@ function _mcapi_limits_form_mcapi_currency_edit_form_alter(&$form, FormStateInte
+  * @param CurrencyInterface $currency
+  *   The currency.
+  *
+- * @return \Drupal\mcapi_limits\Plugin\McapiLimitsInterface
++ * @return McapiLimitsInterface
+  *   The Limits object.
+  */
+ function mcapi_limits_form_state_load_plugin(FormStateInterface $form_state, CurrencyInterface $currency) {
+diff --git a/modules/limits/src/Form/WalletLimitOverride.php b/modules/limits/src/Form/WalletLimitOverride.php
+index 4d035a85..ec6bfdc6 100644
+--- a/modules/limits/src/Form/WalletLimitOverride.php
++++ b/modules/limits/src/Form/WalletLimitOverride.php
+@@ -183,7 +183,7 @@ class WalletLimitOverride extends FormBase {
+           'max' => (int) ($limit == 'max'),
+           'value' => $worth['value'],
+           'editor' => $this->currentUser()->id(),
+-          'date' => REQUEST_TIME,
++          'date' => \Drupal::time()->getRequestTime(),
+         ];
+         $q->values($row);
+       }
+diff --git a/modules/limits/src/Plugin/McapiLimitsBase.php b/modules/limits/src/Plugin/McapiLimitsBase.php
+index d76bd640..ed7685af 100644
+--- a/modules/limits/src/Plugin/McapiLimitsBase.php
++++ b/modules/limits/src/Plugin/McapiLimitsBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\mcapi_limits\Plugin;
+ 
++use Drupal\Core\StringTranslation\StringTranslationTrait;
++use Drupal\mcapi\Entity\Type;
+ use Drupal\mcapi\Entity\TransactionInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -13,7 +15,7 @@ use Drupal\Core\Form\FormStateInterface;
+  */
+ abstract class McapiLimitsBase implements McapiLimitsInterface {
+ 
+-  use \Drupal\Core\StringTranslation\StringTranslationTrait;
++  use StringTranslationTrait;
+ 
+   public $id;
+ 
+@@ -124,7 +126,7 @@ abstract class McapiLimitsBase implements McapiLimitsInterface {
+       ],
+       '#weight' => 6,
+     ];
+-    if (\Drupal\mcapi\Entity\Type::load('mass')) {
++    if (Type::load('mass')) {
+       $subform['skip']['#options']['mass'] = $this->t("of type 'mass'"); // NB mass transactions are now a separate module
+     }
+     $subform['prevent'] = [
+diff --git a/modules/limits/src/Plugin/Validation/Constraint/TransactionLimitsConstraintValidator.php b/modules/limits/src/Plugin/Validation/Constraint/TransactionLimitsConstraintValidator.php
+index 19b94e15..89ca2c4f 100644
+--- a/modules/limits/src/Plugin/Validation/Constraint/TransactionLimitsConstraintValidator.php
++++ b/modules/limits/src/Plugin/Validation/Constraint/TransactionLimitsConstraintValidator.php
+@@ -190,7 +190,7 @@ class TransactionLimitsConstraintValidator extends ConstraintValidator implement
+    * this is only used in tokens, so far, and in mcapi_limits module
+    * incoming transaction can be a transaction object with children or an array.
+    *
+-   * @param \Drupal\mcapi\Entity\Transaction $transaction
++   * @param Transaction $transaction
+    *   The new transaction.
+    */
+   private function differentiate(Transaction $transaction) {
+diff --git a/modules/limits/src/Plugin/migrate/process/WalletLimits.php b/modules/limits/src/Plugin/migrate/process/WalletLimits.php
+index cd2513b8..3ccd1731 100644
+--- a/modules/limits/src/Plugin/migrate/process/WalletLimits.php
++++ b/modules/limits/src/Plugin/migrate/process/WalletLimits.php
+@@ -55,7 +55,7 @@ class WalletLimits extends ProcessPluginBase {
+               'max' => (int)$limit == 'max',
+               'value' => $quant,
+               'editor' => 1, //User 1 because this field didn't exist in 7
+-              'date' => REQUEST_TIME
++              'date' => \Drupal::time()->getRequestTime()
+             ];
+           }
+         }
+diff --git a/modules/masspay/src/MassPay.php b/modules/masspay/src/MassPay.php
+index bb70df5b..7f500b38 100644
+--- a/modules/masspay/src/MassPay.php
++++ b/modules/masspay/src/MassPay.php
+@@ -20,7 +20,7 @@ class MassPay extends ContentEntityForm {
+   const MASSEXCLUDE = 1;
+ 
+   /**
+-   * @var Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+   protected $mailManager;
+ 
+@@ -57,7 +57,7 @@ class MassPay extends ContentEntityForm {
+ 
+   /**
+    * the logger object
+-   * @var Drupal\Core\Logger\LoggerChannel
++   * @var LoggerChannel
+    */
+   protected $logger;
+ 
+diff --git a/modules/signatures/src/Form/Settings.php b/modules/signatures/src/Form/Settings.php
+index 4b3a6e49..0b944cc2 100644
+--- a/modules/signatures/src/Form/Settings.php
++++ b/modules/signatures/src/Form/Settings.php
+@@ -18,7 +18,7 @@ class Settings extends ConfigFormBase {
+   /**
+    * Constructs a \Drupal\system\ConfigFormBase object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, $transactionRelativeManager) {
+diff --git a/modules/signatures/src/Signatures.php b/modules/signatures/src/Signatures.php
+index e0de1e29..0a720fbd 100644
+--- a/modules/signatures/src/Signatures.php
++++ b/modules/signatures/src/Signatures.php
+@@ -135,7 +135,7 @@ class Signatures {
+       $uid = $this->currentUser->id();
+     }
+     if (isset($this->transaction->signatures[$uid]) and empty($this->transaction->signatures[$uid])) {
+-      $this->transaction->signatures[$uid] = REQUEST_TIME;
++      $this->transaction->signatures[$uid] = \Drupal::time()->getRequestTime();
+       // Set the state to finished if there are no outstanding signatures.
+       if (array_search(0, $this->transaction->signatures) === FALSE) {
+         $this->transaction->set('state', 'done');
+@@ -149,7 +149,7 @@ class Signatures {
+   public function signOff() {
+     foreach ($this->transaction->signatures as $uid => $signed) {
+       if (!$signed) {
+-        $this->transaction->signatures[$uid] = REQUEST_TIME;
++        $this->transaction->signatures[$uid] = \Drupal::time()->getRequestTime();
+       }
+     }
+     $this->transaction->set('state', 'done');
+diff --git a/src/Element/BalanceHistories.php b/src/Element/BalanceHistories.php
+index c67cb178..ed2ed1e5 100644
+--- a/src/Element/BalanceHistories.php
++++ b/src/Element/BalanceHistories.php
+@@ -46,7 +46,7 @@ class BalanceHistories extends RenderElement {
+       }
+       // Add a start and end points showing the balance at this moment.
+       $points = [$element['#wallet']->created->value => 0] +
+-      $points += [REQUEST_TIME => end($points)];
++      $points += [\Drupal::time()->getRequestTime() => end($points)];
+       
+       $element[$currency->id()] = [
+         '#theme' => 'mcapi_timeline',
+diff --git a/src/Element/WorthForm.php b/src/Element/WorthForm.php
+index e010f685..f5685e86 100644
+--- a/src/Element/WorthForm.php
++++ b/src/Element/WorthForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\Element;
+ 
++use Drupal\Core\Render\Element\CompositeFormElementTrait;
+ use Drupal\mcapi\Entity\Currency;
+ use Drupal\mcapi\Mcapi;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -13,7 +14,7 @@ use Drupal\Core\Render\Element\FormElement;
+  * @FormElement("worth_form")
+  */
+ class WorthForm extends FormElement {
+-  use \Drupal\Core\Render\Element\CompositeFormElementTrait;
++  use CompositeFormElementTrait;
+ 
+   /**
+    * {@inheritdoc}
+diff --git a/src/Element/WorthsForm.php b/src/Element/WorthsForm.php
+index 709468aa..65b4cc64 100644
+--- a/src/Element/WorthsForm.php
++++ b/src/Element/WorthsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\Element;
+ 
++use Drupal\Core\Render\Element\CompositeFormElementTrait;
+ use Drupal\mcapi\Entity\Currency;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Render\Element\FormElement;
+@@ -13,7 +14,7 @@ use Drupal\Component\Utility\Html as HtmlUtility;
+  * @FormElement("worths_form")
+  */
+ class WorthsForm extends FormElement {
+-  use \Drupal\Core\Render\Element\CompositeFormElementTrait;
++  use CompositeFormElementTrait;
+ 
+   /**
+    * {@inheritdoc}
+diff --git a/src/Entity/Access/CurrencyAccessControlHandler.php b/src/Entity/Access/CurrencyAccessControlHandler.php
+index f3350c3e..187facf3 100644
+--- a/src/Entity/Access/CurrencyAccessControlHandler.php
++++ b/src/Entity/Access/CurrencyAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\Entity\Access;
+ 
++use Drupal\Core\Entity\Query\QueryInterface;
+ use Drupal\mcapi\Entity\Storage\TransactionStorageInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityHandlerInterface;
+@@ -19,7 +20,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class CurrencyAccessControlHandler extends EntityAccessControlHandler implements EntityHandlerInterface {
+ 
+   /**
+-   * @var \Drupal\Core\Entity\Query\QueryInterface
++   * @var QueryInterface
+    */
+   protected $transactionQuery;
+ 
+diff --git a/src/Entity/Access/TransactionAccessControlHandler.php b/src/Entity/Access/TransactionAccessControlHandler.php
+index 52fc64af..18b8a674 100644
+--- a/src/Entity/Access/TransactionAccessControlHandler.php
++++ b/src/Entity/Access/TransactionAccessControlHandler.php
+@@ -21,12 +21,12 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class TransactionAccessControlHandler extends EntityAccessControlHandler implements EntityHandlerInterface {
+ 
+   /**
+-   * @var Drupal\mcapi\Entity\Query\WalletQuery
++   * @var WalletQuery
+    */
+   protected $walletQuery;
+ 
+   /**
+-   * @var Drupal\Core\Messenger\Messenger
++   * @var Messenger
+    */
+   protected $messenger;
+ 
+diff --git a/src/Entity/ListBuilder/CurrencyListBuilder.php b/src/Entity/ListBuilder/CurrencyListBuilder.php
+index da0e11c7..a8efb960 100644
+--- a/src/Entity/ListBuilder/CurrencyListBuilder.php
++++ b/src/Entity/ListBuilder/CurrencyListBuilder.php
+@@ -17,7 +17,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class CurrencyListBuilder extends DraggableListBuilder {
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+diff --git a/src/Entity/Query/TransactionQuery.php b/src/Entity/Query/TransactionQuery.php
+index d402ed57..4a692ba0 100644
+--- a/src/Entity/Query/TransactionQuery.php
++++ b/src/Entity/Query/TransactionQuery.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\Entity\Query;
+ 
++use Drupal\Core\Entity\Query\QueryException;
+ use Drupal\Core\Entity\Query\Sql\Query as BaseQuery;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ 
+@@ -40,7 +41,7 @@ class TransactionQuery extends BaseQuery {
+    * @return \Drupal\Core\Entity\Query\Sql\Query
+    *   Returns the called object.
+    *
+-   * @throws \Drupal\Core\Entity\Query\QueryException
++   * @throws QueryException
+    *   Thrown if the base table does not exist.
+    */
+   protected function prepare() {
+diff --git a/src/Entity/Storage/TransactionStorage.php b/src/Entity/Storage/TransactionStorage.php
+index 52dd9b97..f5485cc9 100644
+--- a/src/Entity/Storage/TransactionStorage.php
++++ b/src/Entity/Storage/TransactionStorage.php
+@@ -63,7 +63,7 @@ class TransactionStorage extends TransactionIndexStorage {
+    */
+   public function doSave($id, EntityInterface $entity) {
+     $record = $this->mapToStorageRecord($entity);
+-    $record->changed = REQUEST_TIME;
++    $record->changed = \Drupal::time()->getRequestTime();
+     $return = parent::doSave($entity->xid->value, $entity);
+     // The entity is no longer new.
+     // because we were working on a clone.
+diff --git a/src/Entity/Storage/TransactionStorageInterface.php b/src/Entity/Storage/TransactionStorageInterface.php
+index 98d58f21..f8fcb9dd 100644
+--- a/src/Entity/Storage/TransactionStorageInterface.php
++++ b/src/Entity/Storage/TransactionStorageInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\Entity\Storage;
+ 
++use Drupal\mcapi\Entity\TransactionInterface;
+ use Drupal\mcapi\Entity\Transaction;
+ use Drupal\mcapi\Entity\CurrencyInterface;
+ use Drupal\Core\Entity\ContentEntityStorageInterface;
+@@ -21,7 +22,7 @@ interface TransactionStorageInterface extends ContentEntityStorageInterface {
+    * @param int $serial
+    *   A serial number.
+    *
+-   * @return \Drupal\mcapi\Entity\TransactionInterface
++   * @return TransactionInterface
+    *   The fully loaded transaction with children.
+    */
+   public function loadBySerial($serial, $skip_access = FALSE) : Transaction ;
+@@ -144,7 +145,7 @@ interface TransactionStorageInterface extends ContentEntityStorageInterface {
+    * @param array $conditions
+    *   Conditions keyed by property name suitable for getMcapiIndexQuery().
+    *
+-   * @return Drupal\Core\Database\Query\Query
++   * @return Query
+    *   An unexecuted db query.
+    */
+   public function ledgerStateQuery($curr_id, array $conditions) : Query;
+diff --git a/src/Entity/Storage/WalletStorageInterface.php b/src/Entity/Storage/WalletStorageInterface.php
+index 73d76ae3..1606e13d 100644
+--- a/src/Entity/Storage/WalletStorageInterface.php
++++ b/src/Entity/Storage/WalletStorageInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\Entity\Storage;
+ 
++use Drupal\mcapi\Entity\WalletInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\ContentEntityStorageInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -19,7 +20,7 @@ interface WalletStorageInterface extends ContentEntityStorageInterface {
+    * @param bool $load
+    *   TRUE means return the fully loaded wallets.
+    *
+-   * @return \Drupal\mcapi\Entity\WalletInterface[]
++   * @return WalletInterface[]
+    *   Or just the wallet ids if $load is FALSE.
+    */
+   public static function walletsOf(ContentEntityInterface $entity, $load = FALSE);
+diff --git a/src/Entity/ViewBuilder/CurrencyViewBuilder.php b/src/Entity/ViewBuilder/CurrencyViewBuilder.php
+index 8df00716..62f517c8 100644
+--- a/src/Entity/ViewBuilder/CurrencyViewBuilder.php
++++ b/src/Entity/ViewBuilder/CurrencyViewBuilder.php
+@@ -201,7 +201,7 @@ class CurrencyViewBuilder extends EntityViewBuilder {
+    */
+   public function periodQueryParams($conditions) {
+     $since = isset($conditions['since']) ? $conditions['since'] : 0;
+-    $until = isset($conditions['until']) ? $conditions['until'] : REQUEST_TIME;
++    $until = isset($conditions['until']) ? $conditions['until'] : \Drupal::time()->getRequestTime();
+     $span = $until - $since;
+     $day = 86400;
+     // $year = 31560192;
+diff --git a/src/Entity/ViewBuilder/TransactionViewBuilder.php b/src/Entity/ViewBuilder/TransactionViewBuilder.php
+index 97932178..6fc8cc99 100644
+--- a/src/Entity/ViewBuilder/TransactionViewBuilder.php
++++ b/src/Entity/ViewBuilder/TransactionViewBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\Entity\ViewBuilder;
+ 
++use Drupal\Component\Render\PlainTextOutput;
+ use Drupal\mcapi\Entity\Transaction;
+ use Drupal\mcapi\TransactionOperations;
+ use Drupal\Core\Link;
+@@ -87,7 +88,7 @@ class TransactionViewBuilder extends EntityViewBuilder {
+         $template = $this->settings->get('sentence_template');
+         $sentence =$this->token->replace($template, ['xaction' => $entity]);
+         // @todo replace this in 9.4 with RenderPlain
+-        $build['#markup'] = \Drupal\Component\Render\PlainTextOutput::renderFromHtml($sentence);
++        $build['#markup'] = PlainTextOutput::renderFromHtml($sentence);
+         break;
+     }
+     $build += [
+diff --git a/src/Entity/WalletInterface.php b/src/Entity/WalletInterface.php
+index d71f3b67..e2cc7778 100644
+--- a/src/Entity/WalletInterface.php
++++ b/src/Entity/WalletInterface.php
+@@ -63,7 +63,7 @@ interface WalletInterface extends ContentEntityInterface {
+   /**
+    * Returns the entity owner's user entity.
+    *
+-   * @return \Drupal\user\UserInterface
++   * @return UserInterface
+    *   The owner user entity.
+    */
+   public function getOwner() : UserInterface;
+diff --git a/src/EventSubscriber/MigrationSubscriber.php b/src/EventSubscriber/MigrationSubscriber.php
+index aad888b8..6f3abc09 100644
+--- a/src/EventSubscriber/MigrationSubscriber.php
++++ b/src/EventSubscriber/MigrationSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\EventSubscriber;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\mcapi\Entity\Currency;
+ use Drupal\mcapi\Entity\Wallet;
+ use Drupal\user\Entity\Role;
+@@ -144,7 +145,7 @@ class MigrationSubscriber implements EventSubscriberInterface {
+       $existing_wids = \Drupal::database()->select('mcapi_wallet', 'w')
+         ->fields('w', ['wid'])
+         ->execute()->fetchCol();
+-      $user1 = \Drupal\user\Entity\User::load(1);
++      $user1 = User::load(1);
+       foreach (array_diff($all_wids, $existing_wids) as $wid) {
+         Wallet::Create([
+           'name' => t("D7 Deleted user @wid", ['@wid' => $wid]),
+diff --git a/src/Form/OperationForm.php b/src/Form/OperationForm.php
+index aab27713..ea491058 100644
+--- a/src/Form/OperationForm.php
++++ b/src/Form/OperationForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\mcapi\Form;
+ 
++use Drupal\system\Entity\Action;
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\mcapi\Event\McapiEvents;
+ use Drupal\mcapi\Event\TransactionSaveEvents;
+ use Drupal\mcapi\TransactionOperations;
+@@ -27,7 +29,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class OperationForm extends ContentEntityForm {
+ 
+   /**
+-   * @var Drupal\system\Entity\Action;
++   * @var Action ;
+    */
+   private $plugin;
+ 
+@@ -157,7 +159,7 @@ class OperationForm extends ContentEntityForm {
+ 
+ 
+   public function buildEntity(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = parent::buildEntity($form, $form_state);
+     $entity->children = $form_state->get('children');
+     return $entity;
+@@ -186,7 +188,7 @@ class OperationForm extends ContentEntityForm {
+         'action' => $this->getOperation(),
+       ];
+       $events = new TransactionSaveEvents($transaction, $context);
+-      $this->eventDispatcher->dispatch(McapiEvents::ACTION, $events);
++      $this->eventDispatcher->dispatch($events, McapiEvents::ACTION);
+       if ($m = $this->config['message']) {
+         $this->messenger()->addMessage($m, 'status');
+       }
+diff --git a/src/Form/TransactionForm.php b/src/Form/TransactionForm.php
+index c59af68f..eef54c19 100644
+--- a/src/Form/TransactionForm.php
++++ b/src/Form/TransactionForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\Form;
+ 
++use Drupal\Core\TempStore\PrivateTempStore;
+ use Drupal\mcapi\Entity\Transaction;
+ use Drupal\mcapi\Entity\Storage\WalletStorage;
+ use Drupal\user\Entity\User;
+@@ -25,28 +26,28 @@ class TransactionForm extends ContentEntityForm {
+   /**
+    * The tempStore service.
+    *
+-   * @var Drupal\Core\TempStore\PrivateTempStore
++   * @var PrivateTempStore
+    */
+   protected $tempStore;
+ 
+   /**
+    * The request object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $currentUser;
+ 
+   /**
+    * The logger channel.
+    *
+-   * @var Drupal\Core\Logger\LoggerChannel;
++   * @var LoggerChannel ;
+    */
+   protected $logger;
+ 
+@@ -160,7 +161,7 @@ class TransactionForm extends ContentEntityForm {
+     }
+ 
+     if (!$form_state->getValue('created')) {
+-      $form_state->setValue('created', REQUEST_TIME);
++      $form_state->setValue('created', \Drupal::time()->getRequestTime());
+     }
+     return $entity;
+   }
+diff --git a/src/Form/TransactionStatsFilterForm.php b/src/Form/TransactionStatsFilterForm.php
+index 57cc7098..8e9786e2 100644
+--- a/src/Form/TransactionStatsFilterForm.php
++++ b/src/Form/TransactionStatsFilterForm.php
+@@ -62,7 +62,7 @@ class TransactionStatsFilterForm extends FormBase {
+       '#type' => 'select',
+       '#empty_option' => t('Now'),
+       '#required' => FALSE,
+-      '#default_value' => isset($previous['until']) ? $previous['until'] : REQUEST_TIME
++      '#default_value' => isset($previous['until']) ? $previous['until'] : \Drupal::time()->getRequestTime()
+     ];
+ 
+     $earliest = $currency->firstUsed();
+@@ -76,7 +76,7 @@ class TransactionStatsFilterForm extends FormBase {
+     if ($earliest > strtotime('-2 years')) {
+       // System is less than two years old, so show months
+       $start_of_month = strtotime("01-{$month}-{$year}");
+-      while ($start_of_month < REQUEST_TIME) {
++      while ($start_of_month < \Drupal::time()->getRequestTime()) {
+         $this->nextMonth($month, $year);
+         $start_of_month = strtotime('01-'.$month.'-'.$year);
+         $end_of_month = strtotime('01-'.($month+1).'-'.$year) -1;
+@@ -87,7 +87,7 @@ class TransactionStatsFilterForm extends FormBase {
+       // System is more than 2 years old, so show years.
+       $start_of_year = strtotime('01-01-'.$year);
+       //$form['since']['#options'][$next_year] = date('Y', $next_year);
+-      while ($start_of_year < REQUEST_TIME) {
++      while ($start_of_year < \Drupal::time()->getRequestTime()) {
+         $form['since']['#options'][$start_of_year] = date('Y', $start_of_year);
+         $year++;
+         $form['until']['#options'][strtotime('01-01-'.$year)-1] = $year;
+diff --git a/src/Plugin/Action/Edit.php b/src/Plugin/Action/Edit.php
+index 1ca06f67..35f92009 100644
+--- a/src/Plugin/Action/Edit.php
++++ b/src/Plugin/Action/Edit.php
+@@ -55,7 +55,7 @@ class Edit extends TransactionActionBase implements ContainerFactoryPluginInterf
+     if ($this->accessState($object, $account)) {
+       if ($this->accessOp($object, $account)) {
+         if ($this->configuration['period']) {
+-          $result = AccessResult::allowedIf($this->configuration['period'] > REQUEST_TIME);
++          $result = AccessResult::allowedIf($this->configuration['period'] > \Drupal::time()->getRequestTime());
+         }
+         else {
+           $result = AccessResult::allowed();
+diff --git a/src/Plugin/Block/SystemStats.php b/src/Plugin/Block/SystemStats.php
+index da90e434..3d1bf633 100644
+--- a/src/Plugin/Block/SystemStats.php
++++ b/src/Plugin/Block/SystemStats.php
+@@ -19,7 +19,7 @@ use Drupal\mysql\Driver\Database\mysql\Connection; //
+ class SystemStats extends BlockBase implements ContainerFactoryPluginInterface {
+ 
+   /**
+-   * @var Drupal\mysql\Driver\Database\mysql\Connection
++   * @var Connection
+    */
+   private $database;
+ 
+diff --git a/src/Plugin/Block/WalletContextBlockBase.php b/src/Plugin/Block/WalletContextBlockBase.php
+index b6eaa706..30700bd2 100644
+--- a/src/Plugin/Block/WalletContextBlockBase.php
++++ b/src/Plugin/Block/WalletContextBlockBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\Plugin\Block;
+ 
++use Drupal\Core\Session\AccountProxy;
+ use Drupal\mcapi\Mcapi;
+ use Drupal\mcapi\Entity\Currency;
+ use Drupal\mcapi\Entity\Wallet;
+@@ -25,12 +26,12 @@ abstract class WalletContextBlockBase extends BlockBase implements ContainerFact
+   const HOLDER_VISITED_ENTITY = 0;
+ 
+   /**
+-   * @var Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $currentUser;
+ 
+   /**
+-   * @var Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $entityTypeManager;
+ 
+diff --git a/src/Plugin/Derivative/WalletLocalAction.php b/src/Plugin/Derivative/WalletLocalAction.php
+index c754852c..c612aa12 100644
+--- a/src/Plugin/Derivative/WalletLocalAction.php
++++ b/src/Plugin/Derivative/WalletLocalAction.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\Plugin\Derivative;
+ 
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Plugin\Discovery\ContainerDeriverInterface;
+ use Drupal\Component\Plugin\Derivative\DeriverBase;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -15,7 +16,7 @@ class WalletLocalAction extends DeriverBase implements ContainerDeriverInterface
+   /**
+    * Mutual credit module miscellaneous settings.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $settings;
+ 
+diff --git a/src/Plugin/EntityReferenceSelection/WalletSelection.php b/src/Plugin/EntityReferenceSelection/WalletSelection.php
+index 49e3b1fe..a4f051d5 100644
+--- a/src/Plugin/EntityReferenceSelection/WalletSelection.php
++++ b/src/Plugin/EntityReferenceSelection/WalletSelection.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\mcapi\Plugin\EntityReferenceSelection;
+ 
++use Drupal\Core\Entity\Query\Sql\Query;
+ use Drupal\Core\Entity\Plugin\EntityReferenceSelection\DefaultSelection;
+ 
+ /**
+@@ -68,7 +69,7 @@ class WalletSelection extends DefaultSelection {
+    * @param string $match
+    *   A fragment of the wallet name.
+    *
+-   * @return Drupal\Core\Entity\Query\Sql\Query
++   * @return Query
+    *   An entity query object, unexecuted
+    */
+   public function buildEntityQuery($match = NULL, $match_operator = 'CONTAINS') {

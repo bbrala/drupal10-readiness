@@ -1,0 +1,167 @@
+diff --git a/restrict_by_ip.info.yml b/restrict_by_ip.info.yml
+index 63ab66a..e21831f 100644
+--- a/restrict_by_ip.info.yml
++++ b/restrict_by_ip.info.yml
+@@ -2,5 +2,5 @@ name: Restrict By IP
+ description: Enables limiting user login and role access to specific IP Addresses.
+ type: module
+ package: Access control
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^8 || ^9 || ^10
+ configure: restrict_by_ip.general_settings
+diff --git a/restrict_by_ip.module b/restrict_by_ip.module
+index 682c4a1..40abece 100644
+--- a/restrict_by_ip.module
++++ b/restrict_by_ip.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\restrict_by_ip\Exception\InvalidIPException;
++use Drupal\user\Entity\User;
+ /**
+  * @file
+  * Restrict logins or roles to whitelisted IP addresses.
+@@ -109,7 +111,7 @@ function restrict_by_ip_user_profile_validate($form, &$form_state) {
+       try {
+         $ip_tools->validateIP($ip);
+       }
+-      catch (\Drupal\restrict_by_ip\Exception\InvalidIPException $e) {
++      catch (InvalidIPException $e) {
+         $form_state->setErrorByName('restrict_by_ip_address', t($e->getMessage()));
+       }
+     }
+@@ -173,7 +175,7 @@ function restrict_by_ip_role_check(&$user){
+  * When a user entity is loaded, remove any roles that are restricted based on
+  * IP whitelists.
+  *
+- * @param \Drupal\user\Entity\User[] $users
++ * @param User[] $users
+  *   Array of user entities keyed by entity ID.
+  */
+ function restrict_by_ip_user_load($users) {
+@@ -185,4 +187,4 @@ function restrict_by_ip_user_load($users) {
+       $user->removeRole($role);
+     }
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/src/EventSubscriber/FirewallSubscriber.php b/src/EventSubscriber/FirewallSubscriber.php
+index c307c66..af5f8b3 100644
+--- a/src/EventSubscriber/FirewallSubscriber.php
++++ b/src/EventSubscriber/FirewallSubscriber.php
+@@ -2,10 +2,10 @@
+ 
+ namespace Drupal\restrict_by_ip\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\restrict_by_ip\LoginFirewallInterface;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ 
+ /**
+  * Triggers the restrict by IP login firewall.
+@@ -17,14 +17,14 @@ class FirewallSubscriber implements EventSubscriberInterface {
+   /**
+    * Drupal\restrict_by_ip\LoginFirewallInterface definition.
+    *
+-   * @var Drupal\restrict_by_ip\LoginFirewallInterface
++   * @var LoginFirewallInterface
+    */
+   protected $loginFirewall;
+ 
+   /**
+    * Drupal\Core\Session\AccountInterface definition.
+    *
+-   * @var Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+@@ -51,10 +51,10 @@ class FirewallSubscriber implements EventSubscriberInterface {
+   /**
+    * This method is called whenever the kernel.request event is dispatched.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The event.
+    */
+-  public function loginFirewall(GetResponseEvent $event) {
++  public function loginFirewall(RequestEvent $event) {
+     $this->loginFirewall->execute($this->currentUser);
+   }
+ 
+diff --git a/src/Form/UserSettingsForm.php b/src/Form/UserSettingsForm.php
+index 738514e..78e09e1 100644
+--- a/src/Form/UserSettingsForm.php
++++ b/src/Form/UserSettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\restrict_by_ip\Form;
+ 
++use Drupal\user\Entity\User;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -67,7 +68,7 @@ class UserSettingsForm extends ConfigFormBase {
+ 
+     // Current restrictions.
+     foreach ($config->get('user') as $key => $value) {
+-      $account = \Drupal\user\Entity\User::load($key);
++      $account = User::load($key);
+       $form['restrict_by_ip_user_' . $key] = [
+         '#type' => 'textfield',
+         '#title' => $this->t('@name user IP range', ['@name' => $account->label()]),
+diff --git a/src/LoginFirewallInterface.php b/src/LoginFirewallInterface.php
+index 6a2a7aa..c079344 100644
+--- a/src/LoginFirewallInterface.php
++++ b/src/LoginFirewallInterface.php
+@@ -14,7 +14,7 @@ interface LoginFirewallInterface {
+   /**
+    * Checks that a user is allowed to login based on IP whitelists.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user to check if login is allowed.
+    *
+    * @return bool
+@@ -25,7 +25,7 @@ interface LoginFirewallInterface {
+   /**
+    * Checks that login is allowed, and takes appropriate action if not.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user to check if login is allowed.
+    */
+   public function execute(AccountInterface $account);
+diff --git a/src/Session/AccountProxy.php b/src/Session/AccountProxy.php
+index a214a7f..aa92f9e 100644
+--- a/src/Session/AccountProxy.php
++++ b/src/Session/AccountProxy.php
+@@ -7,6 +7,7 @@
+ 
+ namespace Drupal\restrict_by_ip\Session;
+ 
++use Drupal\user\RoleStorageInterface;
+ use Drupal\Core\Session\AccountProxyInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\restrict_by_ip\RoleFirewallInterface;
+@@ -21,7 +22,7 @@ class AccountProxy implements AccountProxyInterface {
+   /**
+    * The original current_user service.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $original;
+ 
+@@ -164,7 +165,7 @@ class AccountProxy implements AccountProxyInterface {
+   /**
+    * Returns the role storage object.
+    *
+-   * @return \Drupal\user\RoleStorageInterface
++   * @return RoleStorageInterface
+    *   The role storage object.
+    */
+   protected function getRoleStorage() {

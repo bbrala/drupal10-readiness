@@ -1,0 +1,686 @@
+diff --git a/simplesamlphp_auth.api.php b/simplesamlphp_auth.api.php
+index 60a6555..da1a1ce 100644
+--- a/simplesamlphp_auth.api.php
++++ b/simplesamlphp_auth.api.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\user\UserInterface;
+ /**
+  * @file
+  * Hooks for simpleSAMLphp Authentication module.
+@@ -74,10 +75,10 @@ function hook_simplesamlphp_auth_allow_login($attributes) {
+  *
+  * @param string $authname
+  *   The current authname that will be assigned this user (default: username).
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   The pre-existing Drupal user to be SAML-enabled.
+  */
+-function hook_simplesamlphp_auth_account_authname_alter(&$authname, \Drupal\user\UserInterface $account) {
++function hook_simplesamlphp_auth_account_authname_alter(&$authname, UserInterface $account) {
+   $authname = $account->mail;
+ }
+ 
+@@ -97,7 +98,7 @@ function hook_simplesamlphp_auth_account_authname_alter(&$authname, \Drupal\user
+  * @param array $attributes
+  *   The SimpleSAMLphp attributes for this user.
+  *
+- * @return \Drupal\user\UserInterface|bool
++ * @return UserInterface|bool
+  *   The pre-existing Drupal user to be SAML-enabled, or FALSE if none found.
+  */
+ function hook_simplesamlphp_auth_existing_user($attributes) {
+@@ -119,15 +120,15 @@ function hook_simplesamlphp_auth_existing_user($attributes) {
+  * after a user logged in through SimpleSAMLphp. This can be used to add
+  * map additional SAML attributes to Drupal user profile fields.
+  *
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   The Drupal account that can be altered.
+  * @param array $attributes
+  *   The SimpleSAMLphp attributes for this user.
+  *
+- * @return \Drupal\user\UserInterface|bool
++ * @return UserInterface|bool
+  *   The altered Drupal account or FALSE if nothing was changed.
+  */
+-function hook_simplesamlphp_auth_user_attributes(\Drupal\user\UserInterface $account, $attributes) {
++function hook_simplesamlphp_auth_user_attributes(UserInterface $account, $attributes) {
+   $saml_first_name = $attributes['first_name'];
+   if ($saml_first_name) {
+     $account->set('field_first_name', $saml_first_name);
+diff --git a/simplesamlphp_auth.module b/simplesamlphp_auth.module
+index 1f4783c..988dfc2 100644
+--- a/simplesamlphp_auth.module
++++ b/simplesamlphp_auth.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\simplesamlphp_auth\Service\SimplesamlphpAuthManager;
+ /**
+  * @file
+  * SimpleSAMLphp authentication module for Drupal.
+@@ -52,7 +53,7 @@ function simplesamlphp_auth_help($route_name) {
+  */
+ function simplesamlphp_auth_user_logout(AccountInterface $account) {
+   $logout_url = \Drupal::config('simplesamlphp_auth.settings')->get('logout_goto_url');
+-  /** @var \Drupal\simplesamlphp_auth\Service\SimplesamlphpAuthManager $simplesaml */
++  /** @var SimplesamlphpAuthManager $simplesaml */
+   $simplesaml = \Drupal::service('simplesamlphp_auth.manager');
+   $session = \Drupal::service('session_manager');
+ 
+diff --git a/src/Controller/SimplesamlphpAuthController.php b/src/Controller/SimplesamlphpAuthController.php
+index 8a084f2..6d63fc5 100644
+--- a/src/Controller/SimplesamlphpAuthController.php
++++ b/src/Controller/SimplesamlphpAuthController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simplesamlphp_auth\Controller;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+@@ -24,77 +25,77 @@ class SimplesamlphpAuthController extends ControllerBase implements ContainerInj
+   /**
+    * The SimpleSAML Authentication helper service.
+    *
+-   * @var \Drupal\simplesamlphp_auth\Service\SimplesamlphpAuthManager
++   * @var SimplesamlphpAuthManager
+    */
+   public $simplesaml;
+ 
+   /**
+    * The SimpleSAML Drupal Authentication service.
+    *
+-   * @var \Drupal\simplesamlphp_auth\Service\SimplesamlphpDrupalAuth
++   * @var SimplesamlphpDrupalAuth
+    */
+   public $simplesamlDrupalauth;
+ 
+   /**
+    * The url generator service.
+    *
+-   * @var \Drupal\Core\Routing\UrlGeneratorInterface
++   * @var UrlGeneratorInterface
+    */
+   protected $urlGenerator;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   public $requestStack;
+ 
+   /**
+    * The current account.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+    * The path validator.
+    *
+-   * @var \Drupal\Core\Path\PathValidatorInterface
++   * @var PathValidatorInterface
+    */
+   protected $pathValidator;
+ 
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * A configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * {@inheritdoc}
+    *
+-   * @param \Drupal\simplesamlphp_auth\Service\SimplesamlphpAuthManager $simplesaml
++   * @param SimplesamlphpAuthManager $simplesaml
+    *   The SimpleSAML Authentication helper service.
+-   * @param \Drupal\simplesamlphp_auth\Service\SimplesamlphpDrupalAuth $simplesaml_drupalauth
++   * @param SimplesamlphpDrupalAuth $simplesaml_drupalauth
+    *   The SimpleSAML Drupal Authentication service.
+-   * @param \Drupal\Core\Routing\UrlGeneratorInterface $url_generator
++   * @param UrlGeneratorInterface $url_generator
+    *   The url generator service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The current account.
+-   * @param \Drupal\Core\Path\PathValidatorInterface $path_validator
++   * @param PathValidatorInterface $path_validator
+    *   The path validator.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+    */
+   public function __construct(SimplesamlphpAuthManager $simplesaml, SimplesamlphpDrupalAuth $simplesaml_drupalauth, UrlGeneratorInterface $url_generator, RequestStack $request_stack, AccountInterface $account, PathValidatorInterface $path_validator, LoggerInterface $logger, ConfigFactoryInterface $config_factory) {
+@@ -127,7 +128,7 @@ class SimplesamlphpAuthController extends ControllerBase implements ContainerInj
+   /**
+    * Logs the user in via SimpleSAML federation.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirection to either a designated page or the user login page.
+    */
+   public function authenticate() {
+diff --git a/src/EventSubscriber/SimplesamlExternalauthSubscriber.php b/src/EventSubscriber/SimplesamlExternalauthSubscriber.php
+index 73b844a..0c58a88 100644
+--- a/src/EventSubscriber/SimplesamlExternalauthSubscriber.php
++++ b/src/EventSubscriber/SimplesamlExternalauthSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simplesamlphp_auth\EventSubscriber;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\user\UserInterface;
+ use Drupal\simplesamlphp_auth\Service\SimplesamlphpDrupalAuth;
+@@ -20,50 +21,50 @@ class SimplesamlExternalauthSubscriber implements EventSubscriberInterface {
+   /**
+    * The SimpleSAML Authentication helper service.
+    *
+-   * @var \Drupal\simplesamlphp_auth\Service\SimplesamlphpAuthManager
++   * @var SimplesamlphpAuthManager
+    */
+   protected $simplesaml;
+ 
+   /**
+    * The SimpleSAML Drupal Authentication service.
+    *
+-   * @var \Drupal\simplesamlphp_auth\Service\SimplesamlphpDrupalAuth
++   * @var SimplesamlphpDrupalAuth
+    */
+   public $simplesamlDrupalauth;
+ 
+   /**
+    * A configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * {@inheritdoc}
+    *
+-   * @param \Drupal\simplesamlphp_auth\Service\SimplesamlphpAuthManager $simplesaml
++   * @param SimplesamlphpAuthManager $simplesaml
+    *   The SimpleSAML Authentication helper service.
+-   * @param \Drupal\simplesamlphp_auth\Service\SimplesamlphpDrupalAuth $simplesaml_drupalauth
++   * @param SimplesamlphpDrupalAuth $simplesaml_drupalauth
+    *   The SimpleSAML Drupal Authentication service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+    */
+   public function __construct(SimplesamlphpAuthManager $simplesaml, SimplesamlphpDrupalAuth $simplesaml_drupalauth, ConfigFactoryInterface $config_factory, LoggerInterface $logger, ModuleHandlerInterface $module_handler) {
+@@ -77,7 +78,7 @@ class SimplesamlExternalauthSubscriber implements EventSubscriberInterface {
+   /**
+    * React on an ExternalAuth login event.
+    *
+-   * @param \Drupal\externalauth\Event\ExternalAuthLoginEvent $event
++   * @param ExternalAuthLoginEvent $event
+    *   The subscribed event.
+    */
+   public function externalauthLogin(ExternalAuthLoginEvent $event) {
+diff --git a/src/EventSubscriber/SimplesamlSubscriber.php b/src/EventSubscriber/SimplesamlSubscriber.php
+index 0e29647..f9fa331 100644
+--- a/src/EventSubscriber/SimplesamlSubscriber.php
++++ b/src/EventSubscriber/SimplesamlSubscriber.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\simplesamlphp_auth\EventSubscriber;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\Core\Routing\RouteMatchInterface;
+@@ -9,7 +11,6 @@ use Drupal\Core\Url;
+ use Drupal\simplesamlphp_auth\Service\SimplesamlphpAuthManager;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+ use Symfony\Component\HttpKernel\KernelEvents;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Psr\Log\LoggerInterface;
+ 
+@@ -21,50 +22,50 @@ class SimplesamlSubscriber implements EventSubscriberInterface {
+   /**
+    * The SimpleSAML Authentication helper service.
+    *
+-   * @var \Drupal\simplesamlphp_auth\Service\SimplesamlphpAuthManager
++   * @var SimplesamlphpAuthManager
+    */
+   protected $simplesaml;
+ 
+   /**
+    * The current account.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+    * A configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The current route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * {@inheritdoc}
+    *
+-   * @param \Drupal\simplesamlphp_auth\Service\SimplesamlphpAuthManager $simplesaml
++   * @param SimplesamlphpAuthManager $simplesaml
+    *   The SimpleSAML Authentication helper service.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The current account.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+    */
+   public function __construct(SimplesamlphpAuthManager $simplesaml, AccountInterface $account, ConfigFactoryInterface $config_factory, LoggerInterface $logger, RouteMatchInterface $route_match) {
+@@ -78,10 +79,10 @@ class SimplesamlSubscriber implements EventSubscriberInterface {
+   /**
+    * Logs out user if not SAML authenticated and local logins are disabled.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The subscribed event.
+    */
+-  public function checkAuthStatus(GetResponseEvent $event) {
++  public function checkAuthStatus(RequestEvent $event) {
+     if ($this->account->isAnonymous()) {
+       return;
+     }
+@@ -121,10 +122,10 @@ class SimplesamlSubscriber implements EventSubscriberInterface {
+   /**
+    * Redirect anonymous users to the external IdP from the Drupal login page.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The subscribed event.
+    */
+-  public function login_directly_with_external_IdP(GetResponseEvent $event) {
++  public function login_directly_with_external_IdP(RequestEvent $event) {
+ 
+     if ($this->config->get('allow.default_login')) {
+       return;
+diff --git a/src/Plugin/Block/SimplesamlphpAuthBlock.php b/src/Plugin/Block/SimplesamlphpAuthBlock.php
+index 70f9c1a..5c03434 100644
+--- a/src/Plugin/Block/SimplesamlphpAuthBlock.php
++++ b/src/Plugin/Block/SimplesamlphpAuthBlock.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simplesamlphp_auth\Plugin\Block;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Block\BlockBase;
+ use Drupal\Core\Url;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -22,14 +23,14 @@ class SimplesamlphpAuthBlock extends BlockBase implements ContainerFactoryPlugin
+   /**
+    * SimpleSAMLphp Authentication helper.
+    *
+-   * @var \Drupal\simplesamlphp_auth\Service\SimplesamlphpAuthManager
++   * @var SimplesamlphpAuthManager
+    */
+   protected $simplesamlAuth;
+ 
+   /**
+    * A configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+@@ -55,9 +56,9 @@ class SimplesamlphpAuthBlock extends BlockBase implements ContainerFactoryPlugin
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\simplesamlphp_auth\Service\SimplesamlphpAuthManager $simplesaml_auth
++   * @param SimplesamlphpAuthManager $simplesaml_auth
+    *   The SimpleSAML Authentication helper service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, SimplesamlphpAuthManager $simplesaml_auth, ConfigFactoryInterface $config_factory) {
+diff --git a/src/Service/SimplesamlphpAuthManager.php b/src/Service/SimplesamlphpAuthManager.php
+index 5e25770..c039fa2 100644
+--- a/src/Service/SimplesamlphpAuthManager.php
++++ b/src/Service/SimplesamlphpAuthManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simplesamlphp_auth\Service;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use SimpleSAML\Auth\Simple;
+ use SimpleSAML\Configuration;
+@@ -24,21 +25,21 @@ class SimplesamlphpAuthManager {
+   /**
+    * A configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * A SimpleSAML configuration instance.
+    *
+-   * @var \SimpleSAML\Configuration
++   * @var Configuration
+    */
+   protected $simplesamlConfig;
+ 
+   /**
+    * A SimpleSAML instance.
+    *
+-   * @var \SimpleSAML\Auth\Simple
++   * @var Simple
+    */
+   protected $instance;
+ 
+@@ -52,56 +53,56 @@ class SimplesamlphpAuthManager {
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The route admin context to determine whether a route is an admin one.
+    *
+-   * @var \Drupal\Core\Routing\AdminContext
++   * @var AdminContext
+    */
+   protected $adminContext;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Constructor for SimplesamlphpAuthManager.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Routing\AdminContext $admin_context
++   * @param AdminContext $admin_context
+    *   The route admin context to determine whether the route is an admin one.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+-   * @param \SimpleSAML\Auth\Simple $instance
++   * @param Simple $instance
+    *   Simple instance.
+-   * @param \SimpleSAML\Configuration $config
++   * @param Configuration $config
+    *   \SimpleSAML\Configuration instance.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, AccountInterface $current_user, AdminContext $admin_context, ModuleHandlerInterface $module_handler, RequestStack $request_stack, MessengerInterface $messenger, Simple $instance = NULL, Configuration $config = NULL) {
+@@ -134,7 +135,7 @@ class SimplesamlphpAuthManager {
+   /**
+    * Returns a SimpleSAML Simple class instance.
+    *
+-   * @return \SimpleSAML\Auth\Simple|null
++   * @return Simple|null
+    *   The SimpleSAML Simple instance.
+    */
+   protected function getSimpleSamlInstance() {
+@@ -163,7 +164,7 @@ class SimplesamlphpAuthManager {
+   /**
+    * Returns a SimpleSAML configuration instance.
+    *
+-   * @return \SimpleSAML\Configuration|null
++   * @return Configuration|null
+    *   The SimpleSAML Configuration instance.
+    */
+   protected function getSimpleSamlConfiguration() {
+@@ -269,7 +270,7 @@ class SimplesamlphpAuthManager {
+    * @return mixed|bool
+    *   The attribute value or FALSE.
+    *
+-   * @throws \Drupal\simplesamlphp_auth\Exception\SimplesamlphpAttributeException
++   * @throws SimplesamlphpAttributeException
+    *   Exception when attribute is not set.
+    */
+   public function getAttribute($attribute) {
+diff --git a/src/Service/SimplesamlphpDrupalAuth.php b/src/Service/SimplesamlphpDrupalAuth.php
+index de367cc..d985cb9 100644
+--- a/src/Service/SimplesamlphpDrupalAuth.php
++++ b/src/Service/SimplesamlphpDrupalAuth.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\simplesamlphp_auth\Service;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\externalauth\ExternalAuth;
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -29,49 +32,49 @@ class SimplesamlphpDrupalAuth {
+   /**
+    * A configuration object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The ExternalAuth service.
+    *
+-   * @var \Drupal\externalauth\ExternalAuth
++   * @var ExternalAuth
+    */
+   protected $externalauth;
+ 
+   /**
+    * The currently logged in user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -80,19 +83,19 @@ class SimplesamlphpDrupalAuth {
+    *
+    * @param SimplesamlphpAuthManager $simplesaml_auth
+    *   The SimpleSAML Authentication helper service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+-   * @param \Drupal\externalauth\ExternalAuthInterface $externalauth
++   * @param ExternalAuthInterface $externalauth
+    *   The ExternalAuth service.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The currently logged in user.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+    */
+   public function __construct(SimplesamlphpAuthManager $simplesaml_auth, ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, LoggerInterface $logger, ExternalAuthInterface $externalauth, AccountInterface $account, MessengerInterface $messenger, ModuleHandlerInterface $module_handler) {
+@@ -112,7 +115,7 @@ class SimplesamlphpDrupalAuth {
+    * @param string $authname
+    *   The authentication name.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null
++   * @return EntityInterface|null
+    *   The logged in Drupal user.
+    */
+   public function externalLoginRegister($authname) {
+@@ -137,7 +140,7 @@ class SimplesamlphpDrupalAuth {
+    * @param string $authname
+    *   The authentication name.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|bool
++   * @return EntityInterface|bool
+    *   The registered Drupal user.
+    *
+    * @throws \Exception
+@@ -233,7 +236,7 @@ class SimplesamlphpDrupalAuth {
+   /**
+    * Synchronizes user data if enabled.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The Drupal account to synchronize attributes on.
+    * @param bool $force
+    *   Define whether to force syncing of the user attributes, regardless of
+@@ -289,7 +292,7 @@ class SimplesamlphpDrupalAuth {
+   /**
+    * Synchronizes (adds/removes) user account roles.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The Drupal user to sync roles for.
+    */
+   public function roleMatchSync(UserInterface $account) {

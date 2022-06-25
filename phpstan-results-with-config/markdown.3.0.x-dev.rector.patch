@@ -1,0 +1,3393 @@
+diff --git a/markdown.api.php b/markdown.api.php
+index da2877b..0ce11af 100644
+--- a/markdown.api.php
++++ b/markdown.api.php
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\markdown\Plugin\Markdown\PhpMarkdown\PhpMarkdownExtra;
++use Drupal\Component\Utility\Crypt;
+ /**
+  * @file
+  * Hooks and alters provided by the Markdown module.
+@@ -86,7 +88,7 @@ function hook_markdown_compatible_filters_alter(array &$compatibleFilters) {
+ function hook_markdown_html_alter(&$html, array $context) {
+   // Ignore non PHP Markdown Extra parsers.
+   $parser = $context['parser'];
+-  if (!($parser instanceof \Drupal\markdown\Plugin\Markdown\PhpMarkdown\PhpMarkdownExtra)) {
++  if (!($parser instanceof PhpMarkdownExtra)) {
+     return;
+   }
+ 
+@@ -96,7 +98,7 @@ function hook_markdown_html_alter(&$html, array $context) {
+   if ($phpMarkdown->omit_footnotes && $phpMarkdown->footnotes_assembled) {
+     // Create a hash based on the contents of the HTML output.
+     // This can be used as the lookup identifier to load the footnotes later.
+-    $hash = \Drupal\Component\Utility\Crypt::hashBase64($html);
++    $hash = Crypt::hashBase64($html);
+     \Drupal::keyValue('my_module.markdown.footnotes')->set($hash, $phpMarkdown->footnotes_assembled);
+   }
+ }
+diff --git a/markdown.install b/markdown.install
+index 5dcc1f7..d04feb1 100644
+--- a/markdown.install
++++ b/markdown.install
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Render\RendererInterface;
++use Composer\Autoload\ClassLoader;
+ /**
+  * @file
+  * Install, update and uninstall functions for the markdown module.
+@@ -34,7 +36,7 @@ function markdown_requirements($phase) {
+ 
+   $requirements = [];
+ 
+-  /** @var \Drupal\Core\Render\RendererInterface $renderer */
++  /** @var RendererInterface $renderer */
+   $renderer = \Drupal::service('renderer');
+ 
+   // Load the Markdown Parser Plugin Manager service, if it exists.
+@@ -46,7 +48,7 @@ function markdown_requirements($phase) {
+   // the service to be manually constructed to discover installed parsers.
+   else {
+     $src = __DIR__ . '/src';
+-    /** @var \Composer\Autoload\ClassLoader $classLoader */
++    /** @var ClassLoader $classLoader */
+     $classLoader = \Drupal::service('class_loader');
+     $classLoader->addPsr4('Drupal\\markdown\\', [$src]);
+ 
+diff --git a/markdown.module b/markdown.module
+index 4d66c62..868cb70 100644
+--- a/markdown.module
++++ b/markdown.module
+@@ -1,5 +1,10 @@
+ <?php
+ 
++use Drupal\filter\Entity\FilterFormat;
++use Drupal\filter\FilterPluginManager;
++use Drupal\markdown\PluginManager\ParserManagerInterface;
++use Drupal\markdown\Plugin\Markdown\InstallablePluginInterface;
++use Drupal\markdown\Annotation\InstallableLibrary;
+ /**
+  * @file
+  * Markdown module.
+@@ -40,7 +45,7 @@ function markdown_element_info_alter(array &$info) {
+ function markdown_filter_format_load($entities) {
+   // Because core doesn't provide any association between filter formats and
+   // their filters, it must be done here manually when filter format has loaded.
+-  /** @var \Drupal\filter\Entity\FilterFormat $format */
++  /** @var FilterFormat $format */
+   foreach ($entities as $format) {
+     // Store the current filter format in static cache to prevent recursion.
+     // @see \Drupal\markdown\Plugin\Filter\FilterMarkdown::setConfiguration()
+@@ -72,7 +77,7 @@ function markdown_form_alter(&$form, FormStateInterface $form_state, $formId) {
+ 
+   static $compatibleFilters;
+   if (!isset($compatibleFilters)) {
+-    /** @var \Drupal\filter\FilterPluginManager $filterManager */
++    /** @var FilterPluginManager $filterManager */
+     $filterManager = \Drupal::service('plugin.manager.filter');
+     $compatibleFilters = array_fill_keys(array_keys($filterManager->getDefinitions()), TRUE);
+     \Drupal::moduleHandler()->alter('markdown_compatible_filters', $compatibleFilters);
+@@ -169,7 +174,7 @@ function markdown_modules_installed($modules) {
+   }
+ 
+   // Save the first found parser as the default global parser.
+-  /** @var \Drupal\markdown\PluginManager\ParserManagerInterface $parserManager */
++  /** @var ParserManagerInterface $parserManager */
+   $parserManager = \Drupal::service('plugin.manager.markdown.parser');
+   if ($parserId = current(array_keys($parserManager->installedDefinitions()))) {
+     \Drupal::configFactory()->getEditable('markdown.settings')->set('default_parser', $parserId)->save();
+@@ -180,12 +185,12 @@ function markdown_modules_installed($modules) {
+  * Implements hook_preprocess_HOOK().
+  */
+ function markdown_preprocess_installable_library(&$variables) {
+-  /** @var \Drupal\markdown\Plugin\Markdown\InstallablePluginInterface $plugin */
++  /** @var InstallablePluginInterface $plugin */
+   $plugin = $variables['plugin'];
+   $variables['installedLibrary'] = $plugin->getInstalledLibrary();
+   $variables['preferredLibrary'] = $preferredLibrary = $plugin->getPreferredLibrary();
+ 
+-  /** @var \Drupal\markdown\Annotation\InstallableLibrary|null $library */
++  /** @var InstallableLibrary|null $library */
+   $library = $variables['library'] ?? NULL;
+   $lib = $library ?: $preferredLibrary;
+ 
+diff --git a/markdown.post_update.php b/markdown.post_update.php
+index 7fbad59..91affe3 100644
+--- a/markdown.post_update.php
++++ b/markdown.post_update.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Config\ConfigFactoryInterface;
+ /**
+  * @file
+  * Markdown post updates.
+@@ -13,7 +14,7 @@ use Drupal\markdown\PluginManager\ParserManager;
+ /**
+  * Normalizes markdown configuration.
+  *
+- * @param \Drupal\Core\Config\Config $config
++ * @param Config $config
+  *   The Config object to be normalized.
+  * @param array $defaultData
+  *   Optional. An array of default data to merge with any active config.
+@@ -90,7 +91,7 @@ function _markdown_normalize_config(Config $config, array $defaultData = [], $sa
+         $config->save();
+       }
+ 
+-      /** @var \Drupal\Core\Config\ConfigFactoryInterface $configFactory */
++      /** @var ConfigFactoryInterface $configFactory */
+       $configFactory = \Drupal::service('config.factory');
+ 
+       // Reload config for the specific parser.
+@@ -219,7 +220,7 @@ function _markdown_normalize_config(Config $config, array $defaultData = [], $sa
+  *   Optional. A specific normalizer callback that will be invoked on each
+  *   config. If not specified, it will default to _markdown_normalize_config().
+  *
+- * @return \Drupal\Core\Config\Config[]
++ * @return Config[]
+  *   An array of config objects, keyed by config name.
+  */
+ function _markdown_update_config($save = TRUE, array $defaultData = NULL, callable $normalizer = NULL) {
+@@ -231,7 +232,7 @@ function _markdown_update_config($save = TRUE, array $defaultData = NULL, callab
+     $defaultData = \Drupal::config('markdown.settings')->get('parser') ?: [];
+   }
+ 
+-  /** @var \Drupal\Core\Config\ConfigFactoryInterface $configFactory */
++  /** @var ConfigFactoryInterface $configFactory */
+   $configFactory = \Drupal::service('config.factory');
+ 
+   $configNames = ['markdown.settings'];
+@@ -247,7 +248,7 @@ function _markdown_update_config($save = TRUE, array $defaultData = NULL, callab
+     };
+   }
+ 
+-  /** @var \Drupal\filter\Entity\FilterFormat $format */
++  /** @var FilterFormat $format */
+   foreach (FilterFormat::loadMultiple() as $format) {
+     $configNames[] = $format->getConfigDependencyName();
+   }
+diff --git a/src/Annotation/AnnotationObject.php b/src/Annotation/AnnotationObject.php
+index 63f69c8..5084545 100644
+--- a/src/Annotation/AnnotationObject.php
++++ b/src/Annotation/AnnotationObject.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\AnnotationBase;
+ use Drupal\Component\Annotation\AnnotationInterface;
+ use Drupal\Component\Plugin\Definition\PluginDefinitionInterface;
+@@ -49,18 +50,17 @@ abstract class AnnotationObject extends AnnotationBase implements \ArrayAccess,
+    * @var array
+    */
+   private $_triggeredDeprecations = []; // phpcs:ignore
+-
+   /**
+    * The description of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    */
+   public $description;
+ 
+   /**
+    * A human-readable label.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    */
+   public $label;
+ 
+diff --git a/src/Annotation/Identifier.php b/src/Annotation/Identifier.php
+index 1b71605..c29876c 100644
+--- a/src/Annotation/Identifier.php
++++ b/src/Annotation/Identifier.php
+@@ -22,7 +22,7 @@ class Identifier implements MarkupInterface {
+   /**
+    * The converter.
+    *
+-   * @var \Symfony\Component\Serializer\NameConverter\CamelCaseToSnakeCaseNameConverter
++   * @var CamelCaseToSnakeCaseNameConverter
+    */
+   protected static $converter;
+ 
+@@ -57,7 +57,7 @@ class Identifier implements MarkupInterface {
+   /**
+    * Retrieves the converter.
+    *
+-   * @return \Symfony\Component\Serializer\NameConverter\CamelCaseToSnakeCaseNameConverter
++   * @return CamelCaseToSnakeCaseNameConverter
+    */
+   protected static function converter() {
+     if (!static::$converter) {
+diff --git a/src/Annotation/InstallableLibrary.php b/src/Annotation/InstallableLibrary.php
+index ea27965..6842866 100644
+--- a/src/Annotation/InstallableLibrary.php
++++ b/src/Annotation/InstallableLibrary.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\markdown\Annotation;
+ 
++use Drupal\Core\Url;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\Component\Render\MarkupInterface;
++use Drupal\Core\GeneratedLink;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Cache\CacheableResponse;
+@@ -63,14 +67,14 @@ class InstallableLibrary extends AnnotationObject {
+   /**
+    * A specific version URL, if known.
+    *
+-   * @var \Drupal\Core\Url[]
++   * @var Url[]
+    */
+   protected $versionUrls = [];
+ 
+   /**
+    * The last exception thrown when attempting to initiate a request.
+    *
+-   * @var \GuzzleHttp\Exception\GuzzleException
++   * @var GuzzleException
+    */
+   protected $requestException;
+ 
+@@ -187,7 +191,7 @@ class InstallableLibrary extends AnnotationObject {
+    *   Flag indicating whether to use longer explanations as indicated by
+    *   the individual property values.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The human readable status.
+    */
+   public function getStatus($long = FALSE) {
+@@ -264,13 +268,13 @@ class InstallableLibrary extends AnnotationObject {
+    * @param string $version
+    *   A specific version to retrieve a URL for. If not specified, it will
+    *   default to the currently installed version.
+-   * @param string|\Drupal\Component\Render\MarkupInterface $label
++   * @param string|MarkupInterface $label
+    *   The label to use for the link. If not specified, it will default to
+    *   the versionExtra or version value.
+    * @param array $options
+    *   Optional. Options to pass to the creation of the URL object.
+    *
+-   * @return \Drupal\Core\GeneratedLink|void
++   * @return GeneratedLink|void
+    *   The link to the version.
+    */
+   public function getVersionLink($version = NULL, $label = NULL, array $options = []) {
+@@ -297,7 +301,7 @@ class InstallableLibrary extends AnnotationObject {
+    * @param array $options
+    *   Optional. Options to pass to the creation of the URL object.
+    *
+-   * @return \Drupal\Core\Url|false
++   * @return Url|false
+    *   A specific version URL, if set; FALSE otherwise.
+    */
+   public function getVersionUrl($version = NULL, array $options = []) {
+@@ -439,7 +443,7 @@ class InstallableLibrary extends AnnotationObject {
+    * @param string $url
+    *   The URL being requested.
+    *
+-   * @return \Drupal\Core\Cache\CacheableResponse
++   * @return CacheableResponse
+    *   A cacheable response.
+    */
+   protected function request($url) {
+@@ -496,7 +500,7 @@ class InstallableLibrary extends AnnotationObject {
+       // Cache response in the database. The TTL value defaults to one day,
+       // but allow it to be overrideable via settings.
+       $ttl = Settings::get('installable_library_request_ttl', 86400);
+-      $cache->set($cid, $cacheableResponse, REQUEST_TIME + $ttl);
++      $cache->set($cid, $cacheableResponse, \Drupal::time()->getRequestTime() + $ttl);
+     }
+     catch (GuzzleException $exception) {
+       \Drupal::logger('markdown')->warning('%type: @message in %function (line %line of %file).<pre><code>@backtrace_string</code></pre>', Error::decodeException($exception));
+diff --git a/src/Annotation/InstallablePlugin.php b/src/Annotation/InstallablePlugin.php
+index 5858afa..cf18bf2 100644
+--- a/src/Annotation/InstallablePlugin.php
++++ b/src/Annotation/InstallablePlugin.php
+@@ -20,7 +20,7 @@ abstract class InstallablePlugin extends AnnotationObject {
+   /**
+    * An array of available installable libraries this plugin supports.
+    *
+-   * @var \Drupal\markdown\Annotation\InstallableLibrary[]
++   * @var InstallableLibrary[]
+    */
+   public $libraries = [];
+ 
+@@ -40,7 +40,7 @@ abstract class InstallablePlugin extends AnnotationObject {
+   /**
+    * Retrieves the installed library.
+    *
+-   * @return \Drupal\markdown\Annotation\InstallableLibrary|void
++   * @return InstallableLibrary|void
+    *   The installed library.
+    */
+   public function getInstalledLibrary() {
+@@ -52,7 +52,7 @@ abstract class InstallablePlugin extends AnnotationObject {
+   /**
+    * Retrieves the preferred library.
+    *
+-   * @return \Drupal\markdown\Annotation\InstallableLibrary|void
++   * @return InstallableLibrary|void
+    *   The preferred library.
+    */
+   public function getPreferredLibrary() {
+@@ -69,7 +69,7 @@ abstract class InstallablePlugin extends AnnotationObject {
+    * @param string $id
+    *   Optional. A specific identifier to limit by.
+    *
+-   * @return \Drupal\markdown\Annotation\InstallableRequirement[]
++   * @return InstallableRequirement[]
+    *   An array of requirements matching the type.
+    */
+   public function getRequirementsByType($type, $id = NULL) {
+@@ -97,7 +97,7 @@ abstract class InstallablePlugin extends AnnotationObject {
+    * @param mixed $value
+    *   Optional. A specific value to limit by.
+    *
+-   * @return \Drupal\markdown\Annotation\InstallableRequirement[]
++   * @return InstallableRequirement[]
+    *   An array of requirements matching the type.
+    */
+   public function getRequirementsByConstraint($name, $value = NULL) {
+diff --git a/src/Annotation/InstallablePluginTrait.php b/src/Annotation/InstallablePluginTrait.php
+index 7880a61..4bac43b 100644
+--- a/src/Annotation/InstallablePluginTrait.php
++++ b/src/Annotation/InstallablePluginTrait.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\markdown\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
++use Drupal\Component\Render\MarkupInterface;
++use Drupal\Core\GeneratedLink;
++use Symfony\Component\Validator\ConstraintViolationListInterface;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Link;
+ use Drupal\Core\Url;
+@@ -19,14 +23,14 @@ trait InstallablePluginTrait {
+   /**
+    * Indicates the plugin has been deprecated by providing a message.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    */
+   public $deprecated;
+ 
+   /**
+    * Indicates the plugin is experimental by providing a message.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    */
+   public $experimental;
+ 
+@@ -71,7 +75,7 @@ trait InstallablePluginTrait {
+   /**
+    * An array of requirements for the plugin.
+    *
+-   * @var \Drupal\markdown\Annotation\InstallableRequirement[]|\Drupal\markdown\Annotation\InstallableLibrary[]
++   * @var InstallableRequirement[]|InstallableLibrary[]
+    */
+   public $requirements = [];
+ 
+@@ -90,7 +94,7 @@ trait InstallablePluginTrait {
+    * automatically based on any provided $requirements set above. Instead of
+    * using this property directly, use $requirements.
+    *
+-   * @var \Drupal\markdown\Annotation\InstallableRequirement[]
++   * @var InstallableRequirement[]
+    *
+    * @internal
+    */
+@@ -144,7 +148,7 @@ trait InstallablePluginTrait {
+   /**
+    * Retrieves the plugin as a link using its label and URL.
+    *
+-   * @param string|\Drupal\Component\Render\MarkupInterface $label
++   * @param string|MarkupInterface $label
+    *   Optional. A specific label to use for the link. If not specified, it
+    *   will default to the label or plugin identifier if present.
+    * @param array $options
+@@ -153,7 +157,7 @@ trait InstallablePluginTrait {
+    *   Flag indicating whether to fallback to the original label or plugin
+    *   identifier if no link could be generated.
+    *
+-   * @return \Drupal\Core\GeneratedLink|mixed|void
++   * @return GeneratedLink|mixed|void
+    *   The link if one was generated or the label if $fallback was provided.
+    */
+   public function getLink($label = NULL, array $options = [], $fallback = TRUE) {
+@@ -174,7 +178,7 @@ trait InstallablePluginTrait {
+    * @param array $options
+    *   An array of options to pass to the Url object constructor.
+    *
+-   * @return \Drupal\Core\Url|void
++   * @return Url|void
+    *   A Url object or NULL if no URL is set.
+    */
+   public function getUrl(array $options = []) {
+@@ -221,7 +225,7 @@ trait InstallablePluginTrait {
+         $requirement = $requirement->createObjectRequirement($this);
+       }
+ 
+-      /** @var \Symfony\Component\Validator\ConstraintViolationListInterface $violations */
++      /** @var ConstraintViolationListInterface $violations */
+       $violations = Error::suppress(function () use ($requirement) {
+         return $requirement->validate();
+       });
+@@ -240,7 +244,7 @@ trait InstallablePluginTrait {
+     // Validate runtime requirements.
+     if ($runtime) {
+       foreach ($library->runtimeRequirements as $requirement) {
+-        /** @var \Symfony\Component\Validator\ConstraintViolationListInterface $violations */
++        /** @var ConstraintViolationListInterface $violations */
+         $violations = Error::suppress(function () use ($requirement) {
+           return $requirement->validate();
+         });
+diff --git a/src/Annotation/InstallableRequirement.php b/src/Annotation/InstallableRequirement.php
+index 766cb68..5996bff 100644
+--- a/src/Annotation/InstallableRequirement.php
++++ b/src/Annotation/InstallableRequirement.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\markdown\Annotation;
+ 
++use Drupal\filter\FilterPluginManager;
++use Symfony\Component\Validator\ConstraintViolationListInterface;
++use Symfony\Component\Validator\Constraint;
++use Symfony\Component\Validator\ConstraintValidatorInterface;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\TypedData\DataDefinition;
+ use Drupal\Core\TypedData\ListDataDefinition;
+@@ -24,7 +28,7 @@ use Symfony\Component\Validator\ConstraintViolationList;
+  * @Annotation
+  * @Target("ANNOTATION")
+  *
+- * @property \Drupal\markdown\Annotation\Identifier $id
++ * @property Identifier $id
+  *   Optional. Note: if this contains a colon (:), it will be treated as a
+  *   type based identifier, where everything prior to the colon is
+  *   considered the type and everything following the colon is considered
+@@ -131,7 +135,7 @@ class InstallableRequirement extends AnnotationObject {
+           break;
+ 
+         case 'filter':
+-          /** @var \Drupal\filter\FilterPluginManager $filterManager */
++          /** @var FilterPluginManager $filterManager */
+           if (($filterManager = $container->get('plugin.manager.filter')) && $filterManager->hasDefinition($id)) {
+             if (!isset($this->name)) {
+               $this->name = t('Filter "@id"', ['@id' => $id]);
+@@ -203,7 +207,7 @@ class InstallableRequirement extends AnnotationObject {
+   /**
+    * Validates the requirement.
+    *
+-   * @return \Symfony\Component\Validator\ConstraintViolationListInterface
++   * @return ConstraintViolationListInterface
+    *   A list of constraint violations. If the list is empty, validation
+    *   succeeded.
+    */
+@@ -323,10 +327,10 @@ class InstallableRequirement extends AnnotationObject {
+           $context = new ExecutionContext($typed->getTypedDataManager()->getValidator(), $value, new DrupalTranslator());
+           foreach ($this->constraints as $name => $options) {
+             if ($name === $pluginId) {
+-              /** @var \Symfony\Component\Validator\Constraint $constraint */
++              /** @var Constraint $constraint */
+               $constraint = new $class($options);
+               if (($validatorClass = $constraint->validatedBy()) && class_exists($validatorClass)) {
+-                /** @var \Symfony\Component\Validator\ConstraintValidatorInterface $constraintValidator */
++                /** @var ConstraintValidatorInterface $constraintValidator */
+                 $constraintValidator = new $validatorClass();
+                 $constraintValidator->initialize($context);
+                 $constraintValidator->validate($value, $constraint);
+diff --git a/src/BcSupport/FormStateDecoratorBase.php b/src/BcSupport/FormStateDecoratorBase.php
+index 4d88a20..b8d6352 100644
+--- a/src/BcSupport/FormStateDecoratorBase.php
++++ b/src/BcSupport/FormStateDecoratorBase.php
+@@ -21,7 +21,7 @@ abstract class FormStateDecoratorBase implements FormStateInterface {
+   /**
+    * The decorated form state.
+    *
+-   * @var \Drupal\Core\Form\FormStateInterface
++   * @var FormStateInterface
+    */
+   protected $decoratedFormState;
+ 
+diff --git a/src/BcSupport/ObjectWithPluginCollectionInterface.php b/src/BcSupport/ObjectWithPluginCollectionInterface.php
+index b292392..6680e16 100644
+--- a/src/BcSupport/ObjectWithPluginCollectionInterface.php
++++ b/src/BcSupport/ObjectWithPluginCollectionInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\BcSupport;
+ 
++use Drupal\Component\Plugin\LazyPluginCollection;
+ if (!interface_exists('\Drupal\Core\Plugin\ObjectWithPluginCollectionInterface')) {
+   /* @noinspection PhpIgnoredClassAliasDeclaration */
+   class_alias('\Drupal\markdown\BcSupport\BcAliasedInterface', '\Drupal\Core\Plugin\ObjectWithPluginCollectionInterface');
+@@ -24,7 +25,7 @@ interface ObjectWithPluginCollectionInterface extends CoreObjectWithPluginCollec
+   /**
+    * Gets the plugin collections used by this object.
+    *
+-   * @return \Drupal\Component\Plugin\LazyPluginCollection[]
++   * @return LazyPluginCollection[]
+    *   An array of plugin collections, keyed by the property name they use to
+    *   store their configuration.
+    */
+diff --git a/src/BcSupport/PluginDependencyTrait.php b/src/BcSupport/PluginDependencyTrait.php
+index ad8b18c..52ba4d1 100644
+--- a/src/BcSupport/PluginDependencyTrait.php
++++ b/src/BcSupport/PluginDependencyTrait.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\BcSupport;
+ 
++use Drupal\Core\Extension\ModuleHandlerInterface;
++use Drupal\Core\Extension\ThemeHandlerInterface;
+ use Drupal\Component\Plugin\Definition\PluginDefinitionInterface;
+ use Drupal\Component\Plugin\DependentPluginInterface;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+@@ -30,7 +32,7 @@ trait PluginDependencyTrait {
+    * method, if it implements
+    * \Drupal\Component\Plugin\DependentPluginInterface.
+    *
+-   * @param \Drupal\Component\Plugin\PluginInspectionInterface $instance
++   * @param PluginInspectionInterface $instance
+    *   The plugin instance.
+    *
+    * @return array
+@@ -92,7 +94,7 @@ trait PluginDependencyTrait {
+    * method, if it implements
+    * \Drupal\Component\Plugin\DependentPluginInterface.
+    *
+-   * @param \Drupal\Component\Plugin\PluginInspectionInterface $instance
++   * @param PluginInspectionInterface $instance
+    *   The plugin instance.
+    */
+   protected function calculatePluginDependencies(PluginInspectionInterface $instance) {
+@@ -102,7 +104,7 @@ trait PluginDependencyTrait {
+   /**
+    * Wraps the module handler.
+    *
+-   * @return \Drupal\Core\Extension\ModuleHandlerInterface
++   * @return ModuleHandlerInterface
+    *   The module handler.
+    */
+   protected function moduleHandler() {
+@@ -112,7 +114,7 @@ trait PluginDependencyTrait {
+   /**
+    * Wraps the theme handler.
+    *
+-   * @return \Drupal\Core\Extension\ThemeHandlerInterface
++   * @return ThemeHandlerInterface
+    *   The theme handler.
+    */
+   protected function themeHandler() {
+diff --git a/src/BcSupport/SubformState.php b/src/BcSupport/SubformState.php
+index db8fd3a..c270192 100644
+--- a/src/BcSupport/SubformState.php
++++ b/src/BcSupport/SubformState.php
+@@ -38,7 +38,7 @@ class SubformState extends FormStateDecoratorBase implements SubformStateInterfa
+    *   The subform for which to create a form state.
+    * @param mixed[] $parent_form
+    *   The subform's parent form.
+-   * @param \Drupal\Core\Form\FormStateInterface $parent_form_state
++   * @param FormStateInterface $parent_form_state
+    *   The parent form state.
+    */
+   protected function __construct(array &$subform, array &$parent_form, FormStateInterface $parent_form_state) {
+@@ -54,7 +54,7 @@ class SubformState extends FormStateDecoratorBase implements SubformStateInterfa
+    *   The subform for which to create a form state.
+    * @param mixed[] $parent_form
+    *   The subform's parent form.
+-   * @param \Drupal\Core\Form\FormStateInterface $parent_form_state
++   * @param FormStateInterface $parent_form_state
+    *   The parent form state.
+    *
+    * @return static
+diff --git a/src/BcSupport/SubformStateInterface.php b/src/BcSupport/SubformStateInterface.php
+index e3d3070..5680471 100644
+--- a/src/BcSupport/SubformStateInterface.php
++++ b/src/BcSupport/SubformStateInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\BcSupport;
+ 
++use Drupal\Core\Form\FormStateInterface;
+ if (!interface_exists('\Drupal\Core\Form\SubformStateInterface')) {
+   /* @noinspection PhpIgnoredClassAliasDeclaration */
+   class_alias('\Drupal\Core\Form\FormStateInterface', '\Drupal\Core\Form\SubformStateInterface');
+@@ -22,7 +23,7 @@ interface SubformStateInterface extends CoreSubformStateInterface {
+   /**
+    * Gets the complete form state.
+    *
+-   * @return \Drupal\Core\Form\FormStateInterface
++   * @return FormStateInterface
+    *   The complete form state.
+    */
+   public function getCompleteFormState();
+diff --git a/src/Commands/MarkdownCommands.php b/src/Commands/MarkdownCommands.php
+index 48aafec..873a3cf 100644
+--- a/src/Commands/MarkdownCommands.php
++++ b/src/Commands/MarkdownCommands.php
+@@ -85,16 +85,16 @@ class MarkdownCommands extends DrushCommands implements ContainerInjectionInterf
+   /**
+    * The File System service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * MarkdownCommands constructor.
+    *
+-   * @param \Drupal\Core\File\FileSystemInterface $fileSystem
++   * @param FileSystemInterface $fileSystem
+    *   The File System service.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A Logger.
+    */
+   public function __construct(FileSystemInterface $fileSystem, LoggerInterface $logger) {
+@@ -132,7 +132,7 @@ class MarkdownCommands extends DrushCommands implements ContainerInjectionInterf
+    *   The temporary directory path.
+    */
+   protected function createTempDir() {
+-    $tempDir = 'temporary://markdown_' . REQUEST_TIME . Crypt::randomBytesBase64(10);
++    $tempDir = 'temporary://markdown_' . \Drupal::time()->getRequestTime() . Crypt::randomBytesBase64(10);
+     if (!is_dir($tempDir) && $this->fileSystem->prepareDirectory($tempDir, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS)) {
+       $tempDir = $this->fileSystem->realpath($tempDir);
+       static::$tempDirs[] = $tempDir;
+diff --git a/src/Config/MarkdownConfig.php b/src/Config/MarkdownConfig.php
+index c5a8e9d..4b28ec8 100644
+--- a/src/Config/MarkdownConfig.php
++++ b/src/Config/MarkdownConfig.php
+@@ -61,7 +61,7 @@ class MarkdownConfig extends Config implements ContainerInjectionInterface {
+    *   The config name where the data is stored.
+    * @param array $data
+    *   Optional. Initial data to use.
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   Optional. The service container this instance should use.
+    *
+    * @return static
+diff --git a/src/Form/OverviewForm.php b/src/Form/OverviewForm.php
+index 22db0f6..13a8bdf 100644
+--- a/src/Form/OverviewForm.php
++++ b/src/Form/OverviewForm.php
+@@ -19,43 +19,43 @@ class OverviewForm extends ConfigFormBase {
+   /**
+    * The Cache Tags Invalidator service.
+    *
+-   * @var \Drupal\Core\Cache\CacheTagsInvalidatorInterface
++   * @var CacheTagsInvalidatorInterface
+    */
+   protected $cacheTagsInvalidator;
+ 
+   /**
+    * The Markdown Extension Plugin Manager service.
+    *
+-   * @var \Drupal\markdown\PluginManager\ExtensionManagerInterface
++   * @var ExtensionManagerInterface
+    */
+   protected $extensionManager;
+ 
+   /**
+    * The Markdown service.
+    *
+-   * @var \Drupal\markdown\MarkdownInterface
++   * @var MarkdownInterface
+    */
+   protected $markdown;
+ 
+   /**
+    * The Markdown Parser Plugin Manager service.
+    *
+-   * @var \Drupal\markdown\PluginManager\ParserManagerInterface
++   * @var ParserManagerInterface
+    */
+   protected $parserManager;
+ 
+   /**
+    * OverviewForm constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The Config Factory service.
+-   * @param \Drupal\Core\Cache\CacheTagsInvalidatorInterface $cacheTagsInvalidator
++   * @param CacheTagsInvalidatorInterface $cacheTagsInvalidator
+    *   The Cache Tags Invalidator service.
+-   * @param \Drupal\markdown\MarkdownInterface $markdown
++   * @param MarkdownInterface $markdown
+    *   The Markdown service.
+-   * @param \Drupal\markdown\PluginManager\ParserManagerInterface $parserManager
++   * @param ParserManagerInterface $parserManager
+    *   The Markdown Parser Plugin Manager service.
+-   * @param \Drupal\markdown\PluginManager\ExtensionManagerInterface $extensionManager
++   * @param ExtensionManagerInterface $extensionManager
+    *   The Markdown Extension Plugin Manager service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, CacheTagsInvalidatorInterface $cacheTagsInvalidator, MarkdownInterface $markdown, ParserManagerInterface $parserManager, ExtensionManagerInterface $extensionManager) {
+diff --git a/src/Form/ParserConfigurationForm.php b/src/Form/ParserConfigurationForm.php
+index dbeb117..cf578cc 100644
+--- a/src/Form/ParserConfigurationForm.php
++++ b/src/Form/ParserConfigurationForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Form;
+ 
++use Drupal\Core\Config\Config;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Component\Utility\NestedArray;
+@@ -49,21 +50,21 @@ class ParserConfigurationForm extends FormBase implements FilterAwareInterface,
+   /**
+    * The Cache Tags Invalidator service.
+    *
+-   * @var \Drupal\Core\Cache\CacheTagsInvalidatorInterface
++   * @var CacheTagsInvalidatorInterface
+    */
+   protected $cacheTagsInvalidator;
+ 
+   /**
+    * The Element Info Plugin Manager service.
+    *
+-   * @var \Drupal\Core\Render\ElementInfoManagerInterface
++   * @var ElementInfoManagerInterface
+    */
+   protected $elementInfo;
+ 
+   /**
+    * The Markdown Parser Plugin Manager service.
+    *
+-   * @var \Drupal\markdown\PluginManager\ParserManagerInterface
++   * @var ParserManagerInterface
+    */
+   protected $parserManager;
+ 
+@@ -77,17 +78,17 @@ class ParserConfigurationForm extends FormBase implements FilterAwareInterface,
+   /**
+    * ParserConfigurationForm constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The Config Factory service.
+-   * @param \Drupal\Core\Config\TypedConfigManagerInterface $typedConfigManager
++   * @param TypedConfigManagerInterface $typedConfigManager
+    *   The Typed Config Manager service.
+-   * @param \Drupal\Core\Cache\CacheTagsInvalidatorInterface $cacheTagsInvalidator
++   * @param CacheTagsInvalidatorInterface $cacheTagsInvalidator
+    *   The Cache Tags Invalidator service.
+-   * @param \Drupal\Core\Render\ElementInfoManagerInterface $elementInfo
++   * @param ElementInfoManagerInterface $elementInfo
+    *   The Element Info Plugin Manager service.
+-   * @param \Drupal\markdown\PluginManager\ParserManagerInterface $parserManager
++   * @param ParserManagerInterface $parserManager
+    *   The Markdown Parser Plugin Manager service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The Drupal messenger service.
+    */
+   public function __construct(ConfigFactoryInterface $configFactory, TypedConfigManagerInterface $typedConfigManager, CacheTagsInvalidatorInterface $cacheTagsInvalidator, ElementInfoManagerInterface $elementInfo, ParserManagerInterface $parserManager, MessengerInterface $messenger) {
+@@ -163,7 +164,7 @@ class ParserConfigurationForm extends FormBase implements FilterAwareInterface,
+    *
+    * @param array $element
+    *   The element being processed.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    * @param array $complete_form
+    *   The complete form, passed by reference.
+@@ -171,7 +172,7 @@ class ParserConfigurationForm extends FormBase implements FilterAwareInterface,
+    * @return array
+    *   The processed element.
+    *
+-   * @throws \Drupal\Core\Form\EnforcedResponseException
++   * @throws EnforcedResponseException
+    *   When an invalid parser or no parser is provided.
+    */
+   public function processSubform(array &$element, FormStateInterface $form_state, array &$complete_form) {
+@@ -266,7 +267,7 @@ class ParserConfigurationForm extends FormBase implements FilterAwareInterface,
+    *
+    * @param array $element
+    *   An element in a render array.
+-   * @param \Drupal\markdown\Form\SubformStateInterface $form_state
++   * @param SubformStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -317,11 +318,11 @@ class ParserConfigurationForm extends FormBase implements FilterAwareInterface,
+   /**
+    * Builds the settings for a specific parser.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   The parser.
+    * @param array $element
+    *   An element in a render array.
+-   * @param \Drupal\markdown\Form\SubformStateInterface $form_state
++   * @param SubformStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -352,11 +353,11 @@ class ParserConfigurationForm extends FormBase implements FilterAwareInterface,
+   /**
+    * Builds the extension settings for a specific parser.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   The parser.
+    * @param array $element
+    *   An element in a render array.
+-   * @param \Drupal\markdown\Form\SubformStateInterface $form_state
++   * @param SubformStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -455,11 +456,11 @@ class ParserConfigurationForm extends FormBase implements FilterAwareInterface,
+   /**
+    * Builds the render strategy for a specific parser.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   The parser.
+    * @param array $element
+    *   An element in a render array.
+-   * @param \Drupal\markdown\Form\SubformStateInterface $form_state
++   * @param SubformStateInterface $form_state
+    *   The form state.
+    * @param bool $siteWide
+    *   Flag indicating whether the parser is the site-wide parser.
+@@ -658,7 +659,7 @@ class ParserConfigurationForm extends FormBase implements FilterAwareInterface,
+    * @param array $values
+    *   An array of values.
+    *
+-   * @return \Drupal\Core\Config\Config
++   * @return Config
+    *   A Config object.
+    */
+   public function getConfigFromValues($name, array $values) {
+@@ -716,7 +717,7 @@ class ParserConfigurationForm extends FormBase implements FilterAwareInterface,
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitSubform(array &$form, FormStateInterface $form_state) {
+@@ -774,7 +775,7 @@ class ParserConfigurationForm extends FormBase implements FilterAwareInterface,
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function validateSubform(array &$form, FormStateInterface $form_state) {
+diff --git a/src/Form/ParserOperationForm.php b/src/Form/ParserOperationForm.php
+index 296896b..9b11f22 100644
+--- a/src/Form/ParserOperationForm.php
++++ b/src/Form/ParserOperationForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Form;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Symfony\Component\HttpFoundation\Response;
+ use Drupal\Core\Config\Config;
+ use Drupal\Core\Form\ConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -40,7 +42,7 @@ class ParserOperationForm extends ConfirmFormBase {
+   /**
+    * The markdown parser.
+    *
+-   * @var \Drupal\markdown\Plugin\Markdown\ParserInterface
++   * @var ParserInterface
+    */
+   protected $parser;
+ 
+@@ -54,12 +56,12 @@ class ParserOperationForm extends ConfirmFormBase {
+   /**
+    * Creates a URL with the appropriate CSRF token for a parser operation.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   The parser to perform an operation on.
+    * @param string $operation
+    *   The operation to perform.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   A parser operation Url object.
+    */
+   public static function createOperationUrl(ParserInterface $parser, $operation) {
+@@ -123,7 +125,7 @@ class ParserOperationForm extends ConfirmFormBase {
+   /**
+    * Retrieves the success message to show after the operation has finished.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The success message.
+    */
+   public function getSuccessMessage() {
+@@ -165,7 +167,7 @@ class ParserOperationForm extends ConfirmFormBase {
+   /**
+    * Initializes the operation.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   The parser being operated on.
+    * @param string $operation
+    *   The operation to perform.
+@@ -191,12 +193,12 @@ class ParserOperationForm extends ConfirmFormBase {
+   /**
+    * Controller for the "markdown.parser.operation" route.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   The parser being operated on.
+    * @param string $operation
+    *   The operation to perform.
+    *
+-   * @return array|\Symfony\Component\HttpFoundation\Response|void
++   * @return array|Response|void
+    *   A render array or response object.
+    */
+   public function executeOperation(ParserInterface $parser, $operation) {
+@@ -232,7 +234,7 @@ class ParserOperationForm extends ConfirmFormBase {
+   /**
+    * Retrieves an editable Config object for the parser.
+    *
+-   * @return \Drupal\Core\Config\Config
++   * @return Config
+    *   The Parser Config object.
+    */
+   protected function getParserConfig() {
+@@ -242,7 +244,7 @@ class ParserOperationForm extends ConfirmFormBase {
+   /**
+    * Magic method for the "default" operation.
+    *
+-   * @param \Drupal\Core\Config\Config $config
++   * @param Config $config
+    *   The editable parser Config object.
+    *
+    * @see \Drupal\markdown\Form\ParserOperationForm::initializeOperation
+@@ -254,7 +256,7 @@ class ParserOperationForm extends ConfirmFormBase {
+   /**
+    * Magic method for the "disable" operation.
+    *
+-   * @param \Drupal\Core\Config\Config $config
++   * @param Config $config
+    *   The editable parser Config object.
+    *
+    * @see \Drupal\markdown\Form\ParserOperationForm::initializeOperation
+@@ -266,7 +268,7 @@ class ParserOperationForm extends ConfirmFormBase {
+   /**
+    * Magic method for the "enable" operation.
+    *
+-   * @param \Drupal\Core\Config\Config $config
++   * @param Config $config
+    *   The editable parser Config object.
+    *
+    * @see \Drupal\markdown\Form\ParserOperationForm::initializeOperation
+diff --git a/src/Form/SubformStateInterface.php b/src/Form/SubformStateInterface.php
+index a4f7d62..8c53afe 100644
+--- a/src/Form/SubformStateInterface.php
++++ b/src/Form/SubformStateInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Form;
+ 
++use Drupal\Component\Render\MarkupInterface;
+ use Drupal\markdown\BcSupport\SubformStateInterface as CoreSubformStateInterface;
+ 
+ /**
+@@ -44,7 +45,7 @@ interface SubformStateInterface extends CoreSubformStateInterface {
+    * @param array $conditions
+    *   The conditions for the $state.
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface
++   * @return MarkupInterface
+    *   The rendered $element.
+    */
+   public function conditionalElement(array $element, $state, $name, array $conditions);
+diff --git a/src/Markdown.php b/src/Markdown.php
+index 38f8ed6..604416f 100644
+--- a/src/Markdown.php
++++ b/src/Markdown.php
+@@ -26,50 +26,50 @@ class Markdown implements MarkdownInterface {
+   /**
+    * The cache backend.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cache;
+ 
+   /**
+    * The Config Factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The File System service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * The HTTP Client service.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * The MarkdownParser Plugin Manager.
+    *
+-   * @var \Drupal\markdown\PluginManager\ParserManagerInterface
++   * @var ParserManagerInterface
+    */
+   protected $parserManager;
+ 
+   /**
+    * Markdown constructor.
+    *
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
++   * @param CacheBackendInterface $cache
+    *   The cache backend.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The Config Factory service.
+-   * @param \Drupal\Core\File\FileSystemInterface $fileSystem
++   * @param FileSystemInterface $fileSystem
+    *   The File System service.
+-   * @param \GuzzleHttp\ClientInterface $httpClient
++   * @param ClientInterface $httpClient
+    *   The HTTP Client service.
+-   * @param \Drupal\markdown\PluginManager\ParserManagerInterface $parserManager
++   * @param ParserManagerInterface $parserManager
+    *   The Markdown Parser Plugin Manager service.
+    */
+   public function __construct(CacheBackendInterface $cache, ConfigFactoryInterface $configFactory, FileSystemInterface $fileSystem, ClientInterface $httpClient, ParserManagerInterface $parserManager) {
+diff --git a/src/MarkdownInterface.php b/src/MarkdownInterface.php
+index d768b53..fbee498 100644
+--- a/src/MarkdownInterface.php
++++ b/src/MarkdownInterface.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\markdown;
+ 
++use Drupal\markdown\Exception\MarkdownFileNotExistsException;
++use Drupal\markdown\Exception\MarkdownUrlNotExistsException;
++use Drupal\markdown\Plugin\Markdown\ParserInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Language\LanguageInterface;
+ use Drupal\markdown\Render\ParsedMarkdownInterface;
+@@ -36,13 +39,13 @@ interface MarkdownInterface extends ContainerInjectionInterface {
+    * @param string $id
+    *   Optional. A unique identifier for caching the parsed markdown. If not
+    *   set, one will be generated automatically based on the provided $filename.
+-   * @param \Drupal\Core\Language\LanguageInterface $language
++   * @param LanguageInterface $language
+    *   Optional. The language of the markdown that is being parsed.
+    *
+-   * @return \Drupal\markdown\Render\ParsedMarkdownInterface
++   * @return ParsedMarkdownInterface
+    *   A ParsedMarkdown object.
+    *
+-   * @throws \Drupal\markdown\Exception\MarkdownFileNotExistsException
++   * @throws MarkdownFileNotExistsException
+    */
+   public function loadFile($filename, $id = NULL, LanguageInterface $language = NULL);
+ 
+@@ -56,13 +59,13 @@ interface MarkdownInterface extends ContainerInjectionInterface {
+    * @param string $id
+    *   Optional. A unique identifier for caching the parsed markdown. If not
+    *   set, one will be generated automatically based on the provided $path.
+-   * @param \Drupal\Core\Language\LanguageInterface $language
++   * @param LanguageInterface $language
+    *   Optional. The language of the markdown that is being parsed.
+    *
+-   * @return \Drupal\markdown\Render\ParsedMarkdownInterface
++   * @return ParsedMarkdownInterface
+    *   A ParsedMarkdown object.
+    *
+-   * @throws \Drupal\markdown\Exception\MarkdownFileNotExistsException
++   * @throws MarkdownFileNotExistsException
+    *
+    * @deprecated in markdown:8.x-2.0 and is removed from markdown:3.0.0.
+    *   Use \Drupal\markdown\MarkdownInterface::loadFile instead.
+@@ -80,13 +83,13 @@ interface MarkdownInterface extends ContainerInjectionInterface {
+    * @param string $id
+    *   Optional. A unique identifier for caching the parsed markdown. If not
+    *   set, one will be generated automatically based on the provided $url.
+-   * @param \Drupal\Core\Language\LanguageInterface $language
++   * @param LanguageInterface $language
+    *   Optional. The language of the markdown that is being parsed.
+    *
+-   * @return \Drupal\markdown\Render\ParsedMarkdownInterface
++   * @return ParsedMarkdownInterface
+    *   A ParsedMarkdown object.
+    *
+-   * @throws \Drupal\markdown\Exception\MarkdownUrlNotExistsException
++   * @throws MarkdownUrlNotExistsException
+    */
+   public function loadUrl($url, $id = NULL, LanguageInterface $language = NULL);
+ 
+@@ -95,10 +98,10 @@ interface MarkdownInterface extends ContainerInjectionInterface {
+    *
+    * @param string $markdown
+    *   The markdown string to parse.
+-   * @param \Drupal\Core\Language\LanguageInterface $language
++   * @param LanguageInterface $language
+    *   Optional. The language of the markdown that is being parsed.
+    *
+-   * @return \Drupal\markdown\Render\ParsedMarkdownInterface
++   * @return ParsedMarkdownInterface
+    *   A ParsedMarkdown object.
+    */
+   public function parse($markdown, LanguageInterface $language = NULL);
+@@ -112,7 +115,7 @@ interface MarkdownInterface extends ContainerInjectionInterface {
+    * @param array $configuration
+    *   An array of configuration relevant to the plugin instance.
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\ParserInterface
++   * @return ParserInterface
+    *   A MarkdownParser plugin.
+    */
+   public function getParser($parserId = NULL, array $configuration = []);
+@@ -122,10 +125,10 @@ interface MarkdownInterface extends ContainerInjectionInterface {
+    *
+    * @param string $id
+    *   The identifier to use when saving the parsed markdown object.
+-   * @param \Drupal\markdown\Render\ParsedMarkdownInterface $parsed
++   * @param ParsedMarkdownInterface $parsed
+    *   The parsed markdown object to save.
+    *
+-   * @return \Drupal\markdown\Render\ParsedMarkdownInterface
++   * @return ParsedMarkdownInterface
+    *   The passed parsed markdown.
+    */
+   public function save($id, ParsedMarkdownInterface $parsed);
+diff --git a/src/ParamConverter/MarkdownParamConverter.php b/src/ParamConverter/MarkdownParamConverter.php
+index 1113d48..f1ee103 100644
+--- a/src/ParamConverter/MarkdownParamConverter.php
++++ b/src/ParamConverter/MarkdownParamConverter.php
+@@ -20,41 +20,41 @@ class MarkdownParamConverter implements ParamConverterInterface {
+   /**
+    * The Config Factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The Markdown Allowed HTML Plugin Manager service.
+    *
+-   * @var \Drupal\markdown\PluginManager\AllowedHtmlManager
++   * @var AllowedHtmlManager
+    */
+   protected $allowedHtmlManager;
+ 
+   /**
+    * The Markdown Extension Plugin Manager service.
+    *
+-   * @var \Drupal\markdown\PluginManager\ExtensionManagerInterface
++   * @var ExtensionManagerInterface
+    */
+   protected $extensionManager;
+ 
+   /**
+    * The Markdown Parser Plugin Manager service.
+    *
+-   * @var \Drupal\markdown\PluginManager\ParserManagerInterface
++   * @var ParserManagerInterface
+    */
+   protected $parserManager;
+ 
+   /**
+    * MarkdownParamConverter constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The Config Factory service.
+-   * @param \Drupal\markdown\PluginManager\ParserManagerInterface $parserManager
++   * @param ParserManagerInterface $parserManager
+    *   The Markdown Parser Plugin Manager service.
+-   * @param \Drupal\markdown\PluginManager\ExtensionManagerInterface $extensionManager
++   * @param ExtensionManagerInterface $extensionManager
+    *   The Markdown Extension Plugin Manager service.
+-   * @param \Drupal\markdown\PluginManager\AllowedHtmlManager $allowedHtmlManager
++   * @param AllowedHtmlManager $allowedHtmlManager
+    *   The Markdown Allowed HTML Plugin Manager service.
+    */
+   public function __construct(ConfigFactoryInterface $configFactory, ParserManagerInterface $parserManager, ExtensionManagerInterface $extensionManager, AllowedHtmlManager $allowedHtmlManager) {
+diff --git a/src/Plugin/Filter/FilterMarkdown.php b/src/Plugin/Filter/FilterMarkdown.php
+index 186449f..4673ea0 100644
+--- a/src/Plugin/Filter/FilterMarkdown.php
++++ b/src/Plugin/Filter/FilterMarkdown.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Filter;
+ 
++use Drupal\filter\FilterFormatInterface;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Component\Utility\NestedArray;
+@@ -50,14 +51,14 @@ class FilterMarkdown extends FilterBase implements ContainerFactoryPluginInterfa
+   /**
+    * The Element Info Manager service.
+    *
+-   * @var \Drupal\Core\Render\ElementInfoManagerInterface
++   * @var ElementInfoManagerInterface
+    */
+   protected $elementInfo;
+ 
+   /**
+    * The Markdown Parser Plugin Manager service.
+    *
+-   * @var \Drupal\markdown\PluginManager\ParserManagerInterface
++   * @var ParserManagerInterface
+    */
+   protected $parserManager;
+ 
+@@ -176,7 +177,7 @@ class FilterMarkdown extends FilterBase implements ContainerFactoryPluginInterfa
+           $filterFormat = $currentFilterFormat;
+         }
+         else {
+-          /** @var \Drupal\filter\Entity\FilterFormat $filterFormat */
++          /** @var FilterFormat $filterFormat */
+           $filterFormat = FilterFormat::load($configuration['filterFormat']);
+         }
+         $this->setFilterFormat($filterFormat);
+@@ -290,7 +291,7 @@ class FilterMarkdown extends FilterBase implements ContainerFactoryPluginInterfa
+    *
+    * @param array $element
+    *   The element being processed.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    * @param array $complete_form
+    *   The complete form, passed by reference.
+@@ -438,7 +439,7 @@ class FilterMarkdown extends FilterBase implements ContainerFactoryPluginInterfa
+    *
+    * @param array $element
+    *   The render array element being processed, passed by reference.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    * @param array $complete_form
+    *   The complete form, passed by reference.
+@@ -452,7 +453,7 @@ class FilterMarkdown extends FilterBase implements ContainerFactoryPluginInterfa
+       return $element;
+     }
+ 
+-    /** @var \Drupal\filter\FilterFormatInterface $format */
++    /** @var FilterFormatInterface $format */
+     $format = $formats[$element['#format']];
+     try {
+       if (($markdown = $format->filters('markdown')) && $markdown->status) {
+diff --git a/src/Plugin/Filter/FilterMarkdownInterface.php b/src/Plugin/Filter/FilterMarkdownInterface.php
+index c9cf58d..8def304 100644
+--- a/src/Plugin/Filter/FilterMarkdownInterface.php
++++ b/src/Plugin/Filter/FilterMarkdownInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Filter;
+ 
++use Drupal\markdown\Plugin\Markdown\ParserInterface;
+ use Drupal\filter\Plugin\FilterInterface;
+ use Drupal\markdown\Util\FilterFormatAwareInterface;
+ 
+@@ -13,7 +14,7 @@ interface FilterMarkdownInterface extends FilterInterface, FilterFormatAwareInte
+   /**
+    * Retrieves the MarkdownParser plugin for this filter.
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\ParserInterface
++   * @return ParserInterface
+    *   The MarkdownParser plugin.
+    */
+   public function getParser();
+diff --git a/src/Plugin/Markdown/AllowedHtmlInterface.php b/src/Plugin/Markdown/AllowedHtmlInterface.php
+index b3e91d2..307d2e3 100644
+--- a/src/Plugin/Markdown/AllowedHtmlInterface.php
++++ b/src/Plugin/Markdown/AllowedHtmlInterface.php
+@@ -13,9 +13,9 @@ interface AllowedHtmlInterface extends PluginInspectionInterface {
+   /**
+    * Retrieves the allowed HTML tags.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   The parser associated with this plugin.
+-   * @param \Drupal\Core\Theme\ActiveTheme $activeTheme
++   * @param ActiveTheme $activeTheme
+    *   Optional. The active them. This is used as an indicator when in
+    *   "render mode".
+    *
+diff --git a/src/Plugin/Markdown/AnnotatedPluginBase.php b/src/Plugin/Markdown/AnnotatedPluginBase.php
+index 2e0a443..ae47ba6 100644
+--- a/src/Plugin/Markdown/AnnotatedPluginBase.php
++++ b/src/Plugin/Markdown/AnnotatedPluginBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\AnnotationObject;
+ use Drupal\Component\Utility\DiffArray;
+ use Drupal\Core\Plugin\PluginBase as CoreBasePlugin;
+ use Symfony\Component\DependencyInjection\ContainerAwareTrait;
+@@ -10,8 +11,8 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ /**
+  * Base class for annotated plugins.
+  *
+- * @property \Drupal\markdown\Annotation\AnnotationObject $pluginDefinition
+- * @method \Drupal\markdown\Annotation\AnnotationObject getPluginDefinition()
++ * @property AnnotationObject $pluginDefinition
++ * @method AnnotationObject getPluginDefinition()
+  *
+  * @todo Move upstream to https://www.drupal.org/project/installable_plugins.
+  */
+diff --git a/src/Plugin/Markdown/AnnotatedPluginInterface.php b/src/Plugin/Markdown/AnnotatedPluginInterface.php
+index 0e8704c..d0d856c 100644
+--- a/src/Plugin/Markdown/AnnotatedPluginInterface.php
++++ b/src/Plugin/Markdown/AnnotatedPluginInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\AnnotationObject;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\markdown\BcSupport\ConfigurableInterface;
+@@ -10,7 +12,7 @@ use Symfony\Component\DependencyInjection\ContainerAwareInterface;
+ /**
+  * Interface for annotated plugins.
+  *
+- * @method \Drupal\markdown\Annotation\AnnotationObject getPluginDefinition()
++ * @method AnnotationObject getPluginDefinition()
+  *
+  * @todo Move upstream to https://www.drupal.org/project/installable_plugins.
+  */
+@@ -31,7 +33,7 @@ interface AnnotatedPluginInterface extends ConfigurableInterface, ContainerAware
+   /**
+    * Retrieves the description of the plugin, if set.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The description.
+    */
+   public function getDescription();
+@@ -39,7 +41,7 @@ interface AnnotatedPluginInterface extends ConfigurableInterface, ContainerAware
+   /**
+    * Displays the human-readable label of the plugin.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The label.
+    */
+   public function getLabel();
+diff --git a/src/Plugin/Markdown/BaseExtensibleParser.php b/src/Plugin/Markdown/BaseExtensibleParser.php
+index a46b005..994e024 100644
+--- a/src/Plugin/Markdown/BaseExtensibleParser.php
++++ b/src/Plugin/Markdown/BaseExtensibleParser.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\MarkdownParser;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use Drupal\markdown\PluginManager\ExtensionCollection;
+ use Drupal\markdown\Util\SortArray;
+@@ -9,8 +10,8 @@ use Drupal\markdown\Util\SortArray;
+ /**
+  * Base class for extensible markdown parsers.
+  *
+- * @property \Drupal\markdown\Annotation\MarkdownParser $pluginDefinition
+- * @method \Drupal\markdown\Annotation\MarkdownParser getPluginDefinition()
++ * @property MarkdownParser $pluginDefinition
++ * @method MarkdownParser getPluginDefinition()
+  */
+ abstract class BaseExtensibleParser extends BaseParser implements ExtensibleParserInterface {
+ 
+@@ -24,7 +25,7 @@ abstract class BaseExtensibleParser extends BaseParser implements ExtensiblePars
+   /**
+    * A collection of MarkdownExtension plugins specific to the parser.
+    *
+-   * @var \Drupal\markdown\PluginManager\ExtensionCollection
++   * @var ExtensionCollection
+    */
+   protected $extensionCollection;
+ 
+@@ -77,7 +78,7 @@ abstract class BaseExtensibleParser extends BaseParser implements ExtensiblePars
+     // Normalize extensions and their settings.
+     $extensions = [];
+     $extensionCollection = $this->extensions();
+-    /** @var \Drupal\markdown\Plugin\Markdown\ExtensionInterface $extension */
++    /** @var ExtensionInterface $extension */
+     foreach ($extensionCollection as $extensionId => $extension) {
+       // Only include extensions that have configuration overrides.
+       if ($overrides = $extension->getConfigurationOverrides()) {
+@@ -112,7 +113,7 @@ abstract class BaseExtensibleParser extends BaseParser implements ExtensiblePars
+   /**
+    * Indicates whether an extension is "required" by another extension.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ExtensionInterface $extension
++   * @param ExtensionInterface $extension
+    *   The extension to check.
+    *
+    * @return bool
+diff --git a/src/Plugin/Markdown/BaseExtension.php b/src/Plugin/Markdown/BaseExtension.php
+index b6160b6..203da7c 100644
+--- a/src/Plugin/Markdown/BaseExtension.php
++++ b/src/Plugin/Markdown/BaseExtension.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\MarkdownExtension;
+ use Drupal\Core\Config\Schema\Mapping;
+ use Drupal\markdown\PluginManager\ExtensionManager;
+ use Drupal\markdown\Traits\EnabledPluginTrait;
+@@ -10,8 +11,8 @@ use Symfony\Component\Validator\Context\ExecutionContextInterface;
+ /**
+  * Base class for markdown extensions.
+  *
+- * @property \Drupal\markdown\Annotation\MarkdownExtension $pluginDefinition
+- * @method \Drupal\markdown\Annotation\MarkdownExtension getPluginDefinition()
++ * @property MarkdownExtension $pluginDefinition
++ * @method MarkdownExtension getPluginDefinition()
+  */
+ abstract class BaseExtension extends InstallablePluginBase implements ExtensionInterface {
+ 
+@@ -29,7 +30,7 @@ abstract class BaseExtension extends InstallablePluginBase implements ExtensionI
+    *
+    * @param array $settings
+    *   The extension settings to validate.
+-   * @param \Symfony\Component\Validator\Context\ExecutionContextInterface $context
++   * @param ExecutionContextInterface $context
+    *   The validation execution context.
+    */
+   public static function validateSettings(array $settings, ExecutionContextInterface $context) {
+diff --git a/src/Plugin/Markdown/BaseParser.php b/src/Plugin/Markdown/BaseParser.php
+index ca59dd0..b188631 100644
+--- a/src/Plugin/Markdown/BaseParser.php
++++ b/src/Plugin/Markdown/BaseParser.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\MarkdownParser;
++use Drupal\Component\Render\MarkupInterface;
++use Drupal\markdown\Form\SubformStateInterface;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Cache\RefinableCacheableDependencyTrait;
+@@ -25,8 +28,8 @@ use Symfony\Component\Validator\Context\ExecutionContextInterface;
+ /**
+  * Base class form Markdown Parser instances.
+  *
+- * @property \Drupal\markdown\Annotation\MarkdownParser $pluginDefinition
+- * @method \Drupal\markdown\Annotation\MarkdownParser getPluginDefinition()
++ * @property MarkdownParser $pluginDefinition
++ * @method MarkdownParser getPluginDefinition()
+  */
+ abstract class BaseParser extends InstallablePluginBase implements FilterAwareInterface, ParserInterface, PluginFormInterface {
+ 
+@@ -45,7 +48,7 @@ abstract class BaseParser extends InstallablePluginBase implements FilterAwareIn
+    *
+    * @param array $settings
+    *   The parser settings to validate.
+-   * @param \Symfony\Component\Validator\Context\ExecutionContextInterface $context
++   * @param ExecutionContextInterface $context
+    *   The validation execution context.
+    */
+   public static function validateSettings(array $settings, ExecutionContextInterface $context) {
+@@ -89,7 +92,7 @@ abstract class BaseParser extends InstallablePluginBase implements FilterAwareIn
+    *
+    * @param string $markdown
+    *   The markdown string to convert.
+-   * @param \Drupal\Core\Language\LanguageInterface $language
++   * @param LanguageInterface $language
+    *   Optional. The language of the text that is being converted.
+    *
+    * @return string
+@@ -252,19 +255,19 @@ abstract class BaseParser extends InstallablePluginBase implements FilterAwareIn
+   /**
+    * A description explaining why a setting is disabled due to render strategy.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface
++   * @return MarkupInterface
+    *   The rendered description.
+    */
+   protected function renderStrategyDisabledSetting(FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
++    /** @var SubformStateInterface $form_state */
+     $markdownParents = $form_state->get('markdownSubformParents');
+     $parents = array_merge($markdownParents, ['render_strategy', 'type']);
+     $selector = ':input[name="' . array_shift($parents) . '[' . implode('][', $parents) . ']"]';
+ 
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
++    /** @var SubformStateInterface $form_state */
+     return new FormattableMarkup('@disabled@warning', [
+       '@disabled' => $form_state->conditionalElement([
+         '#type' => 'container',
+@@ -297,7 +300,7 @@ abstract class BaseParser extends InstallablePluginBase implements FilterAwareIn
+   /**
+    * Adds a conditional state for a setting element based on render strategy.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    * @param array $element
+    *   The element to modify, passed by reference.
+@@ -308,7 +311,7 @@ abstract class BaseParser extends InstallablePluginBase implements FilterAwareIn
+    *   The conditions for which to trigger the state(s).
+    */
+   protected function renderStrategyDisabledSettingState(FormStateInterface $form_state, array &$element, $state = 'disabled', array $conditions = ['!value' => self::NONE]) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
++    /** @var SubformStateInterface $form_state */
+     $markdownParents = $form_state->get('markdownSubformParents');
+     $parents = array_merge($markdownParents, ['render_strategy', 'type']);
+     $selector = ':input[name="' . array_shift($parents) . '[' . implode('][', $parents) . ']"]';
+diff --git a/src/Plugin/Markdown/CommonMark/BaseExtension.php b/src/Plugin/Markdown/CommonMark/BaseExtension.php
+index 7094261..abd4fea 100644
+--- a/src/Plugin/Markdown/CommonMark/BaseExtension.php
++++ b/src/Plugin/Markdown/CommonMark/BaseExtension.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown\CommonMark;
+ 
++use Drupal\markdown\Annotation\MarkdownExtension;
+ use Drupal\markdown\Plugin\Markdown\BaseExtension as MarkdownBaseExtension;
+ use Drupal\markdown\Plugin\Markdown\ExtensibleParserInterface;
+ use Drupal\markdown\Traits\ParserAwareTrait;
+@@ -9,8 +10,8 @@ use Drupal\markdown\Traits\ParserAwareTrait;
+ /**
+  * Base CommonMark Extension.
+  *
+- * @property \Drupal\markdown\Annotation\MarkdownExtension $pluginDefinition
+- * @method \Drupal\markdown\Annotation\MarkdownExtension getPluginDefinition()
++ * @property MarkdownExtension $pluginDefinition
++ * @method MarkdownExtension getPluginDefinition()
+  * @method \League\CommonMark\Extension\ExtensionInterface getObject($args = NULL, $_ = NULL)
+  */
+ abstract class BaseExtension extends MarkdownBaseExtension implements ExtensionInterface {
+diff --git a/src/Plugin/Markdown/CommonMark/CommonMark.php b/src/Plugin/Markdown/CommonMark/CommonMark.php
+index 8e7c2eb..bc8956c 100644
+--- a/src/Plugin/Markdown/CommonMark/CommonMark.php
++++ b/src/Plugin/Markdown/CommonMark/CommonMark.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown\CommonMark;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
++use Drupal\markdown\Form\SubformStateInterface;
+ use Composer\Semver\Semver;
+ use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\Component\Utility\NestedArray;
+@@ -105,8 +107,7 @@ class CommonMark extends BaseExtensibleParser implements AllowedHtmlInterface {
+    * {@inheritdoc}
+    */
+   public static function defaultSettings($pluginDefinition) {
+-    /** @var \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition */
+-
++    /** @var InstallablePlugin $pluginDefinition */
+     // CommonMark didn't have configuration until 0.6.0.
+     if (!$pluginDefinition->version || Semver::satisfies($pluginDefinition->version, '<0.6.0')) {
+       return [];
+@@ -187,7 +188,7 @@ class CommonMark extends BaseExtensibleParser implements AllowedHtmlInterface {
+    * {@inheritdoc}
+    */
+   public function buildConfigurationForm(array $element, FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
++    /** @var SubformStateInterface $form_state */
+     $element = parent::buildConfigurationForm($element, $form_state);
+ 
+     $element += $this->createSettingElement('allow_unsafe_links', [
+@@ -394,8 +395,7 @@ class CommonMark extends BaseExtensibleParser implements AllowedHtmlInterface {
+ 
+       $extensions = $this->extensions();
+       foreach ($extensions as $extension) {
+-        /** @var \Drupal\markdown\Plugin\Markdown\CommonMark\ExtensionInterface $extension */
+-
++        /** @var ExtensionInterface $extension */
+         // Skip disabled extensions.
+         if (!$extension->isEnabled()) {
+           continue;
+diff --git a/src/Plugin/Markdown/CommonMark/Extension/FootnoteExtension.php b/src/Plugin/Markdown/CommonMark/Extension/FootnoteExtension.php
+index 9cb39f4..e3b5632 100644
+--- a/src/Plugin/Markdown/CommonMark/Extension/FootnoteExtension.php
++++ b/src/Plugin/Markdown/CommonMark/Extension/FootnoteExtension.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown\CommonMark\Extension;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
++use Drupal\markdown\Form\SubformStateInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Plugin\PluginFormInterface;
+ use Drupal\Core\Theme\ActiveTheme;
+@@ -95,8 +97,7 @@ class FootnoteExtension extends BaseExtension implements AllowedHtmlInterface, P
+    * {@inheritdoc}
+    */
+   public static function defaultSettings($pluginDefinition) {
+-    /** @var \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition */
+-
++    /** @var InstallablePlugin $pluginDefinition */
+     // Immediately return if not using the newer bundled extension.
+     if ($pluginDefinition->object === 'RZ\\CommonMark\\Ext\\Footnote\\FootnoteExtension') {
+       return [];
+@@ -125,8 +126,7 @@ class FootnoteExtension extends BaseExtension implements AllowedHtmlInterface, P
+    * {@inheritdoc}
+    */
+   public function buildConfigurationForm(array $element, FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
+-
++    /** @var SubformStateInterface $form_state */
+     // Add a note about core's aggressive XSS and how it affects footnotes.
+     // @todo Remove note about core XSS bug/workaround.
+     // @see https://www.drupal.org/project/markdown/issues/3136378
+@@ -198,7 +198,7 @@ class FootnoteExtension extends BaseExtension implements AllowedHtmlInterface, P
+    * {@inheritdoc}
+    */
+   public function validateConfigurationForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
++    /** @var SubformStateInterface $form_state */
+     foreach (['footnote_id_prefix', 'ref_id_prefix'] as $name) {
+       if (strpos($form_state->getValue($name), ':') !== FALSE) {
+         $form_state->setError($form[$name], $this->moreInfo($this->t('Due to a core bug, the use of colons (:) in "@title" is not possible.', [
+diff --git a/src/Plugin/Markdown/CommonMark/Extension/HeadingPermalinkExtension.php b/src/Plugin/Markdown/CommonMark/Extension/HeadingPermalinkExtension.php
+index 92e8191..4ed216d 100644
+--- a/src/Plugin/Markdown/CommonMark/Extension/HeadingPermalinkExtension.php
++++ b/src/Plugin/Markdown/CommonMark/Extension/HeadingPermalinkExtension.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown\CommonMark\Extension;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
++use League\CommonMark\Extension\HeadingPermalink\HeadingPermalinkRenderer;
++use Drupal\markdown\Form\SubformStateInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Plugin\PluginFormInterface;
+ use Drupal\Core\Theme\ActiveTheme;
+@@ -46,12 +49,11 @@ class HeadingPermalinkExtension extends BaseExtension implements AllowedHtmlInte
+    * {@inheritdoc}
+    */
+   public static function defaultSettings($pluginDefinition) {
+-    /** @var \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition */
+-
++    /** @var InstallablePlugin $pluginDefinition */
+     $innerContents = '';
+     if (defined('\\League\\CommonMark\\Extension\\HeadingPermalink\\HeadingPermalinkRenderer::DEFAULT_INNER_CONTENTS')) {
+       /* @noinspection PhpFullyQualifiedNameUsageInspection */
+-      $innerContents = \League\CommonMark\Extension\HeadingPermalink\HeadingPermalinkRenderer::DEFAULT_INNER_CONTENTS; // phpcs:ignore
++      $innerContents = HeadingPermalinkRenderer::DEFAULT_INNER_CONTENTS; // phpcs:ignore
+     }
+ 
+     return [
+@@ -78,8 +80,7 @@ class HeadingPermalinkExtension extends BaseExtension implements AllowedHtmlInte
+    * {@inheritdoc}
+    */
+   public function buildConfigurationForm(array $element, FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
+-
++    /** @var SubformStateInterface $form_state */
+     $element += $this->createSettingElement('html_class', [
+       '#type' => 'textfield',
+       '#title' => $this->t('HTML Class'),
+diff --git a/src/Plugin/Markdown/CommonMark/Extension/MentionExtension.php b/src/Plugin/Markdown/CommonMark/Extension/MentionExtension.php
+index 5aad099..8f32f4d 100644
+--- a/src/Plugin/Markdown/CommonMark/Extension/MentionExtension.php
++++ b/src/Plugin/Markdown/CommonMark/Extension/MentionExtension.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown\CommonMark\Extension;
+ 
++use Drupal\markdown\Form\SubformStateInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Plugin\PluginFormInterface;
+ use Drupal\markdown\Plugin\Markdown\CommonMark\BaseExtension;
+@@ -50,7 +51,7 @@ class MentionExtension extends BaseExtension implements PluginFormInterface {
+    * {@inheritdoc}
+    */
+   public function buildConfigurationForm(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
++    /** @var SubformStateInterface $form_state */
+     $parentForm = &$form_state->getParentForm();
+     $parentForm['enabled']['#disabled'] = TRUE;
+     return $form;
+diff --git a/src/Plugin/Markdown/CommonMark/Extension/SmartPunctuationExtension.php b/src/Plugin/Markdown/CommonMark/Extension/SmartPunctuationExtension.php
+index ced6493..7c4df75 100644
+--- a/src/Plugin/Markdown/CommonMark/Extension/SmartPunctuationExtension.php
++++ b/src/Plugin/Markdown/CommonMark/Extension/SmartPunctuationExtension.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown\CommonMark\Extension;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
++use Drupal\markdown\Form\SubformStateInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Plugin\PluginFormInterface;
+ use Drupal\markdown\Plugin\Markdown\CommonMark\BaseExtension;
+@@ -55,8 +57,7 @@ class SmartPunctuationExtension extends BaseExtension implements PluginFormInter
+    * {@inheritdoc}
+    */
+   public static function defaultSettings($pluginDefinition) {
+-    /** @var \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition */
+-
++    /** @var InstallablePlugin $pluginDefinition */
+     // Older versions of the deprecated extension didn't have settings.
+     if (!static::featureExists('settings')) {
+       return [];
+@@ -84,8 +85,7 @@ class SmartPunctuationExtension extends BaseExtension implements PluginFormInter
+    * {@inheritdoc}
+    */
+   public function buildConfigurationForm(array $element, FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
+-
++    /** @var SubformStateInterface $form_state */
+     // Immediately return if extension doesn't support settings.
+     if (!static::featureExists('settings')) {
+       return $element;
+diff --git a/src/Plugin/Markdown/CommonMark/Extension/TableOfContentsExtension.php b/src/Plugin/Markdown/CommonMark/Extension/TableOfContentsExtension.php
+index f39ea5b..ca9e45b 100644
+--- a/src/Plugin/Markdown/CommonMark/Extension/TableOfContentsExtension.php
++++ b/src/Plugin/Markdown/CommonMark/Extension/TableOfContentsExtension.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown\CommonMark\Extension;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
++use Drupal\markdown\Form\SubformStateInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Plugin\PluginFormInterface;
+ use Drupal\markdown\Plugin\Markdown\CommonMark\BaseExtension;
+@@ -45,8 +47,7 @@ class TableOfContentsExtension extends BaseExtension implements PluginFormInterf
+    * {@inheritdoc}
+    */
+   public static function defaultSettings($pluginDefinition) {
+-    /** @var \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition */
+-
++    /** @var InstallablePlugin $pluginDefinition */
+     $settings = [
+       'html_class' => 'table-of-contents',
+       'max_heading_level' => 6,
+@@ -87,8 +88,7 @@ class TableOfContentsExtension extends BaseExtension implements PluginFormInterf
+    * {@inheritdoc}
+    */
+   public function buildConfigurationForm(array $element, FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
+-
++    /** @var SubformStateInterface $form_state */
+     $element += $this->createSettingElement('html_class', [
+       '#type' => 'textfield',
+       '#title' => $this->t('HTML Class'),
+diff --git a/src/Plugin/Markdown/ExtensibleParserInterface.php b/src/Plugin/Markdown/ExtensibleParserInterface.php
+index 934e036..4a8da04 100644
+--- a/src/Plugin/Markdown/ExtensibleParserInterface.php
++++ b/src/Plugin/Markdown/ExtensibleParserInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\PluginManager\ExtensionCollection;
+ use Drupal\markdown\BcSupport\ObjectWithPluginCollectionInterface;
+ 
+ /**
+@@ -15,7 +16,7 @@ interface ExtensibleParserInterface extends ParserInterface, ObjectWithPluginCol
+    * @param string $extensionId
+    *   The identifier of the extension plugin instance to return.
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\ExtensionInterface|null
++   * @return ExtensionInterface|null
+    *   A markdown extension instance or NULL if it doesn't exist.
+    */
+   public function extension($extensionId);
+@@ -31,7 +32,7 @@ interface ExtensibleParserInterface extends ParserInterface, ObjectWithPluginCol
+   /**
+    * Returns the ordered collection of extension plugin instances.
+    *
+-   * @return \Drupal\markdown\PluginManager\ExtensionCollection|\Drupal\markdown\Plugin\Markdown\ExtensionInterface[]
++   * @return ExtensionCollection|ExtensionInterface[]
+    *   The extension plugin collection.
+    */
+   public function extensions();
+diff --git a/src/Plugin/Markdown/ExtensionInterface.php b/src/Plugin/Markdown/ExtensionInterface.php
+index fc971f5..eb48d5c 100644
+--- a/src/Plugin/Markdown/ExtensionInterface.php
++++ b/src/Plugin/Markdown/ExtensionInterface.php
+@@ -2,12 +2,13 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\MarkdownExtension;
+ use Drupal\markdown\Util\ParserAwareInterface;
+ 
+ /**
+  * Interface for extensions.
+  *
+- * @method \Drupal\markdown\Annotation\MarkdownExtension getPluginDefinition()
++ * @method MarkdownExtension getPluginDefinition()
+  */
+ interface ExtensionInterface extends EnabledPluginInterface, ParserAwareInterface {
+ 
+diff --git a/src/Plugin/Markdown/InstallablePluginBase.php b/src/Plugin/Markdown/InstallablePluginBase.php
+index de1dbde..819ae66 100644
+--- a/src/Plugin/Markdown/InstallablePluginBase.php
++++ b/src/Plugin/Markdown/InstallablePluginBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use Drupal\Component\Utility\NestedArray;
+ use Drupal\Component\Utility\UrlHelper;
+@@ -21,8 +22,8 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ /**
+  * Base class for installable plugins.
+  *
+- * @property \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition
+- * @method \Drupal\markdown\Annotation\InstallablePlugin getPluginDefinition()
++ * @property InstallablePlugin $pluginDefinition
++ * @method InstallablePlugin getPluginDefinition()
+  *
+  * @todo Move upstream to https://www.drupal.org/project/installable_plugins.
+  */
+@@ -36,7 +37,7 @@ abstract class InstallablePluginBase extends AnnotatedPluginBase implements Inst
+   /**
+    * The config for this plugin.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+@@ -111,7 +112,7 @@ abstract class InstallablePluginBase extends AnnotatedPluginBase implements Inst
+   /**
+    * Retrieves available installs.
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\InstallablePluginInterface[]
++   * @return InstallablePluginInterface[]
+    */
+   public function getAvailableInstalls() {
+     $availableInstalls = [];
+@@ -187,7 +188,7 @@ abstract class InstallablePluginBase extends AnnotatedPluginBase implements Inst
+   /**
+    * Retrieves the container.
+    *
+-   * @return \Symfony\Component\DependencyInjection\ContainerInterface
++   * @return ContainerInterface
+    *   The container.
+    */
+   public function getContainer() {
+diff --git a/src/Plugin/Markdown/InstallablePluginInterface.php b/src/Plugin/Markdown/InstallablePluginInterface.php
+index e2fdb58..763eb83 100644
+--- a/src/Plugin/Markdown/InstallablePluginInterface.php
++++ b/src/Plugin/Markdown/InstallablePluginInterface.php
+@@ -2,13 +2,19 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
++use Drupal\Component\Render\MarkupInterface;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\Core\GeneratedLink;
++use Drupal\Core\Url;
+ use Drupal\Component\Plugin\DependentPluginInterface;
+ use Drupal\markdown\Annotation\InstallableLibrary;
+ 
+ /**
+  * Interface for installable plugins.
+  *
+- * @method \Drupal\markdown\Annotation\InstallablePlugin getPluginDefinition()
++ * @method InstallablePlugin getPluginDefinition()
+  *
+  * @todo Move upstream to https://www.drupal.org/project/installable_plugins.
+  */
+@@ -17,10 +23,10 @@ interface InstallablePluginInterface extends AnnotatedPluginInterface, Dependent
+   /**
+    * Builds a display for a library.
+    *
+-   * @param \Drupal\markdown\Annotation\InstallableLibrary $library
++   * @param InstallableLibrary $library
+    *   The library to build.
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface
++   * @return MarkupInterface
+    */
+   public function buildLibrary(InstallableLibrary $library = NULL);
+ 
+@@ -30,14 +36,14 @@ interface InstallablePluginInterface extends AnnotatedPluginInterface, Dependent
+    * @param bool $all
+    *   Flag indicating whether to build status for all potential libraries.
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface
++   * @return MarkupInterface
+    */
+   public function buildStatus($all = FALSE);
+ 
+   /**
+    * Retrieves the config instance for this plugin.
+    *
+-   * @return \Drupal\Core\Config\ImmutableConfig
++   * @return ImmutableConfig
+    *   An immutable config instance for this plugin's configuration.
+    */
+   public function config();
+@@ -45,7 +51,7 @@ interface InstallablePluginInterface extends AnnotatedPluginInterface, Dependent
+   /**
+    * Retrieves the deprecation message, if any.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|void
++   * @return TranslatableMarkup|void
+    *   The deprecated message, if set.
+    */
+   public function getDeprecated();
+@@ -53,7 +59,7 @@ interface InstallablePluginInterface extends AnnotatedPluginInterface, Dependent
+   /**
+    * Retrieves the experimental message.
+    *
+-   * @return bool|\Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return bool|TranslatableMarkup
+    *   TRUE if plugin is experimental or a TranslatableMarkup object if plugin
+    *   is experimental, but has an additional message; FALSE otherwise.
+    */
+@@ -70,7 +76,7 @@ interface InstallablePluginInterface extends AnnotatedPluginInterface, Dependent
+   /**
+    * Retrieves the installed library used by the plugin.
+    *
+-   * @return \Drupal\markdown\Annotation\InstallableLibrary|void
++   * @return InstallableLibrary|void
+    *   The installed library, if any.
+    */
+   public function getInstalledLibrary();
+@@ -81,7 +87,7 @@ interface InstallablePluginInterface extends AnnotatedPluginInterface, Dependent
+    * @param bool $version
+    *   Flag indicating whether to show the version with the label.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The label.
+    */
+   public function getLabel($version = TRUE);
+@@ -89,7 +95,7 @@ interface InstallablePluginInterface extends AnnotatedPluginInterface, Dependent
+   /**
+    * Retrieves the plugin as a link using its label and URL.
+    *
+-   * @param string|\Drupal\Component\Render\MarkupInterface $label
++   * @param string|MarkupInterface $label
+    *   Optional. A specific label to use for the link. If not specified, it
+    *   will default to the label or plugin identifier if present.
+    * @param array $options
+@@ -98,7 +104,7 @@ interface InstallablePluginInterface extends AnnotatedPluginInterface, Dependent
+    *   Flag indicating whether to fallback to the original label or plugin
+    *   identifier if no link could be generated.
+    *
+-   * @return \Drupal\Core\GeneratedLink|mixed|void
++   * @return GeneratedLink|mixed|void
+    *   The link if one was generated or the label if $fallback was provided.
+    */
+   public function getLink($label = NULL, array $options = [], $fallback = TRUE);
+@@ -129,7 +135,7 @@ interface InstallablePluginInterface extends AnnotatedPluginInterface, Dependent
+   /**
+    * Retrieves the preferred library of the plugin.
+    *
+-   * @return \Drupal\markdown\Annotation\InstallableLibrary|void
++   * @return InstallableLibrary|void
+    *   The preferred library, if any.
+    */
+   public function getPreferredLibrary();
+@@ -148,7 +154,7 @@ interface InstallablePluginInterface extends AnnotatedPluginInterface, Dependent
+    * @param array $options
+    *   Optional. An array of \Drupal\Core\Url options.
+    *
+-   * @return \Drupal\Core\Url|void
++   * @return Url|void
+    *   A Url object of the plugin's URL or NULL if no URL was provided.
+    *
+    * @see \Drupal\Core\Url::fromUri
+diff --git a/src/Plugin/Markdown/MissingExtension.php b/src/Plugin/Markdown/MissingExtension.php
+index 6540fec..93fd613 100644
+--- a/src/Plugin/Markdown/MissingExtension.php
++++ b/src/Plugin/Markdown/MissingExtension.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
+ use Drupal\markdown\Traits\EnabledPluginTrait;
+ use Drupal\markdown\Traits\ParserAwareTrait;
+ 
+@@ -14,8 +15,8 @@ use Drupal\markdown\Traits\ParserAwareTrait;
+  *   requirementViolations = { @Translation("Missing Extension") },
+  * )
+  *
+- * @property \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition
+- * @method \Drupal\markdown\Annotation\InstallablePlugin getPluginDefinition()
++ * @property InstallablePlugin $pluginDefinition
++ * @method InstallablePlugin getPluginDefinition()
+  */
+ class MissingExtension extends InstallablePluginBase implements ExtensionInterface {
+ 
+diff --git a/src/Plugin/Markdown/MissingParser.php b/src/Plugin/Markdown/MissingParser.php
+index d919e47..1908d05 100644
+--- a/src/Plugin/Markdown/MissingParser.php
++++ b/src/Plugin/Markdown/MissingParser.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
+ use Drupal\Core\Cache\RefinableCacheableDependencyTrait;
+ use Drupal\Core\Language\LanguageInterface;
+ use Drupal\Core\Theme\ActiveTheme;
+@@ -23,8 +24,8 @@ use Drupal\markdown\Util\FilterHtml;
+  *   requirementViolations = { @Translation("Missing Parser") },
+  * )
+  *
+- * @property \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition
+- * @method \Drupal\markdown\Annotation\InstallablePlugin getPluginDefinition()
++ * @property InstallablePlugin $pluginDefinition
++ * @method InstallablePlugin getPluginDefinition()
+  */
+ class MissingParser extends InstallablePluginBase implements AllowedHtmlInterface, ParserInterface {
+ 
+diff --git a/src/Plugin/Markdown/Parsedown/Parsedown.php b/src/Plugin/Markdown/Parsedown/Parsedown.php
+index d807108..3d6c778 100644
+--- a/src/Plugin/Markdown/Parsedown/Parsedown.php
++++ b/src/Plugin/Markdown/Parsedown/Parsedown.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown\Parsedown;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
++use Drupal\markdown\Form\SubformStateInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Language\LanguageInterface;
+ use Drupal\Core\Theme\ActiveTheme;
+@@ -71,7 +73,7 @@ class Parsedown extends BaseParser implements AllowedHtmlInterface, SettingsInte
+    * {@inheritdoc}
+    */
+   public static function defaultSettings($pluginDefinition) {
+-    /** @var \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition */
++    /** @var InstallablePlugin $pluginDefinition */
+     return [
+       'breaks_enabled' => FALSE,
+       'markup_escaped' => FALSE,
+@@ -118,7 +120,7 @@ class Parsedown extends BaseParser implements AllowedHtmlInterface, SettingsInte
+    * {@inheritdoc}
+    */
+   public function buildConfigurationForm(array $element, FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
++    /** @var SubformStateInterface $form_state */
+     $element = parent::buildConfigurationForm($element, $form_state);
+ 
+     $element += $this->createSettingElement('breaks_enabled', [
+diff --git a/src/Plugin/Markdown/ParserInterface.php b/src/Plugin/Markdown/ParserInterface.php
+index dc73300..eeb8b33 100644
+--- a/src/Plugin/Markdown/ParserInterface.php
++++ b/src/Plugin/Markdown/ParserInterface.php
+@@ -2,13 +2,15 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\MarkdownParser;
++use Drupal\markdown\Render\ParsedMarkdownInterface;
+ use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
+ use Drupal\Core\Language\LanguageInterface;
+ 
+ /**
+  * Interface for defining markdown parsers.
+  *
+- * @method \Drupal\markdown\Annotation\MarkdownParser getPluginDefinition()
++ * @method MarkdownParser getPluginDefinition()
+  */
+ interface ParserInterface extends EnabledPluginInterface, RefinableCacheableDependencyInterface, RenderStrategyInterface, SettingsInterface {
+ 
+@@ -17,10 +19,10 @@ interface ParserInterface extends EnabledPluginInterface, RefinableCacheableDepe
+    *
+    * @param string $markdown
+    *   The markdown string to parse.
+-   * @param \Drupal\Core\Language\LanguageInterface $language
++   * @param LanguageInterface $language
+    *   Optional. The language of the markdown to be parsed.
+    *
+-   * @return \Drupal\markdown\Render\ParsedMarkdownInterface
++   * @return ParsedMarkdownInterface
+    *   A safe ParsedMarkdown object.
+    *
+    * @see \Drupal\markdown\Render\ParsedMarkdownInterface
+diff --git a/src/Plugin/Markdown/Pecl/Cmark.php b/src/Plugin/Markdown/Pecl/Cmark.php
+index 7bcbc77..b142d60 100644
+--- a/src/Plugin/Markdown/Pecl/Cmark.php
++++ b/src/Plugin/Markdown/Pecl/Cmark.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown\Pecl;
+ 
++use function CommonMark\Parse;
++use function CommonMark\Render\HTML;
+ use Drupal\Core\Language\LanguageInterface;
+ use Drupal\markdown\Plugin\Markdown\AllowedHtmlInterface;
+ use Drupal\markdown\Plugin\Markdown\BaseParser;
+@@ -35,8 +37,8 @@ class Cmark extends BaseParser implements AllowedHtmlInterface {
+     try {
+       if (is_string($markdown)) {
+         // NOTE: these are functions, not classes.
+-        $node = \CommonMark\Parse($markdown);
+-        return \CommonMark\Render\HTML($node);
++        $node = Parse($markdown);
++        return HTML($node);
+       }
+     }
+     catch (\Exception $e) {
+diff --git a/src/Plugin/Markdown/PhpMarkdown/PhpMarkdown.php b/src/Plugin/Markdown/PhpMarkdown/PhpMarkdown.php
+index 5bf11a9..89c79b4 100644
+--- a/src/Plugin/Markdown/PhpMarkdown/PhpMarkdown.php
++++ b/src/Plugin/Markdown/PhpMarkdown/PhpMarkdown.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown\PhpMarkdown;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
++use Drupal\markdown\Form\SubformStateInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Language\LanguageInterface;
+ use Drupal\markdown\Plugin\Markdown\AllowedHtmlInterface;
+@@ -60,7 +62,7 @@ class PhpMarkdown extends BaseParser implements AllowedHtmlInterface, SettingsIn
+    * {@inheritdoc}
+    */
+   public static function defaultSettings($pluginDefinition) {
+-    /** @var \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition */
++    /** @var InstallablePlugin $pluginDefinition */
+     return [
+       'empty_element_suffix' => ' />',
+       'enhanced_ordered_list' => FALSE,
+@@ -77,7 +79,7 @@ class PhpMarkdown extends BaseParser implements AllowedHtmlInterface, SettingsIn
+    * {@inheritdoc}
+    */
+   public function buildConfigurationForm(array $element, FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
++    /** @var SubformStateInterface $form_state */
+     $element = parent::buildConfigurationForm($element, $form_state);
+ 
+     $element += $this->createSettingElement('enhanced_ordered_list', [
+diff --git a/src/Plugin/Markdown/PhpMarkdown/PhpMarkdownExtra.php b/src/Plugin/Markdown/PhpMarkdown/PhpMarkdownExtra.php
+index c098a80..81323b9 100644
+--- a/src/Plugin/Markdown/PhpMarkdown/PhpMarkdownExtra.php
++++ b/src/Plugin/Markdown/PhpMarkdown/PhpMarkdownExtra.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown\PhpMarkdown;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
++use Drupal\markdown\Form\SubformStateInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Theme\ActiveTheme;
+ use Drupal\markdown\Plugin\Markdown\AllowedHtmlInterface;
+@@ -41,7 +43,7 @@ class PhpMarkdownExtra extends PhpMarkdown implements AllowedHtmlInterface {
+    * {@inheritdoc}
+    */
+   public static function defaultSettings($pluginDefinition) {
+-    /** @var \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition */
++    /** @var InstallablePlugin $pluginDefinition */
+     return [
+       'code_attr_on_pre' => FALSE,
+       'code_class_prefix' => '',
+@@ -104,7 +106,7 @@ class PhpMarkdownExtra extends PhpMarkdown implements AllowedHtmlInterface {
+    * {@inheritdoc}
+    */
+   public function buildConfigurationForm(array $element, FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
++    /** @var SubformStateInterface $form_state */
+     $element = parent::buildConfigurationForm($element, $form_state);
+ 
+     $element += $this->createSettingElement('code_attr_on_pre', [
+diff --git a/src/Plugin/Markdown/PluginInterface.php b/src/Plugin/Markdown/PluginInterface.php
+index 995d07d..cac4ccb 100644
+--- a/src/Plugin/Markdown/PluginInterface.php
++++ b/src/Plugin/Markdown/PluginInterface.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\Core\Url;
+ use Drupal\Component\Plugin\DependentPluginInterface;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -20,7 +23,7 @@ interface PluginInterface extends ConfigurableInterface, ContainerAwareInterface
+   /**
+    * Retrieves the config instance for this plugin.
+    *
+-   * @return \Drupal\Core\Config\ImmutableConfig
++   * @return ImmutableConfig
+    *   An immutable config instance for this plugin's configuration.
+    */
+   public function config();
+@@ -28,7 +31,7 @@ interface PluginInterface extends ConfigurableInterface, ContainerAwareInterface
+   /**
+    * Retrieves the description of the plugin, if set.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The description.
+    */
+   public function getDescription();
+@@ -36,7 +39,7 @@ interface PluginInterface extends ConfigurableInterface, ContainerAwareInterface
+   /**
+    * Displays the human-readable label of the plugin.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The label.
+    */
+   public function getLabel();
+@@ -52,7 +55,7 @@ interface PluginInterface extends ConfigurableInterface, ContainerAwareInterface
+   /**
+    * Retrieves the URL of the plugin, if set.
+    *
+-   * @return \Drupal\Core\Url|null
++   * @return Url|null
+    *   A Url object or NULL if not set.
+    */
+   public function getUrl();
+diff --git a/src/Plugin/Markdown/SettingsInterface.php b/src/Plugin/Markdown/SettingsInterface.php
+index d10cf9a..8a5c6c6 100644
+--- a/src/Plugin/Markdown/SettingsInterface.php
++++ b/src/Plugin/Markdown/SettingsInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Plugin\Markdown;
+ 
++use Drupal\markdown\Annotation\InstallablePlugin;
+ /**
+  * Interface for installable plugins that implement settings.
+  *
+@@ -12,7 +13,7 @@ interface SettingsInterface {
+   /**
+    * Provides the default settings for the plugin.
+    *
+-   * @param \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition
++   * @param InstallablePlugin $pluginDefinition
+    *   The plugin definition.
+    *
+    * @return array
+diff --git a/src/Plugin/Validation/Constraint/VersionValidator.php b/src/Plugin/Validation/Constraint/VersionValidator.php
+index c40f9ba..1968e5b 100644
+--- a/src/Plugin/Validation/Constraint/VersionValidator.php
++++ b/src/Plugin/Validation/Constraint/VersionValidator.php
+@@ -19,7 +19,7 @@ class VersionValidator extends ConstraintValidator {
+   /**
+    * Semver version parser.
+    *
+-   * @var \Composer\Semver\VersionParser
++   * @var VersionParser
+    */
+   private static $versionParser;
+ 
+@@ -27,7 +27,7 @@ class VersionValidator extends ConstraintValidator {
+    * {@inheritdoc}
+    */
+   public function validate($version, Constraint $constraint) {
+-    /** @var \Drupal\markdown\Plugin\Validation\Constraint\Version $constraint */
++    /** @var Version $constraint */
+     $semverConstraints = $constraint->value;
+ 
+     $named = isset($constraint->name);
+diff --git a/src/PluginManager/AllowedHtmlManager.php b/src/PluginManager/AllowedHtmlManager.php
+index bfc410c..0009430 100644
+--- a/src/PluginManager/AllowedHtmlManager.php
++++ b/src/PluginManager/AllowedHtmlManager.php
+@@ -26,10 +26,10 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ /**
+  * Markdown Allowed HTML Plugin Manager.
+  *
+- * @method \Drupal\markdown\Plugin\Markdown\AllowedHtmlInterface createInstance($plugin_id, array $configuration = [])
+- * @method \Drupal\markdown\Annotation\MarkdownAllowedHtml getDefinition($plugin_id, $exception_on_invalid = TRUE)
+- * @method \Drupal\markdown\Annotation\MarkdownAllowedHtml|void getDefinitionByClassName($className)
+- * @method \Drupal\markdown\Annotation\MarkdownAllowedHtml[] getDefinitions($includeFallback = TRUE)
++ * @method AllowedHtmlInterface createInstance($plugin_id, array $configuration = [])
++ * @method MarkdownAllowedHtml getDefinition($plugin_id, $exception_on_invalid = true)
++ * @method MarkdownAllowedHtml|void getDefinitionByClassName($className)
++ * @method MarkdownAllowedHtml[] getDefinitions($includeFallback = true)
+  * @noinspection PhpUnnecessaryFullyQualifiedNameInspection
+  */
+ class AllowedHtmlManager extends InstallablePluginManager {
+@@ -37,35 +37,35 @@ class AllowedHtmlManager extends InstallablePluginManager {
+   /**
+    * The Markdown Extension Plugin Manager service.
+    *
+-   * @var \Drupal\markdown\PluginManager\ExtensionManagerInterface
++   * @var ExtensionManagerInterface
+    */
+   protected $extensionManager;
+ 
+   /**
+    * The Filter Plugin Manager service.
+    *
+-   * @var \Drupal\filter\FilterPluginManager
++   * @var FilterPluginManager
+    */
+   protected $filterManager;
+ 
+   /**
+    * The Markdown Parser Plugin Manager service.
+    *
+-   * @var \Drupal\markdown\PluginManager\ParserManagerInterface
++   * @var ParserManagerInterface
+    */
+   protected $parserManager;
+ 
+   /**
+    * The Theme Handler service.
+    *
+-   * @var \Drupal\Core\Extension\ThemeHandlerInterface|string
++   * @var ThemeHandlerInterface|string
+    */
+   protected $themeHandler;
+ 
+   /**
+    * The Theme Manager service.
+    *
+-   * @var \Drupal\Core\Theme\ThemeManagerInterface
++   * @var ThemeManagerInterface
+    */
+   protected $themeManager;
+ 
+@@ -136,15 +136,15 @@ class AllowedHtmlManager extends InstallablePluginManager {
+    *
+    * Note: this is primarily for use when actually parsing markdown.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   A markdown parser.
+-   * @param \Drupal\Core\Theme\ActiveTheme $activeTheme
++   * @param ActiveTheme $activeTheme
+    *   Optional. The active them. This is used as an indicator when in
+    *   "render mode".
+    * @param array $definitions
+    *   Optional. Specific plugin definitions.
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\AllowedHtmlInterface[]
++   * @return AllowedHtmlInterface[]
+    *   Plugins that apply to the $parser.
+    */
+   public function appliesTo(ParserInterface $parser, ActiveTheme $activeTheme = NULL, array $definitions = NULL) {
+@@ -204,12 +204,12 @@ class AllowedHtmlManager extends InstallablePluginManager {
+   /**
+    * Retrieves definitions supported by parser extensions.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   A parser.
+    * @param array $definitions
+    *   Optional. Specific definitions to filter, if not provided then all
+    *   plugins with an "extension" type will be filtered.
+-   * @param \Drupal\Core\Theme\ActiveTheme $activeTheme
++   * @param ActiveTheme $activeTheme
+    *   Optional. The active them. This is used as an indicator when in
+    *   "render mode".
+    *
+@@ -240,12 +240,12 @@ class AllowedHtmlManager extends InstallablePluginManager {
+   /**
+    * Retrieves definitions required by filters.
+    *
+-   * @param \Drupal\filter\Entity\FilterFormat $filterFormat
++   * @param FilterFormat $filterFormat
+    *   A filter format.
+    * @param array $definitions
+    *   Optional. Specific definitions to filter, if not provided then all
+    *   plugins with a "filter" type will be filtered.
+-   * @param \Drupal\Core\Theme\ActiveTheme $activeTheme
++   * @param ActiveTheme $activeTheme
+    *   Optional. The active them. This is used as an indicator when in
+    *   "render mode".
+    *
+@@ -257,7 +257,7 @@ class AllowedHtmlManager extends InstallablePluginManager {
+     if (!$filterFormat) {
+       return [];
+     }
+-    /** @var \Drupal\markdown\Annotation\MarkdownAllowedHtml[] $definitions */
++    /** @var MarkdownAllowedHtml[] $definitions */
+     $definitions = isset($definitions) ? $definitions : $this->getType('filter', $definitions);
+     $filters = $filterFormat->filters();
+     foreach ($definitions as $plugin_id => $definition) {
+@@ -288,12 +288,12 @@ class AllowedHtmlManager extends InstallablePluginManager {
+   /**
+    * Retrieves the definition provided by the parser.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   A parser.
+    * @param array $definitions
+    *   Optional. Specific definitions to filter, if not provided then all
+    *   plugins with an "extension" type will be filtered.
+-   * @param \Drupal\Core\Theme\ActiveTheme $activeTheme
++   * @param ActiveTheme $activeTheme
+    *   Optional. The active them. This is used as an indicator when in
+    *   "render mode".
+    *
+@@ -333,7 +333,7 @@ class AllowedHtmlManager extends InstallablePluginManager {
+    * @param array $definitions
+    *   Optional. Specific definitions to filter, if not provided then all
+    *   plugins with a "theme" type will be filtered.
+-   * @param \Drupal\Core\Theme\ActiveTheme $activeTheme
++   * @param ActiveTheme $activeTheme
+    *   Optional. The active them. This is used as an indicator when in
+    *   "render mode".
+    *
+@@ -395,7 +395,7 @@ class AllowedHtmlManager extends InstallablePluginManager {
+       return;
+     }
+ 
+-    /** @var \Drupal\markdown\Annotation\MarkdownAllowedHtml $definition */
++    /** @var MarkdownAllowedHtml $definition */
+     switch ($definition->type) {
+       case 'extension':
+         if (($extensionRequirement = current($definition->getRequirementsByType('extension'))) && ($extensionDefinition = $this->extensionManager->getDefinition($extensionRequirement->getTypeId()))) {
+diff --git a/src/PluginManager/EnableAwarePluginManagerInterface.php b/src/PluginManager/EnableAwarePluginManagerInterface.php
+index 3baa6db..54c5a53 100644
+--- a/src/PluginManager/EnableAwarePluginManagerInterface.php
++++ b/src/PluginManager/EnableAwarePluginManagerInterface.php
+@@ -2,12 +2,13 @@
+ 
+ namespace Drupal\markdown\PluginManager;
+ 
++use Drupal\markdown\Plugin\Markdown\EnabledPluginInterface;
+ /**
+  * Interface for plugin managers that are "enable" aware.
+  *
+- * @method \Drupal\markdown\Plugin\Markdown\EnabledPluginInterface[] all(array $configuration = [], $includeFallback = FALSE) : array
+- * @method \Drupal\markdown\Plugin\Markdown\EnabledPluginInterface createInstance($plugin_id, array $configuration = [])
+- * @method \Drupal\markdown\Plugin\Markdown\EnabledPluginInterface[] installed(array $configuration = []) : array
++ * @method EnabledPluginInterface[] all(array $configuration = [], $includeFallback = false) : array
++ * @method EnabledPluginInterface createInstance($plugin_id, array $configuration = [])
++ * @method EnabledPluginInterface[] installed(array $configuration = []) : array
+  *
+  * @todo Move upstream to https://www.drupal.org/project/installable_plugins.
+  */
+@@ -19,7 +20,7 @@ interface EnableAwarePluginManagerInterface extends InstallablePluginManagerInte
+    * @param array $configuration
+    *   The configuration used to create plugin instances.
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\EnabledPluginInterface[]
++   * @return EnabledPluginInterface[]
+    *   An array of enabled plugins instances, keyed by plugin identifier.
+    */
+   public function enabled(array $configuration = []);
+diff --git a/src/PluginManager/ExtensionCollection.php b/src/PluginManager/ExtensionCollection.php
+index c1f776b..f84a9fb 100644
+--- a/src/PluginManager/ExtensionCollection.php
++++ b/src/PluginManager/ExtensionCollection.php
+@@ -9,23 +9,23 @@ use Drupal\markdown\Util\ParserAwareInterface;
+ /**
+  * Collection of extension plugins based on relevant parser.
+  *
+- * @property \Drupal\markdown\PluginManager\ExtensionManager $manager
++ * @property ExtensionManager $manager
+  */
+ class ExtensionCollection extends DefaultLazyPluginCollection {
+ 
+   /**
+    * The Markdown Parser instance this extension collection belongs to.
+    *
+-   * @var \Drupal\markdown\Plugin\Markdown\ExtensibleParserInterface
++   * @var ExtensibleParserInterface
+    */
+   protected $parser;
+ 
+   /**
+    * ExtensionCollection constructor.
+    *
+-   * @param \Drupal\markdown\PluginManager\ExtensionManagerInterface $manager
++   * @param ExtensionManagerInterface $manager
+    *   The Markdown Extension Plugin Manager service.
+-   * @param \Drupal\markdown\Plugin\Markdown\ExtensibleParserInterface $parser
++   * @param ExtensibleParserInterface $parser
+    *   A markdown parser instance.
+    */
+   public function __construct(ExtensionManagerInterface $manager, ExtensibleParserInterface $parser) {
+diff --git a/src/PluginManager/ExtensionManager.php b/src/PluginManager/ExtensionManager.php
+index aaf502a..3e7b5ac 100644
+--- a/src/PluginManager/ExtensionManager.php
++++ b/src/PluginManager/ExtensionManager.php
+@@ -18,12 +18,12 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ /**
+  * Markdown Extension Plugin Manager.
+  *
+- * @method \Drupal\markdown\Plugin\Markdown\ExtensionInterface[] all(array $configuration = [], $includeFallback = FALSE) : array
+- * @method \Drupal\markdown\Plugin\Markdown\ExtensionInterface createInstance($plugin_id, array $configuration = [])
+- * @method \Drupal\markdown\Annotation\MarkdownExtension getDefinition($plugin_id, $exception_on_invalid = TRUE)
+- * @method \Drupal\markdown\Annotation\MarkdownExtension|void getDefinitionByClassName($className)
+- * @method \Drupal\markdown\Annotation\MarkdownExtension[] getDefinitions($includeFallback = TRUE)
+- * @method \Drupal\markdown\Plugin\Markdown\ExtensionInterface[] installed(array $configuration = []) : array
++ * @method ExtensionInterface[] all(array $configuration = [], $includeFallback = false) : array
++ * @method ExtensionInterface createInstance($plugin_id, array $configuration = [])
++ * @method MarkdownExtension getDefinition($plugin_id, $exception_on_invalid = true)
++ * @method MarkdownExtension|void getDefinitionByClassName($className)
++ * @method MarkdownExtension[] getDefinitions($includeFallback = true)
++ * @method ExtensionInterface[] installed(array $configuration = []) : array
+  * @noinspection PhpUnnecessaryFullyQualifiedNameInspection
+  */
+ class ExtensionManager extends InstallablePluginManager implements ExtensionManagerInterface {
+@@ -59,8 +59,7 @@ class ExtensionManager extends InstallablePluginManager implements ExtensionMana
+    * {@inheritdoc}
+    */
+   protected function alterDefinitions(&$definitions, $runtime = FALSE) {
+-    /** @var \Drupal\markdown\Annotation\MarkdownExtension[] $definitions */
+-
++    /** @var MarkdownExtension[] $definitions */
+     // Create dependency relationships between extensions.
+     // Note: property is prefixed with an underscore to denote it as internal.
+     // @see \Drupal\markdown\PluginManager\ExtensionCollection::__construct
+@@ -112,7 +111,7 @@ class ExtensionManager extends InstallablePluginManager implements ExtensionMana
+   protected function createObjectRequirement(InstallablePlugin $definition, InstallableLibrary $library) {
+     $objectRequirement = parent::createObjectRequirement($definition, $library);
+     $id = $objectRequirement->constraints['Installed']['name'];
+-    /** @var \Drupal\markdown\PluginManager\ParserManagerInterface $parserManager */
++    /** @var ParserManagerInterface $parserManager */
+     $parserManager = \Drupal::service('plugin.manager.markdown.parser');
+     $parser = $parserManager->getDefinitionByLibraryId($id);
+     foreach ($library->requirements as $requirement) {
+diff --git a/src/PluginManager/ExtensionManagerInterface.php b/src/PluginManager/ExtensionManagerInterface.php
+index b631fef..7b2d87c 100644
+--- a/src/PluginManager/ExtensionManagerInterface.php
++++ b/src/PluginManager/ExtensionManagerInterface.php
+@@ -2,15 +2,17 @@
+ 
+ namespace Drupal\markdown\PluginManager;
+ 
++use Drupal\markdown\Plugin\Markdown\ExtensionInterface;
++use Drupal\markdown\Annotation\MarkdownExtension;
+ /**
+  * Interface for the Markdown Extension Plugin Manager.
+  *
+- * @method \Drupal\markdown\Plugin\Markdown\ExtensionInterface[] all(array $configuration = [], $includeFallback = FALSE) : array
+- * @method \Drupal\markdown\Plugin\Markdown\ExtensionInterface createInstance($plugin_id, array $configuration = [])
+- * @method \Drupal\markdown\Annotation\MarkdownExtension getDefinition($plugin_id, $exception_on_invalid = TRUE)
+- * @method \Drupal\markdown\Annotation\MarkdownExtension|void getDefinitionByClassName($className)
+- * @method \Drupal\markdown\Annotation\MarkdownExtension[] getDefinitions($includeFallback = TRUE)
+- * @method \Drupal\markdown\Plugin\Markdown\ExtensionInterface[] installed(array $configuration = []) : array
++ * @method ExtensionInterface[] all(array $configuration = [], $includeFallback = false) : array
++ * @method ExtensionInterface createInstance($plugin_id, array $configuration = [])
++ * @method MarkdownExtension getDefinition($plugin_id, $exception_on_invalid = true)
++ * @method MarkdownExtension|void getDefinitionByClassName($className)
++ * @method MarkdownExtension[] getDefinitions($includeFallback = true)
++ * @method ExtensionInterface[] installed(array $configuration = []) : array
+  * @noinspection PhpFullyQualifiedNameUsageInspection
+  */
+ interface ExtensionManagerInterface extends InstallablePluginManagerInterface {
+diff --git a/src/PluginManager/InstallablePluginManager.php b/src/PluginManager/InstallablePluginManager.php
+index 3c09b64..afcd658 100644
+--- a/src/PluginManager/InstallablePluginManager.php
++++ b/src/PluginManager/InstallablePluginManager.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\PluginManager;
+ 
++use Symfony\Component\Validator\ConstraintViolationListInterface;
++use Drupal\Core\Extension\ThemeHandlerInterface;
+ use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Cache\CacheBackendInterface;
+@@ -59,14 +61,14 @@ abstract class InstallablePluginManager extends DefaultPluginManager implements
+   /**
+    * The Config Factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * A Logger service.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+@@ -101,7 +103,7 @@ abstract class InstallablePluginManager extends DefaultPluginManager implements
+   /**
+    * Allows plugin managers to further alter individual definitions.
+    *
+-   * @param \Drupal\markdown\Annotation\InstallablePlugin $definition
++   * @param InstallablePlugin $definition
+    *   The definition being altered.
+    * @param bool $runtime
+    *   Flag indicating whether this is a runtime alteration.
+@@ -137,7 +139,7 @@ abstract class InstallablePluginManager extends DefaultPluginManager implements
+   /**
+    * Converts plugin definitions using the old "installed" method to libraries.
+    *
+-   * @param \Drupal\markdown\Annotation\InstallablePlugin $plugin
++   * @param InstallablePlugin $plugin
+    *   The definition being processed.
+    *
+    * @deprecated in markdown:8.x-2.0 and is removed from markdown:3.0.0.
+@@ -214,7 +216,7 @@ abstract class InstallablePluginManager extends DefaultPluginManager implements
+ 
+     // If this plugin was provided by a Drupal extension that does not exist,
+     // remove the plugin definition.
+-    /** @var \Drupal\markdown\Annotation\InstallablePlugin $definition */
++    /** @var InstallablePlugin $definition */
+     foreach ($definitions as $plugin_id => $definition) {
+       if (($provider = $definition->getProvider()) && !in_array($provider, ['core', 'component']) && !$this->providerExists($provider)) {
+         unset($definitions[$plugin_id]);
+@@ -309,7 +311,7 @@ abstract class InstallablePluginManager extends DefaultPluginManager implements
+   /**
+    * Retrieves the container.
+    *
+-   * @return \Symfony\Component\DependencyInjection\ContainerInterface
++   * @return ContainerInterface
+    *   The container.
+    */
+   public function getContainer() {
+@@ -364,7 +366,7 @@ abstract class InstallablePluginManager extends DefaultPluginManager implements
+   /**
+    * Retrieves the runtime definitions.
+    *
+-   * @return \Drupal\markdown\Annotation\InstallablePlugin[]
++   * @return InstallablePlugin[]
+    *   The runtime definitions.
+    *
+    * @noinspection PhpDocMissingThrowsInspection
+@@ -384,7 +386,7 @@ abstract class InstallablePluginManager extends DefaultPluginManager implements
+       static::$runtimeDefinitions[static::class] = parent::getDefinitions();
+ 
+       // Validate runtime definition requirements.
+-      /** @var \Drupal\markdown\Annotation\InstallablePlugin $definition */
++      /** @var InstallablePlugin $definition */
+       foreach (static::$runtimeDefinitions[static::class] as $definition) {
+         $definition->validate(TRUE);
+       }
+@@ -403,7 +405,7 @@ abstract class InstallablePluginManager extends DefaultPluginManager implements
+       }
+ 
+       // Re-validate runtime definition requirements after alterations.
+-      /** @var \Drupal\markdown\Annotation\InstallablePlugin $definition */
++      /** @var InstallablePlugin $definition */
+       foreach (static::$runtimeDefinitions[static::class] as $plugin_id => $definition) {
+         $definition->validate(TRUE);
+       }
+@@ -515,15 +517,15 @@ abstract class InstallablePluginManager extends DefaultPluginManager implements
+   /**
+    * Processes the library definition.
+    *
+-   * @param \Drupal\markdown\Annotation\InstallablePlugin $definition
++   * @param InstallablePlugin $definition
+    *   The plugin definition.
+-   * @param \Drupal\markdown\Annotation\InstallableLibrary $library
++   * @param InstallableLibrary $library
+    *   A library definition.
+    * @param bool $preferred
+    *   A flag indicating whether a library was explicitly set as "preferred",
+    *   passed by reference.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   protected function processLibraryDefinition(InstallablePlugin $definition, InstallableLibrary $library, &$preferred = FALSE) {
+     if (!$preferred && $library->preferred) {
+@@ -617,7 +619,7 @@ abstract class InstallablePluginManager extends DefaultPluginManager implements
+         $versionRequirement->value = $version;
+       }
+ 
+-      /** @var \Symfony\Component\Validator\ConstraintViolationListInterface $violations */
++      /** @var ConstraintViolationListInterface $violations */
+       $violations = Error::suppress(function () use ($versionRequirement) {
+         return $versionRequirement->validate();
+       });
+@@ -643,7 +645,7 @@ abstract class InstallablePluginManager extends DefaultPluginManager implements
+   public function setCacheBackend(CacheBackendInterface $cache_backend, $cache_key, array $cache_tags = []) {
+     $cache_tags[] = $cache_key;
+     $cache_tags[] = "$cache_key:runtime";
+-    /** @var \Drupal\Core\Extension\ThemeHandlerInterface $themeHandler */
++    /** @var ThemeHandlerInterface $themeHandler */
+     $themeHandler = \Drupal::service('theme_handler');
+     foreach (array_keys($themeHandler->listInfo()) as $theme) {
+       $cache_tags[] = "$cache_key:runtime:$theme";
+diff --git a/src/PluginManager/InstallablePluginManagerInterface.php b/src/PluginManager/InstallablePluginManagerInterface.php
+index 3cd9a13..bbfb92a 100644
+--- a/src/PluginManager/InstallablePluginManagerInterface.php
++++ b/src/PluginManager/InstallablePluginManagerInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\PluginManager;
+ 
++use Drupal\markdown\Plugin\Markdown\InstallablePluginInterface;
++use Drupal\markdown\Annotation\InstallablePlugin;
+ use Drupal\Component\Plugin\Discovery\CachedDiscoveryInterface;
+ use Drupal\Component\Plugin\FallbackPluginManagerInterface;
+ use Drupal\Component\Plugin\PluginManagerInterface;
+@@ -24,7 +26,7 @@ interface InstallablePluginManagerInterface extends CacheableDependencyInterface
+    * @param bool $includeFallback
+    *   Flag indicating whether to include the fallback plugin.
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\InstallablePluginInterface[]
++   * @return InstallablePluginInterface[]
+    *   An array of installed plugins instances, keyed by plugin identifier.
+    */
+   public function all(array $configuration = [], $includeFallback = FALSE);
+@@ -37,7 +39,7 @@ interface InstallablePluginManagerInterface extends CacheableDependencyInterface
+    * @param array $configuration
+    *   An array of configuration relevant to the plugin instance.
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\InstallablePluginInterface
++   * @return InstallablePluginInterface
+    *   A fully configured plugin instance.
+    */
+   public function createInstance($plugin_id, array $configuration = []);
+@@ -75,7 +77,7 @@ interface InstallablePluginManagerInterface extends CacheableDependencyInterface
+    * @param string $className
+    *   The class name to match.
+    *
+-   * @return \Drupal\markdown\Annotation\InstallablePlugin|void
++   * @return InstallablePlugin|void
+    *   The first plugin definition matching the class name or NULL if not found.
+    */
+   public function getDefinitionByClassName($className);
+@@ -86,7 +88,7 @@ interface InstallablePluginManagerInterface extends CacheableDependencyInterface
+    * @param string $libraryId
+    *   The library identifier to match.
+    *
+-   * @return \Drupal\markdown\Annotation\InstallablePlugin|void
++   * @return InstallablePlugin|void
+    *   The first plugin definition matching the first library identifier or
+    *   NULL if not found.
+    */
+@@ -98,7 +100,7 @@ interface InstallablePluginManagerInterface extends CacheableDependencyInterface
+    * @param bool $includeFallback
+    *   Flag indicating whether to include the "fallback" definition.
+    *
+-   * @return \Drupal\markdown\Annotation\InstallablePlugin[]
++   * @return InstallablePlugin[]
+    *   An array of plugin definitions (empty array if no definitions were
+    *   found). Keys are plugin IDs.
+    */
+@@ -110,7 +112,7 @@ interface InstallablePluginManagerInterface extends CacheableDependencyInterface
+    * @param array $configuration
+    *   The configuration used to create plugin instances.
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\InstallablePluginInterface[]
++   * @return InstallablePluginInterface[]
+    *   An array of installed plugins instances, keyed by plugin identifier.
+    */
+   public function installed(array $configuration = []);
+diff --git a/src/PluginManager/ParserManager.php b/src/PluginManager/ParserManager.php
+index 6b6bd44..63c8231 100644
+--- a/src/PluginManager/ParserManager.php
++++ b/src/PluginManager/ParserManager.php
+@@ -17,12 +17,12 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ /**
+  * Markdown Parser Plugin Manager.
+  *
+- * @method \Drupal\markdown\Plugin\Markdown\ParserInterface[] all(array $configuration = [], $includeFallback = FALSE) : array
+- * @method \Drupal\markdown\Plugin\Markdown\ParserInterface[] enabled(array $configuration = []) : array
+- * @method \Drupal\markdown\Annotation\MarkdownParser getDefinition($plugin_id, $exception_on_invalid = TRUE)
+- * @method \Drupal\markdown\Annotation\MarkdownParser|void getDefinitionByClassName($className)
+- * @method \Drupal\markdown\Annotation\MarkdownParser[] getDefinitions($includeFallback = TRUE)
+- * @method \Drupal\markdown\Plugin\Markdown\ParserInterface[] installed(array $configuration = []) : array
++ * @method ParserInterface[] all(array $configuration = [], $includeFallback = false) : array
++ * @method ParserInterface[] enabled(array $configuration = []) : array
++ * @method MarkdownParser getDefinition($plugin_id, $exception_on_invalid = true)
++ * @method MarkdownParser|void getDefinitionByClassName($className)
++ * @method MarkdownParser[] getDefinitions($includeFallback = true)
++ * @method ParserInterface[] installed(array $configuration = []) : array
+  * @noinspection PhpUnnecessaryFullyQualifiedNameInspection
+  */
+ class ParserManager extends InstallablePluginManager implements ParserManagerInterface {
+@@ -59,11 +59,11 @@ class ParserManager extends InstallablePluginManager implements ParserManagerInt
+   /**
+    * {@inheritdoc}
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\ParserInterface
++   * @return ParserInterface
+    *   A Parser instance.
+    */
+   public function createInstance($plugin_id, array $configuration = []) {
+-    /** @var \Drupal\markdown\Plugin\Markdown\ParserInterface $parser */
++    /** @var ParserInterface $parser */
+     $parser = parent::createInstance($plugin_id, $configuration);
+ 
+     // If the parser is the fallback parser (missing), then just return it.
+diff --git a/src/PluginManager/ParserManagerInterface.php b/src/PluginManager/ParserManagerInterface.php
+index f715e41..09e5e9c 100644
+--- a/src/PluginManager/ParserManagerInterface.php
++++ b/src/PluginManager/ParserManagerInterface.php
+@@ -2,17 +2,19 @@
+ 
+ namespace Drupal\markdown\PluginManager;
+ 
++use Drupal\markdown\Plugin\Markdown\ParserInterface;
++use Drupal\markdown\Annotation\MarkdownParser;
+ /**
+  * Interface for the Markdown Parser Plugin Manager.
+  *
+- * @method \Drupal\markdown\Plugin\Markdown\ParserInterface[] all(array $configuration = [], $includeFallback = FALSE) : array
+- * @method \Drupal\markdown\Plugin\Markdown\ParserInterface createInstance($plugin_id, array $configuration = [])
+- * @method \Drupal\markdown\Plugin\Markdown\ParserInterface[] enabled(array $configuration = []) : array
+- * @method \Drupal\markdown\Annotation\MarkdownParser getDefinition($plugin_id, $exception_on_invalid = TRUE)
+- * @method \Drupal\markdown\Annotation\MarkdownParser|void getDefinitionByClassName($className)
+- * @method \Drupal\markdown\Annotation\MarkdownParser[] getDefinitions($includeFallback = TRUE)
++ * @method ParserInterface[] all(array $configuration = [], $includeFallback = false) : array
++ * @method ParserInterface createInstance($plugin_id, array $configuration = [])
++ * @method ParserInterface[] enabled(array $configuration = []) : array
++ * @method MarkdownParser getDefinition($plugin_id, $exception_on_invalid = true)
++ * @method MarkdownParser|void getDefinitionByClassName($className)
++ * @method MarkdownParser[] getDefinitions($includeFallback = true)
+  * @method string getFallbackPluginId($plugin_id = NULL, array $configuration = [])
+- * @method \Drupal\markdown\Plugin\Markdown\ParserInterface[] installed(array $configuration = []) : array
++ * @method ParserInterface[] installed(array $configuration = []) : array
+  */
+ interface ParserManagerInterface extends EnableAwarePluginManagerInterface {
+ 
+@@ -22,7 +24,7 @@ interface ParserManagerInterface extends EnableAwarePluginManagerInterface {
+    * @param array $configuration
+    *   An array of configuration relevant to the plugin instance.
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\ParserInterface
++   * @return ParserInterface
+    *   A MarkdownParser plugin.
+    */
+   public function getDefaultParser(array $configuration = []);
+diff --git a/src/Render/ParsedMarkdown.php b/src/Render/ParsedMarkdown.php
+index f465cc2..b91c96f 100644
+--- a/src/Render/ParsedMarkdown.php
++++ b/src/Render/ParsedMarkdown.php
+@@ -52,7 +52,7 @@ class ParsedMarkdown implements ParsedMarkdownInterface {
+   /**
+    * The language of the parsed markdown, if known.
+    *
+-   * @var \Drupal\Core\Language\LanguageInterface|null
++   * @var LanguageInterface|null
+    */
+   protected $language;
+ 
+@@ -70,7 +70,7 @@ class ParsedMarkdown implements ParsedMarkdownInterface {
+    *   The raw markdown.
+    * @param string $html
+    *   The parsed HTML from $markdown.
+-   * @param \Drupal\Core\Language\LanguageInterface|null $language
++   * @param LanguageInterface|null $language
+    *   Optional. The language of the parsed markdown, if known.
+    */
+   public function __construct($markdown = '', $html = '', LanguageInterface $language = NULL) {
+@@ -108,7 +108,7 @@ class ParsedMarkdown implements ParsedMarkdownInterface {
+ 
+     // Handle relative time.
+     if (is_string($expire)) {
+-      $expire = strtotime($expire, $from_time ?: REQUEST_TIME);
++      $expire = strtotime($expire, $from_time ?: \Drupal::time()->getRequestTime());
+     }
+ 
+     return $expire;
+diff --git a/src/Render/ParsedMarkdownInterface.php b/src/Render/ParsedMarkdownInterface.php
+index 87b0d40..5015f96 100644
+--- a/src/Render/ParsedMarkdownInterface.php
++++ b/src/Render/ParsedMarkdownInterface.php
+@@ -25,7 +25,7 @@ interface ParsedMarkdownInterface extends \Countable, \Serializable, MarkupInter
+    *   The raw markdown.
+    * @param string $html
+    *   The parsed HTML from $markdown.
+-   * @param \Drupal\Core\Language\LanguageInterface|null $language
++   * @param LanguageInterface|null $language
+    *   The language of the parsed markdown, if known.
+    *
+    * @return static
+diff --git a/src/Traits/FilterAwareTrait.php b/src/Traits/FilterAwareTrait.php
+index 8c9910e..09285b1 100644
+--- a/src/Traits/FilterAwareTrait.php
++++ b/src/Traits/FilterAwareTrait.php
+@@ -12,7 +12,7 @@ trait FilterAwareTrait {
+   /**
+    * A Filter plugin.
+    *
+-   * @var \Drupal\filter\Plugin\FilterInterface
++   * @var FilterInterface
+    */
+   protected $filter;
+ 
+diff --git a/src/Traits/FilterFormatAwareTrait.php b/src/Traits/FilterFormatAwareTrait.php
+index a762c39..da09605 100644
+--- a/src/Traits/FilterFormatAwareTrait.php
++++ b/src/Traits/FilterFormatAwareTrait.php
+@@ -12,7 +12,7 @@ trait FilterFormatAwareTrait {
+   /**
+    * A FilterFormat entity.
+    *
+-   * @var \Drupal\filter\Entity\FilterFormat
++   * @var FilterFormat
+    */
+   protected $filterFormat;
+ 
+diff --git a/src/Traits/FormTrait.php b/src/Traits/FormTrait.php
+index 9be2bbb..b3fada7 100644
+--- a/src/Traits/FormTrait.php
++++ b/src/Traits/FormTrait.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Traits;
+ 
++use Drupal\markdown\Form\SubformStateInterface;
++use Drupal\Core\Render\RendererInterface;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Component\Render\MarkupInterface;
+ use Drupal\Component\Serialization\Json;
+@@ -170,11 +172,11 @@ trait FormTrait {
+    *   The name.
+    * @param mixed $defaultValue
+    *   The default value.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    */
+   public static function resetToDefault(array &$element, $name, $defaultValue, FormStateInterface $form_state) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
++    /** @var SubformStateInterface $form_state */
+     $selector = static::getElementSelector($name, $form_state->createParents());
+ 
+     $reset = FormTrait::createElement([
+@@ -193,7 +195,7 @@ trait FormTrait {
+       ],
+     ]);
+ 
+-    /** @var \Drupal\Core\Render\RendererInterface $renderer */
++    /** @var RendererInterface $renderer */
+     $renderer = \Drupal::service('renderer');
+ 
+     $element['#attached']['library'][] = 'markdown/reset';
+diff --git a/src/Traits/HttpClientTrait.php b/src/Traits/HttpClientTrait.php
+index fa3cd2b..b90b006 100644
+--- a/src/Traits/HttpClientTrait.php
++++ b/src/Traits/HttpClientTrait.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\markdown\Traits;
+ 
++use GuzzleHttp\Client;
++use Drupal\Core\Http\ClientFactory;
++use function GuzzleHttp\default_user_agent;
+ /**
+  * Trait to assist with creating an HTTP client using module info as user-agent.
+  *
+@@ -14,7 +17,7 @@ trait HttpClientTrait {
+   /**
+    * The HTTP client.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected static $httpClient;
+ 
+@@ -26,7 +29,7 @@ trait HttpClientTrait {
+    * @param string $type
+    *   The type of Drupal extension, e.g. module or theme.
+    *
+-   * @return \GuzzleHttp\Client
++   * @return Client
+    *   An HTTP client.
+    */
+   protected static function httpClient($name = 'markdown', $type = 'module') {
+@@ -47,11 +50,11 @@ trait HttpClientTrait {
+       }
+       $extension .= " (+https://www.drupal.org/project/$name)";
+ 
+-      /** @var \Drupal\Core\Http\ClientFactory $httpClientFactory */
++      /** @var ClientFactory $httpClientFactory */
+       $httpClientFactory = \Drupal::service('http_client_factory');
+       static::$httpClient = $httpClientFactory->fromOptions([
+         'headers' => [
+-          'User-Agent' => $extension . ' Drupal/' . \Drupal::VERSION . ' (+https://www.drupal.org/) ' . \GuzzleHttp\default_user_agent(),
++          'User-Agent' => $extension . ' Drupal/' . \Drupal::VERSION . ' (+https://www.drupal.org/) ' . default_user_agent(),
+         ],
+       ]);
+     }
+diff --git a/src/Traits/MarkdownTrait.php b/src/Traits/MarkdownTrait.php
+index 260540e..cdbcdcb 100644
+--- a/src/Traits/MarkdownTrait.php
++++ b/src/Traits/MarkdownTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Traits;
+ 
++use Drupal\markdown\MarkdownInterface;
+ /**
+  * Trait for adding the Markdown service to classes.
+  */
+@@ -10,14 +11,14 @@ trait MarkdownTrait {
+   /**
+    * The Markdown service.
+    *
+-   * @var \Drupal\markdown\MarkdownInterface
++   * @var MarkdownInterface
+    */
+   protected static $markdown;
+ 
+   /**
+    * Retrieves the Markdown service.
+    *
+-   * @return \Drupal\markdown\MarkdownInterface
++   * @return MarkdownInterface
+    *   The Markdown service.
+    */
+   protected static function markdown() {
+diff --git a/src/Traits/MoreInfoTrait.php b/src/Traits/MoreInfoTrait.php
+index 460a6a5..be05f3d 100644
+--- a/src/Traits/MoreInfoTrait.php
++++ b/src/Traits/MoreInfoTrait.php
+@@ -21,12 +21,12 @@ trait MoreInfoTrait {
+    *
+    * @param mixed $existing
+    *   The existing content to append to.
+-   * @param string|\Drupal\Core\Url $url
++   * @param string|Url $url
+    *   The URL to use.
+    * @param string $label
+    *   Optional. The "More Info" label to use for the link.
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface
++   * @return MarkupInterface
+    *   The new joined content.
+    */
+   protected function moreInfo($existing, $url, $label = 'More Info') {
+diff --git a/src/Traits/NormalizeTrait.php b/src/Traits/NormalizeTrait.php
+index c12be67..920f671 100644
+--- a/src/Traits/NormalizeTrait.php
++++ b/src/Traits/NormalizeTrait.php
+@@ -73,7 +73,7 @@ trait NormalizeTrait {
+    * @return array
+    *   The normalized array.
+    *
+-   * @throws \Drupal\markdown\Exception\MarkdownUnexpectedValueException
++   * @throws MarkdownUnexpectedValueException
+    *   When a callback provided isn't callable.
+    */
+   public static function normalizeCallables(&$iterable, array $parents = []) {
+diff --git a/src/Traits/ParserAwareTrait.php b/src/Traits/ParserAwareTrait.php
+index 3dd7caf..bfc561d 100644
+--- a/src/Traits/ParserAwareTrait.php
++++ b/src/Traits/ParserAwareTrait.php
+@@ -12,7 +12,7 @@ trait ParserAwareTrait {
+   /**
+    * A Markdown Parser instance.
+    *
+-   * @var \Drupal\markdown\Plugin\Markdown\ParserInterface
++   * @var ParserInterface
+    */
+   protected $parser;
+ 
+diff --git a/src/Traits/RendererTrait.php b/src/Traits/RendererTrait.php
+index 7c54a02..24f175a 100644
+--- a/src/Traits/RendererTrait.php
++++ b/src/Traits/RendererTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Traits;
+ 
++use Drupal\Core\Render\RendererInterface;
+ /**
+  * Trait for utilizing the Renderer service.
+  *
+@@ -12,14 +13,14 @@ trait RendererTrait {
+   /**
+    * The Renderer service.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected static $renderer;
+ 
+   /**
+    * Retrieves the Renderer service.
+    *
+-   * @return \Drupal\Core\Render\RendererInterface
++   * @return RendererInterface
+    *   The Renderer service.
+    */
+   protected function renderer() {
+diff --git a/src/Traits/SettingsTrait.php b/src/Traits/SettingsTrait.php
+index 1890708..5161c62 100644
+--- a/src/Traits/SettingsTrait.php
++++ b/src/Traits/SettingsTrait.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\markdown\Traits;
+ 
++use Drupal\markdown\Form\SubformStateInterface;
++use Drupal\markdown\Annotation\InstallablePlugin;
+ use Drupal\Component\Utility\DiffArray;
+ use Drupal\Component\Utility\NestedArray;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -22,7 +24,7 @@ trait SettingsTrait {
+    * @param array $element
+    *   The array element to construct. Note: this will be filled in with
+    *   defaults if they're not provided.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    * @param callable $valueTransformer
+    *   Optional. Callback used to transform the setting value.
+@@ -33,7 +35,7 @@ trait SettingsTrait {
+    *   `$form += $this->createSettingsElement(...)`.
+    */
+   protected function createSettingElement($name, array $element, FormStateInterface $form_state, callable $valueTransformer = NULL) {
+-    /** @var \Drupal\markdown\Form\SubformStateInterface $form_state */
++    /** @var SubformStateInterface $form_state */
+     $settingName = $name;
+     $parts = explode('.', $name);
+     $name = array_pop($parts);
+@@ -80,7 +82,7 @@ trait SettingsTrait {
+    * {@inheritdoc}
+    */
+   public static function defaultSettings($pluginDefinition) {
+-    /** @var \Drupal\markdown\Annotation\InstallablePlugin $pluginDefinition */
++    /** @var InstallablePlugin $pluginDefinition */
+     return [];
+   }
+ 
+diff --git a/src/Twig/Extension.php b/src/Twig/Extension.php
+index 23d6627..65d7375 100644
+--- a/src/Twig/Extension.php
++++ b/src/Twig/Extension.php
+@@ -12,7 +12,7 @@ class Extension extends \Twig_Extension implements \Twig_Extension_GlobalsInterf
+   /**
+    * An instance of a markdown processor to use.
+    *
+-   * @var \Drupal\markdown\MarkdownInterface
++   * @var MarkdownInterface
+    */
+   protected $markdown;
+ 
+diff --git a/src/Twig/TokenParser.php b/src/Twig/TokenParser.php
+index d8e349a..88e0687 100644
+--- a/src/Twig/TokenParser.php
++++ b/src/Twig/TokenParser.php
+@@ -13,7 +13,7 @@ class TokenParser extends \Twig_TokenParser {
+   /**
+    * An instance of a markdown processor to use.
+    *
+-   * @var \Drupal\markdown\MarkdownInterface
++   * @var MarkdownInterface
+    */
+   protected $markdown;
+ 
+@@ -48,7 +48,7 @@ class TokenParser extends \Twig_TokenParser {
+   /**
+    * Return the markdown instance being used.
+    *
+-   * @return \Drupal\markdown\MarkdownInterface
++   * @return MarkdownInterface
+    *   The Markdown instance.
+    */
+   public function getMarkdown() {
+diff --git a/src/Util/Composer.php b/src/Util/Composer.php
+index af14675..346e52f 100644
+--- a/src/Util/Composer.php
++++ b/src/Util/Composer.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\markdown\Util;
+ 
++use Composer\Autoload\ClassLoader;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Component\Utility\Crypt;
+ use Drupal\Component\Utility\DiffArray;
+@@ -110,7 +111,7 @@ class Composer {
+    * @see https://www.drupal.org/project/markdown/issues/3200476
+    */
+   public static function getInstalledJson($name, array $comparisonJson = []) {
+-    /** @var \Composer\Autoload\ClassLoader $autoloader */
++    /** @var ClassLoader $autoloader */
+     $autoloader = \Drupal::service('class_loader');
+     if ($name && ($file = $autoloader->findFile('Composer\\Semver\\Semver'))) {
+       if (($file = realpath(dirname($file) . "/../../installed.json")) && ($contents = file_get_contents($file)) && ($installedJson = Json::decode($contents))) {
+@@ -221,7 +222,7 @@ class Composer {
+    * @see https://www.drupal.org/project/markdown/issues/3200476
+    */
+   public static function getJsonFromClass($className, &$name = NULL, &$file = NULL) {
+-    /** @var \Composer\Autoload\ClassLoader $autoloader */
++    /** @var ClassLoader $autoloader */
+     $autoloader = \Drupal::service('class_loader');
+     if ($file = $autoloader->findFile(ltrim(str_replace('\\\\', '\\', $className), '\\'))) {
+       $directory = realpath(dirname($file));
+diff --git a/src/Util/FilterAwareInterface.php b/src/Util/FilterAwareInterface.php
+index 2598b29..4a0a3e3 100644
+--- a/src/Util/FilterAwareInterface.php
++++ b/src/Util/FilterAwareInterface.php
+@@ -12,7 +12,7 @@ interface FilterAwareInterface {
+   /**
+    * Retrieves a Filter instance, if set.
+    *
+-   * @return \Drupal\filter\Plugin\FilterInterface|null
++   * @return FilterInterface|null
+    *   A Markdown Filter instance or NULL if not set.
+    */
+   public function getFilter();
+@@ -20,7 +20,7 @@ interface FilterAwareInterface {
+   /**
+    * Sets the Filter plugin.
+    *
+-   * @param \Drupal\filter\Plugin\FilterInterface $filter
++   * @param FilterInterface $filter
+    *   A Filter instance.
+    *
+    * @return static
+diff --git a/src/Util/FilterFormatAwareInterface.php b/src/Util/FilterFormatAwareInterface.php
+index d15dc80..0be34be 100644
+--- a/src/Util/FilterFormatAwareInterface.php
++++ b/src/Util/FilterFormatAwareInterface.php
+@@ -12,7 +12,7 @@ interface FilterFormatAwareInterface {
+   /**
+    * Retrieves a FilterFormat entity, if set.
+    *
+-   * @return \Drupal\filter\Entity\FilterFormat|null
++   * @return FilterFormat|null
+    *   A FilterFormat entity or NULL if not set.
+    */
+   public function getFilterFormat();
+@@ -20,7 +20,7 @@ interface FilterFormatAwareInterface {
+   /**
+    * Sets the FilterFormat entity.
+    *
+-   * @param \Drupal\filter\Entity\FilterFormat $format
++   * @param FilterFormat $format
+    *   A FilterFormat entity.
+    *
+    * @return static
+diff --git a/src/Util/FilterHtml.php b/src/Util/FilterHtml.php
+index cd3594e..dd66fd9 100644
+--- a/src/Util/FilterHtml.php
++++ b/src/Util/FilterHtml.php
+@@ -45,7 +45,7 @@ class FilterHtml extends CoreFilterHtml implements ParserAwareInterface {
+   /**
+    * Create a new instance from a Markdown Parser instance.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   A Markdown Parser instance.
+    *
+    * @return static
+diff --git a/src/Util/ParserAwareInterface.php b/src/Util/ParserAwareInterface.php
+index d5d7259..6270b1d 100644
+--- a/src/Util/ParserAwareInterface.php
++++ b/src/Util/ParserAwareInterface.php
+@@ -12,7 +12,7 @@ interface ParserAwareInterface {
+   /**
+    * Retrieves a Filter instance, if set.
+    *
+-   * @return \Drupal\markdown\Plugin\Markdown\ParserInterface|null
++   * @return ParserInterface|null
+    *   A Markdown Parser instance or NULL if not set.
+    */
+   public function getParser();
+@@ -20,7 +20,7 @@ interface ParserAwareInterface {
+   /**
+    * Sets the Filter plugin.
+    *
+-   * @param \Drupal\markdown\Plugin\Markdown\ParserInterface $parser
++   * @param ParserInterface $parser
+    *   A Markdown Parser instance.
+    *
+    * @return static
+diff --git a/src/Util/Semver.php b/src/Util/Semver.php
+index 846a498..37a08af 100644
+--- a/src/Util/Semver.php
++++ b/src/Util/Semver.php
+@@ -18,7 +18,7 @@ class Semver extends ComposerSemver {
+   /**
+    * A version parser.
+    *
+-   * @var \Composer\Semver\VersionParser
++   * @var VersionParser
+    */
+   protected static $versionParser;
+ 
+@@ -171,7 +171,7 @@ class Semver extends ComposerSemver {
+   /**
+    * Retrieves a version parser.
+    *
+-   * @return \Composer\Semver\VersionParser
++   * @return VersionParser
+    *   A version parser.
+    */
+   public static function versionParser() {
+diff --git a/tests/src/Kernel/MarkdownKernelTestBase.php b/tests/src/Kernel/MarkdownKernelTestBase.php
+index 60028b0..d92b3b4 100644
+--- a/tests/src/Kernel/MarkdownKernelTestBase.php
++++ b/tests/src/Kernel/MarkdownKernelTestBase.php
+@@ -21,7 +21,7 @@ abstract class MarkdownKernelTestBase extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installConfig(['filter', 'markdown']);
+diff --git a/tests/src/Kernel/Plugin/Markdown/MissingParserTest.php b/tests/src/Kernel/Plugin/Markdown/MissingParserTest.php
+index acaf042..35093f7 100644
+--- a/tests/src/Kernel/Plugin/Markdown/MissingParserTest.php
++++ b/tests/src/Kernel/Plugin/Markdown/MissingParserTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\markdown\Kernel\Plugin\Markdown;
+ 
++use Drupal\markdown\Plugin\Markdown\MissingParser;
++use Drupal\Core\Render\RendererInterface;
+ use Drupal\Tests\markdown\Kernel\MarkdownKernelTestBase;
+ 
+ /**
+@@ -14,21 +16,21 @@ class MissingParserTest extends MarkdownKernelTestBase {
+   /**
+    * An instance of the missing markdown parser.
+    *
+-   * @var \Drupal\markdown\Plugin\Markdown\MissingParser
++   * @var MissingParser
+    */
+   protected $parser;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->parser = $this->container->get('plugin.manager.markdown.parser')

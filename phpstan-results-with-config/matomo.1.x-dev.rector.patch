@@ -1,0 +1,562 @@
+diff --git a/matomo.module b/matomo.module
+index 14e439f..781cd5a 100644
+--- a/matomo.module
++++ b/matomo.module
+@@ -9,6 +9,10 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\Core\Session\SessionConfigurationInterface;
++use Drupal\user\AccountForm;
++use Drupal\user\UserInterface;
++use Drupal\Core\Pager\PagerManagerInterface;
+ 
+ use Drupal\Component\Render\MarkupInterface;
+ use Drupal\Component\Serialization\Json;
+@@ -260,7 +264,7 @@ function matomo_page_attachments(array &$page) {
+     }
+ 
+     // Domain tracking type.
+-    /** @var \Drupal\Core\Session\SessionConfigurationInterface $session_config */
++    /** @var SessionConfigurationInterface $session_config */
+     $session_config = \Drupal::service('session_configuration');
+     $cookie_domain = $session_config->getOptions(\Drupal::request())['cookie_domain'] ?? '';
+     $domain_mode = $config->get('domain_mode');
+@@ -406,9 +410,9 @@ function matomo_entity_extra_field_info() {
+  */
+ function matomo_form_user_form_alter(&$form, FormStateInterface $form_state) {
+   $config = \Drupal::config('matomo.settings');
+-  /** @var \Drupal\user\AccountForm $userform */
++  /** @var AccountForm $userform */
+   $userform = $form_state->getFormObject();
+-  /** @var \Drupal\user\UserInterface $account */
++  /** @var UserInterface $account */
+   $account = $userform->getEntity();
+   $visibility_users = $config->get('visibility.user_account_mode');
+   if ($account->hasPermission('opt-in or out of matomo tracking') && $visibility_users != 0 && _matomo_visibility_roles($account)) {
+@@ -468,9 +472,9 @@ function matomo_form_user_form_alter(&$form, FormStateInterface $form_state) {
+  * Submit callback for user profile form to save the Matomo setting.
+  */
+ function matomo_user_profile_form_submit($form, FormStateInterface $form_state) {
+-  /** @var \Drupal\user\AccountForm $userform */
++  /** @var AccountForm $userform */
+   $userform = $form_state->getFormObject();
+-  /** @var \Drupal\user\UserInterface $account */
++  /** @var UserInterface $account */
+   $account = $userform->getEntity();
+   if ($account->id() && $form_state->hasValue('user_account_users')) {
+     \Drupal::service('user.data')->set('matomo', $account->id(), 'user_account_users', (int) $form_state->getValue('user_account_users'));
+@@ -510,7 +514,7 @@ function matomo_preprocess_item_list__search_results(&$variables) {
+     // There is no search result $variable available that hold the number of
+     // items found. The variable $variables['items'] has the current page items
+     // only. But the pager item number can tell the number of search results.
+-    /** @var \Drupal\Core\Pager\PagerManagerInterface $pager_manager */
++    /** @var PagerManagerInterface $pager_manager */
+     $pager_manager = \Drupal::service('pager.manager');
+     $pager = $pager_manager->getPager();
+     $pager_total_items = $pager ? $pager->getTotalItems() : 0;
+@@ -580,7 +584,7 @@ function _matomo_cache($location, $synchronize = FALSE) {
+           \Drupal::logger('matomo')->info('Locally cached tracking code file has been saved.');
+ 
+           // Return the local JS file path.
+-          return file_url_transform_relative(file_create_url($file_destination));
++          return \Drupal::service('file_url_generator')->generateString($file_destination);
+         }
+       }
+     }
+@@ -590,7 +594,7 @@ function _matomo_cache($location, $synchronize = FALSE) {
+   }
+   else {
+     // Return the local JS file path.
+-    return file_url_transform_relative(file_create_url($file_destination));
++    return \Drupal::service('file_url_generator')->generateString($file_destination);
+   }
+ }
+ 
+@@ -614,7 +618,7 @@ function matomo_clear_js_cache() {
+  * Implements hook_views_post_render().
+  */
+ function matomo_views_post_render(ViewExecutable $view, array &$output, CachePluginBase $cache) {
+-  /** @var \Drupal\matomo\HookHandler\ViewsPostRenderHookHandler $instance */
++  /** @var ViewsPostRenderHookHandler $instance */
+   $instance = \Drupal::service('class_resolver')
+     ->getInstanceFromDefinition(ViewsPostRenderHookHandler::class);
+   $instance->process($view, $output, $cache);
+diff --git a/modules/matomo_tagmanager/matomo_tagmanager.install b/modules/matomo_tagmanager/matomo_tagmanager.install
+index c552dc1..057ea6a 100644
+--- a/modules/matomo_tagmanager/matomo_tagmanager.install
++++ b/modules/matomo_tagmanager/matomo_tagmanager.install
+@@ -7,6 +7,9 @@
+ 
+ declare(strict_types = 1);
+ 
++use Drupal\matomo_tagmanager\ContainerStorageInterface;
++use Drupal\matomo_tagmanager\Entity\ContainerInterface;
++
+ /**
+  * Convert container ID into container URL. Remove settings.
+  */
+@@ -19,9 +22,9 @@ function matomo_tagmanager_update_8001(): void {
+     $tagmanager_config->delete();
+   }
+ 
+-  /** @var Drupal\matomo_tagmanager\ContainerStorageInterface $container_storage */
++  /** @var ContainerStorageInterface $container_storage */
+   $container_storage = \Drupal::entityTypeManager()->getStorage('matomo_tagmanager_container');
+-  /** @var \Drupal\matomo_tagmanager\Entity\ContainerInterface[] $containers */
++  /** @var ContainerInterface[] $containers */
+   $containers = $container_storage->loadMultiple();
+ 
+   if (empty($containers)) {
+diff --git a/modules/matomo_tagmanager/matomo_tagmanager.module b/modules/matomo_tagmanager/matomo_tagmanager.module
+index b7e3e68..3362973 100644
+--- a/modules/matomo_tagmanager/matomo_tagmanager.module
++++ b/modules/matomo_tagmanager/matomo_tagmanager.module
+@@ -6,6 +6,7 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\matomo_tagmanager\ContainerStorageInterface;
+ 
+ use Drupal\Core\Cache\Cache;
+ use Drupal\matomo\Component\Render\MatomoJavaScriptSnippet;
+@@ -17,7 +18,7 @@ function matomo_tagmanager_page_attachments(array &$page) {
+   $account = \Drupal::currentUser();
+   $config = \Drupal::config('matomo.settings');
+ 
+-  /** @var Drupal\matomo_tagmanager\ContainerStorageInterface $container_storage */
++  /** @var ContainerStorageInterface $container_storage */
+   $container_storage = \Drupal::entityTypeManager()->getStorage('matomo_tagmanager_container');
+   $containers = $container_storage->loadEnabled();
+   if (empty($containers)) {
+diff --git a/modules/matomo_tagmanager/src/ContainerStorageInterface.php b/modules/matomo_tagmanager/src/ContainerStorageInterface.php
+index 42640db..c8515f2 100644
+--- a/modules/matomo_tagmanager/src/ContainerStorageInterface.php
++++ b/modules/matomo_tagmanager/src/ContainerStorageInterface.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\matomo_tagmanager;
+ 
++use Drupal\matomo_tagmanager\Entity\ContainerInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityStorageInterface;
+ 
+ /**
+@@ -14,7 +15,7 @@ interface ContainerStorageInterface extends ConfigEntityStorageInterface {
+   /**
+    * Load all defined containers.
+    *
+-   * @return \Drupal\matomo_tagmanager\Entity\ContainerInterface[]
++   * @return ContainerInterface[]
+    *   List of all containers ordered by weight, id.
+    */
+   public function loadAll(): array;
+@@ -22,7 +23,7 @@ interface ContainerStorageInterface extends ConfigEntityStorageInterface {
+   /**
+    * Load all enabled containers.
+    *
+-   * @return \Drupal\matomo_tagmanager\Entity\ContainerInterface[]
++   * @return ContainerInterface[]
+    *   List of enabled containers ordered by weight, id.
+    */
+   public function loadEnabled(): array;
+diff --git a/modules/matomo_tagmanager/src/Controller/ContainerController.php b/modules/matomo_tagmanager/src/Controller/ContainerController.php
+index a801b32..a872131 100644
+--- a/modules/matomo_tagmanager/src/Controller/ContainerController.php
++++ b/modules/matomo_tagmanager/src/Controller/ContainerController.php
+@@ -32,9 +32,9 @@ class ContainerController extends EntityController {
+   /**
+    * Route title callback.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+-   * @param \Drupal\Core\Entity\EntityInterface|null $_entity
++   * @param EntityInterface|null $_entity
+    *   (optional) An entity, passed in directly from the request attributes.
+    *
+    * @return string|null
+@@ -50,10 +50,10 @@ class ContainerController extends EntityController {
+   /**
+    * Enables a Container object.
+    *
+-   * @param \Drupal\matomo_tagmanager\Entity\ContainerInterface $matomo_tagmanager_container
++   * @param ContainerInterface $matomo_tagmanager_container
+    *   The Container object to enable.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirect response to the matomo_tagmanager_container listing page.
+    *
+    * @todo The parameter name must match that used in routing.yml although the
+@@ -67,10 +67,10 @@ class ContainerController extends EntityController {
+   /**
+    * Disables a Container object.
+    *
+-   * @param \Drupal\matomo_tagmanager\Entity\ContainerInterface $matomo_tagmanager_container
++   * @param ContainerInterface $matomo_tagmanager_container
+    *   The Container object to disable.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirect response to the matomo_tagmanager_container listing page.
+    */
+   public function disable(ContainerInterface $matomo_tagmanager_container) {
+diff --git a/modules/matomo_tagmanager/src/Form/ContainerForm.php b/modules/matomo_tagmanager/src/Form/ContainerForm.php
+index 634d6e0..061c962 100644
+--- a/modules/matomo_tagmanager/src/Form/ContainerForm.php
++++ b/modules/matomo_tagmanager/src/Form/ContainerForm.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\matomo_tagmanager\Form;
+ 
++use Drupal\Core\Condition\ConditionManager;
++use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Executable\ExecutableManagerInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -18,14 +20,14 @@ class ContainerForm extends EntityForm {
+   /**
+    * The condition plugin manager.
+    *
+-   * @var \Drupal\Core\Condition\ConditionManager
++   * @var ConditionManager
+    */
+   protected $conditionManager;
+ 
+   /**
+    * The context repository service.
+    *
+-   * @var \Drupal\Core\Plugin\Context\ContextRepositoryInterface
++   * @var ContextRepositoryInterface
+    */
+   protected $contextRepository;
+ 
+@@ -39,9 +41,9 @@ class ContainerForm extends EntityForm {
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Executable\ExecutableManagerInterface $condition_manager
++   * @param ExecutableManagerInterface $condition_manager
+    *   The ConditionManager for building the insertion conditions.
+-   * @param \Drupal\Core\Plugin\Context\ContextRepositoryInterface $context_repository
++   * @param ContextRepositoryInterface $context_repository
+    *   The lazy context repository service.
+    */
+   public function __construct(ExecutableManagerInterface $condition_manager, ContextRepositoryInterface $context_repository) {
+@@ -132,14 +134,14 @@ class ContainerForm extends EntityForm {
+    *   The machine name.
+    * @param array $element
+    *   An array containing the structure of the 'id' element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return bool
+    *   Whether or not the container machine name is taken.
+    */
+   public function containerExists($value, array $element, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityInterface $container */
++    /** @var ConfigEntityInterface $container */
+     $container = $form_state->getFormObject()->getEntity();
+     return (bool) $this->entityTypeManager->getStorage($container->getEntityTypeId())
+       ->getQuery()
+diff --git a/src/EventSubscriber/CspSubscriber.php b/src/EventSubscriber/CspSubscriber.php
+index 4fa51eb..b6019dc 100755
+--- a/src/EventSubscriber/CspSubscriber.php
++++ b/src/EventSubscriber/CspSubscriber.php
+@@ -20,14 +20,14 @@ class CspSubscriber implements EventSubscriberInterface {
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory) {
+diff --git a/src/Form/MatomoAdminSettingsForm.php b/src/Form/MatomoAdminSettingsForm.php
+index 67b8f77..3760b5d 100644
+--- a/src/Form/MatomoAdminSettingsForm.php
++++ b/src/Form/MatomoAdminSettingsForm.php
+@@ -4,6 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\matomo\Form;
+ 
++use Drupal\Core\Extension\ModuleHandlerInterface;
++use Drupal\Core\Session\AccountInterface;
++use GuzzleHttp\ClientInterface;
++use Drupal\Core\Session\SessionConfigurationInterface;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -20,28 +24,28 @@ class MatomoAdminSettingsForm extends ConfigFormBase {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The HTTP client to fetch the feed data with.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * The session configuration.
+    *
+-   * @var \Drupal\Core\Session\SessionConfigurationInterface
++   * @var SessionConfigurationInterface
+    */
+   protected $sessionConfig;
+ 
+@@ -814,7 +818,7 @@ class MatomoAdminSettingsForm extends ConfigFormBase {
+    *   The form element key to get the URL.
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+    */
+   protected function validateUrl(string $urlFormKey, array &$form, FormStateInterface $form_state): void {
+diff --git a/src/HookHandler/ViewsPostRenderHookHandler.php b/src/HookHandler/ViewsPostRenderHookHandler.php
+index 16050e3..ae3a911 100644
+--- a/src/HookHandler/ViewsPostRenderHookHandler.php
++++ b/src/HookHandler/ViewsPostRenderHookHandler.php
+@@ -24,7 +24,7 @@ class ViewsPostRenderHookHandler implements ContainerInjectionInterface {
+   /**
+    * The request stack service.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $currentRequest;
+ 
+@@ -38,7 +38,7 @@ class ViewsPostRenderHookHandler implements ContainerInjectionInterface {
+   /**
+    * Constructor.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   The request stack service.
+    * @param \Drupal\facets\FacetManager\DefaultFacetManager|null $facetsManager
+    *   The facets manager service. If present.
+@@ -64,13 +64,13 @@ class ViewsPostRenderHookHandler implements ContainerInjectionInterface {
+   /**
+    * Prepare data for Matomo according to configuration.
+    *
+-   * @param \Drupal\views\ViewExecutable $view
++   * @param ViewExecutable $view
+    *   The view object being processed.
+    * @param array $output
+    *   A structured content array representing the view output. The given array
+    *   depends on the style plugin and can be either a render array or an array
+    *   of render arrays.
+-   * @param \Drupal\views\Plugin\views\cache\CachePluginBase $cache
++   * @param CachePluginBase $cache
+    *   The cache settings.
+    */
+   public function process(ViewExecutable $view, array &$output, CachePluginBase $cache): void {
+@@ -79,7 +79,7 @@ class ViewsPostRenderHookHandler implements ContainerInjectionInterface {
+       // If the ID of the plugin is not in the list then do nothing.
+       return;
+     }
+-    /** @var \Drupal\matomo\Plugin\views\display_extender\Matomo $extender */
++    /** @var Matomo $extender */
+     $extender = $extenders['matomo'];
+ 
+     $options = $extender->options;
+@@ -172,7 +172,7 @@ class ViewsPostRenderHookHandler implements ContainerInjectionInterface {
+    *
+    * @param array $options
+    *   The extender options.
+-   * @param \Drupal\views\ViewExecutable $view
++   * @param ViewExecutable $view
+    *   The view object being processed.
+    *
+    * @return string
+diff --git a/src/Plugin/migrate/process/MatomoVisibilityPages.php b/src/Plugin/migrate/process/MatomoVisibilityPages.php
+index 8c25b09..dc05b1d 100644
+--- a/src/Plugin/migrate/process/MatomoVisibilityPages.php
++++ b/src/Plugin/migrate/process/MatomoVisibilityPages.php
+@@ -26,7 +26,7 @@ class MatomoVisibilityPages extends ProcessPluginBase implements ContainerFactor
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -35,7 +35,7 @@ class MatomoVisibilityPages extends ProcessPluginBase implements ContainerFactor
+    *
+    * Configured for lookups in the d6_user_role and d7_user_role migrations.
+    *
+-   * @var \Drupal\migrate\Plugin\MigrateProcessInterface
++   * @var MigrateProcessInterface
+    */
+   protected $migrationPlugin;
+ 
+diff --git a/src/Plugin/migrate/process/MatomoVisibilityRoles.php b/src/Plugin/migrate/process/MatomoVisibilityRoles.php
+index 9f769da..11ca701 100644
+--- a/src/Plugin/migrate/process/MatomoVisibilityRoles.php
++++ b/src/Plugin/migrate/process/MatomoVisibilityRoles.php
+@@ -25,7 +25,7 @@ class MatomoVisibilityRoles extends ProcessPluginBase implements ContainerFactor
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -34,7 +34,7 @@ class MatomoVisibilityRoles extends ProcessPluginBase implements ContainerFactor
+    *
+    * Configured for lookups in the d6_user_role and d7_user_role migrations.
+    *
+-   * @var \Drupal\migrate\Plugin\MigrateProcessInterface
++   * @var MigrateProcessInterface
+    */
+   protected $migrationPlugin;
+ 
+diff --git a/tests/src/Functional/AdminSettingsFormTest.php b/tests/src/Functional/AdminSettingsFormTest.php
+index e5b84d9..2dae11c 100644
+--- a/tests/src/Functional/AdminSettingsFormTest.php
++++ b/tests/src/Functional/AdminSettingsFormTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\matomo\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -28,7 +29,7 @@ class AdminSettingsFormTest extends BrowserTestBase {
+   /**
+    * A test administrator.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+diff --git a/tests/src/Functional/MatomoBasicTest.php b/tests/src/Functional/MatomoBasicTest.php
+index 833a06b..ab34673 100644
+--- a/tests/src/Functional/MatomoBasicTest.php
++++ b/tests/src/Functional/MatomoBasicTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\matomo\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -17,7 +18,7 @@ class MatomoBasicTest extends BrowserTestBase {
+   /**
+    * User without permissions to use snippets.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $noSnippetUser;
+ 
+@@ -38,7 +39,7 @@ class MatomoBasicTest extends BrowserTestBase {
+   /**
+    * Admin user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+diff --git a/tests/src/Functional/MatomoCustomUrlsTest.php b/tests/src/Functional/MatomoCustomUrlsTest.php
+index 4ade43c..ac904aa 100644
+--- a/tests/src/Functional/MatomoCustomUrlsTest.php
++++ b/tests/src/Functional/MatomoCustomUrlsTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\matomo\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -31,7 +32,7 @@ class MatomoCustomUrlsTest extends BrowserTestBase {
+   /**
+    * Admin user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+diff --git a/tests/src/Functional/MatomoCustomVariablesTest.php b/tests/src/Functional/MatomoCustomVariablesTest.php
+index efbe472..df887cc 100644
+--- a/tests/src/Functional/MatomoCustomVariablesTest.php
++++ b/tests/src/Functional/MatomoCustomVariablesTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\matomo\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -31,7 +32,7 @@ class MatomoCustomVariablesTest extends BrowserTestBase {
+   /**
+    * Admin user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+diff --git a/tests/src/Functional/MatomoPhpFilterTest.php b/tests/src/Functional/MatomoPhpFilterTest.php
+index 308edaa..159aeeb 100644
+--- a/tests/src/Functional/MatomoPhpFilterTest.php
++++ b/tests/src/Functional/MatomoPhpFilterTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\matomo\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -31,14 +32,14 @@ class MatomoPhpFilterTest extends BrowserTestBase {
+   /**
+    * Admin user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+   /**
+    * Delegated admin user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $delegatedAdminUser;
+ 

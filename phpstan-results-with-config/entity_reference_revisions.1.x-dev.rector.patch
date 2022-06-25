@@ -1,0 +1,927 @@
+diff --git a/entity_reference_revisions.module b/entity_reference_revisions.module
+index 82c3cd7..2c9681d 100644
+--- a/entity_reference_revisions.module
++++ b/entity_reference_revisions.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Field\FieldTypePluginManager;
+ /**
+  * @file
+  * Provides a field that can reference other entities.
+@@ -269,7 +270,7 @@ function entity_reference_revisions_entity_revision_create(ContentEntityInterfac
+               }
+             }
+ 
+-            /** @var \Drupal\Core\Entity\ContentEntityInterface $target_entity */
++            /** @var ContentEntityInterface $target_entity */
+             $target_entity = $item->entity;
+             if (!$target_entity->hasTranslation($active_langcode)) {
+               $target_entity->addTranslation($active_langcode, $target_entity->toArray());
+@@ -313,7 +314,7 @@ function entity_reference_revisions_entity_delete(EntityInterface $entity) {
+   }
+ 
+   $entity_type_manager = \Drupal::entityTypeManager();
+-  /** @var \Drupal\Core\Field\FieldTypePluginManager $field_type_manager */
++  /** @var FieldTypePluginManager $field_type_manager */
+   $field_type_manager = \Drupal::service('plugin.manager.field.field_type');
+   foreach ($entity->getFieldDefinitions() as $field_name => $field_definition) {
+     $field_class = $field_type_manager->getPluginClass($field_definition->getType());
+diff --git a/entity_reference_revisions.views.inc b/entity_reference_revisions.views.inc
+index 6dd8ec6..2b569b2 100644
+--- a/entity_reference_revisions.views.inc
++++ b/entity_reference_revisions.views.inc
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\Sql\DefaultTableMapping;
+ /**
+  * @file
+  * Provides views data for the entity_reference_revisions module.
+@@ -45,7 +46,7 @@ function entity_reference_revisions_field_views_data(FieldStorageConfigInterface
+     $args['@entity'] = $entity_type->getLabel();
+     $args['@label'] = $target_entity_type->getSingularLabel();
+     $pseudo_field_name = 'reverse__' . $entity_type_id . '__' . $field_name;
+-    /** @var \Drupal\Core\Entity\Sql\DefaultTableMapping $table_mapping */
++    /** @var DefaultTableMapping $table_mapping */
+     $table_mapping = $entity_manager->getStorage($entity_type_id)->getTableMapping();
+     $data[$target_base_table][$pseudo_field_name]['relationship'] = array(
+       'title' => t('@entity using @field_name', $args),
+diff --git a/src/Commands/EntityReferenceRevisionsCommands.php b/src/Commands/EntityReferenceRevisionsCommands.php
+index d23d307..b224ec5 100644
+--- a/src/Commands/EntityReferenceRevisionsCommands.php
++++ b/src/Commands/EntityReferenceRevisionsCommands.php
+@@ -15,14 +15,14 @@ class EntityReferenceRevisionsCommands extends DrushCommands {
+   /**
+    * The purger service.
+    *
+-   * @var \Drupal\entity_reference_revisions\EntityReferenceRevisionsOrphanPurger
++   * @var EntityReferenceRevisionsOrphanPurger
+    */
+   protected $purger;
+ 
+   /**
+    * Constructs a ERRCommands object.
+    *
+-   * @param \Drupal\entity_reference_revisions\EntityReferenceRevisionsOrphanPurger $purger
++   * @param EntityReferenceRevisionsOrphanPurger $purger
+    */
+   public function __construct(EntityReferenceRevisionsOrphanPurger $purger) {
+     $this->purger = $purger;
+diff --git a/src/EntityReferenceRevisionsOrphanPurger.php b/src/EntityReferenceRevisionsOrphanPurger.php
+index ed7604c..a9d3147 100644
+--- a/src/EntityReferenceRevisionsOrphanPurger.php
++++ b/src/EntityReferenceRevisionsOrphanPurger.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\entity_reference_revisions;
+ 
++use Drupal\Core\Entity\ContentEntityStorageInterface;
++use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+@@ -37,42 +39,42 @@ class EntityReferenceRevisionsOrphanPurger {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The database service.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+@@ -86,17 +88,17 @@ class EntityReferenceRevisionsOrphanPurger {
+   /**
+    * Constructs a EntityReferenceRevisionsOrphanManager object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, DateFormatterInterface $date_formatter, TimeInterface $time, Connection $database, MessengerInterface $messenger) {
+@@ -111,7 +113,7 @@ class EntityReferenceRevisionsOrphanPurger {
+   /**
+    * Deletes unused revision or an entity if there are no revisions remaining.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $composite_revision
++   * @param ContentEntityInterface $composite_revision
+    *   The composite revision.
+    *
+    * @return bool
+@@ -155,7 +157,7 @@ class EntityReferenceRevisionsOrphanPurger {
+   public function deleteOrphansBatchOperation($entity_type_id, &$context) {
+     $composite_type = $this->entityTypeManager->getDefinition($entity_type_id);
+     $composite_revision_key = $composite_type->getKey('revision');
+-    /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $composite_storage */
++    /** @var ContentEntityStorageInterface $composite_storage */
+     $composite_storage = $this->entityTypeManager->getStorage($entity_type_id);
+     $batch_size = Settings::get('entity_update_batch_size', 50);
+ 
+@@ -187,7 +189,7 @@ class EntityReferenceRevisionsOrphanPurger {
+       ->execute()
+       ->fetchCol();
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $composite_revision */
++    /** @var ContentEntityInterface $composite_revision */
+     foreach ($composite_storage->loadMultipleRevisions($entity_revision_ids) as $composite_revision) {
+       $context['sandbox']['progress']++;
+       $context['sandbox']['current_revision_id'] = $composite_revision->getRevisionId();
+@@ -300,7 +302,7 @@ class EntityReferenceRevisionsOrphanPurger {
+   /**
+    * Checks if the composite entity is used.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $composite_revision
++   * @param ContentEntityInterface $composite_revision
+    *   The composite revision.
+    *
+    * @return bool
+@@ -384,7 +386,7 @@ class EntityReferenceRevisionsOrphanPurger {
+   /**
+    * Returns a list of composite entity types.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeInterface[]
++   * @return EntityTypeInterface[]
+    *   An array of composite entity types.
+    */
+   public function getCompositeEntityTypes() {
+diff --git a/src/Form/OrphanedCompositeEntitiesDeleteForm.php b/src/Form/OrphanedCompositeEntitiesDeleteForm.php
+index 6267c97..0f899bb 100644
+--- a/src/Form/OrphanedCompositeEntitiesDeleteForm.php
++++ b/src/Form/OrphanedCompositeEntitiesDeleteForm.php
+@@ -19,32 +19,32 @@ class OrphanedCompositeEntitiesDeleteForm extends FormBase {
+   /**
+    * The Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The entity reference revisions orphan purger service.
+    *
+-   * @var \Drupal\entity_reference_revisions\EntityReferenceRevisionsOrphanPurger
++   * @var EntityReferenceRevisionsOrphanPurger
+    */
+   protected $purger;
+ 
+   /**
+    * OrphanedCompositeEntitiesDeleteForm constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The EntityTypeManager service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+-   * @param \Drupal\entity_reference_revisions\EntityReferenceRevisionsOrphanPurger $purger
++   * @param EntityReferenceRevisionsOrphanPurger $purger
+    *   The entity reference revisions orphan purger.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_manager, MessengerInterface $messenger, EntityReferenceRevisionsOrphanPurger $purger) {
+diff --git a/src/Plugin/DataType/EntityReferenceRevisions.php b/src/Plugin/DataType/EntityReferenceRevisions.php
+index b24b6b1..60d57d5 100644
+--- a/src/Plugin/DataType/EntityReferenceRevisions.php
++++ b/src/Plugin/DataType/EntityReferenceRevisions.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_reference_revisions\Plugin\DataType;
+ 
++use Drupal\Core\Entity\TypedData\EntityDataDefinitionInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\Plugin\DataType\EntityReference;
+ 
+@@ -50,7 +51,7 @@ class EntityReferenceRevisions extends EntityReference {
+   /**
+    * Returns the definition of the referenced entity.
+    *
+-   * @return \Drupal\Core\Entity\TypedData\EntityDataDefinitionInterface
++   * @return EntityDataDefinitionInterface
+    *   The reference target's definition.
+    */
+   public function getTargetDefinition() {
+diff --git a/src/Plugin/Field/FieldFormatter/EntityReferenceRevisionsEntityFormatter.php b/src/Plugin/Field/FieldFormatter/EntityReferenceRevisionsEntityFormatter.php
+index 5d23ec4..10a2324 100644
+--- a/src/Plugin/Field/FieldFormatter/EntityReferenceRevisionsEntityFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/EntityReferenceRevisionsEntityFormatter.php
+@@ -27,14 +27,14 @@ class EntityReferenceRevisionsEntityFormatter extends EntityReferenceRevisionsFo
+   /**
+    * The logger factory.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * The entity display repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepository;
+ 
+@@ -45,7 +45,7 @@ class EntityReferenceRevisionsEntityFormatter extends EntityReferenceRevisionsFo
+    *   The plugin_id for the formatter.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The definition of the field to which the formatter is associated.
+    * @param array $settings
+    *   The formatter settings.
+@@ -57,7 +57,7 @@ class EntityReferenceRevisionsEntityFormatter extends EntityReferenceRevisionsFo
+    *   Any third party settings settings.
+    * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger factory.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
++   * @param EntityDisplayRepositoryInterface $entity_display_repository
+    *   The entity display repository.
+    */
+   public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, $label, $view_mode, array $third_party_settings, LoggerChannelFactoryInterface $logger_factory, EntityDisplayRepositoryInterface $entity_display_repository) {
+diff --git a/src/Plugin/Field/FieldType/EntityReferenceRevisionsItem.php b/src/Plugin/Field/FieldType/EntityReferenceRevisionsItem.php
+index 4a313ea..0b4b698 100644
+--- a/src/Plugin/Field/FieldType/EntityReferenceRevisionsItem.php
++++ b/src/Plugin/Field/FieldType/EntityReferenceRevisionsItem.php
+@@ -79,7 +79,7 @@ class EntityReferenceRevisionsItem extends EntityReferenceItem implements Option
+       return $entity_type->get('common_reference_revisions_target') && $entity_type->isRevisionable();
+     });
+ 
+-    /** @var \Drupal\Core\Entity\EntityTypeInterface $entity_type */
++    /** @var EntityTypeInterface $entity_type */
+     foreach ($common_references as $entity_type) {
+ 
+       $options[$entity_type->id()] = [
+diff --git a/src/Plugin/QueueWorker/OrphanPurger.php b/src/Plugin/QueueWorker/OrphanPurger.php
+index a2bf051..e42ff32 100644
+--- a/src/Plugin/QueueWorker/OrphanPurger.php
++++ b/src/Plugin/QueueWorker/OrphanPurger.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_reference_revisions\Plugin\QueueWorker;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -23,21 +24,21 @@ class OrphanPurger extends QueueWorkerBase implements ContainerFactoryPluginInte
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The purger.
+    *
+-   * @var \Drupal\entity_reference_revisions\EntityReferenceRevisionsOrphanPurger
++   * @var EntityReferenceRevisionsOrphanPurger
+    */
+   protected $purger;
+ 
+   /**
+    * The database.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+@@ -50,11 +51,11 @@ class OrphanPurger extends QueueWorkerBase implements ContainerFactoryPluginInte
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\entity_reference_revisions\EntityReferenceRevisionsOrphanPurger $purger
++   * @param EntityReferenceRevisionsOrphanPurger $purger
+    *   The purger service.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database service.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, EntityReferenceRevisionsOrphanPurger $purger, Connection $database) {
+@@ -102,7 +103,7 @@ class OrphanPurger extends QueueWorkerBase implements ContainerFactoryPluginInte
+       ->execute()
+       ->fetchCol();
+ 
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $composite_revision */
++    /** @var ContentEntityInterface $composite_revision */
+     foreach ($composite_storage->loadMultipleRevisions($entity_revision_ids) as $composite_revision) {
+       if (!$this->purger->isUsed($composite_revision)) {
+         $this->purger->deleteUnusedRevision($composite_revision);
+diff --git a/src/Plugin/migrate/destination/EntityReferenceRevisions.php b/src/Plugin/migrate/destination/EntityReferenceRevisions.php
+index 6bbd60a..673eb29 100644
+--- a/src/Plugin/migrate/destination/EntityReferenceRevisions.php
++++ b/src/Plugin/migrate/destination/EntityReferenceRevisions.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\entity_reference_revisions\Plugin\migrate\destination;
+ 
++use Drupal\Core\Entity\RevisionableInterface;
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Component\Plugin\ConfigurableInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\TypedData\TranslatableInterface;
+@@ -116,7 +118,7 @@ class EntityReferenceRevisions extends EntityRevision implements ConfigurableInt
+ 
+     // If a specific revision_id is supplied and exists, assert the entity_id
+     // matches (if supplied), and update the revision.
+-    /** @var \Drupal\Core\Entity\RevisionableInterface|\Drupal\Core\Entity\EntityInterface $entity */
++    /** @var RevisionableInterface|EntityInterface $entity */
+     if (!empty($revision_id) && ($entity = $this->storage->loadRevision($revision_id))) {
+       if (!empty($entity_id) && ($entity->id() != $entity_id)) {
+         throw new MigrateException("The revision_id exists for this entity type, but does not belong to the given entity id");
+diff --git a/tests/src/Functional/EntityReferenceRevisionsAdminTest.php b/tests/src/Functional/EntityReferenceRevisionsAdminTest.php
+index 9dadafd..27af4cc 100644
+--- a/tests/src/Functional/EntityReferenceRevisionsAdminTest.php
++++ b/tests/src/Functional/EntityReferenceRevisionsAdminTest.php
+@@ -158,6 +158,7 @@ class EntityReferenceRevisionsAdminTest extends BrowserTestBase {
+ 
+   /**
+    * Tests target bundle settings for an entity reference revisions field.
++   * @doesNotPerformAssertions
+    */
+   public function testMultipleTargetBundles() {
+     // Create a couple of content types for the ERR field to point to.
+diff --git a/tests/src/Functional/EntityReferenceRevisionsAutocompleteTest.php b/tests/src/Functional/EntityReferenceRevisionsAutocompleteTest.php
+index 9bd0c53..5df5701 100644
+--- a/tests/src/Functional/EntityReferenceRevisionsAutocompleteTest.php
++++ b/tests/src/Functional/EntityReferenceRevisionsAutocompleteTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\entity_reference_revisions\Functional;
+ 
++use Drupal\block\BlockInterface;
+ use Drupal\block_content\Entity\BlockContent;
+ use Drupal\Component\Utility\Html;
+ use Drupal\node\Entity\Node;
+@@ -118,7 +119,7 @@ class EntityReferenceRevisionsAutocompleteTest extends BrowserTestBase {
+    * @param $reset
+    *   (optional) Whether to reset the entity cache.
+    *
+-   * @return \Drupal\block\BlockInterface
++   * @return BlockInterface
+    *   A block entity matching $info.
+    */
+   function drupalGetBlockByInfo($info, $reset = FALSE) {
+diff --git a/tests/src/Functional/EntityReferenceRevisionsOrphanRemovalForBaseFieldDefinitionTest.php b/tests/src/Functional/EntityReferenceRevisionsOrphanRemovalForBaseFieldDefinitionTest.php
+index 0630f9e..51bb308 100644
+--- a/tests/src/Functional/EntityReferenceRevisionsOrphanRemovalForBaseFieldDefinitionTest.php
++++ b/tests/src/Functional/EntityReferenceRevisionsOrphanRemovalForBaseFieldDefinitionTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\entity_reference_revisions\Functional;
+ 
++use Drupal\user\UserInterface;
++use Drupal\node\NodeStorageInterface;
++use Drupal\Core\Entity\RevisionableInterface;
+ use Drupal\entity_composite_relationship_test\Entity\EntityTestCompositeRelationship;
+ use Drupal\entity_host_relationship_test\Entity\EntityTestHostRelationship;
+ 
+@@ -15,7 +18,7 @@ class EntityReferenceRevisionsOrphanRemovalForBaseFieldDefinitionTest extends En
+   /**
+    * A user with administration access.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+@@ -36,7 +39,7 @@ class EntityReferenceRevisionsOrphanRemovalForBaseFieldDefinitionTest extends En
+    * {@inheritdoc}
+    */
+   public function insertRevisionableData() {
+-    /** @var \Drupal\node\NodeStorageInterface $entity_host_storage */
++    /** @var NodeStorageInterface $entity_host_storage */
+     $entity_host_storage = \Drupal::entityTypeManager()->getStorage('entity_host_relationship_test');
+     // Scenario 1: A composite with a default revision that is referenced and an
+     // old revision that is not. Result: Only the old revision is deleted.
+@@ -225,7 +228,7 @@ class EntityReferenceRevisionsOrphanRemovalForBaseFieldDefinitionTest extends En
+    * @param bool $reset
+    *   (optional) Whether to reset the entity cache.
+    *
+-   * @return \Drupal\Core\Entity\RevisionableInterface
++   * @return RevisionableInterface
+    *   A revisionable entity matching $name.
+    */
+   protected function getEntityHostByName($name, $reset = FALSE) {
+@@ -233,7 +236,7 @@ class EntityReferenceRevisionsOrphanRemovalForBaseFieldDefinitionTest extends En
+       \Drupal::entityTypeManager()->getStorage('entity_host_relationship_test')->resetCache();
+     }
+     $name = (string) $name;
+-    /** @var \Drupal\Core\Entity\RevisionableInterface[] $entities */
++    /** @var RevisionableInterface[] $entities */
+     $entities = \Drupal::entityTypeManager()
+       ->getStorage('entity_host_relationship_test')
+       ->loadByProperties(['name' => $name]);
+diff --git a/tests/src/Functional/EntityReferenceRevisionsOrphanRemovalTest.php b/tests/src/Functional/EntityReferenceRevisionsOrphanRemovalTest.php
+index 2eabb59..53cd0a0 100644
+--- a/tests/src/Functional/EntityReferenceRevisionsOrphanRemovalTest.php
++++ b/tests/src/Functional/EntityReferenceRevisionsOrphanRemovalTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\entity_reference_revisions\Functional;
+ 
++use Drupal\user\UserInterface;
++use Drupal\node\NodeStorageInterface;
+ use Drupal\Core\Site\Settings;
+ use Drupal\entity_composite_relationship_test\Entity\EntityTestCompositeRelationship;
+ use Drupal\field\Entity\FieldConfig;
+@@ -19,7 +21,7 @@ class EntityReferenceRevisionsOrphanRemovalTest extends BrowserTestBase {
+   /**
+    * A user with administration access.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+@@ -150,7 +152,7 @@ class EntityReferenceRevisionsOrphanRemovalTest extends BrowserTestBase {
+    * Inserts revisionable entities needed for testing.
+    */
+   public function insertRevisionableData() {
+-    /** @var \Drupal\node\NodeStorageInterface $node_storage */
++    /** @var NodeStorageInterface $node_storage */
+     $node_storage = \Drupal::entityTypeManager()->getStorage('node');
+     NodeType::create(['type' => 'revisionable', 'new_revision' => TRUE])->save();
+     // Add a translatable field and a not translatable field to both content
+@@ -294,7 +296,7 @@ class EntityReferenceRevisionsOrphanRemovalTest extends BrowserTestBase {
+    * Inserts non revisionable entities needed for testing.
+    */
+   public function insertNonRevisionableData() {
+-    /** @var \Drupal\node\NodeStorageInterface $node_storage */
++    /** @var NodeStorageInterface $node_storage */
+     NodeType::create(['type' => 'non_revisionable', 'new_revision' => FALSE])->save();
+     // Add a translatable field and a not translatable field to both content
+     // types.
+diff --git a/tests/src/Kernel/EntityReferenceRevisionsCompositeTest.php b/tests/src/Kernel/EntityReferenceRevisionsCompositeTest.php
+index 6be1424..cded7ea 100644
+--- a/tests/src/Kernel/EntityReferenceRevisionsCompositeTest.php
++++ b/tests/src/Kernel/EntityReferenceRevisionsCompositeTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\entity_reference_revisions\Kernel;
+ 
++use Drupal\Core\Database\Connection;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Core\Cron;
++use Drupal\node\NodeInterface;
+ use Drupal\entity_composite_relationship_test\Entity\EntityTestCompositeRelationship;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+@@ -38,22 +42,21 @@ class EntityReferenceRevisionsCompositeTest extends EntityKernelTestBase {
+   /**
+    * The current database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
+-   *
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The cron service.
+    *
+-   * @var \Drupal\Core\Cron
++   * @var Cron
+    */
+   protected $cron;
+ 
+@@ -115,7 +118,7 @@ class EntityReferenceRevisionsCompositeTest extends EntityKernelTestBase {
+     $this->assertEquals(1, $composite_revisions_count);
+ 
+     // Create a node with a reference to the test composite entity.
+-    /** @var \Drupal\node\NodeInterface $node */
++    /** @var NodeInterface $node */
+     $node = Node::create(array(
+       'title' => $this->randomMachineName(),
+       'type' => 'article',
+@@ -193,7 +196,7 @@ class EntityReferenceRevisionsCompositeTest extends EntityKernelTestBase {
+     $node->save();
+     $nid = $node->id();
+     $node_storage->resetCache([$nid]);
+-    /** @var \Drupal\node\NodeInterface $node */
++    /** @var NodeInterface $node */
+     $node = $node_storage->load($nid);
+ 
+     // Check the composite has changed.
+@@ -236,7 +239,7 @@ class EntityReferenceRevisionsCompositeTest extends EntityKernelTestBase {
+     ]);
+     $composite->save();
+     // Create a node with a reference to the test composite entity.
+-    /** @var \Drupal\node\NodeInterface $node */
++    /** @var NodeInterface $node */
+     $node = Node::create([
+       'title' => $this->randomMachineName(),
+       'type' => 'article',
+diff --git a/tests/src/Kernel/EntityReferenceRevisionsCompositeTranslatableFieldTest.php b/tests/src/Kernel/EntityReferenceRevisionsCompositeTranslatableFieldTest.php
+index d0f0335..e62e1cd 100644
+--- a/tests/src/Kernel/EntityReferenceRevisionsCompositeTranslatableFieldTest.php
++++ b/tests/src/Kernel/EntityReferenceRevisionsCompositeTranslatableFieldTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\entity_reference_revisions\Kernel;
+ 
++use Drupal\Core\Database\Connection;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\node\NodeStorageInterface;
++use Drupal\node\NodeInterface;
+ use Drupal\entity_composite_relationship_test\Entity\EntityTestCompositeRelationship;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+@@ -39,15 +43,14 @@ class EntityReferenceRevisionsCompositeTranslatableFieldTest extends EntityKerne
+   /**
+    * The current database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
+-   *
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -102,7 +105,7 @@ class EntityReferenceRevisionsCompositeTranslatableFieldTest extends EntityKerne
+    * Test the storage for handling pending revisions with translations.
+    */
+   public function testCompositePendingRevisionTranslation() {
+-    /** @var \Drupal\node\NodeStorageInterface $node_storage */
++    /** @var NodeStorageInterface $node_storage */
+     $node_storage = \Drupal::entityTypeManager()->getStorage('node');
+ 
+     // Create the test composite entity.
+@@ -121,7 +124,7 @@ class EntityReferenceRevisionsCompositeTranslatableFieldTest extends EntityKerne
+     ]);
+     $node->save();
+ 
+-    /** @var \Drupal\node\NodeInterface $node */
++    /** @var NodeInterface $node */
+     $node = $node_storage->load($node->id());
+ 
+     // Assert the revision count.
+@@ -135,7 +138,7 @@ class EntityReferenceRevisionsCompositeTranslatableFieldTest extends EntityKerne
+     $composite_de = $node->get('composite_reference')->entity->createDuplicate();
+     $composite_de->set('langcode', 'de');
+     $composite_de->set('name', 'Pending Revision Composite #1 DE');
+-    /** @var \Drupal\node\NodeInterface $node_de */
++    /** @var NodeInterface $node_de */
+     $node_de = $node->addTranslation('de', ['title' => 'Pending Revision Node #1 DE', 'composite_reference' => $composite_de] + $node->toArray());
+     $node_de->setNewRevision(TRUE);
+     $node_de->isDefaultRevision(FALSE);
+@@ -149,7 +152,7 @@ class EntityReferenceRevisionsCompositeTranslatableFieldTest extends EntityKerne
+     // The DE translation will now reference to a pending revision of the
+     // composite entity but the en translation will reference the existing,
+     // unchanged revision.
+-    /** @var \Drupal\node\NodeInterface $node_revision */
++    /** @var NodeInterface $node_revision */
+     $node_revision = $node_storage->loadRevision($node_de->getRevisionId());
+     $this->assertFalse($node_revision->isDefaultRevision());
+     $this->assertFalse((bool) $node_revision->isRevisionTranslationAffected());
+@@ -193,7 +196,7 @@ class EntityReferenceRevisionsCompositeTranslatableFieldTest extends EntityKerne
+     // Now assert that all 3 revisions exist as expected. Two translation
+     // pending revisions, each has the original revision as parent without
+     // any existing translation.
+-    /** @var \Drupal\node\NodeInterface $node_fr */
++    /** @var NodeInterface $node_fr */
+     $node_revision = $node_storage->loadRevision($node_fr->getRevisionId());
+     $this->assertFalse($node_revision->isDefaultRevision());
+     $this->assertFalse((bool) $node_revision->isRevisionTranslationAffected());
+diff --git a/tests/src/Kernel/EntityReferenceRevisionsCompositeTranslationTest.php b/tests/src/Kernel/EntityReferenceRevisionsCompositeTranslationTest.php
+index 6f0103d..74827d0 100644
+--- a/tests/src/Kernel/EntityReferenceRevisionsCompositeTranslationTest.php
++++ b/tests/src/Kernel/EntityReferenceRevisionsCompositeTranslationTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\entity_reference_revisions\Kernel;
+ 
++use Drupal\Core\Database\Connection;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\node\NodeStorageInterface;
++use Drupal\node\NodeInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\entity_composite_relationship_test\Entity\EntityTestCompositeRelationship;
+@@ -41,15 +45,14 @@ class EntityReferenceRevisionsCompositeTranslationTest extends EntityKernelTestB
+   /**
+    * The current database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
+-   *
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -137,7 +140,7 @@ class EntityReferenceRevisionsCompositeTranslationTest extends EntityKernelTestB
+    * Test the storage for handling pending revisions with translations.
+    */
+   public function testCompositePendingRevisionTranslation() {
+-    /** @var \Drupal\node\NodeStorageInterface $node_storage */
++    /** @var NodeStorageInterface $node_storage */
+     $node_storage = \Drupal::entityTypeManager()->getStorage('node');
+ 
+     // Create a nested composite entity.
+@@ -166,7 +169,7 @@ class EntityReferenceRevisionsCompositeTranslationTest extends EntityKernelTestB
+     $node->save();
+     $initial_revision_id = $node->getRevisionId();
+ 
+-    /** @var \Drupal\node\NodeInterface $node */
++    /** @var NodeInterface $node */
+     $node = $node_storage->load($node->id());
+ 
+     // Assert that there is only 1 revision when creating a node.
+@@ -236,7 +239,7 @@ class EntityReferenceRevisionsCompositeTranslationTest extends EntityKernelTestB
+     $this->assertRevisionCount(4, $nested_composite);
+     $this->assertRevisionCount(1, $second_nested_composite);
+ 
+-    /** @var \Drupal\node\NodeInterface $node_de */
++    /** @var NodeInterface $node_de */
+     $node_de = $node_storage->loadRevision($node_de->getRevisionId());
+     $this->assertFalse($node_de->isDefaultRevision());
+     $this->assertFalse((bool) $node_de->isRevisionTranslationAffected());
+@@ -270,7 +273,7 @@ class EntityReferenceRevisionsCompositeTranslationTest extends EntityKernelTestB
+     // Now assert that all 3 revisions exist as expected. Two translation
+     // pending revisions, each composite has the original revision as parent
+     // without any existing translation.
+-    /** @var \Drupal\node\NodeInterface $node_fr */
++    /** @var NodeInterface $node_fr */
+     $node_fr = $node_storage->loadRevision($node_fr->getRevisionId());
+     $this->assertFalse($node_fr->isDefaultRevision());
+     $this->assertTrue($node_fr->hasTranslation('de'));
+@@ -443,7 +446,7 @@ class EntityReferenceRevisionsCompositeTranslationTest extends EntityKernelTestB
+    * Tests that composite translations affects the host entity's translations.
+    */
+   public function testCompositeTranslation() {
+-    /** @var \Drupal\node\NodeStorageInterface $node_storage */
++    /** @var NodeStorageInterface $node_storage */
+     $node_storage = $this->entityTypeManager->getStorage('node');
+ 
+     // Create a composite entity.
+@@ -462,7 +465,7 @@ class EntityReferenceRevisionsCompositeTranslationTest extends EntityKernelTestB
+     ]);
+     $node->save();
+ 
+-    /** @var \Drupal\node\NodeInterface $node */
++    /** @var NodeInterface $node */
+     $node = $node_storage->load($node->id());
+ 
+     // Assert that there is only 1 revision when creating a node.
+@@ -519,7 +522,7 @@ class EntityReferenceRevisionsCompositeTranslationTest extends EntityKernelTestB
+    * Tests that nested composite translations affects the host translations.
+    */
+   public function testNestedCompositeTranslation() {
+-    /** @var \Drupal\node\NodeStorageInterface $node_storage */
++    /** @var NodeStorageInterface $node_storage */
+     $node_storage = \Drupal::entityTypeManager()->getStorage('node');
+ 
+     // Create a nested composite entity.
+@@ -548,7 +551,7 @@ class EntityReferenceRevisionsCompositeTranslationTest extends EntityKernelTestB
+       'composite_reference' => $composite,
+     ]);
+     $node->save();
+-    /** @var \Drupal\node\NodeInterface $node */
++    /** @var NodeInterface $node */
+     $node = $node_storage->load($node->id());
+ 
+     // Assert that there is only 1 revision when creating a node.
+@@ -604,7 +607,7 @@ class EntityReferenceRevisionsCompositeTranslationTest extends EntityKernelTestB
+    *
+    * @param int $expected
+    *   The expected count.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity.
+    */
+   protected function assertAffectedRevisionCount($expected, EntityInterface $entity) {
+@@ -627,7 +630,7 @@ class EntityReferenceRevisionsCompositeTranslationTest extends EntityKernelTestB
+    *
+    * @param int $expected
+    *   The expected amount of revisions.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity.
+    */
+   protected function assertRevisionCount($expected, EntityInterface $entity) {
+diff --git a/tests/src/Kernel/EntityReferenceRevisionsFormatterTest.php b/tests/src/Kernel/EntityReferenceRevisionsFormatterTest.php
+index 9bc647f..5f7ab20 100644
+--- a/tests/src/Kernel/EntityReferenceRevisionsFormatterTest.php
++++ b/tests/src/Kernel/EntityReferenceRevisionsFormatterTest.php
+@@ -78,7 +78,7 @@ class EntityReferenceRevisionsFormatterTest extends KernelTestBase {
+ 
+     $text = 'Clever text';
+     // Set the name to a new text.
+-    /** @var \Drupal\entity_composite_relationship_test\Entity\EntityTestCompositeRelationship $entity_test */
++    /** @var EntityTestCompositeRelationship $entity_test */
+     $entity_test->name = $text;
+     $entity_test->setNeedsSave(TRUE);
+ 
+diff --git a/tests/src/Kernel/EntityReferenceRevisionsSaveTest.php b/tests/src/Kernel/EntityReferenceRevisionsSaveTest.php
+index 57582b7..60dafef 100644
+--- a/tests/src/Kernel/EntityReferenceRevisionsSaveTest.php
++++ b/tests/src/Kernel/EntityReferenceRevisionsSaveTest.php
+@@ -79,7 +79,7 @@ class EntityReferenceRevisionsSaveTest extends KernelTestBase {
+ 
+     $text = 'Clever text';
+     // Set the name to a new text.
+-    /** @var \Drupal\entity_composite_relationship_test\Entity\EntityTestCompositeRelationship $entity_test */
++    /** @var EntityTestCompositeRelationship $entity_test */
+     $entity_test->name = $text;
+     $entity_test->setNeedsSave(TRUE);
+     // Create a node with a reference to the test entity and save.
+@@ -98,7 +98,7 @@ class EntityReferenceRevisionsSaveTest extends KernelTestBase {
+     $node->save();
+ 
+     // Check that the name has been updated when the parent has been saved.
+-    /** @var \Drupal\entity_composite_relationship_test\Entity\EntityTestCompositeRelationship $entity_test_after */
++    /** @var EntityTestCompositeRelationship $entity_test_after */
+     $entity_test_after = EntityTestCompositeRelationship::load($entity_test->id());
+     static::assertEquals($entity_test_after->name->value, $text);
+ 
+@@ -212,7 +212,7 @@ class EntityReferenceRevisionsSaveTest extends KernelTestBase {
+     $node_target->save();
+ 
+     // Create an entity reference field to reference to the test target node.
+-    /** @var \Drupal\field\Entity\FieldStorageConfig $field_storage */
++    /** @var FieldStorageConfig $field_storage */
+     $field_storage = FieldStorageConfig::create([
+       'field_name' => 'target_node_reference',
+       'entity_type' => 'node',
+@@ -220,7 +220,7 @@ class EntityReferenceRevisionsSaveTest extends KernelTestBase {
+       'settings' => ['target_type' => 'node'],
+     ]);
+     $field_storage->save();
+-    /** @var \Drupal\field\Entity\FieldConfig $field */
++    /** @var FieldConfig $field */
+     $field = FieldConfig::create([
+       'field_storage' => $field_storage,
+       'bundle' => 'article',
+@@ -269,6 +269,7 @@ class EntityReferenceRevisionsSaveTest extends KernelTestBase {
+ 
+   /**
+    * Tests FieldType\EntityReferenceRevisionsItem::deleteRevision
++   * @doesNotPerformAssertions
+    */
+   public function testEntityReferenceRevisionsDeleteHandleDeletedChild() {
+     $field_storage = FieldStorageConfig::create([
+diff --git a/tests/src/Kernel/Plugin/migrate/destination/EntityReferenceRevisionsDestinationTest.php b/tests/src/Kernel/Plugin/migrate/destination/EntityReferenceRevisionsDestinationTest.php
+index 8e145b6..9dc1c8f 100644
+--- a/tests/src/Kernel/Plugin/migrate/destination/EntityReferenceRevisionsDestinationTest.php
++++ b/tests/src/Kernel/Plugin/migrate/destination/EntityReferenceRevisionsDestinationTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\entity_reference_revisions\Kernel\Plugin\migrate\destination;
+ 
++use Drupal\migrate\Plugin\MigrationPluginManager;
++use Drupal\entity_reference_revisions\Plugin\migrate\destination\EntityReferenceRevisions;
++use Drupal\Core\Entity\EntityStorageBase;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+ use Drupal\KernelTests\KernelTestBase;
+@@ -21,7 +24,7 @@ class EntityReferenceRevisionsDestinationTest extends KernelTestBase implements
+   /**
+    * The migration plugin manager.
+    *
+-   * @var \Drupal\migrate\Plugin\MigrationPluginManager
++   * @var MigrationPluginManager
+    */
+   protected $migrationPluginManager;
+ 
+@@ -57,12 +60,12 @@ class EntityReferenceRevisionsDestinationTest extends KernelTestBase implements
+    * @covers ::getEntityTypeId
+    */
+   public function testGetEntityTypeId(array $definition, $expected) {
+-    /** @var \Drupal\migrate\Plugin\Migration $migration */
++    /** @var Migration $migration */
+     $migration = $this->migrationPluginManager->createStubMigration($definition);
+-    /** @var \Drupal\entity_reference_revisions\Plugin\migrate\destination\EntityReferenceRevisions $destination */
++    /** @var EntityReferenceRevisions $destination */
+     $destination = $migration->getDestinationPlugin();
+ 
+-    /** @var \Drupal\Core\Entity\EntityStorageBase $storage */
++    /** @var EntityStorageBase $storage */
+     $reflected_storage = new \ReflectionProperty($destination, 'storage');
+     $reflected_storage->setAccessible(TRUE);
+     $storage = $reflected_storage->getValue($destination);
+@@ -96,10 +99,10 @@ class EntityReferenceRevisionsDestinationTest extends KernelTestBase implements
+    * @covers ::rollbackNonTranslation
+    */
+   public function testGetEntity(array $definition, array $expected) {
+-    /** @var \Drupal\migrate\Plugin\Migration $migration */
++    /** @var Migration $migration */
+     $migration = $this->migrationPluginManager->createStubMigration($definition);
+     $migrationExecutable = (new MigrateExecutable($migration, $this));
+-    /** @var \Drupal\Core\Entity\EntityStorageBase $storage */
++    /** @var EntityStorageBase $storage */
+     $reflected_storage = new \ReflectionProperty($migration->getDestinationPlugin(), 'storage');
+     $reflected_storage->setAccessible(TRUE);
+     $storage = $reflected_storage->getValue($migration->getDestinationPlugin());
+@@ -252,10 +255,10 @@ class EntityReferenceRevisionsDestinationTest extends KernelTestBase implements
+    * @covers ::rollbackNonTranslation
+    */
+   public function testGetEntityForceRevision(array $definition, array $expected) {
+-    /** @var \Drupal\migrate\Plugin\Migration $migration */
++    /** @var Migration $migration */
+     $migration = $this->migrationPluginManager->createStubMigration($definition);
+     $migrationExecutable = (new MigrateExecutable($migration, $this));
+-    /** @var \Drupal\Core\Entity\EntityStorageBase $storage */
++    /** @var EntityStorageBase $storage */
+     $reflected_storage = new \ReflectionProperty($migration->getDestinationPlugin(), 'storage');
+     $reflected_storage->setAccessible(TRUE);
+     $storage = $reflected_storage->getValue($migration->getDestinationPlugin());
+@@ -422,7 +425,7 @@ class EntityReferenceRevisionsDestinationTest extends KernelTestBase implements
+     foreach ($data as $datum) {
+       $migration = $this->migrationPluginManager->createInstance($datum['definition']['id']);
+       $migrationExecutable = (new MigrateExecutable($migration, $this));
+-      /** @var \Drupal\Core\Entity\EntityStorageBase $storage */
++      /** @var EntityStorageBase $storage */
+       $reflected_storage = new \ReflectionProperty($migration->getDestinationPlugin(), 'storage');
+       $reflected_storage->setAccessible(TRUE);
+       $storage = $reflected_storage->getValue($migration->getDestinationPlugin());

@@ -1,0 +1,819 @@
+diff --git a/give.install b/give.install
+index 5aae8dc..e607ec7 100644
+--- a/give.install
++++ b/give.install
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\give\Entity\Donation;
++use Drupal\views\Entity\View;
++use Drupal\user\Entity\Role;
+ /**
+  * @file
+  * Install, update and uninstall functions for the give module.
+@@ -383,7 +386,7 @@ function give_update_8009() {
+   $donation_ids = $entity_type_manager->getStorage('give_donation')->getQuery()->execute();
+   $user_storage = $entity_type_manager->getStorage('user');
+   foreach ($donation_ids as $did) {
+-    $don = \Drupal\give\Entity\Donation::load($did);
++    $don = Donation::load($did);
+     $uids = $user_storage->getQuery()->condition('name', $don->name->value)->execute();
+     if ($uid = reset($uids)) {
+       $don->set('uid', $uid)->save();
+@@ -421,7 +424,7 @@ function give_update_8009() {
+ 
+   // Delete and re-install the give_donations view from file.
+   // This needs testing... Maybe cache needs clearing too.
+-  if ($view = \Drupal\views\Entity\View::load('give_donations')) {
++  if ($view = View::load('give_donations')) {
+     $view->delete();
+     // Hattip to https://gist.github.com/mikecrittenden/2d2c6734c506d509505fa79142125757
+     $conf_name = 'views.view.give_donations';
+@@ -439,8 +442,8 @@ function give_update_8009() {
+  * change the permission names.
+  */
+ function give_update_9000() {
+-  foreach (\Drupal\user\Entity\Role::loadMultiple() as $role) {
+-    /** @var \Drupal\user\Entity\Role $role */
++  foreach (Role::loadMultiple() as $role) {
++    /** @var Role $role */
+     if ($role->hasPermission('create and edit give forms')) {
+       $role->grantPermission('manage give forms')->save();
+     }
+diff --git a/give.module b/give.module
+index c654ae7..ba02bad 100644
+--- a/give.module
++++ b/give.module
+@@ -49,9 +49,9 @@ const STRIPE_CURRENCY_SYMBOLS = [
+ function give_help($route_name, RouteMatchInterface $route_match) {
+   switch ($route_name) {
+     case 'help.page.give':
+-      $menu_page = \Drupal::moduleHandler()->moduleExists('menu_ui') ? \Drupal::url('entity.menu.collection') : '#';
+-      $block_page = \Drupal::moduleHandler()->moduleExists('block') ? \Drupal::url('block.admin_display') : '#';
+-      $give_page = \Drupal::url('entity.give_form.collection');
++      $menu_page = \Drupal::moduleHandler()->moduleExists('menu_ui') ? Url::fromRoute('entity.menu.collection')->toString() : '#';
++      $block_page = \Drupal::moduleHandler()->moduleExists('block') ? Url::fromRoute('block.admin_display')->toString() : '#';
++      $give_page = Url::fromRoute('entity.give_form.collection')->toString();
+       $output = '';
+       $output .= '<h3>' . t('About') . '</h3>';
+       $output .= '<p>' . t('The Give module allows anonymous and authenticated members to pay by card (via stripe) or pledge to pay by cheque or bank transfer using configurable donation forms. For more information, see the <a href=":give">online documentation for the Give module</a>.', [':give' => 'https://www.drupal.org/project/give']) . '</p>';
+diff --git a/give.tokens.inc b/give.tokens.inc
+index a5f4200..a9bea43 100644
+--- a/give.tokens.inc
++++ b/give.tokens.inc
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Render\Markup;
+ /**
+  * Implements hook_tokens().
+  * Everything is done automatically, but we need to populate the name, from the donation owner
+@@ -8,7 +9,7 @@ function give_tokens($type, $tokens, $data, $options, $bubbleable_metadata) {
+   if ($type == 'give_donation') {
+     $replacements = [];
+     if (isset($tokens['name']) and ($data['give_donation']->getOwnerId())) {
+-      $replacements['[give_donation:name]'] = \Drupal\Core\Render\Markup::create($data['give_donation']->getOwner()->getDisplayName());
++      $replacements['[give_donation:name]'] = Markup::create($data['give_donation']->getOwner()->getDisplayName());
+     }
+     if (isset($tokens['amount'])) {
+       $replacements['[give_donation:amount]'] = format_stripe_currency($data['give_donation']->amount->value);
+diff --git a/src/Controller/GiveController.php b/src/Controller/GiveController.php
+index 4a41341..127a6e5 100644
+--- a/src/Controller/GiveController.php
++++ b/src/Controller/GiveController.php
+@@ -18,14 +18,14 @@ class GiveController extends ControllerBase {
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * Constructs a GiveController object.
+    *
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+    */
+   public function __construct(RendererInterface $renderer) {
+@@ -44,13 +44,13 @@ class GiveController extends ControllerBase {
+   /**
+    * Presents the give form.
+    *
+-   * @param \Drupal\give\GiveFormInterface $give_form
++   * @param GiveFormInterface $give_form
+    *   The give form to use.
+    *
+    * @return array
+    *   The form as render array as expected by drupal_render().
+    *
+-   * @throws \Symfony\Component\HttpKernel\Exception\NotFoundHttpException
++   * @throws NotFoundHttpException
+    *   Exception is thrown when user tries to access non existing default
+    *   give form.
+    */
+@@ -86,15 +86,15 @@ class GiveController extends ControllerBase {
+   /**
+    * Presents the second page of the give form which takes donations.
+    *
+-   * @param \Drupal\give\GiveFormInterface $give_form
++   * @param GiveFormInterface $give_form
+    *   The give form to use.
+-   * @param \Drupal\give\DonationInterface $give_donation
++   * @param DonationInterface $give_donation
+    *   The donation for which payment is to be processed.
+    *
+    * @return array
+    *   The form as render array as expected by drupal_render().
+    *
+-   * @throws \Symfony\Component\HttpKernel\Exception\NotFoundHttpException
++   * @throws NotFoundHttpException
+    *   Exception is thrown when user tries to access non existing donation or
+    *   give form.
+    */
+@@ -111,13 +111,13 @@ class GiveController extends ControllerBase {
+   /**
+    * Presents a preview of the acknowledgement e-mail.
+    *
+-   * @param \Drupal\give\GiveFormInterface $give_form
++   * @param GiveFormInterface $give_form
+    *   The give form to use.
+    *
+    * @return array
+    *   The preview as render array as expected by drupal_render().
+    *
+-   * @throws \Symfony\Component\HttpKernel\Exception\NotFoundHttpException
++   * @throws NotFoundHttpException
+    *   Exception is thrown when user tries to access non existing give form.
+    */
+   public function givePreviewReply(GiveFormInterface $give_form) {
+diff --git a/src/DonationInterface.php b/src/DonationInterface.php
+index 655806c..2a02adf 100644
+--- a/src/DonationInterface.php
++++ b/src/DonationInterface.php
+@@ -16,7 +16,7 @@ interface DonationInterface extends ContentEntityInterface {
+   /**
+    * Returns the form this give donation belongs to.
+    *
+-   * @return \Drupal\give\GiveFormInterface
++   * @return GiveFormInterface
+    *   The give form entity.
+    */
+   public function getGiveForm();
+diff --git a/src/Entity/Donation.php b/src/Entity/Donation.php
+index fb7070e..b6453a4 100644
+--- a/src/Entity/Donation.php
++++ b/src/Entity/Donation.php
+@@ -361,7 +361,7 @@ class Donation extends ContentEntityBase implements DonationInterface, EntityOwn
+    * Helper function to set card last four, brand, and funding source from a
+    * GiveStripe entity.
+    *
+-   * @param \Drupal\give\GiveStripeInterface $give_stripe
++   * @param GiveStripeInterface $give_stripe
+    *   The donation.
+    */
+   public function setCardInfo(GiveStripeInterface $give_stripe) {
+diff --git a/src/Entity/DonationListBuilder.php b/src/Entity/DonationListBuilder.php
+index accbb10..7665546 100644
+--- a/src/Entity/DonationListBuilder.php
++++ b/src/Entity/DonationListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\give\Entity;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -19,9 +20,9 @@ class DonationListBuilder extends EntityListBuilder {
+   /**
+    * Constructs a new EntityListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+    */
+   public function __construct($entity_type, $storage, DateFormatterInterface $date_formatter) {
+diff --git a/src/Entity/DonationViewBuilder.php b/src/Entity/DonationViewBuilder.php
+index 0e2e01e..d63ac12 100644
+--- a/src/Entity/DonationViewBuilder.php
++++ b/src/Entity/DonationViewBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\give\Entity;
+ 
++use Drupal\Core\Field\PluginSettingsInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityViewBuilder;
+ use Drupal\give\ProblemLog;
+@@ -79,7 +80,7 @@ class DonationViewBuilder extends EntityViewBuilder {
+     return $build;
+   }
+ 
+-  private function getFieldFormatter(string $field_name, $formatter_id = 'basic_string') : \Drupal\Core\Field\PluginSettingsInterface {
++  private function getFieldFormatter(string $field_name, $formatter_id = 'basic_string') : PluginSettingsInterface {
+ 
+     $definitions = \Drupal::service('entity_field.manager')
+       ->getFieldDefinitions('give_donation', $this->bundle);
+diff --git a/src/Entity/GiveFormViewBuilder.php b/src/Entity/GiveFormViewBuilder.php
+index 5d8ea3a..20d9039 100644
+--- a/src/Entity/GiveFormViewBuilder.php
++++ b/src/Entity/GiveFormViewBuilder.php
+@@ -24,41 +24,41 @@ class GiveFormViewBuilder implements EntityViewBuilderInterface, EntityHandlerIn
+   /**
+    * The entity form builder.
+    *
+-   * @var \Drupal\Core\Entity\EntityFormBuilderInterface
++   * @var EntityFormBuilderInterface
+    */
+   protected $entityFormBuilder;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The give settings config object.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * The give donation storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $giveDonationStorage;
+ 
+   /**
+    * Constructs a new give form view builder.
+    *
+-   * @param \Drupal\Core\Entity\EntityFormBuilderInterface $entity_form_builder
++   * @param EntityFormBuilderInterface $entity_form_builder
+    *   The entity form builder service.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer service.
+-   * @param \Drupal\Core\Config\Config $config
++   * @param Config $config
+    *   The give settings config object.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $give_donation_storage
++   * @param EntityStorageInterface $give_donation_storage
+    *   The give donation storage.
+    */
+   public function __construct(EntityFormBuilderInterface $entity_form_builder, RendererInterface $renderer, Config $config, EntityStorageInterface $give_donation_storage) {
+diff --git a/src/Form/Donation/DonationCompleteForm.php b/src/Form/Donation/DonationCompleteForm.php
+index 2ac3d23..6b9b6ba 100644
+--- a/src/Form/Donation/DonationCompleteForm.php
++++ b/src/Form/Donation/DonationCompleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\give\Form\Donation;
+ 
++use Drupal\give\DonationInterface;
+ use Drupal\Core\Entity\ContentEntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -14,7 +15,7 @@ class DonationCompleteForm extends ContentEntityForm {
+    * {@inheritdoc}
+    */
+   public function form(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\give\DonationInterface $donation */
++    /** @var DonationInterface $donation */
+     $donation = $this->entity;
+     $form = parent::form($form, $form_state);
+ 
+diff --git a/src/Form/Donation/DonationEditForm.php b/src/Form/Donation/DonationEditForm.php
+index 5f67ae6..2d00ddd 100644
+--- a/src/Form/Donation/DonationEditForm.php
++++ b/src/Form/Donation/DonationEditForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\give\Form\Donation;
+ 
++use Drupal\give\DonationInterface;
+ use Drupal\Core\Entity\ContentEntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -18,7 +19,7 @@ class DonationEditForm extends ContentEntityForm {
+    * {@inheritdoc}
+    */
+   public function form(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\give\DonationInterface $donation */
++    /** @var DonationInterface $donation */
+     $donation = $this->entity;
+     $form = parent::form($form, $form_state);
+ 
+@@ -68,9 +69,11 @@ class DonationEditForm extends ContentEntityForm {
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+     $this->entity->save();
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Please confirm that `$entity` is an instance of `\Drupal\Core\Entity\EntityInterface`. Only the method name and not the class name was checked for this replacement, so this may be a false positive.
+     $this->logger('give')->notice('The donation %label has been updated.', [
+       '%label' => $this->entity->label(),
+-      'link' => $this->entity->link($this->t('Edit'), 'edit-form'),
++      'link' => $this->entity->toLink($this->t('Edit'), 'edit-form')->toString(),
+     ]);
+   }
+ 
+diff --git a/src/Form/Donation/DonationForm.php b/src/Form/Donation/DonationForm.php
+index 08955d9..adf18ce 100644
+--- a/src/Form/Donation/DonationForm.php
++++ b/src/Form/Donation/DonationForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\give\Form\Donation;
+ 
++use Drupal\give\DonationInterface;
++use Drupal\give\Entity\GiveForm;
+ use Drupal\give\Entity\Donation;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Url;
+@@ -23,28 +25,28 @@ class DonationForm extends ContentEntityForm {
+   /**
+    * The donation being used by this form.
+    *
+-   * @var \Drupal\give\DonationInterface
++   * @var DonationInterface
+    */
+   protected $entity;
+ 
+   /**
+    * The flood control mechanism.
+    *
+-   * @var \Drupal\Core\Flood\FloodInterface
++   * @var FloodInterface
+    */
+   protected $flood;
+ 
+   /**
+    * The language manager service.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+@@ -163,9 +165,9 @@ class DonationForm extends ContentEntityForm {
+    * {@inheritdoc}
+    */
+   public function actions(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\give\Entity\Donation $donation */
++    /** @var Donation $donation */
+     $donation = $this->entity;
+-    /** @var \Drupal\give\Entity\GiveForm $giveForm */
++    /** @var GiveForm $giveForm */
+     $giveForm = $donation->referencedEntities()[0];
+     $elements = parent::actions($form, $form_state);
+     $elements['submit']['#value'] = $this->t($giveForm->getSubmitText());
+@@ -176,7 +178,7 @@ class DonationForm extends ContentEntityForm {
+    * {@inheritdoc}
+    */
+   public function buildEntity(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\give\DonationInterface $donation */
++    /** @var DonationInterface $donation */
+     $donation = parent::buildEntity($form, $form_state);
+     if (!$form_state->isValueEmpty('date') && $form_state->getValue('date') instanceof DrupalDateTime) {
+       $donation->setCreatedTime($form_state->getValue('date')->getTimestamp());
+diff --git a/src/Form/Donation/PaymentForm.php b/src/Form/Donation/PaymentForm.php
+index 19ad554..77af5f9 100644
+--- a/src/Form/Donation/PaymentForm.php
++++ b/src/Form/Donation/PaymentForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\give\Form\Donation;
+ 
++use Drupal\give\DonationInterface;
++use Drupal\give\Entity\Donation;
+ use Drupal\give\Plugin\Field\FieldType\PaymentMethod;
+ use Drupal\give\MailHandlerInterface;
+ use Drupal\give\GiveStripeInterface;
+@@ -25,23 +27,22 @@ class PaymentForm extends ContentEntityForm {
+   /**
+    * The give mail handler service.
+    *
+-   * @var \Drupal\give\MailHandlerInterface
++   * @var MailHandlerInterface
+    */
+   protected $mailHandler;
+ 
+   /**
+    * The Stripe Service.
+    *
+-   * @var \Drupal\give\GiveStripeInterface
++   * @var GiveStripeInterface
+    */
+   protected $giveStripe;
+ 
+   /**
+    * The Problem Log.
+    *
+-   * @var \Drupal\give\ProblemLog
++   * @var ProblemLog
+    */
+-
+   protected $problemLog;
+ 
+   /**
+@@ -161,7 +162,7 @@ class PaymentForm extends ContentEntityForm {
+       ];
+       if ($give_settings->get('log_problems')) {
+         if (\Drupal::VERSION < 9.3) {
+-          $mod_path = drupal_get_path('module', 'give');// will be deprecated in d10;
++          $mod_path = \Drupal::service('extension.list.module')->getPath('give');// will be deprecated in d10;
+         }
+         else {
+           $mod_path = \Drupal::service('extension.path.resolver')->getPath('module', 'give');
+@@ -329,7 +330,7 @@ class PaymentForm extends ContentEntityForm {
+    * {@inheritdoc}
+    */
+   public function buildEntity(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\give\DonationInterface $donation */
++    /** @var DonationInterface $donation */
+     $donation = parent::buildEntity($form, $form_state);
+     $donation->setChangedTime(\Drupal::time()->getRequestTime());
+     return $donation;
+@@ -347,7 +348,7 @@ class PaymentForm extends ContentEntityForm {
+       // @todo I think the stripe_token should not be saved as part of the donation entity because it is temporary.
+     }
+     $donation = parent::validateForm($form, $form_state);
+-    /** @var \Drupal\give\Entity\Donation $donation */
++    /** @var Donation $donation */
+     $give_config = $this->config('give.settings');
+     $errors = $form_state->getErrors();
+     if ($errors) {
+diff --git a/src/Form/GiveForm/GiveFormEditForm.php b/src/Form/GiveForm/GiveFormEditForm.php
+index abdfa91..7239a3f 100644
+--- a/src/Form/GiveForm/GiveFormEditForm.php
++++ b/src/Form/GiveForm/GiveFormEditForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\give\Form\GiveForm;
+ 
++use Drupal\give\Entity\GiveForm;
++use Drupal\give\GiveFormInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Entity\EntityForm;
+@@ -21,14 +23,14 @@ class GiveFormEditForm extends EntityForm implements ContainerInjectionInterface
+   /**
+    * The email validator.
+    *
+-   * @var \Egulias\EmailValidator\EmailValidator
++   * @var EmailValidator
+    */
+   protected $emailValidator;
+ 
+   /**
+    * Constructs a new GiveFormEditForm.
+    *
+-   * @param \Egulias\EmailValidator\EmailValidator $email_validator
++   * @param EmailValidator $email_validator
+    *   The email validator.
+    */
+   public function __construct(EmailValidator $email_validator) {
+@@ -57,7 +59,7 @@ class GiveFormEditForm extends EntityForm implements ContainerInjectionInterface
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\give\Entity\GiveForm $give_form */
++    /** @var GiveForm $give_form */
+     $give_form = $this->entity;
+     // A more Drupalish way of doing this would be to assign weightings to
+     // giveForms on the Entity collection page.
+@@ -368,7 +370,7 @@ class GiveFormEditForm extends EntityForm implements ContainerInjectionInterface
+    * Callback for return autoreply inputs.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    */
+   public function autoReplyCallback(array &$form, FormStateInterface $form_state) {
+     return $form['submission']['autoreply_fields'];
+@@ -436,7 +438,7 @@ class GiveFormEditForm extends EntityForm implements ContainerInjectionInterface
+    * {@inheritdoc}
+    */
+   public function buildEntity(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\give\GiveFormInterface $entity */
++    /** @var GiveFormInterface $entity */
+     $entity = parent::buildEntity($form, $form_state);
+     $frequency = $form_state->getValue('frequency'); // not an entity property, so has not been added.
+     unset($frequency['frequency_intervals_table']['actions']);
+diff --git a/src/Form/GiveForm/GiveSettings.php b/src/Form/GiveForm/GiveSettings.php
+index 9d6b1cf..7d267f4 100644
+--- a/src/Form/GiveForm/GiveSettings.php
++++ b/src/Form/GiveForm/GiveSettings.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\give\Form\GiveForm;
+ 
++use Drupal\Core\Url;
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -17,7 +19,7 @@ class GiveSettings extends ConfigFormBase {
+    *
+    * @param array $form
+    *   Default form array structure.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Object containing current form state.
+    *
+    * @return array
+@@ -29,7 +31,7 @@ class GiveSettings extends ConfigFormBase {
+     $form['currency_symbol'] = [
+       '#type' => 'select',
+       '#title' => $this->t('Currency symbol'),
+-      '#description' => $this->t('These are the currencies accepted by Stripe. You need to specify which you accept at :url', [':url' => \Drupal\Core\Url::fromUri('https://dashboard.stripe.com/settings/settlement_currencies')->toString()]),
++      '#description' => $this->t('These are the currencies accepted by Stripe. You need to specify which you accept at :url', [':url' => Url::fromUri('https://dashboard.stripe.com/settings/settlement_currencies')->toString()]),
+       '#default_value' => $config->get('currency_symbol'),
+       '#options' => [// these should probably be translatable.
+         'gbp' => 'British Pound',
+@@ -127,11 +129,11 @@ class GiveSettings extends ConfigFormBase {
+    *
+    * @param array $form
+    *   The render array of the currently built form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Object describing the current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Config\Config $config */
++    /** @var Config $config */
+     $config = \Drupal::service('config.factory')->getEditable('give.settings')
+       ->set('stripe_publishable_key', $form_state->getValue('stripe_publishable_key'))
+       ->set('stripe_secret_key', $form_state->getValue('stripe_secret_key'))
+diff --git a/src/GiveFormInterface.php b/src/GiveFormInterface.php
+index f02134d..5f8a4d8 100644
+--- a/src/GiveFormInterface.php
++++ b/src/GiveFormInterface.php
+@@ -187,7 +187,7 @@ interface GiveFormInterface extends ConfigEntityInterface {
+   /**
+    * The text displayed in the Donate Encouragement in the payment form.
+    *
+-   * @param \Drupal\give\Entity\Donation $donation
++   * @param Donation $donation
+    *   A donation object.
+    */
+   public function getPaymentPageTitle(Donation $donation = NULL);
+diff --git a/src/GiveStripe.php b/src/GiveStripe.php
+index 838ebfb..eb45ff7 100644
+--- a/src/GiveStripe.php
++++ b/src/GiveStripe.php
+@@ -29,14 +29,14 @@ class GiveStripe implements GiveStripeInterface {
+   /**
+    * The plan, if any, associated with a donation.
+    *
+-   * @var \Stripe\Plan
++   * @var Plan
+    */
+   protected $plan;
+ 
+   /**
+    * The charge, if any, associated with a donation.
+    *
+-   * @var \Stripe\Charge
++   * @var Charge
+    */
+   public $charge;
+ 
+diff --git a/src/GiveStripeInterface.php b/src/GiveStripeInterface.php
+index 2c1f33e..c722cc7 100644
+--- a/src/GiveStripeInterface.php
++++ b/src/GiveStripeInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\give;
+ 
++use Stripe\Plan;
+ /**
+  * Give stripe interface.
+  */
+@@ -24,7 +25,7 @@ interface GiveStripeInterface {
+    * @throws \Exception
+    *   The error returned by the Stripe API.
+    *
+-   * @return \Stripe\Plan
++   * @return Plan
+    *   The Stripe Plan.
+    */
+   public function createPlan(array $plan_data);
+diff --git a/src/MailHandler.php b/src/MailHandler.php
+index 9babafa..80d78d7 100644
+--- a/src/MailHandler.php
++++ b/src/MailHandler.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\give;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\give\Entity\Donation;
+ use Drupal\give\Plugin\Field\FieldType\PaymentMethod;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -23,43 +25,43 @@ class MailHandler implements MailHandlerInterface {
+   /**
+    * Language manager service.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Logger service.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Mail manager service.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+   protected $mailManager;
+ 
+   /**
+    * The user entity storage handler.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * Constructs a new \Drupal\give\MailHandler object.
+    *
+-   * @param \Drupal\Core\Mail\MailManagerInterface $mail_manager
++   * @param MailManagerInterface $mail_manager
+    *   Mail manager service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   Language manager service.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager service.
+    */
+   public function __construct(MailManagerInterface $mail_manager, LanguageManagerInterface $language_manager, LoggerInterface $logger, TranslationInterface $string_translation, EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/MailHandlerInterface.php b/src/MailHandlerInterface.php
+index fa54931..f9fa04f 100644
+--- a/src/MailHandlerInterface.php
++++ b/src/MailHandlerInterface.php
+@@ -16,9 +16,9 @@ interface MailHandlerInterface {
+    * - To the configured recipient(s); and
+    * - Auto-reply receipt to the donor.
+    *
+-   * @param \Drupal\give\DonationInterface $donation
++   * @param DonationInterface $donation
+    *   Submitted donation entity.
+-   * @param \Drupal\Core\Session\AccountInterface $sender
++   * @param AccountInterface $sender
+    *   User that submitted the donation entity form.
+    */
+   public function sendDonationNotices(DonationInterface $donation, AccountInterface $sender);
+diff --git a/src/Plugin/migrate/source/UcOrder.php b/src/Plugin/migrate/source/UcOrder.php
+index 59377ca..14bbdba 100644
+--- a/src/Plugin/migrate/source/UcOrder.php
++++ b/src/Plugin/migrate/source/UcOrder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\give\Plugin\migrate\source;
+ 
++use Drupal\migrate_drupal\Plugin\migrate\source\d7\FieldableEntity;
+ /**
+  * Drupal 7 Ubercart orders
+  *
+@@ -10,7 +11,7 @@ namespace Drupal\give\Plugin\migrate\source;
+  *   source_module = "uc_order"
+  * )
+  */
+-class UcOrder extends \Drupal\migrate_drupal\Plugin\migrate\source\d7\FieldableEntity {
++class UcOrder extends FieldableEntity {
+ 
+   /**
+    * {@inheritdoc}
+diff --git a/src/Plugin/views/field/ViewsDateFormatSqlField.php b/src/Plugin/views/field/ViewsDateFormatSqlField.php
+index bd70376..cd1462a 100644
+--- a/src/Plugin/views/field/ViewsDateFormatSqlField.php
++++ b/src/Plugin/views/field/ViewsDateFormatSqlField.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\give\Plugin\views\field;
+ 
++use Drupal\Core\Field\FieldItemListInterface;
++use Drupal\Core\Field\FieldItemInterface;
++use Drupal\Core\Render\Markup;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\views\ResultRow;
+ use Drupal\views\Plugin\views\field\EntityField;
+@@ -142,7 +145,7 @@ class ViewsDateFormatSqlField extends EntityField {
+     $entity = $this->getEntity($values);
+     // Some bundles might not have a specific field, in which case the entity
+     // (potentially a fake one) doesn't have it either.
+-    /** @var \Drupal\Core\Field\FieldItemListInterface $field_item_list */
++    /** @var FieldItemListInterface $field_item_list */
+     $field_item_list = isset($entity->{$this->definition['field_name']}) ? $entity->{$this->definition['field_name']} : NULL;
+ 
+     if (!isset($field_item_list)) {
+@@ -162,7 +165,7 @@ class ViewsDateFormatSqlField extends EntityField {
+ 
+     $values = [];
+     foreach ($field_item_list as $field_item) {
+-      /** @var \Drupal\Core\Field\FieldItemInterface $field_item */
++      /** @var FieldItemInterface $field_item */
+       if ($field) {
+         $values[] = $field_item->$field;
+       }
+@@ -246,7 +249,7 @@ class ViewsDateFormatSqlField extends EntityField {
+       // Render date values from SQL result.
+       $alias = $this->aliases[$this->definition['field_name']];
+       //return [['rendered' => $values->{$alias}]];
+-      return [['rendered' => ['#markup' => \Drupal\Core\Render\Markup::create($values->{$alias})]]];
++      return [['rendered' => ['#markup' => Markup::create($values->{$alias})]]];
+     }
+     // Code from parent function.
+     if (!$build_list) {
+diff --git a/src/ProblemLog.php b/src/ProblemLog.php
+index 23a9ca6..881689e 100644
+--- a/src/ProblemLog.php
++++ b/src/ProblemLog.php
+@@ -12,7 +12,7 @@ class ProblemLog {
+   /**
+    * Constructs the statistics storage.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection for the node view storage.
+    */
+   public function __construct(Connection $connection) {
+diff --git a/tests/modules/give_test/src/GiveStripe.php b/tests/modules/give_test/src/GiveStripe.php
+index 2c50f28..9783cbd 100644
+--- a/tests/modules/give_test/src/GiveStripe.php
++++ b/tests/modules/give_test/src/GiveStripe.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\give_test;
+ 
++use Stripe\Plan;
+ use Drupal\give\GiveStripeInterface;
+ 
+ /**
+@@ -28,7 +29,7 @@ class GiveStripe implements GiveStripeInterface {
+    * @throws \Exception
+    *   The error returned by the Stripe API.
+    *
+-   * @return \Stripe\Plan
++   * @return Plan
+    *   The Stripe Plan.
+    */
+   public function createPlan(array $plan_data) {
+diff --git a/tests/src/Functional/DonationTest.php b/tests/src/Functional/DonationTest.php
+index 9a359d8..5fc1b22 100644
+--- a/tests/src/Functional/DonationTest.php
++++ b/tests/src/Functional/DonationTest.php
+@@ -164,12 +164,12 @@ class DonationTest extends GiveTestBase {
+     $this->assertSession()->fieldValueEquals('edit-amount', 22);
+ 
+     // Submit should redirect back to listing.
+-    $this->drupalPostForm(NULL, [], t('Save'));
++    $this->submitForm([], t('Save'));
+     $this->assertSession()->addressEquals('admin/structure/give/donations');
+ 
+     // Delete the donation.
+     $this->clickLink(t('Delete'));
+-    $this->drupalPostForm(NULL, [], t('Delete'));
++    $this->submitForm([], t('Delete'));
+     // Make sure no donations are available.
+     $this->assertSession()->pageTextContains('There are no recorded donations yet.');
+   }

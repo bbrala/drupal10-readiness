@@ -1,0 +1,696 @@
+diff --git a/modules/computrition_entity/computrition_entity.module b/modules/computrition_entity/computrition_entity.module
+index 1b45461..49de081 100644
+--- a/modules/computrition_entity/computrition_entity.module
++++ b/modules/computrition_entity/computrition_entity.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Form\FormStateInterface;
++use Drupal\datetime\Plugin\Field\FieldType\DateTimeItemInterface;
+ /**
+  * @file
+  * Contains computrition_entity.module.
+@@ -75,7 +77,7 @@ function computrition_entity_theme_suggestions_computrition_object(array $variab
+ /**
+  * Implements hook_form_alter().
+  */
+-function computrition_entity_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $form_state, $form_id) {
++function computrition_entity_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+   // Give users the option to enable automatic entity import via cron on the
+   // Computrition settings form.
+   if ('computrition_configuration_form' === $form_id) {
+@@ -179,7 +181,7 @@ function computrition_entity_form_alter(&$form, \Drupal\Core\Form\FormStateInter
+  * Save the submitted configuration for our hooked additions to the Computrition
+  * settings form.
+  */
+-function computrition_entity_configuration_form_submit(array &$form, \Drupal\Core\Form\FormStateInterface $form_state) {
++function computrition_entity_configuration_form_submit(array &$form, FormStateInterface $form_state) {
+   $config = \Drupal::service('config.factory')->getEditable('computrition.settings');
+   $config->set('cron_enabled', $form_state->getValue('cron_enabled'));
+   $config->set('automatic_delete', $form_state->getValue('automatic_delete'));
+@@ -214,7 +216,7 @@ function computrition_entity_delete_old_menus(int $menu_delete_days) {
+   $count = 0;
+ 
+   $cutoff = new DrupalDateTime("-$menu_delete_days days");
+-  $cutoff = $cutoff->format(\Drupal\datetime\Plugin\Field\FieldType\DateTimeItemInterface::DATETIME_STORAGE_FORMAT);
++  $cutoff = $cutoff->format(DateTimeItemInterface::DATETIME_STORAGE_FORMAT);
+ 
+   $query = \Drupal::entityQuery('computrition_object');
+   $query->condition('type', 'menu');
+diff --git a/modules/computrition_entity/src/Commands/ComputritionEntityCommands.php b/modules/computrition_entity/src/Commands/ComputritionEntityCommands.php
+index 71998ed..3a26ff9 100644
+--- a/modules/computrition_entity/src/Commands/ComputritionEntityCommands.php
++++ b/modules/computrition_entity/src/Commands/ComputritionEntityCommands.php
+@@ -25,35 +25,35 @@ class ComputritionEntityCommands extends DrushCommands {
+   /**
+    * Computrition entity importer.
+    *
+-   * @var \Drupal\computrition_entity\ComputritionEntityImporter
++   * @var ComputritionEntityImporter
+    */
+   protected $importer;
+ 
+   /**
+    * Computrition entity orphan object purger.
+    *
+-   * @var \Drupal\computrition_entity\ComputritionEntityPurger
++   * @var ComputritionEntityPurger
+    */
+   protected $purger;
+ 
+   /**
+    * Lock used to prevent multiple imports from running concurrently.
+    *
+-   * @var \Drupal\Core\Lock\LockBackendInterface
++   * @var LockBackendInterface
+    */
+   protected $lock;
+ 
+   /**
+    * Entity type manager used for creating, loading, and deleting entities.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * State object for tracking when the last import ran.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+@@ -64,13 +64,13 @@ class ComputritionEntityCommands extends DrushCommands {
+    *   Computrition entity importer.
+    * @param \Drupal\computrition\Api\ComputritionEntityPurger $purger
+    *   Computrition entity orphan object purger.
+-   * @param \Drupal\Core\Lock\LockBackendInterface $lock
++   * @param LockBackendInterface $lock
+    *   DatabaseLockBackend used to prevent multiple imports from running
+    *   concurrently and trampling each other.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager used for creating, loading, and deleting Drupal
+    *   entities.
+-   * @param Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   State object for tracking when the last import ran.
+    */
+   public function __construct(ComputritionEntityImporter $importer, ComputritionEntityPurger $purger, LockBackendInterface $lock, EntityTypeManagerInterface $entity_type_manager, StateInterface $state) {
+diff --git a/modules/computrition_entity/src/ComputritionEntityImporter.php b/modules/computrition_entity/src/ComputritionEntityImporter.php
+index ed15c8b..04ab457 100644
+--- a/modules/computrition_entity/src/ComputritionEntityImporter.php
++++ b/modules/computrition_entity/src/ComputritionEntityImporter.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\computrition_entity;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\computrition_entity\Entity\ComputritionObjectInterface;
+ use Drupal\computrition\Api\ComputritionApiRequest;
+ use Drupal\computrition_entity\Entity\ComputritionObject;
+ use Drupal\Component\Serialization\Json;
+@@ -21,79 +23,79 @@ class ComputritionEntityImporter {
+   /**
+    * Computrition API request object used for fetching data from Computrition.
+    *
+-   * @var \Drupal\computrition\Api\ComputritionApiRequest
++   * @var ComputritionApiRequest
+    */
+   protected $api;
+ 
+   /**
+    * Entity type manager used for creating our imported drupal entities.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Lock used to prevent multiple imports from running concurrently.
+    *
+-   * @var \Drupal\Core\Lock\LockBackendInterface
++   * @var LockBackendInterface
+    */
+   protected $lock;
+ 
+   /**
+    * Logger factory used for writing to the Drupal database log.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactory
++   * @var LoggerChannelFactory
+    */
+   protected $logger;
+ 
+   /**
+    * Module handler used for making our import functions hookable.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The user-defined module configuration options.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * State object for tracking when the last import ran.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The database connection for making static queries.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * ComputritionEntityImporter constructor.
+    *
+-   * @param \Drupal\computrition\Api\ComputritionApiRequest $api
++   * @param ComputritionApiRequest $api
+    *   The computrition API request object used for pulling data from the
+    *   external computrition API.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager used for creating our imported drupal entities.
+-   * @param \Drupal\Core\Lock\LockBackendInterface $lock
++   * @param LockBackendInterface $lock
+    *   DatabaseLockBackend used to prevent multiple imports from running
+    *   concurrently and trampling each other.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactory $logger
++   * @param LoggerChannelFactory $logger
+    *   The logger factory used for writing messages to the Drupal database log.
+-   * @param \Drupal\Core\Extension\ModuleHandler $module_handler
++   * @param ModuleHandler $module_handler
+    *   Module handler used for making our import functions hookable.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The user-defined module configuration options.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   State object for tracking when the last import ran.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection for making static queries.
+    */
+   public function __construct(ComputritionApiRequest $api, EntityTypeManagerInterface $entity_type_manager, LockBackendInterface $lock, LoggerChannelFactory $logger, ModuleHandler $module_handler, ConfigFactoryInterface $config_factory, StateInterface $state, Connection $connection) {
+@@ -204,7 +206,7 @@ class ComputritionEntityImporter {
+         'remote_data' => $item,
+       ];
+ 
+-      /** @var \Drupal\computrition_entity\Entity\ComputritionObjectInterface $object */
++      /** @var ComputritionObjectInterface $object */
+       $object = $this->entityTypeManager->getStorage('computrition_object')->create($values);
+       $changed = TRUE;
+     }
+@@ -266,7 +268,7 @@ class ComputritionEntityImporter {
+    * @param array $item
+    *   An array representing a computrition object as resturned from a
+    *   computrition API response.
+-   * @param \Drupal\computrition_entity\Entity\ComputritionObject $location
++   * @param ComputritionObject $location
+    *   A computrition object entity representing a dining location.
+    * @param bool $skipHashCheck
+    *   If TRUE, update existing computrition entities in Drupal even they
+@@ -302,7 +304,7 @@ class ComputritionEntityImporter {
+         'location' => $location->id(),
+       ];
+ 
+-      /** @var \Drupal\computrition_entity\Entity\ComputritionObjectInterface $object */
++      /** @var ComputritionObjectInterface $object */
+       $object = $this->entityTypeManager->getStorage('computrition_object')->create($values);
+       $changed = TRUE;
+     }
+@@ -364,7 +366,7 @@ class ComputritionEntityImporter {
+    * @param array $item
+    *   An array representing a computrition object as resturned from a
+    *   computrition API response.
+-   * @param \Drupal\computrition_entity\Entity\ComputritionObject $location
++   * @param ComputritionObject $location
+    *   A computrition object entity representing a dining location.
+    * @param bool $skipHashCheck
+    *   If TRUE, update existing computrition entities in Drupal even they
+@@ -400,7 +402,7 @@ class ComputritionEntityImporter {
+         'location' => $location->id(),
+       ];
+ 
+-      /** @var \Drupal\computrition_entity\Entity\ComputritionObjectInterface $object */
++      /** @var ComputritionObjectInterface $object */
+       $object = $this->entityTypeManager->getStorage('computrition_object')->create($values);
+       $changed = TRUE;
+     }
+@@ -481,7 +483,7 @@ class ComputritionEntityImporter {
+         'remote_data' => $item,
+       ];
+ 
+-      /** @var \Drupal\computrition_entity\Entity\ComputritionObjectInterface $object */
++      /** @var ComputritionObjectInterface $object */
+       $object = $this->entityTypeManager->getStorage('computrition_object')->create($values);
+       $changed = TRUE;
+     }
+@@ -562,7 +564,7 @@ class ComputritionEntityImporter {
+         'remote_data' => $item,
+       ];
+ 
+-      /** @var \Drupal\computrition_entity\Entity\ComputritionObjectInterface $object */
++      /** @var ComputritionObjectInterface $object */
+       $object = $this->entityTypeManager->getStorage('computrition_object')->create($values);
+       $changed = TRUE;
+     }
+@@ -643,7 +645,7 @@ class ComputritionEntityImporter {
+         'remote_data' => $item,
+       ];
+ 
+-      /** @var \Drupal\computrition_entity\Entity\ComputritionObjectInterface $object */
++      /** @var ComputritionObjectInterface $object */
+       $object = $this->entityTypeManager->getStorage('computrition_object')->create($values);
+       $changed = TRUE;
+     }
+@@ -724,7 +726,7 @@ class ComputritionEntityImporter {
+         'remote_data' => $item,
+       ];
+ 
+-      /** @var \Drupal\computrition_entity\Entity\ComputritionObjectInterface $object */
++      /** @var ComputritionObjectInterface $object */
+       $object = $this->entityTypeManager->getStorage('computrition_object')->create($values);
+       $changed = TRUE;
+     }
+@@ -799,7 +801,7 @@ class ComputritionEntityImporter {
+    * @param array $recipe
+    *   An array representing a computrition object as returned from a
+    *   computrition API response.
+-   * @param \Drupal\computrition_entity\Entity\ComputritionObject $location
++   * @param ComputritionObject $location
+    *   A computrition object entity representing a dining location.
+    * @param bool $skipHashCheck
+    *   If TRUE, update existing computrition entities in Drupal even they
+@@ -853,7 +855,7 @@ class ComputritionEntityImporter {
+         'location' => $location->id(),
+       ];
+ 
+-      /** @var \Drupal\computrition_entity\Entity\ComputritionObjectInterface $object */
++      /** @var ComputritionObjectInterface $object */
+       $object = $this->entityTypeManager->getStorage('computrition_object')->create($values);
+       $changed = TRUE;
+     }
+@@ -917,7 +919,7 @@ class ComputritionEntityImporter {
+    *
+    * @param string $date
+    *   A date in the format "Ymd".
+-   * @param \Drupal\computrition_entity\Entity\ComputritionObject $location
++   * @param ComputritionObject $location
+    *   A computrition object entity representing a dining location.
+    * @param array $menuParams
+    *   An array of parameters for fetching a menu from the computrition API.
+@@ -951,7 +953,7 @@ class ComputritionEntityImporter {
+    *   computrition API response.
+    * @param array $menuParams
+    *   An array of parameters for fetching a menu from the computrition API.
+-   * @param \Drupal\computrition_entity\Entity\ComputritionObject $location
++   * @param ComputritionObject $location
+    *   A computrition object entity representing a dining location.
+    * @param bool $skipHashCheck
+    *   If TRUE, update existing computrition entities in Drupal even they
+@@ -1043,7 +1045,7 @@ class ComputritionEntityImporter {
+         'menu_type' => $menuType->id(),
+       ];
+ 
+-      /** @var \Drupal\computrition_entity\Entity\ComputritionObjectInterface $object */
++      /** @var ComputritionObjectInterface $object */
+       $object = $this->entityTypeManager->getStorage('computrition_object')->create($values);
+       $changed = TRUE;
+     }
+@@ -1064,7 +1066,7 @@ class ComputritionEntityImporter {
+   /**
+    * Helper function to ensure only content of desired locations are imported.
+    *
+-   * @param \Drupal\computrition_entity\Entity\ComputritionObject $location
++   * @param ComputritionObject $location
+    *   A computrition object entity representing a dining location.
+    *
+    * @return bool
+@@ -1092,7 +1094,7 @@ class ComputritionEntityImporter {
+   /**
+    * Helper function to ensure only menus of a desired type are imported.
+    *
+-   * @param \Drupal\computrition_entity\Entity\ComputritionObject $location
++   * @param ComputritionObject $location
+    *   A computrition object entity representing a dining location.
+    * @param array $menu
+    *   An array representing a computrition menu as returned from a
+@@ -1129,7 +1131,7 @@ class ComputritionEntityImporter {
+    * @param array $menu
+    *   An array representing a computrition menu as resturned from a
+    *   computrition API response.
+-   * @param \Drupal\computrition_entity\Entity\ComputritionObject $location
++   * @param ComputritionObject $location
+    *   A computrition object entity representing a dining location.
+    *
+    * @return array
+@@ -1204,7 +1206,7 @@ class ComputritionEntityImporter {
+    *
+    * @param string $recipeRemoteId
+    *   The remote ID of a recipe in Computrition.
+-   * @param \Drupal\computrition_entity\Entity\ComputritionObject $location
++   * @param ComputritionObject $location
+    *   A computrition object entity representing a dining location.
+    *
+    * @return bool
+diff --git a/modules/computrition_entity/src/ComputritionEntityPurger.php b/modules/computrition_entity/src/ComputritionEntityPurger.php
+index 9e875ba..f293f61 100644
+--- a/modules/computrition_entity/src/ComputritionEntityPurger.php
++++ b/modules/computrition_entity/src/ComputritionEntityPurger.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\computrition_entity;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\computrition\Api\ComputritionApiRequest;
+ use Drupal\computrition\Api\ComputritionErrorResponse;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -18,61 +19,61 @@ class ComputritionEntityPurger {
+   /**
+    * Computrition API request object used for fetching data from Computrition.
+    *
+-   * @var \Drupal\computrition\Api\ComputritionApiRequest
++   * @var ComputritionApiRequest
+    */
+   protected $api;
+ 
+   /**
+    * Entity type manager used for deleting our imported drupal entities.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Lock used to prevent multiple purges from running concurrently.
+    *
+-   * @var \Drupal\Core\Lock\LockBackendInterface
++   * @var LockBackendInterface
+    */
+   protected $lock;
+ 
+   /**
+    * Logger factory used for writing to the Drupal database log.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactory
++   * @var LoggerChannelFactory
+    */
+   protected $logger;
+ 
+   /**
+    * Module handler used for making our purge functions hookable.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The user-defined module configuration options.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * ComputritionEntityPurger constructor.
+    *
+-   * @param \Drupal\computrition\Api\ComputritionApiRequest $api
++   * @param ComputritionApiRequest $api
+    *   The computrition API request object used for pulling data from the
+    *   external computrition API.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager used for deleting our imported drupal entities.
+-   * @param \Drupal\Core\Lock\LockBackendInterface $lock
++   * @param LockBackendInterface $lock
+    *   DatabaseLockBackend used to prevent multiple purges from running
+    *   concurrently and trampling each other.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactory $logger
++   * @param LoggerChannelFactory $logger
+    *   The logger factory used for writing messages to the Drupal database log.
+-   * @param \Drupal\Core\Extension\ModuleHandler $module_handler
++   * @param ModuleHandler $module_handler
+    *   Module handler used for making our purge functions hookable.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The user-defined module configuration options.
+    */
+   public function __construct(ComputritionApiRequest $api, EntityTypeManagerInterface $entity_type_manager, LockBackendInterface $lock, LoggerChannelFactory $logger, ModuleHandler $module_handler, ConfigFactoryInterface $config_factory) {
+diff --git a/modules/computrition_entity/src/ComputritionObjectAccessControlHandler.php b/modules/computrition_entity/src/ComputritionObjectAccessControlHandler.php
+index fd184ff..c8b76c1 100644
+--- a/modules/computrition_entity/src/ComputritionObjectAccessControlHandler.php
++++ b/modules/computrition_entity/src/ComputritionObjectAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\computrition_entity;
+ 
++use Drupal\computrition_entity\Entity\ComputritionObjectInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,8 +19,7 @@ class ComputritionObjectAccessControlHandler extends EntityAccessControlHandler
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\computrition_entity\Entity\ComputritionObjectInterface $entity */
+-
++    /** @var ComputritionObjectInterface $entity */
+     switch ($operation) {
+       case 'view':
+         return AccessResult::allowedIfHasPermission($account, 'view computrition object entities');
+diff --git a/modules/computrition_entity/src/ComputritionObjectHtmlRouteProvider.php b/modules/computrition_entity/src/ComputritionObjectHtmlRouteProvider.php
+index 067e021..fb8b5ed 100644
+--- a/modules/computrition_entity/src/ComputritionObjectHtmlRouteProvider.php
++++ b/modules/computrition_entity/src/ComputritionObjectHtmlRouteProvider.php
+@@ -32,10 +32,10 @@ class ComputritionObjectHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/modules/computrition_entity/src/ComputritionObjectListBuilder.php b/modules/computrition_entity/src/ComputritionObjectListBuilder.php
+index 1dce83c..5177167 100644
+--- a/modules/computrition_entity/src/ComputritionObjectListBuilder.php
++++ b/modules/computrition_entity/src/ComputritionObjectListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\computrition_entity;
+ 
++use Drupal\computrition_entity\Entity\ComputritionObject;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ use Drupal\Core\Link;
+@@ -28,7 +29,7 @@ class ComputritionObjectListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\computrition_entity\Entity\ComputritionObject $entity */
++    /** @var ComputritionObject $entity */
+     $row['id'] = $entity->id();
+     $row['remote_id'] = $entity->get('remote_id')->value;
+ 
+diff --git a/modules/computrition_entity/src/ComputritionObjectPermissions.php b/modules/computrition_entity/src/ComputritionObjectPermissions.php
+index 0f308a0..98ef781 100644
+--- a/modules/computrition_entity/src/ComputritionObjectPermissions.php
++++ b/modules/computrition_entity/src/ComputritionObjectPermissions.php
+@@ -34,7 +34,7 @@ class ComputritionObjectPermissions {
+   /**
+    * Returns a list of node permissions for a given node type.
+    *
+-   * @param \Drupal\computrition_entity\Entity\ComputritionObjectType $type
++   * @param ComputritionObjectType $type
+    *   The ComputritionObject type.
+    *
+    * @return array
+diff --git a/modules/computrition_entity/src/Form/ComputritionObjectForm.php b/modules/computrition_entity/src/Form/ComputritionObjectForm.php
+index a509fa2..5777f5b 100644
+--- a/modules/computrition_entity/src/Form/ComputritionObjectForm.php
++++ b/modules/computrition_entity/src/Form/ComputritionObjectForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\computrition_entity\Form;
+ 
++use Drupal\Core\Session\AccountProxyInterface;
++use Drupal\computrition_entity\Entity\ComputritionObject;
+ use Drupal\Core\Entity\ContentEntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -16,7 +18,7 @@ class ComputritionObjectForm extends ContentEntityForm {
+   /**
+    * The current user account.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $account;
+ 
+@@ -34,7 +36,7 @@ class ComputritionObjectForm extends ContentEntityForm {
+    * {@inheritdoc}
+    */
+   public function buildForm(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\computrition_entity\Entity\ComputritionObject $entity */
++    /** @var ComputritionObject $entity */
+     $form = parent::buildForm($form, $form_state);
+ 
+     return $form;
+diff --git a/modules/computrition_entity/src/Form/ComputritionObjectSettingsForm.php b/modules/computrition_entity/src/Form/ComputritionObjectSettingsForm.php
+index a25f253..54fca1b 100644
+--- a/modules/computrition_entity/src/Form/ComputritionObjectSettingsForm.php
++++ b/modules/computrition_entity/src/Form/ComputritionObjectSettingsForm.php
+@@ -27,7 +27,7 @@ class ComputritionObjectSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class ComputritionObjectSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Api/ComputritionApiRequest.php b/src/Api/ComputritionApiRequest.php
+index b2387fe..f93844b 100644
+--- a/src/Api/ComputritionApiRequest.php
++++ b/src/Api/ComputritionApiRequest.php
+@@ -40,21 +40,21 @@ class ComputritionApiRequest {
+   /**
+    * The CacheBackendInterface used to make calls to the Drupal cache.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cacheBackend;
+ 
+   /**
+    * The Guzzle client used to make calls to the external Computrition API.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $guzzleClient;
+ 
+   /**
+    * Logger factory used for writing to the Drupal database log.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactory
++   * @var LoggerChannelFactory
+    */
+   protected $logger;
+ 
+@@ -82,14 +82,14 @@ class ComputritionApiRequest {
+   /**
+    * ComputritionApiRequest constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The computrition module settings, used for setting the API base url and
+    *   cache lifetime.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   The CacheBackendInterface used to make calls to the Drupal cache.
+-   * @param \GuzzleHttp\Client $guzzle_client
++   * @param Client $guzzle_client
+    *   The guzzle client used to make calls to the external computrition API.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactory $logger
++   * @param LoggerChannelFactory $logger
+    *   The logger factory used for writing messages to the Drupal database log.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, CacheBackendInterface $cache_backend, Client $guzzle_client, LoggerChannelFactory $logger) {
+diff --git a/tests/src/Unit/ComputritionApiRequestTest.php b/tests/src/Unit/ComputritionApiRequestTest.php
+index 471f46a..d953c53 100644
+--- a/tests/src/Unit/ComputritionApiRequestTest.php
++++ b/tests/src/Unit/ComputritionApiRequestTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\computrition\Unit;
+ 
++use Drupal\Core\Config\ConfigFactory;
++use Drupal\Core\Cache\CacheBackendInterface;
++use Drupal\Core\Logger\LoggerChannelFactory;
+ use Drupal\computrition\Api\ComputritionApiRequest;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\Tests\UnitTestCase;
+@@ -20,35 +23,35 @@ class ComputritionApiRequestTest extends UnitTestCase {
+   /**
+    * Used for passing our test module configuration into the API constructor.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected $configFactory;
+ 
+   /**
+    * Cache backend required by the API constructor.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cacheBackend;
+ 
+   /**
+    * Guzzle http client required by the API constructor.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $guzzleClient;
+ 
+   /**
+    * Logger factory required by the API constructor.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactory
++   * @var LoggerChannelFactory
+    */
+   protected $logger;
+ 
+   /**
+    * Used for setting up our mocked guzzle HTTP requests to the external API.
+    *
+-   * @var \GuzzleHttp\Handler\MockHandler
++   * @var MockHandler
+    */
+   protected $guzzleMock;
+ 
+@@ -62,7 +65,7 @@ class ComputritionApiRequestTest extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $container = new ContainerBuilder();

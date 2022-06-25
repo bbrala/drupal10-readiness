@@ -1,0 +1,207 @@
+diff --git a/s3fs_cors.install b/s3fs_cors.install
+index dda2e65..9dcad95 100644
+--- a/s3fs_cors.install
++++ b/s3fs_cors.install
+@@ -35,7 +35,7 @@ function s3fs_cors_update_8001(&$sandbox) {
+       continue;
+     }
+ 
+-    /** @var \Drupal\field\Entity\FieldConfig $field */
++    /** @var FieldConfig $field */
+     foreach ($fields as $field) {
+       $new_field = $field->toArray();
+       $new_field['field_type'] = 's3fs_cors_file';
+diff --git a/s3fs_cors.module b/s3fs_cors.module
+index 5969d65..e93d34e 100644
+--- a/s3fs_cors.module
++++ b/s3fs_cors.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\field\Entity\FieldConfig;
++use Drupal\field\Entity\FieldStorageConfig;
+ /**
+  * @file
+  * Allow uploading of files directly to AmazonS3 via the browser using CORS.
+@@ -53,10 +55,10 @@ function s3fs_cors_form_entity_form_display_edit_form_alter(&$form, FormStateInt
+   foreach ($form['#fields'] as $field) {
+     $field_definition = $field_definitions[$field];
+     if ($field_definition instanceof FieldConfigInterface) {
+-      /** @var \Drupal\field\Entity\FieldConfig $field_definition */
++      /** @var FieldConfig $field_definition */
+       $field_type = $field_definition->get('field_type');
+       if ($field_type == 'file' || $field_type == 'image') {
+-        /** @var \Drupal\field\Entity\FieldStorageConfig $field_storage */
++        /** @var FieldStorageConfig $field_storage */
+         $field_storage = $field_definition->getFieldStorageDefinition();
+         $uri_scheme = $field_storage->getSetting('uri_scheme');
+         if ($uri_scheme == 's3' ||
+diff --git a/s3fs_cors.post_update.php b/s3fs_cors.post_update.php
+index 5d38864..e686d8a 100644
+--- a/s3fs_cors.post_update.php
++++ b/s3fs_cors.post_update.php
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityTypeManager;
+ /**
+  * @file
+  * Post update functions.
+@@ -16,7 +17,7 @@ function s3fs_cors_post_update_fix_file_paths(&$sandbox) {
+   $public_folder = 's3://' . ($config->get('public_folder') ?: 's3fs-public');
+   $private_folder = 's3://' . ($config->get('private_folder') ?: 's3fs-private');
+   if (!isset($sandbox['progress'])) {
+-    /** @var \Drupal\Core\Entity\EntityTypeManager $entity_type_manager */
++    /** @var EntityTypeManager $entity_type_manager */
+     $entity_type_manager = \Drupal::service('entity_type.manager');
+     $storage_handler = $entity_type_manager->getStorage('file');
+     $public_ids = $storage_handler
+@@ -35,7 +36,7 @@ function s3fs_cors_post_update_fix_file_paths(&$sandbox) {
+   }
+   $ids = array_slice($sandbox['ids'], $sandbox['progress'], Settings::get('entity_update_batch_size', 50));
+ 
+-  /** @var \Drupal\file\Entity\File $file */
++  /** @var File $file */
+   foreach (File::loadMultiple($ids) as $file) {
+     $file->setFileUri(str_replace([$public_folder, $private_folder], ['public:/', 'private:/'], $file->getFileUri()));
+     $file->save();
+diff --git a/src/Controller/AjaxController.php b/src/Controller/AjaxController.php
+index 4496bc5..fc360f1 100644
+--- a/src/Controller/AjaxController.php
++++ b/src/Controller/AjaxController.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\s3fs_cors\Controller;
+ 
++use Aws\S3\S3ClientInterface;
++use Drupal\Core\File\MimeType\MimeTypeGuesser;
++use Drupal\Core\Logger\LoggerChannelInterface;
++use Symfony\Component\Mime\MimeTypesInterface;
++use Drupal\s3fs\S3fsException;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\File\FileSystemInterface;
+@@ -10,7 +15,6 @@ use Drupal\file\Entity\File;
+ use Drupal\s3fs\S3fsServiceInterface;
+ use Drupal\s3fs\StreamWrapper\S3fsStream;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+-use Symfony\Component\HttpFoundation\File\MimeType\MimeTypeGuesserInterface;
+ use Symfony\Component\HttpFoundation\JsonResponse;
+ 
+ /**
+@@ -21,47 +25,47 @@ class AjaxController extends ControllerBase {
+   /**
+    * S3 Client Interface.
+    *
+-   * @var \Aws\S3\S3ClientInterface
++   * @var S3ClientInterface
+    */
+   protected $s3Client;
+ 
+   /**
+    * Database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * Mime Type Guesser Interface.
+    *
+-   * @var \Drupal\Core\File\MimeType\MimeTypeGuesser
++   * @var MimeTypeGuesser
+    */
+   protected $mimeType;
+ 
+   /**
+    * Logger Channel Interface.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * AjaxController constructor.
+    *
+-   * @param \Drupal\s3fs\S3fsServiceInterface $s3fs
++   * @param S3fsServiceInterface $s3fs
+    *   The S3fs service interface.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The Drupal database connection service.
+-   * @param \Symfony\Component\HttpFoundation\File\MimeType\MimeTypeGuesserInterface $mimeType
++   * @param MimeTypesInterface $mimeType
+    *   The mime type guesser service.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $loggerFactory
++   * @param LoggerChannelFactoryInterface $loggerFactory
+    *   The core logger factory service.
+    *
+-   * @throws \Drupal\s3fs\S3fsException
++   * @throws S3fsException
+    *   The S3fs exception.
+    */
+-  public function __construct(S3fsServiceInterface $s3fs, Connection $database, MimeTypeGuesserInterface $mimeType, LoggerChannelFactoryInterface $loggerFactory) {
++  public function __construct(S3fsServiceInterface $s3fs, Connection $database, MimeTypesInterface $mimeType, LoggerChannelFactoryInterface $loggerFactory) {
+     $s3_config = $this->config('s3fs.settings')->get();
+     $this->s3Client = $s3fs->getAmazonS3Client($s3_config);
+     $this->database = $database;
+diff --git a/src/Element/S3fsCorsFile.php b/src/Element/S3fsCorsFile.php
+index 81ed853..52fa629 100644
+--- a/src/Element/S3fsCorsFile.php
++++ b/src/Element/S3fsCorsFile.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\s3fs_cors\Element;
+ 
++use Drupal\s3fs\S3fsServiceInterface;
+ use Aws\Credentials\CredentialProvider;
+ use Aws\Credentials\Credentials;
+ use Aws\Sts\StsClient;
+@@ -204,7 +205,7 @@ class S3fsCorsFile extends ManagedFile {
+ 
+     // Create an S3 client using the provider. This should use the Instance
+     // Profile provider if this code is running in an AWS instance.
+-    /** @var \Drupal\s3fs\S3fsServiceInterface $s3fs */
++    /** @var S3fsServiceInterface $s3fs */
+     $s3fs = \Drupal::service('s3fs');
+     $client = $s3fs->getAmazonS3Client($config->get());
+     $creds = $client->getCredentials()->wait();
+diff --git a/src/Form/S3fsCorsAdminForm.php b/src/Form/S3fsCorsAdminForm.php
+index 0dc0878..6f43df3 100644
+--- a/src/Form/S3fsCorsAdminForm.php
++++ b/src/Form/S3fsCorsAdminForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\s3fs_cors\Form;
+ 
++use Aws\S3\S3ClientInterface;
++use Drupal\s3fs\S3fsException;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -19,19 +21,19 @@ class S3fsCorsAdminForm extends ConfigFormBase {
+   /**
+    * S3 Client Interface.
+    *
+-   * @var \Aws\S3\S3ClientInterface
++   * @var S3ClientInterface
+    */
+   private $s3Client;
+ 
+   /**
+    * S3fsCorsAdminForm constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory interface.
+-   * @param \Drupal\s3fs\S3fsServiceInterface $s3fs
++   * @param S3fsServiceInterface $s3fs
+    *   The S3fs service interface.
+    *
+-   * @throws \Drupal\s3fs\S3fsException
++   * @throws S3fsException
+    *   The S3fs exception.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, S3fsServiceInterface $s3fs) {

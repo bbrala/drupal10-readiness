@@ -1,0 +1,791 @@
+diff --git a/reader.module b/reader.module
+index 64a65e1..abddf71 100644
+--- a/reader.module
++++ b/reader.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\Core\Entity\EntityInterface;
+ /**
+  * @file
+  * Reader functions.
+@@ -65,7 +67,7 @@ function reader_theme() {
+  * Implements hook_entity_type_alter().
+  */
+ function reader_entity_type_alter(array &$entity_types) {
+-  /** @var \Drupal\Core\Entity\EntityTypeInterface[] $entity_types */
++  /** @var EntityTypeInterface[] $entity_types */
+   if (isset($entity_types['node'])) {
+     $entity_types['node']->setFormClass('reader-add', '\Drupal\reader\Form\ReaderNodeForm');
+     $entity_types['node']->setFormClass('reader-edit', '\Drupal\reader\Form\ReaderNodeForm');
+@@ -79,10 +81,10 @@ function reader_entity_type_alter(array &$entity_types) {
+  * Implements hook_form_BASE_FORM_ID_alter() for \Drupal\node\NodeForm.
+  *
+  * @param $form
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  */
+ function reader_form_node_form_alter(&$form, FormStateInterface $form_state) {
+-  /** @var \Drupal\Core\Entity\EntityInterface $entity */
++  /** @var EntityInterface $entity */
+   $entity = $form_state->getFormObject()->getEntity();
+   // @todo move the check, we always need to go in for the redirect
+   if ($entity && \Drupal::config('reader.settings')->get('alter_node_form')) {
+@@ -94,7 +96,7 @@ function reader_form_node_form_alter(&$form, FormStateInterface $form_state) {
+  * Implements hook_form_FORM_ID_alter() for \Drupal\user\Form\UserLoginForm.
+  *
+  * @param $form
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  */
+ function reader_form_user_login_form_alter(&$form, FormStateInterface $form_state) {
+   \Drupal::service('reader.form_alter')->alterLoginForm($form, $form_state);
+diff --git a/src/Controller/ReaderController.php b/src/Controller/ReaderController.php
+index 17001f2..ab44898 100644
+--- a/src/Controller/ReaderController.php
++++ b/src/Controller/ReaderController.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\reader\Controller;
+ 
++use Symfony\Component\HttpFoundation\RedirectResponse;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Component\Render\MarkupInterface;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+@@ -24,32 +29,32 @@ class ReaderController extends ControllerBase {
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The user data service.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * ReaderController constructor.
+    *
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\user\UserDataInterface $user_data
++   * @param UserDataInterface $user_data
+    *   The user data service.
+    */
+   public function __construct(DateFormatterInterface $date_formatter, EntityFieldManagerInterface $entity_field_manager, UserDataInterface $user_data) {
+@@ -72,7 +77,7 @@ class ReaderController extends ControllerBase {
+   /**
+    * Returns the manifest.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    */
+   public function manifest() {
+ 
+@@ -85,7 +90,7 @@ class ReaderController extends ControllerBase {
+     $manifest['start_url'] = $url;
+     $manifest['display'] = $pwa_display;
+     $manifest['icons'][] = (object) [
+-      'src' => file_create_url(drupal_get_path('theme', 'reader_theme') . '/images/icon.png'),
++      'src' => \Drupal::service('file_url_generator')->generateAbsoluteString(\Drupal::service('extension.list.theme')->getPath('reader_theme') . '/images/icon.png'),
+       'sizes' => '192x192',
+       'type' => 'image/png',
+     ];
+@@ -98,7 +103,7 @@ class ReaderController extends ControllerBase {
+   /**
+    * Home entry point for the reader.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *
+    * @return array
+    */
+@@ -172,7 +177,7 @@ class ReaderController extends ControllerBase {
+   /**
+    * Returns the timeline.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    * @param $module
+    * @param $id
+    * @param $is_home
+@@ -428,7 +433,7 @@ class ReaderController extends ControllerBase {
+   /**
+    * Routing callback: search.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *
+    * @return array
+    */
+@@ -444,7 +449,7 @@ class ReaderController extends ControllerBase {
+    * @param $action
+    * @param $id
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    */
+   public function timelineAction($module, $action, $id) {
+ 
+@@ -467,7 +472,7 @@ class ReaderController extends ControllerBase {
+    * @param $id
+    * @param $post_id
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    */
+   public function postAction($module, $action, $id, $post_id) {
+ 
+@@ -487,8 +492,8 @@ class ReaderController extends ControllerBase {
+    *
+    * @return array $build
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function content() {
+     $build = $rows = [];
+@@ -552,7 +557,7 @@ class ReaderController extends ControllerBase {
+    *
+    * @param $content
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface|string
++   * @return MarkupInterface|string
+    */
+   protected function filterContent($content) {
+     $filter_format_id = $this->config('reader.settings')->get('filter_format');
+@@ -671,7 +676,7 @@ class ReaderController extends ControllerBase {
+    *
+    * @param $type
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    */
+   protected function getActionLinkLabel($type) {
+     $label = $this->t('Unknown');
+diff --git a/src/EventSubscriber/ReaderAccessDeniedSubscriber.php b/src/EventSubscriber/ReaderAccessDeniedSubscriber.php
+index f539dda..5a81bd4 100644
+--- a/src/EventSubscriber/ReaderAccessDeniedSubscriber.php
++++ b/src/EventSubscriber/ReaderAccessDeniedSubscriber.php
+@@ -23,14 +23,14 @@ class ReaderAccessDeniedSubscriber implements EventSubscriberInterface {
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+    * Constructs a new redirect subscriber.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The current user.
+    */
+   public function __construct(AccountInterface $account) {
+diff --git a/src/Form/ReaderSearchForm.php b/src/Form/ReaderSearchForm.php
+index 6e5c883..b81a79d 100644
+--- a/src/Form/ReaderSearchForm.php
++++ b/src/Form/ReaderSearchForm.php
+@@ -13,14 +13,14 @@ class ReaderSearchForm extends FormBase {
+   /**
+    * The user data service.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * ReaderSearchForm constructor.
+    *
+-   * @param \Drupal\user\UserDataInterface $user_data
++   * @param UserDataInterface $user_data
+    *   The user data service.
+    */
+   public function __construct(UserDataInterface $user_data) {
+diff --git a/src/Form/ReaderSettingsForm.php b/src/Form/ReaderSettingsForm.php
+index 5a53422..c283bad 100644
+--- a/src/Form/ReaderSettingsForm.php
++++ b/src/Form/ReaderSettingsForm.php
+@@ -15,25 +15,25 @@ class ReaderSettingsForm extends ConfigFormBase {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The entity type manager
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * ReaderSettingsForm constructor
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, ModuleHandlerInterface $module_handler, EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Form/ReaderSettingsUserForm.php b/src/Form/ReaderSettingsUserForm.php
+index 7444b27..d983e49 100644
+--- a/src/Form/ReaderSettingsUserForm.php
++++ b/src/Form/ReaderSettingsUserForm.php
+@@ -14,23 +14,23 @@ class ReaderSettingsUserForm extends FormBase {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The user data service.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * ReaderSettingsUserForm constructor
+    *
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\user\UserDataInterface $user_data
++   * @param UserDataInterface $user_data
+    *   The user data service.
+    */
+   public function __construct(ModuleHandlerInterface $module_handler, UserDataInterface $user_data) {
+diff --git a/src/Plugin/Block/Actions.php b/src/Plugin/Block/Actions.php
+index f30dd69..bedb8f2 100644
+--- a/src/Plugin/Block/Actions.php
++++ b/src/Plugin/Block/Actions.php
+@@ -30,35 +30,35 @@ class Actions extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * The route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The entity type manager
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -74,15 +74,15 @@ class Actions extends BlockBase implements ContainerFactoryPluginInterface {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, RouteMatchInterface $route_match, ConfigFactoryInterface $config_factory, AccountInterface $current_user, EntityTypeManagerInterface $entity_type_manager, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Plugin/Block/Channels.php b/src/Plugin/Block/Channels.php
+index b75e72d..7183199 100644
+--- a/src/Plugin/Block/Channels.php
++++ b/src/Plugin/Block/Channels.php
+@@ -23,7 +23,7 @@ class Channels extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -39,7 +39,7 @@ class Channels extends BlockBase implements ContainerFactoryPluginInterface {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Plugin/Block/CreateLinks.php b/src/Plugin/Block/CreateLinks.php
+index 3900ce5..9d464a2 100644
+--- a/src/Plugin/Block/CreateLinks.php
++++ b/src/Plugin/Block/CreateLinks.php
+@@ -23,21 +23,21 @@ class CreateLinks extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The renderer service.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+@@ -53,11 +53,11 @@ class CreateLinks extends BlockBase implements ContainerFactoryPluginInterface {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, RendererInterface $renderer, ConfigFactoryInterface $config_factory) {
+diff --git a/src/Plugin/Block/Search.php b/src/Plugin/Block/Search.php
+index 35a296d..053a671 100644
+--- a/src/Plugin/Block/Search.php
++++ b/src/Plugin/Block/Search.php
+@@ -22,7 +22,7 @@ class Search extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Form\FormBuilderInterface
++   * @var FormBuilderInterface
+    */
+   protected $formBuilder;
+ 
+diff --git a/src/ReaderBase.php b/src/ReaderBase.php
+index 90f0720..a03a02b 100644
+--- a/src/ReaderBase.php
++++ b/src/ReaderBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\reader;
+ 
++use Drupal\Core\GeneratedUrl;
+ use Drupal\Core\Link;
+ use Drupal\Core\Url;
+ 
+@@ -77,7 +78,7 @@ abstract class ReaderBase implements ReaderInterface {
+    *
+    * @param $module
+    *
+-   * @return \Drupal\Core\GeneratedUrl|string
++   * @return GeneratedUrl|string
+    */
+   protected function getSourcesListUrl($module) {
+     return Url::fromRoute('reader.sources', ['module' => $module])->toString();
+diff --git a/src/Routing/ReaderRouteSubscriber.php b/src/Routing/ReaderRouteSubscriber.php
+index 8e5f223..58007c1 100644
+--- a/src/Routing/ReaderRouteSubscriber.php
++++ b/src/Routing/ReaderRouteSubscriber.php
+@@ -18,14 +18,14 @@ class ReaderRouteSubscriber extends RouteSubscriberBase {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * ReaderRouterSubscriber constructor
+    *
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(ModuleHandlerInterface $module_handler) {
+@@ -35,7 +35,7 @@ class ReaderRouteSubscriber extends RouteSubscriberBase {
+   /**
+    * Overrides user.login route with our custom login form.
+    *
+-   * @param \Symfony\Component\Routing\RouteCollection $collection
++   * @param RouteCollection $collection
+    */
+   public function alterRoutes(RouteCollection $collection) {
+     // Change path of user login to overridden TFA login form if the tfa module
+diff --git a/src/Services/Reader.php b/src/Services/Reader.php
+index c66b137..c8723d7 100644
+--- a/src/Services/Reader.php
++++ b/src/Services/Reader.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\reader\Services;
+ 
++use Drupal\Core\Datetime\DateFormatInterface;
++use Drupal\aggregator\ItemInterface;
++use Drupal\aggregator\FeedInterface;
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Entity\EntityFormBuilderInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -25,66 +31,66 @@ class Reader extends ReaderBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity form builder.
+    *
+-   * @var \Drupal\Core\Entity\EntityFormBuilderInterface
++   * @var EntityFormBuilderInterface
+    */
+   protected $entityFormBuilder;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+-   * @var \Drupal\Core\Datetime\DateFormatInterface
++   * @var DateFormatInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The pager manager.
+    *
+-   * @var \Drupal\Core\Pager\PagerManagerInterface
++   * @var PagerManagerInterface
+    */
+   protected $pagerManager;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * ActivityPubFormAlter constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityFormBuilderInterface $entity_form_builder
++   * @param EntityFormBuilderInterface $entity_form_builder
+    *   The entity form builder.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter.
+-   * @param \Drupal\Core\Pager\PagerManagerInterface $pager_manager
++   * @param PagerManagerInterface $pager_manager
+    *   The pager manager.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityFormBuilderInterface $entity_form_builder, ModuleHandlerInterface $module_handler, DateFormatterInterface $date_formatter, PagerManagerInterface $pager_manager, RequestStack $request_stack, AccountInterface $current_user) {
+@@ -192,8 +198,7 @@ class Reader extends ReaderBase {
+     $limit = Settings::get('reader_aggregator_items_per_page', 10);
+ 
+     if ($this->moduleHandler->moduleExists('aggregator') && $this->currentUser->hasPermission('access reader')) {
+-      /** @var \Drupal\aggregator\ItemInterface[] $posts */
+-
++      /** @var ItemInterface[] $posts */
+       $page = $this->requestStack->getCurrentRequest()->get('page', 0);
+ 
+       if (empty($search)) {
+@@ -203,7 +208,7 @@ class Reader extends ReaderBase {
+         $posts = $this->searchAggregatorPosts($search, $limit);
+       }
+       foreach ($posts as $post) {
+-        /** @var \Drupal\aggregator\FeedInterface $feed */
++        /** @var FeedInterface $feed */
+         $feed = $this->entityTypeManager->getStorage('aggregator_feed')->load($post->getFeedId());
+         $item = [];
+         $item['_id'] = $post->id();
+@@ -237,10 +242,10 @@ class Reader extends ReaderBase {
+    * @param $search
+    * @param $limit
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface[]
++   * @return EntityInterface[]
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function searchAggregatorPosts($search, $limit) {
+     $query = $this->entityTypeManager->getStorage('aggregator_item')->getQuery();
+diff --git a/src/Services/ReaderFormAlter.php b/src/Services/ReaderFormAlter.php
+index 5465eef..86356f0 100644
+--- a/src/Services/ReaderFormAlter.php
++++ b/src/Services/ReaderFormAlter.php
+@@ -23,38 +23,38 @@ class ReaderFormAlter implements ReaderFormAlterInterface {
+   /**
+    * The route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The entity type manager
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * ReaderPubFormAlter constructor
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param RouteMatchInterface $route_match
++   * @param EntityTypeManagerInterface $entity_type_manager
++   * @param ConfigFactoryInterface $config_factory
++   * @param ModuleHandlerInterface $module_handler
+    */
+   public function __construct(RouteMatchInterface $route_match, EntityTypeManagerInterface $entity_type_manager, ConfigFactoryInterface $config_factory, ModuleHandlerInterface $module_handler) {
+     $this->routeMatch = $route_match;
+@@ -88,7 +88,7 @@ class ReaderFormAlter implements ReaderFormAlterInterface {
+    * Submit callback.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    */
+   public function submitNodeForm(array $form, FormStateInterface $form_state) {
+     $form_state->setRedirect('reader.content');
+@@ -122,7 +122,7 @@ class ReaderFormAlter implements ReaderFormAlterInterface {
+    * Submit callback after login.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *
+    * @see alterLoginForm();
+    */
+@@ -153,7 +153,7 @@ class ReaderFormAlter implements ReaderFormAlterInterface {
+    * Submit callback after reset login.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *
+    * @see alterLoginForm();
+    */
+diff --git a/src/Services/ReaderFormAlterInterface.php b/src/Services/ReaderFormAlterInterface.php
+index 1eef595..7c639ca 100644
+--- a/src/Services/ReaderFormAlterInterface.php
++++ b/src/Services/ReaderFormAlterInterface.php
+@@ -12,8 +12,8 @@ interface ReaderFormAlterInterface {
+    * Alter the node form.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param FormStateInterface $form_state
++   * @param EntityInterface $entity
+    */
+   public function alterNodeForm(array &$form, FormStateInterface $form_state, EntityInterface $entity);
+ 
+@@ -21,8 +21,8 @@ interface ReaderFormAlterInterface {
+    * Alter the comment form.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param FormStateInterface $form_state
++   * @param EntityInterface $entity
+    */
+   public function alterCommentForm(array &$form, FormStateInterface $form_state, EntityInterface $entity);
+ 
+@@ -30,7 +30,7 @@ interface ReaderFormAlterInterface {
+    * Alter the user login form.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    */
+   public function alterLoginForm(array &$form, FormStateInterface $form_state);
+ 
+diff --git a/tests/modules/reader_test/src/Controller/ReaderTestController.php b/tests/modules/reader_test/src/Controller/ReaderTestController.php
+index f4d4f0a..1f1ca4a 100644
+--- a/tests/modules/reader_test/src/Controller/ReaderTestController.php
++++ b/tests/modules/reader_test/src/Controller/ReaderTestController.php
+@@ -11,7 +11,7 @@ class ReaderTestController extends ControllerBase {
+    * Routing callback: return a feed.
+    */
+   public function feed() {
+-    $content = file_get_contents(drupal_get_path('module', 'reader_test') . '/assets/rss_template.xml');
++    $content = file_get_contents(\Drupal::service('extension.list.module')->getPath('reader_test') . '/assets/rss_template.xml');
+     $date1 = date('M Y', strtotime( "-1 month"));
+     $date2 = date('M Y', strtotime( "-2 month"));
+     $content = str_replace (["[MONTHYEAR1]", "[MONTHYEAR2]"] , [$date1, $date2], $content);
+diff --git a/tests/src/Functional/ReaderTest.php b/tests/src/Functional/ReaderTest.php
+index 7dda432..89bcd9e 100644
+--- a/tests/src/Functional/ReaderTest.php
++++ b/tests/src/Functional/ReaderTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\reader\Functional;
+ 
++use Drupal\user\UserInterface;
++use Behat\Mink\Exception\ExpectationException;
+ use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Url;
+ use Drupal\Tests\BrowserTestBase;
+@@ -34,14 +36,14 @@ class ReaderTest extends BrowserTestBase {
+   /**
+    * A user with all permissions.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $adminUser;
+ 
+   /**
+    * An authenticated user with reader permissions.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $authenticatedUser;
+ 
+@@ -79,7 +81,7 @@ class ReaderTest extends BrowserTestBase {
+   /**
+    * Test reader functionality.
+    *
+-   * @throws \Behat\Mink\Exception\ExpectationException
++   * @throws ExpectationException
+    */
+   public function testReader() {
+     $assert_session = $this->assertSession();

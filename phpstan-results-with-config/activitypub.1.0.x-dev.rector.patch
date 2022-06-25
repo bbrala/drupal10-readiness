@@ -1,0 +1,2654 @@
+diff --git a/activitypub.module b/activitypub.module
+index 38befee..e4b816a 100644
+--- a/activitypub.module
++++ b/activitypub.module
+@@ -17,7 +17,7 @@ define('ACTIVITYPUB_FOLLOW_TEST_USER', 'https://example.com/user/random');
+ /**
+  * Implements hook_entity_delete().
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  */
+ function activitypub_entity_delete(EntityInterface $entity) {
+   \Drupal::service('activitypub.utility')->onEntityDelete($entity);
+@@ -27,10 +27,10 @@ function activitypub_entity_delete(EntityInterface $entity) {
+  * Implements hook_form_BASE_FORM_ID_alter() for \Drupal\node\NodeForm.
+  *
+  * @param $form
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  */
+ function activitypub_form_node_form_alter(&$form, FormStateInterface $form_state) {
+-  /** @var \Drupal\Core\Entity\EntityInterface $entity */
++  /** @var EntityInterface $entity */
+   $entity = $form_state->getFormObject()->getEntity();
+   if ($entity) {
+     \Drupal::service('activitypub.form_alter')->addActivityPubOutboxFormElement($form, $form_state, $entity);
+@@ -41,10 +41,10 @@ function activitypub_form_node_form_alter(&$form, FormStateInterface $form_state
+  * Implements hook_form_FORM_BASE_ID_alter() for the comments form.
+  *
+  * @param $form
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  */
+ function activitypub_form_comment_form_alter(&$form, FormStateInterface $form_state) {
+-  /** @var \Drupal\Core\Entity\EntityInterface $entity */
++  /** @var EntityInterface $entity */
+   $entity = $form_state->getFormObject()->getEntity();
+   if ($entity) {
+     \Drupal::service('activitypub.form_alter')->addActivityPubOutboxFormElement($form, $form_state, $entity);
+diff --git a/src/Annotation/ActivityPubType.php b/src/Annotation/ActivityPubType.php
+index 4aa1433..d0888f1 100644
+--- a/src/Annotation/ActivityPubType.php
++++ b/src/Annotation/ActivityPubType.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -26,7 +27,7 @@ class ActivityPubType extends Plugin {
+   /**
+    * The human-readable name of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Commands/ActivityPubCommands.php b/src/Commands/ActivityPubCommands.php
+index 3574c5f..c2b0f8a 100644
+--- a/src/Commands/ActivityPubCommands.php
++++ b/src/Commands/ActivityPubCommands.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\activitypub\Commands;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\activitypub\Entity\ActivityPubActivityInterface;
++use Drupal\activitypub\Services\ActivityPubUtilityInterface;
+ use Drush\Commands\DrushCommands;
+ 
+ /**
+@@ -89,12 +94,12 @@ class ActivityPubCommands extends DrushCommands {
+    *
+    * @command activitypub:add-to-queue
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
+    */
+   public function addActivityToQueue($activityId) {
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity */
++    /** @var ActivityPubActivityInterface $activity */
+     $activity = \Drupal::entityTypeManager()->getStorage('activitypub_activity')->load($activityId);
+     if ($activity) {
+       $activity
+@@ -116,13 +121,13 @@ class ActivityPubCommands extends DrushCommands {
+    *
+    * @command activitypub:fetch-remote-users
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function cacheRemoteUsers($uid) {
+     $server = \Drupal::service('activitypub.utility')->getServer();
+     $conditions = ['type' => 'Follow', 'uid' => $uid, 'status' => 1];
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface[] $activities */
++    /** @var ActivityPubActivityInterface[] $activities */
+     $activities = \Drupal::entityTypeManager()->getStorage('activitypub_activity')->loadByProperties($conditions);
+     foreach ($activities as $activity) {
+       $this->writeln('Fetching ' . $activity->getActor());
+@@ -141,7 +146,7 @@ class ActivityPubCommands extends DrushCommands {
+    * @command activitypub:webfinger-info
+    */
+   public function getWebfingerInfo($handle, $debug = 1) {
+-    /** @var \Drupal\activitypub\Services\ActivityPubUtilityInterface $utility */
++    /** @var ActivityPubUtilityInterface $utility */
+     $utility = \Drupal::service('activitypub.utility');
+     $server = $utility->getServer(['instance' => ['debug' => (bool) $debug]]);
+ 
+diff --git a/src/Controller/ActivityController.php b/src/Controller/ActivityController.php
+index c2e4fef..e32a3e1 100644
+--- a/src/Controller/ActivityController.php
++++ b/src/Controller/ActivityController.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\activitypub\Controller;
+ 
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\activitypub\Services\ActivityPubProcessClientInterface;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -14,14 +18,14 @@ class ActivityController extends ControllerBase {
+   /**
+    * The ActivityPub process client service.
+    *
+-   * @var \Drupal\activitypub\Services\ActivityPubProcessClientInterface
++   * @var ActivityPubProcessClientInterface
+    */
+   protected $activityPubProcessClient;
+ 
+   /**
+    * ActivityController constructor
+    *
+-   * @param \Drupal\activitypub\Services\ActivityPubProcessClientInterface $activitypub_process_client
++   * @param ActivityPubProcessClientInterface $activitypub_process_client
+    */
+   public function __construct(ActivityPubProcessClientInterface $activitypub_process_client) {
+     $this->activityPubProcessClient = $activitypub_process_client;
+@@ -39,7 +43,7 @@ class ActivityController extends ControllerBase {
+   /**
+    * View activity routing callback.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activitypub_activity
++   * @param ActivityPubActivityInterface $activitypub_activity
+    *
+    * @return string[]
+    */
+@@ -52,11 +56,11 @@ class ActivityController extends ControllerBase {
+   /**
+    * Queue activity routing callback.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activitypub_activity
++   * @param ActivityPubActivityInterface $activitypub_activity
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function queue(ActivityPubActivityInterface $activitypub_activity) {
+     if ($activitypub_activity->canBeQueued()) {
+@@ -77,14 +81,14 @@ class ActivityController extends ControllerBase {
+   /**
+    * Undo activity routing callback.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activitypub_activity
++   * @param ActivityPubActivityInterface $activitypub_activity
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityStorageException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityStorageException
++   * @throws EntityMalformedException
+    */
+   public function undo(ActivityPubActivityInterface $activitypub_activity) {
+     if ($activitypub_activity->canBeUndone()) {
+@@ -97,7 +101,7 @@ class ActivityController extends ControllerBase {
+         'object' => $activitypub_activity->getObject(),
+         'external_id' => $activitypub_activity->toUrl('canonical', ['absolute' => TRUE])->toString(),
+       ];
+-      /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity */
++      /** @var ActivityPubActivityInterface $activity */
+       $activity = $this->entityTypeManager()->getStorage('activitypub_activity')->create($values);
+       $activity->save();
+       $this->activityPubProcessClient->createQueueItem($activity);
+diff --git a/src/Controller/ActivityTypeController.php b/src/Controller/ActivityTypeController.php
+index 46d7aa1..08343cf 100644
+--- a/src/Controller/ActivityTypeController.php
++++ b/src/Controller/ActivityTypeController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\activitypub\Controller;
+ 
++use Symfony\Component\HttpFoundation\RedirectResponse;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal\activitypub\Entity\ActivityPubTypeInterface;
+ use Drupal\Core\Controller\ControllerBase;
+ 
+@@ -10,14 +12,14 @@ class ActivityTypeController extends ControllerBase {
+   /**
+    * Enable or disables the status.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubTypeInterface $activitypub_type
++   * @param ActivityPubTypeInterface $activitypub_type
+    *   The ActivityPub Type.
+    * @param string $op
+    *   The operation to perform 'enable' or 'disable'.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirect back to the search settings page.
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws EntityMalformedException
+    */
+   public function setStatus(ActivityPubTypeInterface $activitypub_type, $op) {
+     $activitypub_type->$op()->save();
+diff --git a/src/Controller/BaseController.php b/src/Controller/BaseController.php
+index 0fc20c3..d41f904 100644
+--- a/src/Controller/BaseController.php
++++ b/src/Controller/BaseController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Controller;
+ 
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\activitypub\Entity\ActivityPubActorInterface;
+ use Drupal\activitypub\Services\ActivityPubProcessClientInterface;
+ use Drupal\activitypub\Services\ActivityPubUtilityInterface;
+@@ -17,32 +18,32 @@ class BaseController extends ControllerBase {
+   /**
+    * The ActivityPub Utility service.
+    *
+-   * @var \Drupal\activitypub\Services\ActivityPubUtilityInterface
++   * @var ActivityPubUtilityInterface
+    */
+   protected $activityPubUtility;
+ 
+   /**
+    * The path matcher service.
+    *
+-   * @var \Drupal\Core\Path\PathMatcherInterface
++   * @var PathMatcherInterface
+    */
+   protected $pathMatcher;
+ 
+   /**
+    * The pager manager.
+    *
+-   * @var \Drupal\Core\Pager\PagerManagerInterface
++   * @var PagerManagerInterface
+    */
+   protected $pagerManager;
+ 
+   /**
+    * BaseController constructor
+    *
+-   * @param \Drupal\Core\Path\PathMatcherInterface $path_matcher
++   * @param PathMatcherInterface $path_matcher
+    *   The path matcher
+-   * @param \Drupal\activitypub\Services\ActivityPubUtilityInterface $activitypub_utility
++   * @param ActivityPubUtilityInterface $activitypub_utility
+    *   The ActivityPub utility service
+-   * @param \Drupal\Core\Pager\PagerManagerInterface $pager_manager
++   * @param PagerManagerInterface $pager_manager
+    *   The pager manager
+    */
+   public function __construct(PathMatcherInterface $path_matcher, ActivityPubUtilityInterface $activitypub_utility, PagerManagerInterface $pager_manager) {
+@@ -65,11 +66,11 @@ class BaseController extends ControllerBase {
+   /**
+    * Check that the actor points to the user.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActorInterface $activitypub_actor
++   * @param ActivityPubActorInterface $activitypub_actor
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function actorUserCheck(UserInterface $user, ActivityPubActorInterface $activitypub_actor) {
+diff --git a/src/Controller/EntityController.php b/src/Controller/EntityController.php
+index 113ab5c..57bd396 100644
+--- a/src/Controller/EntityController.php
++++ b/src/Controller/EntityController.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\activitypub\Controller;
+ 
++use Drupal\Core\Cache\CacheableJsonResponse;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\comment\CommentInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -13,12 +17,12 @@ class EntityController extends BaseController {
+   /**
+    * Node self routing callback with activity+json accept header.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *
+-   * @return \Drupal\Core\Cache\CacheableJsonResponse|\Symfony\Component\HttpFoundation\JsonResponse
++   * @return CacheableJsonResponse|JsonResponse
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function node(NodeInterface $node) {
+     return $this->json($node);
+@@ -27,12 +31,12 @@ class EntityController extends BaseController {
+   /**
+    * Comment self routing callback with activity+json accept header.
+    *
+-   * @param \Drupal\comment\CommentInterface $comment
++   * @param CommentInterface $comment
+    *
+-   * @return \Drupal\Core\Cache\CacheableJsonResponse|\Symfony\Component\HttpFoundation\JsonResponse
++   * @return CacheableJsonResponse|JsonResponse
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function comment(CommentInterface $comment) {
+     return $this->json($comment);
+@@ -41,20 +45,20 @@ class EntityController extends BaseController {
+   /**
+    * Node self routing callback with activity+json accept header.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *
+-   * @return \Drupal\Core\Cache\CacheableJsonResponse|\Symfony\Component\HttpFoundation\JsonResponse
++   * @return CacheableJsonResponse|JsonResponse
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function json(EntityInterface $entity) {
+-    /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface $actorStorage */
++    /** @var ActivityPubActorStorageInterface $actorStorage */
+     $actorStorage = $this->entityTypeManager()->getStorage('activitypub_actor');
+     $actor = $actorStorage->loadActorByEntityIdAndType($entity->getOwnerId(), 'person');
+ 
+     /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface $activityStorage */
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity */
++    /** @var ActivityPubActivityInterface $activity */
+     $activity = NULL;
+     $activityStorage = $this->entityTypeManager()->getStorage('activitypub_activity');
+     $activities = $activityStorage->loadByProperties(['entity_type_id' => $entity->getEntityTypeId(), 'entity_id' => $entity->id(), 'collection' => 'outbox']);
+diff --git a/src/Controller/FollowController.php b/src/Controller/FollowController.php
+index b9accb1..ac5b87d 100644
+--- a/src/Controller/FollowController.php
++++ b/src/Controller/FollowController.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\activitypub\Controller;
+ 
++use Drupal\activitypub\Entity\ActivityPubActorInterface;
++use Drupal\Core\Access\AccessResultInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\activitypub\Entity\ActivitypubActorInterface;
+ use Drupal\Core\Url;
+@@ -14,10 +19,10 @@ class FollowController extends BaseController {
+   /**
+    * Check that the actor points to the user.
+    *
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivityPubActorInterface $activitypub_actor
++   * @param UserInterface $user
++   * @param ActivityPubActorInterface $activitypub_actor
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function actorFollowUserCheck(UserInterface $user, ActivityPubActorInterface $activitypub_actor) {
+@@ -27,11 +32,11 @@ class FollowController extends BaseController {
+   /**
+    * Followers routing callback.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivitypubActorInterface $activitypub_actor
++   * @param Request $request
++   * @param UserInterface $user
++   * @param ActivitypubActorInterface $activitypub_actor
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    */
+   public function followers(Request $request, UserInterface $user, ActivitypubActorInterface $activitypub_actor) {
+     return $this->get($request, $user, $activitypub_actor, ActivityPubActivityInterface::FOLLOWERS);
+@@ -40,11 +45,11 @@ class FollowController extends BaseController {
+   /**
+    * Following routing callback.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivitypubActorInterface $activitypub_actor
++   * @param Request $request
++   * @param UserInterface $user
++   * @param ActivitypubActorInterface $activitypub_actor
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    */
+   public function following(Request $request, UserInterface $user, ActivitypubActorInterface $activitypub_actor) {
+     return $this->get($request, $user, $activitypub_actor, ActivityPubActivityInterface::FOLLOWING);
+@@ -53,12 +58,12 @@ class FollowController extends BaseController {
+   /**
+    * Helper function to get followers or following collection.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivitypubActorInterface $activitypub_actor
++   * @param Request $request
++   * @param UserInterface $user
++   * @param ActivitypubActorInterface $activitypub_actor
+    * @param $type
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    */
+   protected function get(Request $request, UserInterface $user, ActivitypubActorInterface $activitypub_actor, $type) {
+     $status = 400;
+@@ -86,16 +91,16 @@ class FollowController extends BaseController {
+   /**
+    * Get collection info.
+    *
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivitypubActorInterface $activitypub_actor
++   * @param UserInterface $user
++   * @param ActivitypubActorInterface $activitypub_actor
+    * @param $type
+    *
+    * @return array
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getCollectionInfo(UserInterface $user, ActivitypubActorInterface $activitypub_actor, $type) {
+-    /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface $storage */
++    /** @var ActivityPubActivityStorageInterface $storage */
+     $storage = $this->entityTypeManager()->getStorage('activitypub_activity');
+     $url = Url::fromRoute('activitypub.user.self', ['user' => $activitypub_actor->getOwnerId(), 'activitypub_actor' => $activitypub_actor->getName()], ['absolute' => TRUE])->toString();
+ 
+@@ -122,14 +127,14 @@ class FollowController extends BaseController {
+   /**
+    * Get collection items.
+    *
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivitypubActorInterface $activitypub_actor
++   * @param UserInterface $user
++   * @param ActivitypubActorInterface $activitypub_actor
+    * @param int $page
+    * @param $type
+    *
+    * @return array
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getCollectionItems(UserInterface $user, ActivitypubActorInterface $activitypub_actor, int $page, $type) {
+ 
+@@ -144,7 +149,7 @@ class FollowController extends BaseController {
+     $conditions = ['type' => 'Follow', 'status' => 1];
+     $url = Url::fromRoute('activitypub.user.self', ['user' => $activitypub_actor->getOwnerId(), 'activitypub_actor' => $activitypub_actor->getName()], ['absolute' => TRUE])->toString();
+     if ($type == ActivityPubActivityInterface::FOLLOWERS) {
+-      /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface[] $activities */
++      /** @var ActivityPubActivityInterface[] $activities */
+       $conditions['object'] = $url;
+       $conditions['collection'] = ActivityPubActivityInterface::INBOX;
+     }
+diff --git a/src/Controller/InboxController.php b/src/Controller/InboxController.php
+index c8710c0..ceb0194 100644
+--- a/src/Controller/InboxController.php
++++ b/src/Controller/InboxController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\activitypub\Controller;
+ 
++use Drupal\activitypub\Entity\Storage\ActivityPubActivityStorage;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\activitypub\Entity\ActivitypubActorInterface;
+ use Drupal\Core\Site\Settings;
+@@ -14,11 +17,11 @@ class InboxController extends BaseController {
+   /**
+    * Inbox routing callback.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivitypubActorInterface $activitypub_actor
++   * @param Request $request
++   * @param UserInterface $user
++   * @param ActivitypubActorInterface $activitypub_actor
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    */
+   public function inbox(Request $request, UserInterface $user, ActivitypubActorInterface $activitypub_actor) {
+     $status = 400;
+@@ -58,7 +61,7 @@ class InboxController extends BaseController {
+           // Get the object.
+           $object = $this->getObject($payload);
+ 
+-          /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorage $storage */
++          /** @var ActivityPubActivityStorage $storage */
+           $storage = $this->entityTypeManager()->getStorage('activitypub_activity');
+           $values = [
+             'uid' => $user->id(),
+@@ -71,7 +74,7 @@ class InboxController extends BaseController {
+             'status' => $published,
+           ];
+ 
+-          /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity */
++          /** @var ActivityPubActivityInterface $activity */
+           $activity = $storage->create($values);
+           $doSave = TRUE;
+           $activity->preInboxSave($doSave);
+@@ -103,8 +106,8 @@ class InboxController extends BaseController {
+    * @param $uid
+    *
+    * @return bool
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function isFollowee($followee, $uid) {
+ 
+@@ -116,7 +119,7 @@ class InboxController extends BaseController {
+       'collection' => ActivityPubActivityInterface::OUTBOX,
+     ];
+ 
+-    /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorage $storage */
++    /** @var ActivityPubActivityStorage $storage */
+     $storage = $this->entityTypeManager()->getStorage('activitypub_activity');
+     $count = $storage->getActivityCount($conditions);
+ 
+diff --git a/src/Controller/OutboxController.php b/src/Controller/OutboxController.php
+index b7b0f87..609dc91 100644
+--- a/src/Controller/OutboxController.php
++++ b/src/Controller/OutboxController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\activitypub\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\activitypub\Entity\ActivitypubActorInterface;
+ use Drupal\Core\Cache\CacheableJsonResponse;
+@@ -16,11 +19,11 @@ class OutboxController extends BaseController {
+   /**
+    * Outbox routing callback.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivitypubActorInterface $activitypub_actor
++   * @param Request $request
++   * @param UserInterface $user
++   * @param ActivitypubActorInterface $activitypub_actor
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    */
+   public function outbox(Request $request, UserInterface $user, ActivitypubActorInterface $activitypub_actor) {
+     $status = 400;
+@@ -57,17 +60,17 @@ class OutboxController extends BaseController {
+   /**
+    * Get collection info.
+    *
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivitypubActorInterface $activitypub_actor
+-   * @param \Drupal\Core\Cache\CacheableMetadata $metadata
++   * @param UserInterface $user
++   * @param ActivitypubActorInterface $activitypub_actor
++   * @param CacheableMetadata $metadata
+    *
+    * @return array
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getCollectionInfo(UserInterface $user, ActivitypubActorInterface $activitypub_actor, CacheableMetadata $metadata) {
+-    /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface $storage */
++    /** @var ActivityPubActivityStorageInterface $storage */
+     $storage = $this->entityTypeManager()->getStorage('activitypub_activity');
+     $conditions = ['uid' => $user->id(), 'status' => 1, 'direct' => 0, 'collection' => 'outbox', '!type' => $this->activityPubUtility->getOutboxIgnoreTypes()];
+     $id = Url::fromRoute('activitypub.outbox', ['user' => $user->id(), 'activitypub_actor' => $activitypub_actor->getName()], ['absolute' => TRUE])->toString(TRUE);
+@@ -86,15 +89,15 @@ class OutboxController extends BaseController {
+   /**
+    * Get collection items.
+    *
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivitypubActorInterface $activitypub_actor
++   * @param UserInterface $user
++   * @param ActivitypubActorInterface $activitypub_actor
+    * @param int $page
+-   * @param \Drupal\Core\Cache\CacheableMetadata $metadata
++   * @param CacheableMetadata $metadata
+    *
+    * @return array
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getCollectionItems(UserInterface $user, ActivitypubActorInterface $activitypub_actor, int $page, CacheableMetadata $metadata) {
+ 
+@@ -111,7 +114,7 @@ class OutboxController extends BaseController {
+     ];
+ 
+     $items = [];
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface[] $activities */
++    /** @var ActivityPubActivityInterface[] $activities */
+     $storage = $this->entityTypeManager()->getStorage('activitypub_activity');
+     $ids = $storage->getQuery()
+       ->condition('uid', $user->id())
+diff --git a/src/Controller/UserController.php b/src/Controller/UserController.php
+index b60ffdd..305d08e 100644
+--- a/src/Controller/UserController.php
++++ b/src/Controller/UserController.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\activitypub\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface;
++use Drupal\views\ViewEntityInterface;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\activitypub\Entity\ActivityPubActorInterface;
+ use Drupal\activitypub\Services\ActivityPubUtilityInterface;
+@@ -18,14 +22,14 @@ class UserController extends BaseController {
+   /**
+    * The ActivityPub utility service.
+    *
+-   * @var \Drupal\activitypub\Services\ActivityPubUtilityInterface
++   * @var ActivityPubUtilityInterface
+    */
+   protected $activityPubUtility;
+ 
+   /**
+    * SelfController constructor
+    *
+-   * @param \Drupal\activitypub\Services\ActivityPubUtilityInterface $activitypub_utility
++   * @param ActivityPubUtilityInterface $activitypub_utility
+    *   The ActivityPub utility service.
+    */
+   public function __construct(ActivityPubUtilityInterface $activitypub_utility) {
+@@ -44,10 +48,10 @@ class UserController extends BaseController {
+   /**
+    * Self routing callback.
+    *
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivityPubActorInterface $activitypub_actor
++   * @param UserInterface $user
++   * @param ActivityPubActorInterface $activitypub_actor
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    */
+   public function self(UserInterface $user, ActivityPubActorInterface $activitypub_actor) {
+ 
+@@ -104,15 +108,15 @@ class UserController extends BaseController {
+   /**
+    * User self routing callback with activity+json accept header.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *
+-   * @return \Drupal\Core\Cache\CacheableJsonResponse|\Symfony\Component\HttpFoundation\JsonResponse
++   * @return CacheableJsonResponse|JsonResponse
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function selfJson(UserInterface $user) {
+-    /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface $storage */
++    /** @var ActivityPubActorStorageInterface $storage */
+     $storage = $this->entityTypeManager()->getStorage('activitypub_actor');
+     $actor = $storage->loadActorByEntityIdAndType($user->id(), 'person');
+     if ($actor) {
+@@ -126,15 +130,15 @@ class UserController extends BaseController {
+   /**
+    * Activities routing callback.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *
+    * @return array
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function activities(UserInterface $user) {
+-    /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface $storage */
++    /** @var ActivityPubActorStorageInterface $storage */
+     $storage = $this->entityTypeManager()->getStorage('activitypub_actor');
+     $actor = $storage->loadActorByEntityIdAndType($user->id(), 'person');
+     if (!$actor) {
+@@ -160,7 +164,7 @@ class UserController extends BaseController {
+         '#weight' => -10,
+       ];
+ 
+-      /** @var \Drupal\views\ViewEntityInterface $view */
++      /** @var ViewEntityInterface $view */
+       $view = NULL;
+       try {
+         $view = $this->entityTypeManager()->getStorage('view')->load('activitypub_user_activities');
+diff --git a/src/Entity/ActivityPubActivity.php b/src/Entity/ActivityPubActivity.php
+index 5fb9e05..988ba99 100644
+--- a/src/Entity/ActivityPubActivity.php
++++ b/src/Entity/ActivityPubActivity.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\activitypub\Entity;
+ 
++use Drupal\activitypub\Services\Type\TypePluginManager;
++use Drupal\activitypub\Services\Type\TypePluginInterface;
+ use Drupal\Core\Entity\ContentEntityBase;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -63,7 +65,7 @@ class ActivityPubActivity extends ContentEntityBase implements ActivityPubActivi
+   /**
+    * The object plugin manager.
+    *
+-   * @var \Drupal\activitypub\Services\Type\TypePluginManager
++   * @var TypePluginManager
+    */
+   protected $typePluginManager;
+ 
+@@ -228,7 +230,7 @@ class ActivityPubActivity extends ContentEntityBase implements ActivityPubActivi
+ 
+     $activityPubType = NULL;
+     if ($this->getConfigID()) {
+-      /** @var \Drupal\activitypub\Entity\ActivityPubTypeInterface $activityPubType */
++      /** @var ActivityPubTypeInterface $activityPubType */
+       $activityPubType = $this->entityTypeManager()->getStorage('activitypub_type')->load($this->getConfigID());
+     }
+ 
+@@ -243,7 +245,7 @@ class ActivityPubActivity extends ContentEntityBase implements ActivityPubActivi
+       $entity = $this->entityTypeManager()->getStorage($this->getTargetEntityTypeId())->load($this->getTargetEntityId());
+     }
+ 
+-    /** @var \Drupal\activitypub\Services\Type\TypePluginInterface $object */
++    /** @var TypePluginInterface $object */
+     $object = $this->getTypePluginManager()->createInstance($activityPubType->getPlugin()['id'], $activityPubType->getPlugin()['configuration']);
+     return $object->build($this, $entity);
+   }
+@@ -253,7 +255,7 @@ class ActivityPubActivity extends ContentEntityBase implements ActivityPubActivi
+    */
+   public function doInboxProcess() {
+ 
+-    /** @var \Drupal\activitypub\Entity\ActivityPubTypeInterface $activityPubType */
++    /** @var ActivityPubTypeInterface $activityPubType */
+     $activityPubType = $this->entityTypeManager()->getStorage('activitypub_type')->load($this->getConfigID());
+ 
+     // No config type found, we can not process anything.
+@@ -267,7 +269,7 @@ class ActivityPubActivity extends ContentEntityBase implements ActivityPubActivi
+       $entity = $this->entityTypeManager()->getStorage($this->getTargetEntityTypeId())->load($this->getTargetEntityId());
+     }
+ 
+-    /** @var \Drupal\activitypub\Services\Type\TypePluginInterface $object */
++    /** @var TypePluginInterface $object */
+     $object = $this->getTypePluginManager()->createInstance($activityPubType->getPlugin()['id'], $activityPubType->getPlugin()['configuration']);
+     return $object->doInboxProcess($this, $entity);
+   }
+@@ -306,7 +308,7 @@ class ActivityPubActivity extends ContentEntityBase implements ActivityPubActivi
+    */
+   public function preInboxSave(&$doSave) {
+     foreach (array_keys($this->getTypePluginManager()->getDefinitions()) as $plugin_id) {
+-      /** @var \Drupal\activitypub\Services\Type\TypePluginInterface $object */
++      /** @var TypePluginInterface $object */
+       $object = $this->getTypePluginManager()->createInstance($plugin_id);
+       $object->onActivityInboxPreSave($this,$doSave);
+     }
+@@ -317,7 +319,7 @@ class ActivityPubActivity extends ContentEntityBase implements ActivityPubActivi
+    */
+   public function preOutboxSave(EntityInterface $entity, ActivityPubTypeInterface $activityPubType, &$doSave) {
+     foreach (array_keys($this->getTypePluginManager()->getDefinitions()) as $plugin_id) {
+-      /** @var \Drupal\activitypub\Services\Type\TypePluginInterface $object */
++      /** @var TypePluginInterface $object */
+       $object = $this->getTypePluginManager()->createInstance($plugin_id);
+       $object->onActivityOutboxPreSave($this, $entity, $activityPubType, $doSave);
+     }
+@@ -328,7 +330,7 @@ class ActivityPubActivity extends ContentEntityBase implements ActivityPubActivi
+    */
+   public function onEntityDelete(EntityInterface $entity) {
+     foreach (array_keys($this->getTypePluginManager()->getDefinitions()) as $plugin_id) {
+-      /** @var \Drupal\activitypub\Services\Type\TypePluginInterface $object */
++      /** @var TypePluginInterface $object */
+       $object = $this->getTypePluginManager()->createInstance($plugin_id);
+       $object->onEntityDelete($this, $entity);
+     }
+@@ -339,7 +341,7 @@ class ActivityPubActivity extends ContentEntityBase implements ActivityPubActivi
+    */
+   public function postSave(EntityStorageInterface $storage, $update = TRUE) {
+     foreach (array_keys($this->getTypePluginManager()->getDefinitions()) as $plugin_id) {
+-      /** @var \Drupal\activitypub\Services\Type\TypePluginInterface $object */
++      /** @var TypePluginInterface $object */
+       $object = $this->getTypePluginManager()->createInstance($plugin_id);
+       $object->onActivityPostSave($this, $update);
+     }
+diff --git a/src/Entity/ActivityPubActivityAccessControlHandler.php b/src/Entity/ActivityPubActivityAccessControlHandler.php
+index 17296eb..1bea53c 100644
+--- a/src/Entity/ActivityPubActivityAccessControlHandler.php
++++ b/src/Entity/ActivityPubActivityAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Entity;
+ 
++use Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityHandlerInterface;
+@@ -17,7 +18,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class ActivityPubActivityAccessControlHandler extends EntityAccessControlHandler implements EntityHandlerInterface{
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -34,9 +35,9 @@ class ActivityPubActivityAccessControlHandler extends EntityAccessControlHandler
+   /**
+    * Constructs the block access control handler instance
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityTypeManagerInterface $entity_type_manager) {
+@@ -49,7 +50,7 @@ class ActivityPubActivityAccessControlHandler extends EntityAccessControlHandler
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+ 
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $entity */
++    /** @var ActivityPubActivityInterface $entity */
+     switch ($operation) {
+       case 'view':
+         return AccessResult::allowed();
+@@ -69,7 +70,7 @@ class ActivityPubActivityAccessControlHandler extends EntityAccessControlHandler
+    * {@inheritdoc}
+    */
+   protected function checkCreateAccess(AccountInterface $account, array $context, $entity_bundle = NULL) {
+-    /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface $storage */
++    /** @var ActivityPubActorStorageInterface $storage */
+     $storage = $this->entityTypeManager->getStorage('activitypub_actor');
+     $actor = $storage->loadActorByEntityIdAndType($account->id(), 'person');
+     if ($actor) {
+diff --git a/src/Entity/ActivityPubActivityInterface.php b/src/Entity/ActivityPubActivityInterface.php
+index ea090d3..4079117 100644
+--- a/src/Entity/ActivityPubActivityInterface.php
++++ b/src/Entity/ActivityPubActivityInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Entity;
+ 
++use Drupal\activitypub\Services\Type\TypePluginManager;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\user\EntityOwnerInterface;
+@@ -25,7 +26,7 @@ interface ActivityPubActivityInterface extends ContentEntityInterface, EntityOwn
+   /**
+    * Returns the object plugin manager.
+    *
+-   * @return \Drupal\activitypub\Services\Type\TypePluginManager
++   * @return TypePluginManager
+    */
+   public function getTypePluginManager();
+ 
+@@ -174,9 +175,9 @@ interface ActivityPubActivityInterface extends ContentEntityInterface, EntityOwn
+   /**
+    * Outbox pre save call.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being saved, usually a node.
+-   * @param \Drupal\activitypub\Entity\ActivityPubTypeInterface $activityPubType
++   * @param ActivityPubTypeInterface $activityPubType
+    *   The activitypub type.
+    * @param $doSave
+    *   Whether to save the activity, defaults to TRUE.
+@@ -186,7 +187,7 @@ interface ActivityPubActivityInterface extends ContentEntityInterface, EntityOwn
+   /**
+    * Act on entity delete.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity that is being deleted. It is a content entity, apart from the
+    *   user or activitypub actor.
+    */
+diff --git a/src/Entity/ActivityPubActivityListBuilder.php b/src/Entity/ActivityPubActivityListBuilder.php
+index fe58e0f..54ab61c 100644
+--- a/src/Entity/ActivityPubActivityListBuilder.php
++++ b/src/Entity/ActivityPubActivityListBuilder.php
+@@ -18,27 +18,27 @@ class ActivityPubActivityListBuilder extends EntityListBuilder {
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new PathAliasListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, AccountInterface $current_user, DateFormatterInterface $date_formatter) {
+@@ -80,7 +80,7 @@ class ActivityPubActivityListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $entity */
++    /** @var ActivityPubActivityInterface $entity */
+     $row['id'] = $entity->id();
+     $row['created'] = $entity->getCreatedTime() ? $this->dateFormatter->format($entity->getCreatedTime(), 'short') : '/';
+     $row['collection'] = $entity->getCollection();
+@@ -114,7 +114,7 @@ class ActivityPubActivityListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function getDefaultOperations(EntityInterface $entity) {
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $entity */
++    /** @var ActivityPubActivityInterface $entity */
+     $operations = parent::getDefaultOperations($entity);
+ 
+     if ($entity->canBeQueued() && $entity->access('queue')) {
+diff --git a/src/Entity/ActivityPubType.php b/src/Entity/ActivityPubType.php
+index d30b0f5..b8339a5 100644
+--- a/src/Entity/ActivityPubType.php
++++ b/src/Entity/ActivityPubType.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\activitypub\Entity;
+ 
++use Drupal\activitypub\Services\Type\TypePluginInterface;
++use Drupal\activitypub\Services\Type\TypePluginManager;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ 
+@@ -150,7 +152,7 @@ class ActivityPubType extends ConfigEntityBase implements ActivityPubTypeInterfa
+   public function calculateDependencies() {
+     parent::calculateDependencies();
+ 
+-    /** @var \Drupal\activitypub\Services\Type\TypePluginInterface $object */
++    /** @var TypePluginInterface $object */
+     $configuration = [];
+     if (isset($this->getPlugin()['configuration'])) {
+       $configuration = $this->getPlugin()['configuration'];
+@@ -191,7 +193,7 @@ class ActivityPubType extends ConfigEntityBase implements ActivityPubTypeInterfa
+   /**
+    * Returns the object plugin manager.
+    *
+-   * @return \Drupal\activitypub\Services\Type\TypePluginManager
++   * @return TypePluginManager
+    */
+   protected function getTypePluginManager() {
+     if (!isset($this->typePluginManager)) {
+diff --git a/src/Entity/ActivityPubTypeListBuilder.php b/src/Entity/ActivityPubTypeListBuilder.php
+index 7af00da..b045a03 100644
+--- a/src/Entity/ActivityPubTypeListBuilder.php
++++ b/src/Entity/ActivityPubTypeListBuilder.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\activitypub\Entity;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\activitypub\Services\Type\TypePluginManager;
+ use Drupal\Core\Config\Entity\ConfigEntityListBuilder;
+ use Drupal\Core\Entity\EntityInterface;
+ 
+@@ -26,7 +28,7 @@ class ActivityPubTypeListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\activitypub\Entity\ActivityPubTypeInterface $entity */
++    /** @var ActivityPubTypeInterface $entity */
+     $row['label'] = $entity->label();
+     $row['description'] = ['data' => ['#markup' => nl2br($entity->getDescription())]];
+     $row['status'] = $entity->status() ? $this->t('Enabled') : $this->t('Disabled');
+@@ -40,11 +42,11 @@ class ActivityPubTypeListBuilder extends ConfigEntityListBuilder {
+    *
+    * @param $id
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    */
+   protected function getHumanPluginName($id) {
+     try {
+-      /** @var \Drupal\activitypub\Services\Type\TypePluginManager $plugin_manager */
++      /** @var TypePluginManager $plugin_manager */
+       $plugin_manager = \Drupal::service('plugin.manager.activitypub.type');
+       return $plugin_manager->getDefinition($id)['label'];
+     }
+diff --git a/src/Entity/Storage/ActivityPubActivityStorage.php b/src/Entity/Storage/ActivityPubActivityStorage.php
+index 255ed8e..b2d5954 100644
+--- a/src/Entity/Storage/ActivityPubActivityStorage.php
++++ b/src/Entity/Storage/ActivityPubActivityStorage.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Entity\Storage;
+ 
++use Drupal\Core\Database\Query\SelectInterface;
+ use Drupal\Core\Entity\Sql\SqlContentEntityStorage;
+ 
+ /**
+@@ -39,7 +40,7 @@ class ActivityPubActivityStorage extends SqlContentEntityStorage implements Acti
+    *
+    * @param array $conditions
+    *
+-   * @return \Drupal\Core\Database\Query\SelectInterface
++   * @return SelectInterface
+    */
+   protected function getBaseQuery($conditions = []) {
+     $query = $this->database->select($this->getBaseTable(), 't');
+diff --git a/src/Entity/Storage/ActivityPubActivityStorageInterface.php b/src/Entity/Storage/ActivityPubActivityStorageInterface.php
+index 66fddb8..2f5c695 100644
+--- a/src/Entity/Storage/ActivityPubActivityStorageInterface.php
++++ b/src/Entity/Storage/ActivityPubActivityStorageInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Entity\Storage;
+ 
++use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\Core\Entity\ContentEntityStorageInterface;
+ 
+ /**
+@@ -14,7 +15,7 @@ interface ActivityPubActivityStorageInterface extends ContentEntityStorageInterf
+    *
+    * @param array $conditions
+    *
+-   * @return \Drupal\activitypub\Entity\ActivityPubActivityInterface[]
++   * @return ActivityPubActivityInterface[]
+    */
+   public function getActivities($conditions = []);
+ 
+diff --git a/src/Entity/Storage/ActivityPubActorStorageInterface.php b/src/Entity/Storage/ActivityPubActorStorageInterface.php
+index 59f3d94..85a56a4 100644
+--- a/src/Entity/Storage/ActivityPubActorStorageInterface.php
++++ b/src/Entity/Storage/ActivityPubActorStorageInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Entity\Storage;
+ 
++use Drupal\activitypub\Entity\ActivitypubActorInterface;
+ use Drupal\Core\Entity\ContentEntityStorageInterface;
+ 
+ /**
+@@ -24,7 +25,7 @@ interface ActivityPubActorStorageInterface extends ContentEntityStorageInterface
+    * @param $entity_id
+    * @param $type
+    *
+-   * @return NULL|\Drupal\activitypub\Entity\ActivitypubActorInterface
++   * @return NULL|ActivitypubActorInterface
+    */
+   public function loadActorByEntityIdAndType($entity_id, $type);
+ 
+@@ -33,7 +34,7 @@ interface ActivityPubActorStorageInterface extends ContentEntityStorageInterface
+    *
+    * @param $name
+    *
+-   * @return NULL|\Drupal\activitypub\Entity\ActivitypubActorInterface
++   * @return NULL|ActivitypubActorInterface
+    */
+   public function loadActorByName($name);
+ 
+diff --git a/src/EventSubscriber/WebfingerProfileSubscriber.php b/src/EventSubscriber/WebfingerProfileSubscriber.php
+index e169650..a9bc833 100644
+--- a/src/EventSubscriber/WebfingerProfileSubscriber.php
++++ b/src/EventSubscriber/WebfingerProfileSubscriber.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\activitypub\EventSubscriber;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\activitypub\Entity\ActivityPubActorInterface;
+ use Drupal\activitypub\Services\ActivityPubUtilityInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Url;
+@@ -21,43 +26,43 @@ class WebfingerProfileSubscriber implements EventSubscriberInterface {
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The actor storage.
+    *
+-   * @var \Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface
++   * @var ActivityPubActorStorageInterface
+    */
+   protected $actorStorage;
+ 
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The ActivityPub Utility service
+    *
+-   * @var \Drupal\activitypub\Services\ActivityPubUtilityInterface
++   * @var ActivityPubUtilityInterface
+    */
+   protected $activityPubUtility;
+ 
+   /**
+    * WebfingerProfileSubscriber constructor
+    *
+-   * @param \Drupal\activitypub\Services\ActivityPubUtilityInterface $activityPubUtility
++   * @param ActivityPubUtilityInterface $activityPubUtility
+    *   The Activitypub utility service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(ActivityPubUtilityInterface $activityPubUtility, EntityTypeManagerInterface $entity_type_manager, LoggerInterface $logger) {
+     $this->activityPubUtility = $activityPubUtility;
+@@ -69,7 +74,7 @@ class WebfingerProfileSubscriber implements EventSubscriberInterface {
+   /**
+    * Builds a profile response.
+    *
+-   * @param \Drupal\webfinger\Event\WebfingerResponseEvent $event
++   * @param WebfingerResponseEvent $event
+    *   The event to process.
+    *
+    * @throws \Exception
+@@ -149,7 +154,7 @@ class WebfingerProfileSubscriber implements EventSubscriberInterface {
+    *
+    * @param $name
+    *
+-   * @return \Drupal\activitypub\Entity\ActivityPubActorInterface|NULL
++   * @return ActivityPubActorInterface|NULL
+    */
+   protected function getActor($name) {
+     return $this->actorStorage->loadActorByName($name);
+@@ -160,12 +165,12 @@ class WebfingerProfileSubscriber implements EventSubscriberInterface {
+    *
+    * @param int $uid
+    *   The uid of a requested account.
+-   * @return \Drupal\user\UserInterface|null
++   * @return UserInterface|null
+    *   A fully-loaded user object upon successful user load or FALSE if user
+    *   cannot be loaded
+    */
+   protected function getUserByUid($uid): ?UserInterface {
+-    /** @var \Drupal\user\UserInterface $user */
++    /** @var UserInterface $user */
+     $user = $this->userStorage->load($uid);
+ 
+     return $user ? $user : NULL;
+diff --git a/src/Form/ActivityPubActivityForm.php b/src/Form/ActivityPubActivityForm.php
+index e9b16b7..40b9e72 100644
+--- a/src/Form/ActivityPubActivityForm.php
++++ b/src/Form/ActivityPubActivityForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Form;
+ 
++use Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Entity\ContentEntityForm;
+@@ -13,7 +14,7 @@ use Drupal\Core\Url;
+ /**
+  * ActivityPub Activity form.
+  *
+- * @property \Drupal\activitypub\Entity\ActivityPubActivityInterface $entity
++ * @property ActivityPubActivityInterface $entity
+  */
+ class ActivityPubActivityForm extends ContentEntityForm {
+ 
+@@ -129,7 +130,7 @@ class ActivityPubActivityForm extends ContentEntityForm {
+     if ($this->entity->isNew()) {
+       $form['#title'] = $this->t('Add activity');
+ 
+-      /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface $storage */
++      /** @var ActivityPubActorStorageInterface $storage */
+       $storage = $this->entityTypeManager->getStorage('activitypub_actor');
+       $actor = $storage->loadActorByEntityIdAndType($this->currentUser()->id(), 'person');
+       $form['actor']['#default_value'] = Url::fromRoute('activitypub.user.self', ['user' => $this->currentUser()->id(), 'activitypub_actor' => $actor->getName()], ['absolute' => TRUE])->toString();
+diff --git a/src/Form/ActivityPubSettingsForm.php b/src/Form/ActivityPubSettingsForm.php
+index 2a1440f..5db7b73 100644
+--- a/src/Form/ActivityPubSettingsForm.php
++++ b/src/Form/ActivityPubSettingsForm.php
+@@ -16,34 +16,34 @@ class ActivityPubSettingsForm extends ConfigFormBase {
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The entity field type plugin manager.
+    *
+-   * @var \Drupal\Core\Field\FieldTypePluginManagerInterface
++   * @var FieldTypePluginManagerInterface
+    */
+   protected $fieldTypePluginManager;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * SettingsForm constructor
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entityFieldManager
++   * @param EntityFieldManagerInterface $entityFieldManager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Field\FieldTypePluginManagerInterface $fieldTypePluginManager
++   * @param FieldTypePluginManagerInterface $fieldTypePluginManager
+    *   The entity field type plugin manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, EntityFieldManagerInterface $entityFieldManager, FieldTypePluginManagerInterface $fieldTypePluginManager, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Form/ActivityPubTypeForm.php b/src/Form/ActivityPubTypeForm.php
+index 76a0e1b..7386f4f 100644
+--- a/src/Form/ActivityPubTypeForm.php
++++ b/src/Form/ActivityPubTypeForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\activitypub\Form;
+ 
++use Drupal\activitypub\Entity\ActivityPubTypeInterface;
++use Drupal\activitypub\Services\Type\TypePluginInterface;
+ use Drupal\activitypub\Services\Type\TypePluginManager;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -10,21 +12,21 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ /**
+  * ActivityPub type form.
+  *
+- * @property \Drupal\activitypub\Entity\ActivityPubTypeInterface $entity
++ * @property ActivityPubTypeInterface $entity
+  */
+ class ActivityPubTypeForm extends EntityForm {
+ 
+   /**
+    * The plugin manager for ActivityPub objects.
+    *
+-   * @var \Drupal\activitypub\Services\Type\TypePluginManager
++   * @var TypePluginManager
+    */
+   protected $typePluginManager;
+ 
+   /**
+    * ActivitypubTypeForm constructor
+    *
+-   * @param \Drupal\activitypub\Services\Type\TypePluginManager $widget_plugin_manager
++   * @param TypePluginManager $widget_plugin_manager
+    */
+   public function __construct(TypePluginManager $widget_plugin_manager) {
+     $this->typePluginManager = $widget_plugin_manager;
+@@ -85,7 +87,7 @@ class ActivityPubTypeForm extends EntityForm {
+     $plugin_options = ['' => $this->t('- Select -')];
+     foreach ($this->typePluginManager->getDefinitions() as $plugin_id => $definition) {
+ 
+-      /** @var \Drupal\activitypub\Services\Type\TypePluginInterface $typePlugin */
++      /** @var TypePluginInterface $typePlugin */
+       $typePlugin = $this->typePluginManager->createInstance($plugin_id);
+ 
+       if (!$typePlugin->isExposed()) {
+@@ -148,7 +150,7 @@ class ActivityPubTypeForm extends EntityForm {
+       }
+       $this->entity->setPlugin($selected_plugin_id, $configuration);
+ 
+-      /** @var \Drupal\activitypub\Services\Type\TypePluginInterface $typePlugin */
++      /** @var TypePluginInterface $typePlugin */
+       $typePlugin = $this->typePluginManager->createInstance($selected_plugin_id, $this->entity->getPlugin()['configuration']);
+       $form['plugin_configuration'] += $typePlugin->buildConfigurationForm([], $form_state);
+     }
+@@ -179,7 +181,7 @@ class ActivityPubTypeForm extends EntityForm {
+    * Handles form submissions for the type subform.
+    *
+    * @param $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    */
+   public function submitAjaxTypeForm($form, FormStateInterface $form_state) {
+     $form_state->setRebuild();
+@@ -189,7 +191,7 @@ class ActivityPubTypeForm extends EntityForm {
+    * Handles changes ajax elements.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *
+    * @return mixed
+    */
+diff --git a/src/Form/ActivityPubUserForm.php b/src/Form/ActivityPubUserForm.php
+index 8405b71..4544342 100644
+--- a/src/Form/ActivityPubUserForm.php
++++ b/src/Form/ActivityPubUserForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Form;
+ 
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\activitypub\Services\ActivityPubFormAlterInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Form\FormBase;
+@@ -14,14 +15,14 @@ class ActivityPubUserForm extends FormBase {
+   /**
+    * The ActivityPub form alter service.
+    *
+-   * @var \Drupal\activitypub\Services\ActivityPubFormAlterInterface
++   * @var ActivityPubFormAlterInterface
+    */
+   protected $activityPubFormAlter;
+ 
+   /**
+    * UserForm constructor
+    *
+-   * @param \Drupal\activitypub\Services\ActivityPubFormAlterInterface $activitypub_form_alter
++   * @param ActivityPubFormAlterInterface $activitypub_form_alter
+    */
+   public function __construct(ActivityPubFormAlterInterface $activitypub_form_alter) {
+     $this->activityPubFormAlter = $activitypub_form_alter;
+@@ -46,9 +47,9 @@ class ActivityPubUserForm extends FormBase {
+   /**
+    * Check that the actor points to the user.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function currentUserCheck(UserInterface $user) {
+diff --git a/src/Form/ConfirmActivityPubActorDeleteForm.php b/src/Form/ConfirmActivityPubActorDeleteForm.php
+index a00eaf2..3b9a329 100644
+--- a/src/Form/ConfirmActivityPubActorDeleteForm.php
++++ b/src/Form/ConfirmActivityPubActorDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Form;
+ 
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\activitypub\Entity\ActivityPubActorInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Cache\Cache;
+@@ -36,10 +37,10 @@ class ConfirmActivityPubActorDeleteForm extends ConfirmFormBase {
+   /**
+    * Check that the actor points to the user.
+    *
+-   * @param \Drupal\user\UserInterface $user
+-   * @param \Drupal\activitypub\Entity\ActivityPubActorInterface $activitypub_actor
++   * @param UserInterface $user
++   * @param ActivityPubActorInterface $activitypub_actor
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function actorUserCheck(UserInterface $user, ActivityPubActorInterface $activitypub_actor) {
+@@ -69,7 +70,7 @@ class ConfirmActivityPubActorDeleteForm extends ConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActorInterface $activitypub_actor */
++    /** @var ActivityPubActorInterface $activitypub_actor */
+     $activitypub_actor = $form_state->getValue('activitypub_actor');
+     $activitypub_actor->delete();
+     $this->messenger()->addMessage($this->t('ActivityPub profile has been deleted.'));
+diff --git a/src/Form/FollowForm.php b/src/Form/FollowForm.php
+index 1a523ee..288129b 100644
+--- a/src/Form/FollowForm.php
++++ b/src/Form/FollowForm.php
+@@ -14,14 +14,14 @@ class FollowForm extends FormBase {
+   /**
+    * The ActivityPub utility service.
+    *
+-   * @var \Drupal\activitypub\Services\ActivityPubUtilityInterface
++   * @var ActivityPubUtilityInterface
+    */
+   protected $activityPubUtility;
+ 
+   /**
+    * FollowForm constructor
+    *
+-   * @param \Drupal\activitypub\Services\ActivityPubUtilityInterface $activityPubUtility
++   * @param ActivityPubUtilityInterface $activityPubUtility
+    *   The ActivityPub utility service.
+    */
+   public function __construct(ActivityPubUtilityInterface $activityPubUtility) {
+diff --git a/src/ParamConverter/ActivityPubActorConverter.php b/src/ParamConverter/ActivityPubActorConverter.php
+index 89329db..a6dc74a 100644
+--- a/src/ParamConverter/ActivityPubActorConverter.php
++++ b/src/ParamConverter/ActivityPubActorConverter.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\ParamConverter;
+ 
++use Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface;
+ use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -13,14 +14,14 @@ class ActivityPubActorConverter implements ParamConverterInterface {
+   /**
+    * The ActivityPub Actor storage.
+    *
+-   * @var \Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface
++   * @var ActivityPubActorStorageInterface
+    */
+   protected $actorStorage;
+ 
+   /**
+    * ActivityPubActorConverter constructor
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+     try {
+diff --git a/src/Plugin/Block/FollowBlock.php b/src/Plugin/Block/FollowBlock.php
+index 8d573e1..45f817b 100644
+--- a/src/Plugin/Block/FollowBlock.php
++++ b/src/Plugin/Block/FollowBlock.php
+@@ -24,21 +24,21 @@ class FollowBlock extends BlockBase implements  ContainerFactoryPluginInterface
+   /**
+    * The route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The form builder.
+    *
+-   * @var \Drupal\Core\Form\FormBuilderInterface
++   * @var FormBuilderInterface
+    */
+   protected $formBuilder;
+ 
+@@ -54,11 +54,11 @@ class FollowBlock extends BlockBase implements  ContainerFactoryPluginInterface
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Form\FormBuilderInterface $form_builder
++   * @param FormBuilderInterface $form_builder
+    *   The form builder.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, RouteMatchInterface $route_match, EntityTypeManagerInterface $entity_type_manager, FormBuilderInterface $form_builder) {
+diff --git a/src/Plugin/activitypub/type/Context.php b/src/Plugin/activitypub/type/Context.php
+index a28ff1b..a8b4ada 100644
+--- a/src/Plugin/activitypub/type/Context.php
++++ b/src/Plugin/activitypub/type/Context.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Plugin\activitypub\type;
+ 
++use Drupal\activitypub\Entity\ActivityPubTypeInterface;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\activitypub\Services\Type\TypePluginBase;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -37,7 +38,7 @@ class Context extends TypePluginBase {
+   public function onActivityPostSave(ActivityPubActivityInterface $activity, $update = TRUE) {
+     if (in_array($activity->getType(), $this->activityPubUtility->getTimelineTypes()) && !$update) {
+       // Is the context config entity enabled or not.
+-      /** @var \Drupal\activitypub\Entity\ActivityPubTypeInterface $activityPubType */
++      /** @var ActivityPubTypeInterface $activityPubType */
+       $activityPubType = $this->entityTypeManager->getStorage('activitypub_type')->load('context');
+       if ($activityPubType && $activityPubType->isEnabled()) {
+         $payload = @json_decode($activity->getPayLoad(), TRUE);
+@@ -55,7 +56,7 @@ class Context extends TypePluginBase {
+             'payload' => $activity->getPayLoad(),
+           ];
+ 
+-          /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $contextActivity */
++          /** @var ActivityPubActivityInterface $contextActivity */
+           $contextActivity = $this->entityTypeManager->getStorage('activitypub_activity')->create($values);
+           $contextActivity->save();
+           $this->activityPubProcessClient->createQueueItem($contextActivity);
+@@ -71,7 +72,7 @@ class Context extends TypePluginBase {
+     if (!$activity->isProcessed() && $activity->getConfigID() == 'context') {
+       $url = NULL;
+ 
+-      /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $loadActivity */
++      /** @var ActivityPubActivityInterface $loadActivity */
+       $loadActivity = $this->entityTypeManager->getStorage('activitypub_activity')->load($activity->getExternalId());
+ 
+       $payload = @json_decode($loadActivity->getPayLoad(), TRUE);
+diff --git a/src/Plugin/activitypub/type/DynamicTypes.php b/src/Plugin/activitypub/type/DynamicTypes.php
+index 40e268a..87d8541 100644
+--- a/src/Plugin/activitypub/type/DynamicTypes.php
++++ b/src/Plugin/activitypub/type/DynamicTypes.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Plugin\activitypub\type;
+ 
++use Drupal\activitypub\Entity\ActivityPubActorInterface;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\activitypub\Services\Type\TypePluginBase;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -140,7 +141,7 @@ class DynamicTypes extends TypePluginBase {
+     }
+ 
+     $to = array_merge([ActivityPubActivityInterface::PUBLIC_URL], $activity->getTo());
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActorInterface $actor */
++    /** @var ActivityPubActorInterface $actor */
+     $actor = $this->entityTypeManager->getStorage('activitypub_actor')->loadActorByEntityIdAndType($activity->getOwnerId(), 'person');
+     $cc = [$this->renderUrl(Url::fromRoute('activitypub.followers', ['user' => $actor->getOwnerId(), 'activitypub_actor' => $actor->getName()], ['absolute' => TRUE]))];
+     $object['to'] = $to;
+diff --git a/src/Plugin/activitypub/type/StaticTypes.php b/src/Plugin/activitypub/type/StaticTypes.php
+index 2e0ea1e..0c6208b 100644
+--- a/src/Plugin/activitypub/type/StaticTypes.php
++++ b/src/Plugin/activitypub/type/StaticTypes.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\activitypub\Plugin\activitypub\type;
+ 
++use Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface;
++use Drupal\activitypub\Entity\ActivityPubActorInterface;
++use Drupal\comment\CommentInterface;
++use Drupal\node\NodeInterface;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\activitypub\Services\Type\TypePluginBase;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -36,7 +40,7 @@ class StaticTypes extends TypePluginBase {
+       $doSave = FALSE;
+ 
+       if ($activity->getActor() != $activity->getObject()) {
+-        /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface $storage */
++        /** @var ActivityPubActivityStorageInterface $storage */
+         $storage = $this->entityTypeManager->getStorage('activitypub_activity');
+         foreach ($storage->getActivities(['object' => $activity->getObject(), '!type' => 'Delete']) as $a) {
+           $a->delete();
+@@ -47,7 +51,7 @@ class StaticTypes extends TypePluginBase {
+     // Check if the actor already exists. If so, do not save the activity,
+     // otherwise, set status to 0.
+     if ($activity->getType() == 'Follow') {
+-      /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface $storage */
++      /** @var ActivityPubActivityStorageInterface $storage */
+       $storage = $this->entityTypeManager->getStorage('activitypub_activity');
+       $activities = $storage->getActivityRecords(['type' => 'Follow', 'actor' => $activity->getActor(), 'object' => $activity->getObject(), 'collection' => ActivityPubActivityInterface::INBOX]);
+       if (!empty($activities)) {
+@@ -63,7 +67,7 @@ class StaticTypes extends TypePluginBase {
+       $payload = @json_decode($activity->getPayLoad(), TRUE);
+       if (isset($payload['object']) && isset($payload['object']['type']) && $payload['object']['type'] == 'Follow') {
+         $doSave = FALSE;
+-        /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface $storage */
++        /** @var ActivityPubActivityStorageInterface $storage */
+         $storage = $this->entityTypeManager->getStorage('activitypub_activity');
+         foreach ($storage->getActivities(['type' => 'Follow', 'actor' => $activity->getActor(), 'object' => $activity->getObject()]) as $a) {
+           $a->delete();
+@@ -95,7 +99,7 @@ class StaticTypes extends TypePluginBase {
+         'status' => 0,
+       ];
+ 
+-      /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $outboxActivity */
++      /** @var ActivityPubActivityInterface $outboxActivity */
+       $outboxActivity = $this->entityTypeManager->getStorage('activitypub_activity')->create($values);
+       $outboxActivity->save();
+       $this->activityPubProcessClient->createQueueItem($outboxActivity);
+@@ -108,7 +112,7 @@ class StaticTypes extends TypePluginBase {
+ 
+     // Outgoing accept request.
+     if ($activity->getType() == 'Accept' && $activity->getCollection() == ActivityPubActivityInterface::OUTBOX && $update && $activity->isProcessed()) {
+-      /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface $storage */
++      /** @var ActivityPubActivityStorageInterface $storage */
+       $storage = $this->entityTypeManager->getStorage('activitypub_activity');
+       $activities = $storage->getActivities(['type' => 'Follow', 'actor' => $activity->getObject(), 'object' => $activity->getActor(), 'collection' => ActivityPubActivityInterface::INBOX]);
+       if (!empty($activities)) {
+@@ -120,7 +124,7 @@ class StaticTypes extends TypePluginBase {
+ 
+     // Incoming accept request.
+     if ($activity->getType() == 'Accept' && $activity->getCollection() == ActivityPubActivityInterface::INBOX && !$update) {
+-      /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface $storage */
++      /** @var ActivityPubActivityStorageInterface $storage */
+       $storage = $this->entityTypeManager->getStorage('activitypub_activity');
+       $activities = $storage->getActivities(['type' => 'Follow', 'actor' => $activity->getObject(), 'object' => $activity->getActor(), 'collection' => ActivityPubActivityInterface::OUTBOX]);
+       if (!empty($activities)) {
+@@ -208,7 +212,7 @@ class StaticTypes extends TypePluginBase {
+     // Delete type.
+     if ($this->getConfiguration()['activity'] == 'Delete') {
+ 
+-      /** @var \Drupal\activitypub\Entity\ActivityPubActorInterface $actor */
++      /** @var ActivityPubActorInterface $actor */
+       $actor = $this->entityTypeManager->getStorage('activitypub_actor')->loadActorByEntityIdAndType($activity->getOwnerId(), 'person');
+ 
+       if (!$activity->isDirectMessage()) {
+@@ -273,7 +277,7 @@ class StaticTypes extends TypePluginBase {
+       'to' => $activity->getTo(),
+     ];
+ 
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $outboxActivity */
++    /** @var ActivityPubActivityInterface $outboxActivity */
+     $outboxActivity = $this->entityTypeManager->getStorage('activitypub_activity')->create($values);
+     $outboxActivity->save();
+     $this->activityPubProcessClient->createQueueItem($outboxActivity);
+@@ -282,7 +286,7 @@ class StaticTypes extends TypePluginBase {
+   /**
+    * Handle comment creation.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity
++   * @param ActivityPubActivityInterface $activity
+    */
+   protected function handleCommentCreation(ActivityPubActivityInterface $activity) {
+     $pid = 0;
+@@ -299,7 +303,7 @@ class StaticTypes extends TypePluginBase {
+       // This can be a reply on a comment. Get the node to attach the
+       // comment there and set pid.
+       if (!empty($params) && key($params) == 'comment') {
+-        /** @var \Drupal\comment\CommentInterface $comment */
++        /** @var CommentInterface $comment */
+         $comment = $this->entityTypeManager->getStorage('comment')->load($params['comment']);
+         if ($comment && $comment->getCommentedEntityTypeId() == 'node') {
+           $pid = $comment->id();
+@@ -321,7 +325,7 @@ class StaticTypes extends TypePluginBase {
+           $activity_reference_field = 'activitypub_activity';
+           $node_comment_field_name = 'comment';
+ 
+-          /** @var \Drupal\node\NodeInterface $node */
++          /** @var NodeInterface $node */
+           $node = $storage->load($params[$entity_type]);
+           if ($node && $node->hasField($node_comment_field_name) && $node->{$node_comment_field_name}->status == 2) {
+ 
+@@ -345,7 +349,7 @@ class StaticTypes extends TypePluginBase {
+               ],
+             ];
+ 
+-            /** @var \Drupal\comment\CommentInterface $comment */
++            /** @var CommentInterface $comment */
+             $comment = $this->entityTypeManager->getStorage('comment')->create($values);
+             $comment->setCreatedTime($activity->getCreatedTime());
+             $comment->save();
+diff --git a/src/ProxyClass/ParamConverter/ActivityPubActorConverter.php b/src/ProxyClass/ParamConverter/ActivityPubActorConverter.php
+index fe8d06e..9d06251 100644
+--- a/src/ProxyClass/ParamConverter/ActivityPubActorConverter.php
++++ b/src/ProxyClass/ParamConverter/ActivityPubActorConverter.php
+@@ -7,15 +7,19 @@
+ 
+ namespace Drupal\activitypub\ProxyClass\ParamConverter {
+ 
++    use Drupal\Core\ParamConverter\ParamConverterInterface;
++    use Drupal\Core\DependencyInjection\DependencySerializationTrait;
++    use Symfony\Component\DependencyInjection\ContainerInterface;
++    use Symfony\Component\Routing\Route;
+     /**
+      * Provides a proxy class for \Drupal\activitypub\ParamConverter\ActivityPubActorConverter.
+      *
+      * @see \Drupal\Component\ProxyBuilder
+      */
+-    class ActivityPubActorConverter implements \Drupal\Core\ParamConverter\ParamConverterInterface
++    class ActivityPubActorConverter implements ParamConverterInterface
+     {
+ 
+-        use \Drupal\Core\DependencyInjection\DependencySerializationTrait;
++        use DependencySerializationTrait;
+ 
+         /**
+          * The id of the original proxied service.
+@@ -34,19 +38,19 @@ namespace Drupal\activitypub\ProxyClass\ParamConverter {
+         /**
+          * The service container.
+          *
+-         * @var \Symfony\Component\DependencyInjection\ContainerInterface
++         * @var ContainerInterface
+          */
+         protected $container;
+ 
+         /**
+          * Constructs a ProxyClass Drupal proxy object.
+          *
+-         * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++         * @param ContainerInterface $container
+          *   The container.
+          * @param string $drupal_proxy_original_service_id
+          *   The service ID of the original service.
+          */
+-        public function __construct(\Symfony\Component\DependencyInjection\ContainerInterface $container, $drupal_proxy_original_service_id)
++        public function __construct(ContainerInterface $container, $drupal_proxy_original_service_id)
+         {
+             $this->container = $container;
+             $this->drupalProxyOriginalServiceId = $drupal_proxy_original_service_id;
+@@ -78,7 +82,7 @@ namespace Drupal\activitypub\ProxyClass\ParamConverter {
+         /**
+          * {@inheritdoc}
+          */
+-        public function applies($definition, $name, \Symfony\Component\Routing\Route $route)
++        public function applies($definition, $name, Route $route)
+         {
+             return $this->lazyLoadItself()->applies($definition, $name, $route);
+         }
+diff --git a/src/Services/ActivityPubFormAlter.php b/src/Services/ActivityPubFormAlter.php
+index 3b1327c..d9bd70e 100644
+--- a/src/Services/ActivityPubFormAlter.php
++++ b/src/Services/ActivityPubFormAlter.php
+@@ -2,6 +2,16 @@
+ 
+ namespace Drupal\activitypub\Services;
+ 
++use Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface;
++use Drupal\Core\Config\Entity\ConfigEntityStorageInterface;
++use Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\activitypub\Entity\ActivityPubActorInterface;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\activitypub\Entity\ActivityPubActivityInterface;
++use Drupal\activitypub\Entity\ActivityPubTypeInterface;
++use Drupal\comment\CommentInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\DependencyInjection\DependencySerializationTrait;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -24,68 +34,68 @@ class ActivityPubFormAlter implements ActivityPubFormAlterInterface {
+   /**
+    * The ActivityPub Actor storage.
+    *
+-   * @var \Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface
++   * @var ActivityPubActorStorageInterface
+    */
+   protected $actorStorage;
+ 
+   /**
+    * The ActivityPub type storage.
+    *
+-   * @var \Drupal\Core\Config\Entity\ConfigEntityStorageInterface
++   * @var ConfigEntityStorageInterface
+    */
+   protected $typeStorage;
+ 
+   /**
+    * The ActivityPub Activity  storage.
+    *
+-   * @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface
++   * @var ActivityPubActivityStorageInterface
+    */
+   protected $activityStorage;
+ 
+   /**
+    * The ActivityPub utility service.
+    *
+-   * @var \Drupal\activitypub\Services\ActivityPubUtilityInterface
++   * @var ActivityPubUtilityInterface
+    */
+   protected $activityPubUtility;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The process client.
+    *
+-   * @var \Drupal\activitypub\Services\ActivityPubProcessClientInterface
++   * @var ActivityPubProcessClientInterface
+    */
+   protected $activityPubProcessClient;
+ 
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * ActivityPubFormAlter constructor
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\activitypub\Services\ActivityPubUtilityInterface $activitypub_utility
++   * @param ActivityPubUtilityInterface $activitypub_utility
+    *   The ActivityPub utility service.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\activitypub\Services\ActivityPubProcessClientInterface $activitypub_process_Client
++   * @param ActivityPubProcessClientInterface $activitypub_process_Client
+    *   The ActivityPub process client service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, ActivityPubUtilityInterface $activitypub_utility, AccountInterface $current_user, ActivityPubProcessClientInterface $activitypub_process_Client, MessengerInterface $messenger) {
+     $this->actorStorage = $entity_type_manager->getStorage('activitypub_actor');
+@@ -102,7 +112,7 @@ class ActivityPubFormAlter implements ActivityPubFormAlterInterface {
+    */
+   public function addActivityPubSettingsFormElement(array &$form, FormStateInterface $form_state, EntityInterface $entity, $type) {
+ 
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActorInterface $actor */
++    /** @var ActivityPubActorInterface $actor */
+     $actor = $this->actorStorage->loadActorByEntityIdAndType($entity->id(), $type);
+ 
+     $form['activitypub'] = [
+@@ -197,7 +207,7 @@ class ActivityPubFormAlter implements ActivityPubFormAlterInterface {
+    * Validate callback for the ActivityPub settings form element.
+    *
+    * @param $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    */
+   public function validateSettingsForm($form, FormStateInterface $form_state) {
+     if ($form_state->getValue('activitypub_enable')) {
+@@ -218,9 +228,9 @@ class ActivityPubFormAlter implements ActivityPubFormAlterInterface {
+    * Submit callback for the ActivityPub settings form element.
+    *
+    * @param $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function submitSettingsForm($form, FormStateInterface $form_state) {
+     $entity = $form_state->getValue('entity');
+@@ -244,7 +254,7 @@ class ActivityPubFormAlter implements ActivityPubFormAlterInterface {
+         $values['uid'] = $entity->getOwnerId();
+       }
+ 
+-      /** @var \Drupal\activitypub\Entity\ActivityPubActorInterface $actor */
++      /** @var ActivityPubActorInterface $actor */
+       $actor = $this->actorStorage->create($values);
+       $actor->save();
+ 
+@@ -254,7 +264,7 @@ class ActivityPubFormAlter implements ActivityPubFormAlterInterface {
+ 
+     }
+     elseif ($form_state->getValue('activitypub_actor')) {
+-      /** @var \Drupal\activitypub\Entity\ActivityPubActorInterface $actor */
++      /** @var ActivityPubActorInterface $actor */
+       $actor = $this->actorStorage->load($form_state->getValue('activitypub_actor'));
+       $actor->set('blocked_domains', $form_state->getValue('activitypub_blocked_domains'));
+       $actor->set('summary', $form_state->getValue('activitypub_summary'));
+@@ -277,7 +287,7 @@ class ActivityPubFormAlter implements ActivityPubFormAlterInterface {
+ 
+     $options = [];
+     $outbox_selected = [];
+-    /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface[] $outboxEntities */
++    /** @var ActivityPubActivityInterface[] $outboxEntities */
+     if ($entity->id()) {
+       $outboxEntities = $this->activityStorage->loadByProperties(['entity_type_id' => $entity->getEntityTypeId(), 'entity_id' => $entity->id(), 'collection' => 'outbox']);
+       foreach ($outboxEntities as $outboxEntity) {
+@@ -339,16 +349,16 @@ class ActivityPubFormAlter implements ActivityPubFormAlterInterface {
+    * Submit outbox form.
+    *
+    * @param $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function submitOutboxForm($form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Entity\EntityInterface $entity */
++    /** @var EntityInterface $entity */
+     $entity = $form_state->getFormObject()->getEntity();
+     if ($type = $form_state->getValue('activitypub_type')) {
+ 
+-      /** @var \Drupal\activitypub\Entity\ActivityPubTypeInterface $activityPubType */
++      /** @var ActivityPubTypeInterface $activityPubType */
+       $activityPubType = $this->typeStorage->load($type);
+ 
+       $values = [
+@@ -368,7 +378,7 @@ class ActivityPubFormAlter implements ActivityPubFormAlterInterface {
+         $values['to'] = $to;
+       }
+ 
+-      /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity */
++      /** @var ActivityPubActivityInterface $activity */
+       $activity = $this->activityStorage->create($values);
+       $doSave = TRUE;
+       $activity->preOutboxSave($entity, $activityPubType, $doSave);
+@@ -385,7 +395,7 @@ class ActivityPubFormAlter implements ActivityPubFormAlterInterface {
+    * {@inheritdoc}
+    */
+   public function alterCommentForm(array &$form, FormStateInterface $form_state, EntityInterface $entity) {
+-    /** @var \Drupal\comment\CommentInterface $entity */
++    /** @var CommentInterface $entity */
+     if (isset($form['activitypub_activity'])) {
+       $actor = $this->actorStorage->loadActorByEntityIdAndType($this->currentUser->id(), 'person');
+       if (!$actor) {
+diff --git a/src/Services/ActivityPubFormAlterInterface.php b/src/Services/ActivityPubFormAlterInterface.php
+index 2861436..9e74113 100644
+--- a/src/Services/ActivityPubFormAlterInterface.php
++++ b/src/Services/ActivityPubFormAlterInterface.php
+@@ -11,8 +11,8 @@ interface ActivityPubFormAlterInterface {
+    * Adds the ActivityPub settings form element.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param FormStateInterface $form_state
++   * @param EntityInterface $entity
+    * @param $type
+    */
+   public function addActivityPubSettingsFormElement(array &$form, FormStateInterface $form_state, EntityInterface $entity, $type);
+@@ -21,8 +21,8 @@ interface ActivityPubFormAlterInterface {
+    * Adds the ActivityPub outbox form element.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param FormStateInterface $form_state
++   * @param EntityInterface $entity
+    */
+   public function addActivityPubOutboxFormElement(array &$form, FormStateInterface $form_state, EntityInterface $entity);
+ 
+@@ -30,8 +30,8 @@ interface ActivityPubFormAlterInterface {
+    * Alter the comment form.
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param FormStateInterface $form_state
++   * @param EntityInterface $entity
+    */
+   public function alterCommentForm(array &$form, FormStateInterface $form_state, EntityInterface $entity);
+ 
+diff --git a/src/Services/ActivityPubMediaCache.php b/src/Services/ActivityPubMediaCache.php
+index e2b444a..c2d99e4 100644
+--- a/src/Services/ActivityPubMediaCache.php
++++ b/src/Services/ActivityPubMediaCache.php
+@@ -12,23 +12,23 @@ class ActivityPubMediaCache implements ActivityPubMediaCacheInterface {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * ActivityPubCacheClient constructor
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, ModuleHandlerInterface $module_handler) {
+@@ -72,11 +72,11 @@ class ActivityPubMediaCache implements ActivityPubMediaCacheInterface {
+           $filename = $style->buildUrl($filename);
+         }
+         else {
+-          $filename = file_create_url($filename);
++          $filename = \Drupal::service('file_url_generator')->generateAbsoluteString($filename);
+         }
+       }
+       else {
+-        $filename = file_create_url($filename);
++        $filename = \Drupal::service('file_url_generator')->generateAbsoluteString($filename);
+       }
+     }
+ 
+diff --git a/src/Services/ActivityPubProcessClient.php b/src/Services/ActivityPubProcessClient.php
+index c619d86..bac46d9 100644
+--- a/src/Services/ActivityPubProcessClient.php
++++ b/src/Services/ActivityPubProcessClient.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Services;
+ 
++use Drupal\activitypub\Entity\Storage\ActivityPubActorStorage;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use GuzzleHttp\ClientInterface;
+@@ -13,28 +14,28 @@ class ActivityPubProcessClient implements ActivityPubProcessClientInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The ActivityPub Utility service.
+    *
+-   * @var \Drupal\activitypub\Services\ActivityPubUtilityInterface
++   * @var ActivityPubUtilityInterface
+    */
+   protected $activityPubUtility;
+ 
+   /**
+    * The http client.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+@@ -48,13 +49,13 @@ class ActivityPubProcessClient implements ActivityPubProcessClientInterface {
+   /**
+    * ActivityPubProcessClient constructor
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\activitypub\Services\ActivityPubUtilityInterface $activitypub_utility
++   * @param ActivityPubUtilityInterface $activitypub_utility
+    *   The activitypub utility.
+-   * @param \GuzzleHttp\ClientInterface $http_client
++   * @param ClientInterface $http_client
+    *   The HTTP client.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, ActivityPubUtilityInterface $activitypub_utility, ClientInterface $http_client, LoggerInterface $logger) {
+@@ -84,7 +85,7 @@ class ActivityPubProcessClient implements ActivityPubProcessClientInterface {
+         $remove_queue_item = FALSE;
+       }
+ 
+-      /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity */
++      /** @var ActivityPubActivityInterface $activity */
+       $activity = $this->entityTypeManager->getStorage('activitypub_activity')->load($data['activity']);
+       if (!empty($activity)) {
+         try {
+@@ -117,7 +118,7 @@ class ActivityPubProcessClient implements ActivityPubProcessClientInterface {
+ 
+             // Get followers.
+             $conditions = ['type' => 'Follow', 'object' => str_replace('/followers', '', $build['cc'][0]), 'status' => 1];
+-            /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $followers */
++            /** @var ActivityPubActivityInterface $followers */
+             $followers = $this->entityTypeManager->getStorage('activitypub_activity')->loadByProperties($conditions);
+             foreach ($followers as $follower) {
+               $targets[] = $follower->getActor();
+@@ -174,7 +175,7 @@ class ActivityPubProcessClient implements ActivityPubProcessClientInterface {
+     $this->setDebug($debug);
+     $server = $this->activityPubUtility->getServer();
+ 
+-    /** @var \Drupal\activitypub\Entity\Storage\ActivityPubActorStorage $actorStorage */
++    /** @var ActivityPubActorStorage $actorStorage */
+     $actorStorage = $this->entityTypeManager->getStorage('activitypub_actor');
+ 
+     while (time() < $end && ($item = \Drupal::queue(ACTIVITYPUB_OUTBOX_SEND_QUEUE)->claimItem())) {
+@@ -200,7 +201,7 @@ class ActivityPubProcessClient implements ActivityPubProcessClientInterface {
+         $remove_queue_item = FALSE;
+       }
+ 
+-      /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity */
++      /** @var ActivityPubActivityInterface $activity */
+       $activity = $this->entityTypeManager->getStorage('activitypub_activity')->load($data['activity']);
+       if (!empty($activity)) {
+         try {
+@@ -308,7 +309,7 @@ class ActivityPubProcessClient implements ActivityPubProcessClientInterface {
+       $activity = NULL;
+       $remove_queue_item = TRUE;
+ 
+-      /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity */
++      /** @var ActivityPubActivityInterface $activity */
+       $activity = $this->entityTypeManager->getStorage('activitypub_activity')->load($data['activity']);
+       if (!empty($activity)) {
+         try {
+diff --git a/src/Services/ActivityPubProcessClientInterface.php b/src/Services/ActivityPubProcessClientInterface.php
+index 3f47c57..a5bfae5 100644
+--- a/src/Services/ActivityPubProcessClientInterface.php
++++ b/src/Services/ActivityPubProcessClientInterface.php
+@@ -50,14 +50,14 @@ interface ActivityPubProcessClientInterface {
+   /**
+    * Generates a queue item, either inbox or outbox.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activityPubActivity
++   * @param ActivityPubActivityInterface $activityPubActivity
+    */
+   public function createQueueItem(ActivityPubActivityInterface $activityPubActivity);
+ 
+   /**
+    * Generates a outbox send queue item.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activityPubActivity
++   * @param ActivityPubActivityInterface $activityPubActivity
+    *   The activity.
+    * @param $build
+    *   The build for this activity.
+diff --git a/src/Services/ActivityPubUtility.php b/src/Services/ActivityPubUtility.php
+index b5c049f..2d3c093 100644
+--- a/src/Services/ActivityPubUtility.php
++++ b/src/Services/ActivityPubUtility.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\activitypub\Services;
+ 
++use Drupal\image\ImageStyleStorageInterface;
++use Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface;
++use Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface;
++use Drupal\file\FileInterface;
++use Drupal\image\ImageStyleInterface;
+ use ActivityPhp\Server;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\activitypub\Entity\ActivityPubActorInterface;
+@@ -21,64 +26,64 @@ class ActivityPubUtility implements ActivityPubUtilityInterface {
+   /**
+    * The image style storage.
+    *
+-   * @var \Drupal\image\ImageStyleStorageInterface
++   * @var ImageStyleStorageInterface
+    */
+   protected $imageStyleStorage;
+ 
+   /**
+    * The actor storage.
+    *
+-   * @var \Drupal\activitypub\Entity\Storage\ActivityPubActorStorageInterface
++   * @var ActivityPubActorStorageInterface
+    */
+   protected $actorStorage;
+ 
+   /**
+    * The activitypub storage.
+    *
+-   * @var \Drupal\activitypub\Entity\Storage\ActivityPubActivityStorageInterface
++   * @var ActivityPubActivityStorageInterface
+    */
+   protected $activityStorage;
+ 
+   /**
+    * The request stack
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @var RequestStack $requestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The file system service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * ActivityPubUtility constructor
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   The file system service.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, RequestStack $request_stack, ConfigFactoryInterface $config_factory, FileSystemInterface $file_system, LoggerInterface $logger) {
+@@ -111,10 +116,10 @@ class ActivityPubUtility implements ActivityPubUtilityInterface {
+   public function getActivityPubUserAvatar(UserInterface $user) {
+     $config = $this->configFactory->get('activitypub.settings');
+     $avatar_user_field = $config->get('avatar_user_field');
+-    /** @var \Drupal\file\FileInterface $image */
++    /** @var FileInterface $image */
+     if (!empty($avatar_user_field) && $user->hasField($avatar_user_field) && ($image = $user->get($avatar_user_field)->entity)) {
+ 
+-      /** @var \Drupal\image\ImageStyleInterface $image_style */
++      /** @var ImageStyleInterface $image_style */
+       $image_style = $this->imageStyleStorage->load($config->get('avatar_user_style'));
+       $image_url = $image_style->buildUrl($image->getFileUri());
+ 
+@@ -122,9 +127,9 @@ class ActivityPubUtility implements ActivityPubUtilityInterface {
+     else {
+       $avatar_path = activitypub_default_avatar_path();
+       if ($avatar_path == 'assets/avatar.png') {
+-        $avatar_path = drupal_get_path('module', 'activitypub') . '/' . $avatar_path;
++        $avatar_path = \Drupal::service('extension.list.module')->getPath('activitypub') . '/' . $avatar_path;
+       }
+-      $image_url = file_create_url($avatar_path);
++      $image_url = \Drupal::service('file_url_generator')->generateAbsoluteString($avatar_path);
+     }
+ 
+     return $image_url;
+@@ -187,7 +192,7 @@ class ActivityPubUtility implements ActivityPubUtilityInterface {
+         ];
+         $activities = $this->activityStorage->loadByProperties($conditions);
+         if (count($activities) == 1) {
+-          /** @var \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity */
++          /** @var ActivityPubActivityInterface $activity */
+           $activity = array_shift($activities);
+           $activity->onEntityDelete($entity);
+           $activity->delete();
+diff --git a/src/Services/ActivityPubUtilityInterface.php b/src/Services/ActivityPubUtilityInterface.php
+index ae4987c..393d6f0 100644
+--- a/src/Services/ActivityPubUtilityInterface.php
++++ b/src/Services/ActivityPubUtilityInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\activitypub\Services;
+ 
++use ActivityPhp\Server;
+ use Drupal\activitypub\Entity\ActivityPubActorInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\user\UserInterface;
+@@ -12,7 +13,7 @@ interface ActivityPubUtilityInterface {
+   /**
+    * Returns the ActivityPub name.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActorInterface $actor
++   * @param ActivityPubActorInterface $actor
+    *
+    * @return string
+    */
+@@ -21,7 +22,7 @@ interface ActivityPubUtilityInterface {
+   /**
+    * Returns the ActivityPub ID based on the Actor.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActorInterface $actor
++   * @param ActivityPubActorInterface $actor
+    *
+    * @return string
+    */
+@@ -30,7 +31,7 @@ interface ActivityPubUtilityInterface {
+   /**
+    * Returns the user avatar, if any.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *
+    * @return string
+    */
+@@ -41,7 +42,7 @@ interface ActivityPubUtilityInterface {
+    *
+    * @param array $config
+    *
+-   * @return \ActivityPhp\Server
++   * @return Server
+    */
+   public function getServer(array $config = []);
+ 
+@@ -55,7 +56,7 @@ interface ActivityPubUtilityInterface {
+   /**
+    * Act on entity delete.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *
+    * @return mixed
+    */
+@@ -134,7 +135,7 @@ interface ActivityPubUtilityInterface {
+   /**
+    * Verify signature.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    * @param string $actor
+    *
+    * @return bool
+diff --git a/src/Services/Type/TypePluginBase.php b/src/Services/Type/TypePluginBase.php
+index 093550b..5056b6d 100644
+--- a/src/Services/Type/TypePluginBase.php
++++ b/src/Services/Type/TypePluginBase.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\activitypub\Services\Type;
+ 
++use Drupal\Core\DateTime\DateFormatInterface;
++use Drupal\activitypub\Services\ActivityPubProcessClient;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\image\ImageStyleInterface;
+ use Drupal\activitypub\Entity\ActivityPubActivityInterface;
+ use Drupal\activitypub\Entity\ActivityPubTypeInterface;
+ use Drupal\activitypub\Services\ActivityPubProcessClientInterface;
+@@ -30,56 +35,56 @@ abstract class TypePluginBase extends PluginBase implements TypePluginInterface,
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The date formatter.
+    *
+-   * @var \Drupal\Core\DateTime\DateFormatInterface
++   * @var DateFormatInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The ActivityPub process client.
+    *
+-   * @var \Drupal\activitypub\Services\ActivityPubProcessClient
++   * @var ActivityPubProcessClient
+    */
+   protected $activityPubProcessClient;
+ 
+   /**
+    * The ActivityPub utility service.
+    *
+-   * @var \Drupal\activitypub\Services\ActivityPubUtilityInterface
++   * @var ActivityPubUtilityInterface
+    */
+   protected $activityPubUtility;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+@@ -189,8 +194,8 @@ abstract class TypePluginBase extends PluginBase implements TypePluginInterface,
+    * @param $value
+    *
+    * @return array|mixed|null
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getValue($property, $value) {
+     $return = NULL;
+@@ -211,7 +216,7 @@ abstract class TypePluginBase extends PluginBase implements TypePluginInterface,
+       case 'attachment':
+         $return = [];
+         foreach ($value as $v) {
+-          /** @var \Drupal\file\FileInterface $file */
++          /** @var FileInterface $file */
+           $file = $this->entityTypeManager->getStorage('file')->load($v['target_id']);
+           $return[] = (object) [
+             'type' => 'Image',
+@@ -228,31 +233,31 @@ abstract class TypePluginBase extends PluginBase implements TypePluginInterface,
+   /**
+    * Gets the file URL.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *
+    * @return string
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function getFileUrl(FileInterface $file) {
+     $config = $this->configFactory->get('activitypub.settings');
+     $attachment_content_style = $config->get('attachment_content_style');
+     if (!empty($attachment_content_style)) {
+-      /** @var \Drupal\image\ImageStyleInterface $image_style */
++      /** @var ImageStyleInterface $image_style */
+       $storage = $this->entityTypeManager->getStorage('image_style');
+       $image_style = $storage->load($attachment_content_style);
+       return $image_style->buildUrl($file->getFileUri());
+     }
+     else {
+-      return file_create_url($file->getFileUri());
++      return \Drupal::service('file_url_generator')->generateAbsoluteString($file->getFileUri());
+     }
+   }
+ 
+   /**
+    * Render a URL from an entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *
+    * @return string
+    */
+@@ -265,7 +270,7 @@ abstract class TypePluginBase extends PluginBase implements TypePluginInterface,
+   /**
+    * Render a Url.
+    *
+-   * @param \Drupal\Core\Url $url
++   * @param Url $url
+    *
+    * @return string
+    */
+diff --git a/src/Services/Type/TypePluginInterface.php b/src/Services/Type/TypePluginInterface.php
+index dca3c20..8a2ae54 100644
+--- a/src/Services/Type/TypePluginInterface.php
++++ b/src/Services/Type/TypePluginInterface.php
+@@ -50,7 +50,7 @@ interface TypePluginInterface extends ConfigurableInterface, DependentPluginInte
+   /**
+    * Act on pre save of an activity arriving in the Inbox.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity
++   * @param ActivityPubActivityInterface $activity
+    *   The activity being saved.
+    * @param $doSave
+    *   Whether to save the activity. Set to FALSE if you don't want the activity
+@@ -61,11 +61,11 @@ interface TypePluginInterface extends ConfigurableInterface, DependentPluginInte
+   /**
+    * Act on outbox pre save.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity
++   * @param ActivityPubActivityInterface $activity
+    *   The activity being saved.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity being saved, usually a node.
+-   * @param \Drupal\activitypub\Entity\ActivityPubTypeInterface $activityPubType
++   * @param ActivityPubTypeInterface $activityPubType
+    *   The activitypub type.
+    * @param $doSave
+    *   Whether to save the activity. Set to FALSE if you don't want the activity
+@@ -78,7 +78,7 @@ interface TypePluginInterface extends ConfigurableInterface, DependentPluginInte
+   /**
+    * Act on post save of an activity.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity
++   * @param ActivityPubActivityInterface $activity
+    *   The activity which was saved.
+    * @param $update
+    *   Specifies whether the entity is being updated or created.
+@@ -88,9 +88,9 @@ interface TypePluginInterface extends ConfigurableInterface, DependentPluginInte
+   /**
+    * Act when a content entity is deleted, apart from user or Activitypub actor.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity
++   * @param ActivityPubActivityInterface $activity
+    *   The activity that references the entity.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity that is being deleted.
+    *
+    * @return mixed
+@@ -102,7 +102,7 @@ interface TypePluginInterface extends ConfigurableInterface, DependentPluginInte
+    *
+    * @param array $form
+    *   A form API form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+    *
+    * @return array
+@@ -113,8 +113,8 @@ interface TypePluginInterface extends ConfigurableInterface, DependentPluginInte
+   /**
+    * Build the activity.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity
+-   * @param \Drupal\Core\Entity\EntityInterface|null $entity
++   * @param ActivityPubActivityInterface $activity
++   * @param EntityInterface|null $entity
+    *
+    * @return array
+    */
+@@ -123,8 +123,8 @@ interface TypePluginInterface extends ConfigurableInterface, DependentPluginInte
+   /**
+    * Do inbox processing.
+    *
+-   * @param \Drupal\activitypub\Entity\ActivityPubActivityInterface $activity
+-   * @param \Drupal\Core\Entity\EntityInterface|null $entity
++   * @param ActivityPubActivityInterface $activity
++   * @param EntityInterface|null $entity
+    */
+   public function doInboxProcess(ActivityPubActivityInterface $activity, EntityInterface $entity = NULL);
+ 
+diff --git a/src/StackMiddleware/FormatSetter.php b/src/StackMiddleware/FormatSetter.php
+index c2ff36c..fea1a7f 100644
+--- a/src/StackMiddleware/FormatSetter.php
++++ b/src/StackMiddleware/FormatSetter.php
+@@ -19,14 +19,14 @@ class FormatSetter implements HttpKernelInterface {
+   /**
+    * The wrapped HTTP kernel.
+    *
+-   * @var \Symfony\Component\HttpKernel\HttpKernelInterface
++   * @var HttpKernelInterface
+    */
+   protected $httpKernel;
+ 
+   /**
+    * Constructs a FormatSetter object.
+    *
+-   * @param \Symfony\Component\HttpKernel\HttpKernelInterface $http_kernel
++   * @param HttpKernelInterface $http_kernel
+    *   The decorated kernel.
+    */
+   public function __construct(HttpKernelInterface $http_kernel) {

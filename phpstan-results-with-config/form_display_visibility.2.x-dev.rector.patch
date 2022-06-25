@@ -1,0 +1,360 @@
+diff --git a/form_display_visibility.info.yml b/form_display_visibility.info.yml
+index 102e94d..3b1a9b1 100644
+--- a/form_display_visibility.info.yml
++++ b/form_display_visibility.info.yml
+@@ -1,6 +1,6 @@
+ name: "Entity Form Display Visibility"
+ description: "Allows visibility settings per field on the entity form display"
+-core_version_requirement: ^9
++core_version_requirement: ^9 || ^10
+ type: module
+ dependencies:
+   - drupal:field_ui
+diff --git a/form_display_visibility.module b/form_display_visibility.module
+index c887646..af7c229 100644
+--- a/form_display_visibility.module
++++ b/form_display_visibility.module
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\form_display_visibility\Plugin\FormDisplayVisibilityConditionInterface;
++use Drupal\Core\Field\FieldConfigInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ /**
+  * @file
+  * Form display visibility hooks and alters.
+@@ -21,7 +25,7 @@ function form_display_visibility_field_widget_third_party_settings_form(WidgetIn
+   $field_settings = form_display_visibility_settings_getter($field_definition, $form_mode);
+   $plugin_manager = \Drupal::service('plugin.manager.form_display_visibility_condition');
+   foreach ($plugin_manager->getDefinitions() as $condition_plugin) {
+-    /** @var \Drupal\form_display_visibility\Plugin\FormDisplayVisibilityConditionInterface $condition */
++    /** @var FormDisplayVisibilityConditionInterface $condition */
+     $condition = $plugin_manager->createInstance($condition_plugin['id'], ['field_settings' => $field_settings]);
+     $conditions[$condition_plugin['id']] = $condition->buildForm();
+   }
+@@ -47,7 +51,7 @@ function form_display_visibility_field_widget_settings_summary_alter(array &$sum
+   if ($conditions = $context['widget']->getThirdPartySetting('form_display_visibility', 'conditions')) {
+     $plugin_manager = \Drupal::service('plugin.manager.form_display_visibility_condition');
+     foreach ($conditions as $id => $condition) {
+-      /** @var \Drupal\form_display_visibility\Plugin\FormDisplayVisibilityConditionInterface $condition_plugin */
++      /** @var FormDisplayVisibilityConditionInterface $condition_plugin */
+       $condition_plugin = $plugin_manager->createInstance($id, $conditions);
+       $summary[] = $condition_plugin->displaySummary();
+     }
+@@ -65,7 +69,7 @@ function form_display_visibility_field_widget_multivalue_form_alter(array &$elem
+     // Nothing to do for this form.
+     return;
+   }
+-  /** @var \Drupal\Core\Field\FieldConfigInterface $field_definition */
++  /** @var FieldConfigInterface $field_definition */
+   $field_definition = $context['items']->getFieldDefinition();
+   $form_mode = form_display_visibility_filter_form_mode_helper($field_definition->getTargetEntityTypeId(), $form_object->getOperation());
+ 
+@@ -74,7 +78,7 @@ function form_display_visibility_field_widget_multivalue_form_alter(array &$elem
+     $plugin_definitions = $plugin_manager->getDefinitions();
+     $access = AccessResult::allowed();
+     foreach ($plugin_definitions as $condition_plugin) {
+-      /** @var \Drupal\form_display_visibility\Plugin\FormDisplayVisibilityConditionInterface $condition */
++      /** @var FormDisplayVisibilityConditionInterface $condition */
+       $condition = $plugin_manager->createInstance($condition_plugin['id'], ['field_settings' => $field_settings]);
+       $access = $access->andIf($condition->applyCondition());
+     }
+@@ -108,7 +112,7 @@ function form_display_visibility_filter_form_mode_helper($entity_type_id, $form_
+ /**
+  * Helper function to get the form display settings.
+  *
+- * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++ * @param FieldDefinitionInterface $field_definition
+  *   The field definition.
+  * @param string $form_mode
+  *   The form mode.
+@@ -116,8 +120,8 @@ function form_display_visibility_filter_form_mode_helper($entity_type_id, $form_
+  * @return array
+  *   The field settings. Empty array if not found.
+  *
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++ * @throws InvalidPluginDefinitionException
++ * @throws PluginNotFoundException
+  */
+ function form_display_visibility_settings_getter(FieldDefinitionInterface $field_definition, $form_mode) {
+   if ($config_entity = \Drupal::entityTypeManager()
+diff --git a/src/Annotation/FormDisplayVisibilityCondition.php b/src/Annotation/FormDisplayVisibilityCondition.php
+index 5c57058..901b939 100644
+--- a/src/Annotation/FormDisplayVisibilityCondition.php
++++ b/src/Annotation/FormDisplayVisibilityCondition.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\form_display_visibility\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -21,7 +22,7 @@ class FormDisplayVisibilityCondition extends Plugin {
+   /**
+    * The human-readable name of the event operation.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -30,7 +31,7 @@ class FormDisplayVisibilityCondition extends Plugin {
+   /**
+    * The description of the event operation.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Plugin/FormDisplayVisibilityCondition/AccessByPermission.php b/src/Plugin/FormDisplayVisibilityCondition/AccessByPermission.php
+index 5960a7e..66c5d74 100644
+--- a/src/Plugin/FormDisplayVisibilityCondition/AccessByPermission.php
++++ b/src/Plugin/FormDisplayVisibilityCondition/AccessByPermission.php
+@@ -25,21 +25,21 @@ class AccessByPermission extends PluginBase implements FormDisplayVisibilityCond
+   /**
+    * The permission handler.
+    *
+-   * @var \Drupal\user\PermissionHandlerInterface
++   * @var PermissionHandlerInterface
+    */
+   protected $permissionHandler;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+@@ -52,11 +52,11 @@ class AccessByPermission extends PluginBase implements FormDisplayVisibilityCond
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\user\PermissionHandlerInterface $permission_handler
++   * @param PermissionHandlerInterface $permission_handler
+    *   The permission handler.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, PermissionHandlerInterface $permission_handler, ModuleHandlerInterface $module_handler, AccountInterface $current_user) {
+diff --git a/src/Plugin/FormDisplayVisibilityCondition/AccessByRole.php b/src/Plugin/FormDisplayVisibilityCondition/AccessByRole.php
+index 8dd6cde..41b02f8 100644
+--- a/src/Plugin/FormDisplayVisibilityCondition/AccessByRole.php
++++ b/src/Plugin/FormDisplayVisibilityCondition/AccessByRole.php
+@@ -23,7 +23,7 @@ class AccessByRole extends PluginBase implements FormDisplayVisibilityConditionI
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+@@ -36,7 +36,7 @@ class AccessByRole extends PluginBase implements FormDisplayVisibilityConditionI
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, AccountInterface $current_user) {
+diff --git a/src/Plugin/FormDisplayVisibilityConditionInterface.php b/src/Plugin/FormDisplayVisibilityConditionInterface.php
+index b8c12f8..97ba17a 100644
+--- a/src/Plugin/FormDisplayVisibilityConditionInterface.php
++++ b/src/Plugin/FormDisplayVisibilityConditionInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\form_display_visibility\Plugin;
+ 
++use Drupal\Core\Access\AccessResult;
+ /**
+  * Provides an interface for FormDisplayVisibilityCondition plugins.
+  */
+@@ -18,7 +19,7 @@ interface FormDisplayVisibilityConditionInterface {
+   /**
+    * Calculates the access level for a given condition.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   Access result of the calculation.
+    */
+   public function applyCondition();
+diff --git a/src/Plugin/FormDisplayVisibilityConditionPluginManager.php b/src/Plugin/FormDisplayVisibilityConditionPluginManager.php
+index c280493..d5ff20b 100644
+--- a/src/Plugin/FormDisplayVisibilityConditionPluginManager.php
++++ b/src/Plugin/FormDisplayVisibilityConditionPluginManager.php
+@@ -17,9 +17,9 @@ class FormDisplayVisibilityConditionPluginManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/tests/src/Kernel/FormDisplayVisibilityAccessByPermissionTest.php b/tests/src/Kernel/FormDisplayVisibilityAccessByPermissionTest.php
+index 43a52c4..ba21409 100644
+--- a/tests/src/Kernel/FormDisplayVisibilityAccessByPermissionTest.php
++++ b/tests/src/Kernel/FormDisplayVisibilityAccessByPermissionTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\form_display_visibility\Kernel;
+ 
++use Drupal\user\UserInterface;
++use Drupal\user\RoleInterface;
+ use Drupal\Core\Entity\Entity\EntityFormDisplay;
+ use Drupal\entity_test\Entity\EntityTest;
+ use Drupal\field\Entity\FieldConfig;
+@@ -38,28 +40,28 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+   /**
+    * The test field storage config.
+    *
+-   * @var \Drupal\field\Entity\FieldStorageConfig
++   * @var FieldStorageConfig
+    */
+   protected $fieldStorage;
+ 
+   /**
+    * The field config.
+    *
+-   * @var \Drupal\field\Entity\FieldConfig
++   * @var FieldConfig
+    */
+   protected $field;
+ 
+   /**
+    * An admin user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $admin;
+ 
+   /**
+    * A custom role for testing purposes.
+    *
+-   * @var \Drupal\user\RoleInterface
++   * @var RoleInterface
+    */
+   protected $role;
+ 
+@@ -98,7 +100,7 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installEntitySchema('entity_test');
+     $this->installEntitySchema('user');
+@@ -150,7 +152,7 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+       'third_party_settings' => [],
+       'region' => 'content',
+     ];
+-    $this->assertEqual($form_display->getComponent($this->fieldName), $expected);
++    $this->assertEquals($form_display->getComponent($this->fieldName), $expected);
+ 
+     $normal_user = $this->createUser();
+     $this->setCurrentUser($normal_user);
+@@ -185,7 +187,7 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+       'region' => 'content',
+       'third_party_settings' => $third_party_settings,
+     ];
+-    $this->assertEqual($form_display->getComponent($this->fieldName), $expected);
++    $this->assertEquals($form_display->getComponent($this->fieldName), $expected);
+ 
+     $normal_user = $this->createUser();
+     $this->setCurrentUser($normal_user);
+@@ -220,7 +222,7 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+       'region' => 'content',
+       'third_party_settings' => $third_party_settings,
+     ];
+-    $this->assertEqual($form_display->getComponent($this->fieldName), $expected);
++    $this->assertEquals($form_display->getComponent($this->fieldName), $expected);
+ 
+     $normal_user = $this->createUser();
+     $this->setCurrentUser($normal_user);
+@@ -255,7 +257,7 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+       'region' => 'content',
+       'third_party_settings' => $third_party_settings,
+     ];
+-    $this->assertEqual($form_display->getComponent($this->fieldName), $expected);
++    $this->assertEquals($form_display->getComponent($this->fieldName), $expected);
+ 
+     $normal_user = $this->createUser(['view test entity']);
+     $this->setCurrentUser($normal_user);
+@@ -290,7 +292,7 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+       'region' => 'content',
+       'third_party_settings' => $third_party_settings,
+     ];
+-    $this->assertEqual($form_display->getComponent($this->fieldName), $expected);
++    $this->assertEquals($form_display->getComponent($this->fieldName), $expected);
+ 
+     $normal_user = $this->createUser();
+     $this->setCurrentUser($normal_user);
+@@ -325,7 +327,7 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+       'region' => 'content',
+       'third_party_settings' => $third_party_settings,
+     ];
+-    $this->assertEqual($form_display->getComponent($this->fieldName), $expected);
++    $this->assertEquals($form_display->getComponent($this->fieldName), $expected);
+ 
+     $normal_user = $this->createUser();
+     $this->setCurrentUser($normal_user);
+@@ -360,7 +362,7 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+       'region' => 'content',
+       'third_party_settings' => $third_party_settings,
+     ];
+-    $this->assertEqual($form_display->getComponent($this->fieldName), $expected);
++    $this->assertEquals($form_display->getComponent($this->fieldName), $expected);
+ 
+     $normal_user = $this->createUser();
+     $normal_user->addRole($this->role->id());
+@@ -400,7 +402,7 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+       'region' => 'content',
+       'third_party_settings' => $third_party_settings,
+     ];
+-    $this->assertEqual($form_display->getComponent($this->fieldName), $expected);
++    $this->assertEquals($form_display->getComponent($this->fieldName), $expected);
+ 
+     $normal_user = $this->createUser(['view test entity']);
+     $normal_user->addRole($this->role->id());
+@@ -440,7 +442,7 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+       'region' => 'content',
+       'third_party_settings' => $third_party_settings,
+     ];
+-    $this->assertEqual($form_display->getComponent($this->fieldName), $expected);
++    $this->assertEquals($form_display->getComponent($this->fieldName), $expected);
+ 
+     $normal_user = $this->createUser(['view test entity']);
+     $this->setCurrentUser($normal_user);
+@@ -479,7 +481,7 @@ class FormDisplayVisibilityAccessByPermissionTest extends KernelTestBase {
+       'region' => 'content',
+       'third_party_settings' => $third_party_settings,
+     ];
+-    $this->assertEqual($form_display->getComponent($this->fieldName), $expected);
++    $this->assertEquals($form_display->getComponent($this->fieldName), $expected);
+ 
+     $normal_user = $this->createUser();
+     $normal_user->addRole($this->role->id());

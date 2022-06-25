@@ -1,0 +1,578 @@
+diff --git a/new_relic_rpm.drush.inc b/new_relic_rpm.drush.inc
+index b3a0419..cf0a0aa 100644
+--- a/new_relic_rpm.drush.inc
++++ b/new_relic_rpm.drush.inc
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface;
++use Drupal\new_relic_rpm\Client\NewRelicApiClient;
+ /**
+  * @file
+  * New Relic Drush integration.
+@@ -10,7 +12,7 @@
+  */
+ function new_relic_rpm_drush_init() {
+   if (\Drupal::hasService('new_relic_rpm.adapter')) {
+-    /** @var \Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface $adapter */
++    /** @var NewRelicAdapterInterface $adapter */
+     $adapter = \Drupal::service('new_relic_rpm.adapter');
+ 
+     // Add custom parameter, telling the drush command executed.
+@@ -48,7 +50,7 @@ function new_relic_rpm_drush_command() {
+  */
+ function drush_new_relic_rpm_newrelic_deploy($revision, $description = NULL, $user = NULL, $changelog = NULL) {
+ 
+-  /** @var \Drupal\new_relic_rpm\Client\NewRelicApiClient $client */
++  /** @var NewRelicApiClient $client */
+   $client = \Drupal::service('new_relic_rpm.client');
+   $deployment = $client->createDeployment($revision, $description, $user, $changelog);
+ 
+diff --git a/new_relic_rpm.module b/new_relic_rpm.module
+index ff03467..2307eba 100644
+--- a/new_relic_rpm.module
++++ b/new_relic_rpm.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\new_relic_rpm\Client\NewRelicApiClient;
+ /**
+  * @file
+  * Drupal module implementing New Relic.
+@@ -46,7 +47,7 @@ function new_relic_rpm_module_deploy($modules, $action) {
+     ':modules' => implode(', ', $modules),
+   ]);
+ 
+-  /** @var \Drupal\new_relic_rpm\Client\NewRelicApiClient $client */
++  /** @var NewRelicApiClient $client */
+   $client = \Drupal::service('new_relic_rpm.client');
+   $client->createDeployment('module_change', $description->render());
+ }
+@@ -54,7 +55,7 @@ function new_relic_rpm_module_deploy($modules, $action) {
+ /**
+  * The unique name for the timer based on view details.
+  *
+- * @param \Drupal\views\ViewExecutable $view
++ * @param ViewExecutable $view
+  *   The view to create the timer for.
+  *
+  * @return string
+diff --git a/src/Client/NewRelicApiClient.php b/src/Client/NewRelicApiClient.php
+index f9ce866..fc3dacd 100644
+--- a/src/Client/NewRelicApiClient.php
++++ b/src/Client/NewRelicApiClient.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\new_relic_rpm\Client;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Psr\Log\LoggerInterface;
++use Psr\Http\Message\ResponseInterface;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+@@ -29,7 +32,7 @@ class NewRelicApiClient {
+   /**
+    * The serialisation JSON service.
+    *
+-   * @var \Drupal\Component\Serialization\Json
++   * @var Json
+    */
+   protected $parser;
+ 
+@@ -50,36 +53,36 @@ class NewRelicApiClient {
+   /**
+    * The http_client service.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $httpClient;
+ 
+   /**
+    * A loaded config object for new_relic_rpm.settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * A logger service instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Constructs a new NewRelicApiClient.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory so we can load config that we need.
+-   * @param \GuzzleHttp\Client $http_client
++   * @param Client $http_client
+    *   The http client to send requests to newrelic.
+-   * @param \Drupal\Component\Serialization\Json $serialization_json
++   * @param Json $serialization_json
+    *   Decoding the returned result from newrelic.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   For logging notifications to Drupal.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, Client $http_client, Json $serialization_json, LoggerChannelFactoryInterface $logger_factory, TranslationInterface $string_translation) {
+@@ -157,7 +160,7 @@ class NewRelicApiClient {
+    * @return array
+    *   An array of application details.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function listApplications($name = NULL) {
+     $filters = [];
+@@ -249,10 +252,10 @@ class NewRelicApiClient {
+    * @param string $method
+    *   The request method.
+    *
+-   * @return \Psr\Http\Message\ResponseInterface
++   * @return ResponseInterface
+    *   A response from the API request.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function request($uri, array $options = [], $method = 'GET') {
+     $options = array_merge([
+diff --git a/src/Commands/NewRelicRpmCommands.php b/src/Commands/NewRelicRpmCommands.php
+index b48bffe..062dcb1 100644
+--- a/src/Commands/NewRelicRpmCommands.php
++++ b/src/Commands/NewRelicRpmCommands.php
+@@ -13,14 +13,14 @@ class NewRelicRpmCommands extends DrushCommands {
+   /**
+    * Newrelic API client.
+    *
+-   * @var \Drupal\new_relic_rpm\Client\NewRelicApiClient
++   * @var NewRelicApiClient
+    */
+   protected $apiClient;
+ 
+   /**
+    * NewRelicRpmCommands constructor.
+    *
+-   * @param \Drupal\new_relic_rpm\Client\NewRelicApiClient $api_client
++   * @param NewRelicApiClient $api_client
+    *   Newrelic API client.
+    */
+   public function __construct(NewRelicApiClient $api_client) {
+diff --git a/src/EventSubscriber/ExceptionSubscriber.php b/src/EventSubscriber/ExceptionSubscriber.php
+index 27269a5..ff841bc 100644
+--- a/src/EventSubscriber/ExceptionSubscriber.php
++++ b/src/EventSubscriber/ExceptionSubscriber.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\new_relic_rpm\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\ExceptionEvent;
+ use Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface;
+-use Symfony\Component\HttpKernel\Event\GetResponseForExceptionEvent;
+ use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+@@ -16,14 +16,14 @@ class ExceptionSubscriber implements EventSubscriberInterface {
+   /**
+    * New Relic adapter.
+    *
+-   * @var \Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface
++   * @var NewRelicAdapterInterface
+    */
+   protected $adapter;
+ 
+   /**
+    * Constructs a subscriber.
+    *
+-   * @param \Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface $adapter
++   * @param NewRelicAdapterInterface $adapter
+    *   The Adapter to use when talking to the New Relic extension.
+    */
+   public function __construct(NewRelicAdapterInterface $adapter) {
+@@ -43,17 +43,17 @@ class ExceptionSubscriber implements EventSubscriberInterface {
+   /**
+    * Handles errors for this subscriber.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseForExceptionEvent $event
++   * @param ExceptionEvent $event
+    *   The event to process.
+    */
+-  public function onException(GetResponseForExceptionEvent $event) {
++  public function onException(ExceptionEvent $event) {
+     // Don't log http exceptions.
+-    if ($event->getException() instanceof HttpExceptionInterface) {
++    if ($event->getThrowable() instanceof HttpExceptionInterface) {
+       return;
+     }
+     if (\Drupal::config('new_relic_rpm.settings')->get('override_exception_handler')) {
+       // Forward the exception to New Relic.
+-      $this->adapter->logException($event->getException());
++      $this->adapter->logException($event->getThrowable());
+     }
+   }
+ 
+diff --git a/src/EventSubscriber/NewRelicConfigSubscriber.php b/src/EventSubscriber/NewRelicConfigSubscriber.php
+index d23214f..0ceaf0e 100644
+--- a/src/EventSubscriber/NewRelicConfigSubscriber.php
++++ b/src/EventSubscriber/NewRelicConfigSubscriber.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\new_relic_rpm\EventSubscriber;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\new_relic_rpm\Client\NewRelicApiClient;
+ use Drupal\Core\Config\ConfigEvents;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Config\ConfigImporterEvent;
+@@ -20,32 +22,32 @@ class NewRelicConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * New Relic adapter.
+    *
+-   * @var \Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface
++   * @var NewRelicAdapterInterface
+    */
+   protected $adapter;
+ 
+   /**
+    * The configuration for the New Relic module.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The current user account.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * Constructs a NewRelicConfigSubscriber.
+    *
+-   * @param \Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface $adapter
++   * @param NewRelicAdapterInterface $adapter
+    *   The Adapter that we use to talk to the New Relic extension.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The object we use to get our settings.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The currently logged in user.
+    */
+   public function __construct(NewRelicAdapterInterface $adapter, ConfigFactoryInterface $config_factory, AccountInterface $current_user) {
+@@ -65,7 +67,7 @@ class NewRelicConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * Attempts to create a deployment on New Relic when a config import happens.
+    *
+-   * @param \Drupal\Core\Config\ConfigImporterEvent $event
++   * @param ConfigImporterEvent $event
+    *   The current config event that we are responding to.
+    */
+   public function onImport(ConfigImporterEvent $event) {
+@@ -112,7 +114,7 @@ class NewRelicConfigSubscriber implements EventSubscriberInterface {
+       }
+     }
+ 
+-    /** @var \Drupal\new_relic_rpm\Client\NewRelicApiClient $client */
++    /** @var NewRelicApiClient $client */
+     $client = \Drupal::service('new_relic_rpm.client');
+     $client->createDeployment('config_import', $description, $name, $changelog);
+   }
+diff --git a/src/EventSubscriber/NewRelicRequestSubscriber.php b/src/EventSubscriber/NewRelicRequestSubscriber.php
+index a47fe77..ba67558 100644
+--- a/src/EventSubscriber/NewRelicRequestSubscriber.php
++++ b/src/EventSubscriber/NewRelicRequestSubscriber.php
+@@ -2,12 +2,13 @@
+ 
+ namespace Drupal\new_relic_rpm\EventSubscriber;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Path\CurrentPathStack;
+ use Drupal\Core\Path\PathMatcherInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\HttpKernelInterface;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+@@ -20,28 +21,28 @@ class NewRelicRequestSubscriber implements EventSubscriberInterface {
+   /**
+    * New Relic adapter.
+    *
+-   * @var \Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface
++   * @var NewRelicAdapterInterface
+    */
+   protected $adapter;
+ 
+   /**
+    * The object we use for matching paths.
+    *
+-   * @var \Drupal\Core\Path\PathMatcherInterface
++   * @var PathMatcherInterface
+    */
+   protected $pathMatcher;
+ 
+   /**
+    * The configuration for the New Relic RPM module.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * An object representing the current URL path of the request.
+    *
+-   * @var \Drupal\Core\Path\CurrentPathStack
++   * @var CurrentPathStack
+    */
+   protected $currentPathStack;
+ 
+@@ -55,22 +56,22 @@ class NewRelicRequestSubscriber implements EventSubscriberInterface {
+   /**
+    * The current user account.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * Constructs a subscriber.
+    *
+-   * @param \Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface $adapter
++   * @param NewRelicAdapterInterface $adapter
+    *   The Adapter that we use to talk to the New Relic extension.
+-   * @param \Drupal\Core\Path\PathMatcherInterface $path_matcher
++   * @param PathMatcherInterface $path_matcher
+    *   The object we use for matching paths.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The object we use to get our settings.
+-   * @param \Drupal\Core\Path\CurrentPathStack $current_path_stack
++   * @param CurrentPathStack $current_path_stack
+    *   An object representing the current URL path of the request.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   An object representing the current user.
+    */
+   public function __construct(NewRelicAdapterInterface $adapter, PathMatcherInterface $path_matcher, ConfigFactoryInterface $config_factory, CurrentPathStack $current_path_stack, AccountInterface $current_user) {
+@@ -95,10 +96,10 @@ class NewRelicRequestSubscriber implements EventSubscriberInterface {
+    *
+    * Naming is based on the current path and route.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The current response event for the page.
+    */
+-  public function onRequest(GetResponseEvent $event) {
++  public function onRequest(RequestEvent $event) {
+ 
+     // If this is a sub request, only process it if there was no master
+     // request yet. In that case, it is probably a page not found or access
+diff --git a/src/ExtensionAdapter/AdapterFactory.php b/src/ExtensionAdapter/AdapterFactory.php
+index c349a6f..fa128af 100644
+--- a/src/ExtensionAdapter/AdapterFactory.php
++++ b/src/ExtensionAdapter/AdapterFactory.php
+@@ -13,7 +13,7 @@ class AdapterFactory {
+    * If the extension is not enabled, a null implementation is returned
+    * to prevent errors.
+    *
+-   * @return \Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface
++   * @return NewRelicAdapterInterface
+    *   The new relic adapter.
+    */
+   public static function getAdapter() {
+diff --git a/src/Form/NewRelicRpmDeploy.php b/src/Form/NewRelicRpmDeploy.php
+index ca7710e..601545b 100644
+--- a/src/Form/NewRelicRpmDeploy.php
++++ b/src/Form/NewRelicRpmDeploy.php
+@@ -15,14 +15,14 @@ class NewRelicRpmDeploy extends FormBase {
+   /**
+    * The new relic HTTP cilent.
+    *
+-   * @var \Drupal\new_relic_rpm\Client\NewRelicApiClient
++   * @var NewRelicApiClient
+    */
+   protected $newRelicClient;
+ 
+   /**
+    * NewRelicRpmDeploy constructor.
+    *
+-   * @param \Drupal\new_relic_rpm\Client\NewRelicApiClient $new_relic_client
++   * @param NewRelicApiClient $new_relic_client
+    *   The new relic HTTP client.
+    */
+   public function __construct(NewRelicApiClient $new_relic_client) {
+diff --git a/src/Logger/NewRelicLogger.php b/src/Logger/NewRelicLogger.php
+index 7c005f1..11f44c9 100644
+--- a/src/Logger/NewRelicLogger.php
++++ b/src/Logger/NewRelicLogger.php
+@@ -19,21 +19,21 @@ class NewRelicLogger implements LoggerInterface {
+   /**
+    * The message's placeholders parser.
+    *
+-   * @var \Drupal\Core\Logger\LogMessageParserInterface
++   * @var LogMessageParserInterface
+    */
+   protected $parser;
+ 
+   /**
+    * The Adapter for the New Relic extension.
+    *
+-   * @var \Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface
++   * @var NewRelicAdapterInterface
+    */
+   protected $adapter;
+ 
+   /**
+    * The configuration factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+@@ -47,11 +47,11 @@ class NewRelicLogger implements LoggerInterface {
+   /**
+    * Constructs a DbLog object.
+    *
+-   * @param \Drupal\Core\Logger\LogMessageParserInterface $parser
++   * @param LogMessageParserInterface $parser
+    *   The parser to use when extracting message variables.
+-   * @param \Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface $adapter
++   * @param NewRelicAdapterInterface $adapter
+    *   The new relic adapter.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The configuration factory used to read new relic settings.
+    */
+   public function __construct(LogMessageParserInterface $parser, NewRelicAdapterInterface $adapter, ConfigFactoryInterface $config_factory) {
+diff --git a/src/RouteEnhancer/TransactionNameEnhancer.php b/src/RouteEnhancer/TransactionNameEnhancer.php
+index 348f717..56c01ed 100644
+--- a/src/RouteEnhancer/TransactionNameEnhancer.php
++++ b/src/RouteEnhancer/TransactionNameEnhancer.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\new_relic_rpm\RouteEnhancer;
+ 
++use Symfony\Component\Routing\Route;
+ use Drupal\Core\Controller\ControllerResolverInterface;
+ use Drupal\Core\Routing\EnhancerInterface;
+ use Symfony\Cmf\Component\Routing\RouteObjectInterface;
+@@ -16,14 +17,14 @@ class TransactionNameEnhancer implements EnhancerInterface {
+   /**
+    * Controller resolver service.
+    *
+-   * @var \Drupal\Core\Controller\ControllerResolverInterface
++   * @var ControllerResolverInterface
+    */
+   private $controllerResolver;
+ 
+   /**
+    * Argument resolver service.
+    *
+-   * @var \Symfony\Component\HttpKernel\Controller\ArgumentResolverInterface
++   * @var ArgumentResolverInterface
+    */
+   private $argumentResolver;
+ 
+@@ -40,7 +41,7 @@ class TransactionNameEnhancer implements EnhancerInterface {
+    */
+   public function enhance(array $defaults, Request $request) {
+ 
+-    /** @var \Symfony\Component\Routing\Route $route */
++    /** @var Route $route */
+     $route = $defaults[RouteObjectInterface::ROUTE_OBJECT];
+     if (!$route->hasDefault('_transaction_name_callback')) {
+       return $defaults;
+diff --git a/tests/src/Unit/EventListener/RoutingTransactionNameSubscriberTest.php b/tests/src/Unit/EventListener/RoutingTransactionNameSubscriberTest.php
+index 982def1..dd50950 100644
+--- a/tests/src/Unit/EventListener/RoutingTransactionNameSubscriberTest.php
++++ b/tests/src/Unit/EventListener/RoutingTransactionNameSubscriberTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\new_relic_rpm\Unit\EventListener;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Routing\RouteBuildEvent;
+ use Drupal\new_relic_rpm\EventSubscriber\RoutingTransactionNameSubscriber;
+@@ -17,6 +18,7 @@ use Symfony\Component\Routing\RouteCollection;
+  */
+ class RoutingTransactionNameSubscriberTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * @covers ::addTransactionNamesToRoutes
+    */
+diff --git a/tests/src/Unit/Logger/NewRelicLoggerTest.php b/tests/src/Unit/Logger/NewRelicLoggerTest.php
+index e6927d0..0bee322 100644
+--- a/tests/src/Unit/Logger/NewRelicLoggerTest.php
++++ b/tests/src/Unit/Logger/NewRelicLoggerTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\new_relic_rpm\Unit\Logger;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Core\Logger\LogMessageParser;
+ use Drupal\Core\Logger\RfcLogLevel;
+ use Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface;
+@@ -15,6 +16,7 @@ use Prophecy\Argument;
+  */
+ class NewRelicLoggerTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * The default request context for tests.
+    *
+@@ -31,12 +33,12 @@ class NewRelicLoggerTest extends UnitTestCase {
+   /**
+    * Get a preconfigured logger.
+    *
+-   * @param \Drupal\new_relic_rpm\ExtensionAdapter\NewRelicAdapterInterface $adapter
++   * @param NewRelicAdapterInterface $adapter
+    *   The adapter to use.
+    * @param array $levels
+    *   The log levels to report.
+    *
+-   * @return \Drupal\new_relic_rpm\Logger\NewRelicLogger
++   * @return NewRelicLogger
+    *   A new logger instance.
+    */
+   private function getLogger(NewRelicAdapterInterface $adapter, array $levels = []) {
+diff --git a/tests/src/Unit/RouteEnhancer/TransactionNameEnhancerTest.php b/tests/src/Unit/RouteEnhancer/TransactionNameEnhancerTest.php
+index 82df44b..e8e4d9b 100644
+--- a/tests/src/Unit/RouteEnhancer/TransactionNameEnhancerTest.php
++++ b/tests/src/Unit/RouteEnhancer/TransactionNameEnhancerTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\new_relic_rpm\Unit\RouteEnhancer;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Core\Controller\ControllerResolverInterface;
+ use Drupal\new_relic_rpm\RouteEnhancer\TransactionNameEnhancer;
+ use Drupal\Tests\UnitTestCase;
+@@ -17,6 +18,7 @@ use Symfony\Component\Routing\Route;
+  */
+ class TransactionNameEnhancerTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Test callback for _translation_name_callback with known response.
+    *

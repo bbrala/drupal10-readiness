@@ -1,0 +1,1668 @@
+diff --git a/composer.json b/composer.json
+index fd590d2..b942b11 100644
+--- a/composer.json
++++ b/composer.json
+@@ -11,7 +11,7 @@
+     "source": "http://cgit.drupalcode.org/micro_node"
+   },
+   "require": {
+-      "drupal/core": "^8.8 || ^9"
++    "drupal/core": "^9.3 || ^10"
+   },
+   "require-dev": {
+       "drupal/micro_site": "1.x-dev"
+diff --git a/micro_node.api.php b/micro_node.api.php
+index a2d7a8d..4eb6d61 100644
+--- a/micro_node.api.php
++++ b/micro_node.api.php
+@@ -1,10 +1,10 @@
+ <?php
+ 
++use Drupal\Core\Session\AccountInterface;
+ /**
+  * @file
+  * API documentation file for micro_node module.
+  */
+-
+ /**
+  * Alter the grants set for an account in a site context.
+  *
+@@ -13,7 +13,7 @@
+  *
+  * @param array $grants
+  *   The $grants array returned by micro_node_get_account_grants.
+- * @param \Drupal\Core\Session\AccountInterface $account
++ * @param AccountInterface $account
+  *   The account of the user.
+  * @param array $context
+  *   A keyed array passing two items:
+diff --git a/micro_node.info.yml b/micro_node.info.yml
+index 8ba538d..c83e95f 100644
+--- a/micro_node.info.yml
++++ b/micro_node.info.yml
+@@ -1,7 +1,7 @@
+ name: Micro Node
+ type: module
+ description: 'Provide node integration for micro site.'
+-core_version_requirement: ^8.8 || ^9
++core_version_requirement: ^9.3 || ^10
+ package: 'Micro Site'
+ dependencies:
+   - drupal:node
+diff --git a/micro_node.install b/micro_node.install
+index a08ebb3..6572f12 100644
+--- a/micro_node.install
++++ b/micro_node.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityFieldManagerInterface;
+ /**
+  * @file
+  * Contains micro_node.module.
+@@ -26,7 +27,7 @@ function micro_node_install() {
+  * Ensure fields are added.
+  */
+ function _micro_node_ensure_fields() {
+-  /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $field_manager */
++  /** @var EntityFieldManagerInterface $field_manager */
+   $field_manager = \Drupal::service('entity_field.manager');
+   $entity_definition_update_manager = \Drupal::entityDefinitionUpdateManager();
+   foreach (['site_id'] as $field_name) {
+@@ -67,7 +68,7 @@ function micro_node_update_8104() {
+  * Add the new field "Publish on master" on bundles enabled.
+  */
+ function micro_node_update_8105() {
+-  $config_path = drupal_get_path('module', 'micro_node') . '/config/install';
++  $config_path = \Drupal::service('extension.list.module')->getPath('micro_node') . '/config/install';
+   $source = new FileStorage($config_path);
+   $id = 'field.storage.node.field_publish_master';
+   $field_storage = \Drupal::entityTypeManager()->getStorage('field_storage_config');
+diff --git a/micro_node.module b/micro_node.module
+index 6b3c2d8..58300e7 100644
+--- a/micro_node.module
++++ b/micro_node.module
+@@ -1,5 +1,11 @@
+ <?php
+ 
++use Drupal\micro_site\SiteNegotiatorInterface;
++use Drupal\micro_node\MicroNodeManagerInterface;
++use Drupal\micro_site\Entity\SiteTypeInterface;
++use Drupal\Core\Field\FieldDefinitionInterface;
++use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
++use Drupal\Core\Entity\Entity\EntityViewDisplay;
+ /**
+  * @file
+  * Contains micro_node.module.
+@@ -82,9 +88,9 @@ function micro_node_entity_base_field_info(EntityTypeInterface $entity_type) {
+  * Implements hook_node_grants().
+  */
+ function micro_node_node_grants(AccountInterface $account, $op) {
+-  /** @var \Drupal\micro_site\SiteNegotiatorInterface $negotiator */
++  /** @var SiteNegotiatorInterface $negotiator */
+   $negotiator = \Drupal::service('micro_site.negotiator');
+-  /** @var \Drupal\micro_site\Entity\SiteInterface $site */
++  /** @var SiteInterface $site */
+   $site = $negotiator->getSite();
+   $site_id = ($site) ? $site->id() : 'master';
+ 
+@@ -95,7 +101,7 @@ function micro_node_node_grants(AccountInterface $account, $op) {
+     $data = \Drupal::cache('micro_node_grants')->get($cid);
+ 
+     if (!$data) {
+-      /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++      /** @var MicroNodeManagerInterface $micro_node_manager */
+       $micro_node_manager = \Drupal::service('micro_node.manager');
+       // Get the user's sites.
+       $sites_user = $micro_node_manager->getSitesReferencingUsers($account);
+@@ -115,13 +121,13 @@ function micro_node_node_grants(AccountInterface $account, $op) {
+ /**
+  * Get the grants for a given account and an operation.
+  *
+- * @param \Drupal\Core\Session\AccountInterface $account
++ * @param AccountInterface $account
+  *   The account to check.
+  * @param $op
+  *   The operation to check
+  * @param array $sites_user
+  *   An array of site id referencing the account.
+- * @param \Drupal\micro_site\Entity\SiteInterface $site
++ * @param SiteInterface $site
+  *  The active site on which check the permissions.
+  *
+  * @return array
+@@ -129,7 +135,7 @@ function micro_node_node_grants(AccountInterface $account, $op) {
+  */
+ function micro_node_get_account_grants(AccountInterface $account, $op, $sites_user, SiteInterface $site = NULL) {
+   $grants = [];
+-  /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++  /** @var MicroNodeManagerInterface $micro_node_manager */
+   $micro_node_manager = \Drupal::service('micro_node.manager');
+ 
+   // No site means we are on the master host. We provide grants which
+@@ -223,7 +229,7 @@ function micro_node_get_account_grants(AccountInterface $account, $op, $sites_us
+  */
+ function micro_node_node_access_records(NodeInterface $node) {
+   $grants = [];
+-  /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++  /** @var MicroNodeManagerInterface $micro_node_manager */
+   $micro_node_manager = \Drupal::service('micro_node.manager');
+ 
+   // Grants may not be the same for all languages.
+@@ -281,7 +287,7 @@ function micro_node_node_access_records(NodeInterface $node) {
+     // The content is created on at least a micro site.
+     $sites = $micro_node_manager->getAllSitesFromEntity($node);
+     if (!empty($sites)) {
+-      /** @var \Drupal\micro_site\Entity\SiteInterface $site */
++      /** @var SiteInterface $site */
+       foreach ($sites as $id => $site) {
+         $grants[] = [
+           'realm' => ($translation->isPublished()) ? 'site_id' : 'site_unpublished',
+@@ -351,7 +357,7 @@ function micro_node_view_access(EntityInterface $entity, $operation, AccountInte
+  * Implements hook_node_access().
+  */
+ function micro_node_node_access(NodeInterface $node, $op, AccountInterface $account) {
+-  /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++  /** @var MicroNodeManagerInterface $micro_node_manager */
+   $micro_node_manager = \Drupal::service('micro_node.manager');
+   $result = $micro_node_manager->nodeAccess($node, $op, $account);
+ 
+@@ -373,12 +379,12 @@ function micro_node_node_access(NodeInterface $node, $op, AccountInterface $acco
+  * Implements hook_entity_create_access().
+  */
+ function micro_node_node_create_access(AccountInterface $account, array $context, $entity_bundle) {
+-  /** @var \Drupal\micro_site\SiteNegotiatorInterface $negotiator */
++  /** @var SiteNegotiatorInterface $negotiator */
+   $negotiator = \Drupal::service('micro_site.negotiator');
+-  /** @var \Drupal\micro_site\Entity\SiteInterface $site */
++  /** @var SiteInterface $site */
+   $site = $negotiator->getSite();
+   if ($site instanceof SiteInterface) {
+-    /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++    /** @var MicroNodeManagerInterface $micro_node_manager */
+     $micro_node_manager = \Drupal::service('micro_node.manager');
+     if ($micro_node_manager->userCanCreateContent($account, $site)) {
+       return AccessResult::allowed()->addCacheableDependency($site)->addCacheableDependency($account)->cachePerPermissions();
+@@ -392,18 +398,18 @@ function micro_node_node_create_access(AccountInterface $account, array $context
+  * Move fields to an advanced tab like other node settings.
+  */
+ function micro_node_form_node_form_alter(&$form, FormState $form_state, $form_id) {
+-  /** @var \Drupal\node\NodeInterface $node */
++  /** @var NodeInterface $node */
+   $node = $form_state->getFormObject()->getEntity();
+   $type = $node->type->entity;
+   $node_types_enabled = \Drupal::config('micro_node.settings')->get('node_types') ?: [];
+   $account = \Drupal::currentUser();
+   $node_type_enabled = in_array($type->id(), $node_types_enabled);
+ 
+-  /** @var \Drupal\micro_site\SiteNegotiatorInterface $negotiator */
++  /** @var SiteNegotiatorInterface $negotiator */
+   $negotiator = \Drupal::service('micro_site.negotiator');
+   $active_site = $negotiator->getSite();
+ 
+-  /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++  /** @var MicroNodeManagerInterface $micro_node_manager */
+   $micro_node_manager = \Drupal::service('micro_node.manager');
+ 
+   $form['site'] = [
+@@ -421,7 +427,7 @@ function micro_node_form_node_form_alter(&$form, FormState $form_state, $form_id
+   ];
+ 
+   if ($active_site instanceof SiteInterface) {
+-    /** @var \Drupal\micro_site\Entity\SiteTypeInterface $site_type */
++    /** @var SiteTypeInterface $site_type */
+     $site_type = $active_site->type->entity;
+     $site_node_types_enabled = $site_type->getTypes();
+     $node_type_enabled = $node_type_enabled && in_array($type->id(), $site_node_types_enabled);
+@@ -504,11 +510,11 @@ function micro_node_form_node_form_alter(&$form, FormState $form_state, $form_id
+ }
+ 
+ function _micro_node_node_form_submit(&$form, FormState $form_state) {
+-  /** @var \Drupal\node\NodeInterface $node */
++  /** @var NodeInterface $node */
+   $node = $form_state->getFormObject()->getEntity();
+-  /** @var \Drupal\micro_site\SiteNegotiatorInterface $negotiator */
++  /** @var SiteNegotiatorInterface $negotiator */
+   $negotiator = \Drupal::service('micro_site.negotiator');
+-  /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++  /** @var MicroNodeManagerInterface $micro_node_manager */
+   $micro_node_manager = \Drupal::service('micro_node.manager');
+ 
+   $need_trusted_redirect = FALSE;
+@@ -552,7 +558,7 @@ function micro_node_site_delete(EntityInterface $entity) {
+  * Implements hook_entity_field_access_alter().
+  */
+ function micro_node_entity_field_access_alter(array &$grants, array $context) {
+-  /** @var \Drupal\Core\Field\FieldDefinitionInterface $field_definition */
++  /** @var FieldDefinitionInterface $field_definition */
+   $field_definition = $context['field_definition'];
+   $operation = $context['operation'];
+   $account = $context['account'];
+@@ -580,9 +586,9 @@ function micro_node_entity_field_access_alter(array &$grants, array $context) {
+     return;
+   }
+ 
+-  /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++  /** @var MicroNodeManagerInterface $micro_node_manager */
+   $micro_node_manager = \Drupal::service('micro_node.manager');
+-  /** @var \Drupal\micro_site\Entity\SiteInterface $site */
++  /** @var SiteInterface $site */
+   if ($operation == 'edit' && in_array($field_definition->getName(), $administrative_fields, TRUE)) {
+     $sites = $micro_node_manager->getSitesUserCanUpdateAdministrativeFields($account);
+     if (in_array($site->id(), $sites) ) {
+@@ -609,7 +615,7 @@ function micro_node_site_references_alter($query, $account, $context) {
+   }
+ 
+   elseif ($account->hasPermission('publish on any assigned site')) {
+-      /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++      /** @var MicroNodeManagerInterface $micro_node_manager */
+     $micro_node_manager = \Drupal::service('micro_node.manager');
+     $allowed = $micro_node_manager->getSitesUserCanReference($account);
+     $query->condition('id', $allowed, 'IN');
+@@ -636,9 +642,9 @@ function micro_node_entity_view_alter(array &$build, EntityInterface $entity, En
+ 
+     $override_canonical_url = FALSE;
+     $site = NULL;
+-    /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++    /** @var MicroNodeManagerInterface $micro_node_manager */
+     $micro_node_manager = \Drupal::service('micro_node.manager');
+-    /** @var \Drupal\micro_site\SiteNegotiatorInterface $negotiator */
++    /** @var SiteNegotiatorInterface $negotiator */
+     $negotiator = \Drupal::service('micro_site.negotiator');
+     $active_site = $negotiator->getActiveSite();
+     // For node published on multiple site, we insure that the canonical url
+@@ -705,9 +711,9 @@ function micro_node_page_attachments_alter(array &$attachments) {
+ 
+   $override_canonical_url = FALSE;
+   $site = NULL;
+-  /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++  /** @var MicroNodeManagerInterface $micro_node_manager */
+   $micro_node_manager = \Drupal::service('micro_node.manager');
+-  /** @var \Drupal\micro_site\SiteNegotiatorInterface $negotiator */
++  /** @var SiteNegotiatorInterface $negotiator */
+   $negotiator = \Drupal::service('micro_site.negotiator');
+   $active_site = $negotiator->getActiveSite();
+   // For node published on multiple site, we insure that the canonical url
+@@ -847,9 +853,9 @@ function micro_node_assign_fields($entity_type, $bundle) {
+     }
+ 
+     // Tell the form system how to behave.
+-    /** @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface $display_repository */
++    /** @var EntityDisplayRepositoryInterface $display_repository */
+     $display_repository = \Drupal::service('entity_display.repository');
+-    /** @var \Drupal\Core\Entity\Entity\EntityFormDisplay $entity_form_display */
++    /** @var EntityFormDisplay $entity_form_display */
+     $entity_form_display = EntityFormDisplay::load($entity_type . '.' . $bundle . '.default');
+     if (!$entity_form_display) {
+       $values = [
+@@ -889,7 +895,7 @@ function micro_node_assign_fields($entity_type, $bundle) {
+       ->save();
+ 
+     // Tell the view system how to behave.
+-    /** @var \Drupal\Core\Entity\Entity\EntityViewDisplay $entity_view_display */
++    /** @var EntityViewDisplay $entity_view_display */
+     $entity_view_display = \Drupal::entityTypeManager()->getStorage('entity_view_display')->load($entity_type . '.' . $bundle . '.default');
+     if (!$entity_view_display) {
+       $values = array(
+diff --git a/src/Access/NodeAccess.php b/src/Access/NodeAccess.php
+index 46c48d2..27e6201 100644
+--- a/src/Access/NodeAccess.php
++++ b/src/Access/NodeAccess.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\micro_node\Access;
+ 
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Routing\Access\AccessInterface;
+ use Drupal\Core\Routing\RouteMatchInterface;
+@@ -29,25 +30,25 @@ class NodeAccess implements AccessInterface{
+   /**
+    * The request stack object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The site negotiator.
+    *
+-   * @var \Drupal\micro_site\SiteNegotiatorInterface
++   * @var SiteNegotiatorInterface
+    */
+   protected $negotiator;
+ 
+   /**
+    * Constructs a NodeAccess object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   The request stack object.
+-   * @param \Drupal\micro_site\SiteNegotiatorInterface $site_negotiator
++   * @param SiteNegotiatorInterface $site_negotiator
+    *   The site negotiator.
+    */
+   function __construct(EntityTypeManagerInterface $entity_type_manager, RequestStack $requestStack, SiteNegotiatorInterface $site_negotiator) {
+@@ -59,18 +60,18 @@ class NodeAccess implements AccessInterface{
+   /**
+    * Checks access to the entity operation on the given route.
+    *
+-   * @param \Symfony\Component\Routing\Route $route
++   * @param Route $route
+    *   The route to check against.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The parametrized route
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The currently logged in account.
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The node on which check access.
+-   * @param \Drupal\micro_site\Entity\SiteInterface $site
++   * @param SiteInterface $site
+    *   The site entity.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function access(Route $route, RouteMatchInterface $route_match, AccountInterface $account, NodeInterface $node, SiteInterface $site = NULL) {
+diff --git a/src/Access/NodeAddAccess.php b/src/Access/NodeAddAccess.php
+index 67d8a93..c643675 100644
+--- a/src/Access/NodeAddAccess.php
++++ b/src/Access/NodeAddAccess.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\micro_node\Access;
+ 
++use Drupal\micro_site\Entity\SiteTypeInterface;
++use Drupal\micro_node\MicroNodeManagerInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\micro_site\Entity\SiteInterface;
+@@ -15,7 +17,7 @@ class NodeAddAccess {
+   public function access(AccountInterface $account, SiteInterface $site = NULL, NodeTypeInterface $node_type = NULL) {
+     if ($node_type && $site) {
+       $node_types = \Drupal::config('micro_node.settings')->get('node_types');
+-      /** @var \Drupal\micro_site\Entity\SiteTypeInterface $site_type */
++      /** @var SiteTypeInterface $site_type */
+       $site_type = $site->type->entity;
+       // Site type can filter the node types enabled globaly on the site.
+       $site_node_types = array_filter($site_type->getTypes());
+@@ -28,7 +30,7 @@ class NodeAddAccess {
+             ->addCacheableDependency($site)
+             ->addCacheableDependency($site_type);
+         }
+-        /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++        /** @var MicroNodeManagerInterface $micro_node_manager */
+         $micro_node_manager = \Drupal::service('micro_node.manager');
+         // Site administrators and owner can always add content to their site
+         if ($micro_node_manager->userCanCreateContent($account, $site)) {
+diff --git a/src/Access/TabContentAccess.php b/src/Access/TabContentAccess.php
+index f9885d9..f850c7e 100644
+--- a/src/Access/TabContentAccess.php
++++ b/src/Access/TabContentAccess.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\micro_node\Access;
+ 
++use Drupal\micro_node\MicroNodeManagerInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\micro_site\Entity\SiteInterface;
+@@ -32,7 +33,7 @@ class TabContentAccess {
+         return AccessResult::neutral('Site tab content can be access only on site registered.');
+       }
+ 
+-      /** @var \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager */
++      /** @var MicroNodeManagerInterface $micro_node_manager */
+       $micro_node_manager = \Drupal::service('micro_node.manager');
+       if ($micro_node_manager->userCanAccessContentOverview($account, $site)) {
+         return AccessResult::allowed()->addCacheableDependency($site)->addCacheableDependency($account)->cachePerPermissions();
+diff --git a/src/Cache/MicroNodeAccessGrantsCacheContext.php b/src/Cache/MicroNodeAccessGrantsCacheContext.php
+index ff427bb..7da4db5 100644
+--- a/src/Cache/MicroNodeAccessGrantsCacheContext.php
++++ b/src/Cache/MicroNodeAccessGrantsCacheContext.php
+@@ -25,7 +25,7 @@ class MicroNodeAccessGrantsCacheContext extends NodeAccessGrantsCacheContext imp
+    * {@inheritdoc}
+    */
+   public function getCacheableMetadata($operation = NULL) {
+-    /** @var \Drupal\Core\Cache\CacheableMetadata $cacheable_metadata */
++    /** @var CacheableMetadata $cacheable_metadata */
+     $cacheable_metadata = parent::getCacheableMetadata();
+     // @TODO test setMaxAge(-1).
+     return $cacheable_metadata;
+diff --git a/src/HttpKernel/MicroNodeOutboundPathProcessor.php b/src/HttpKernel/MicroNodeOutboundPathProcessor.php
+index 86f6a4a..b461119 100644
+--- a/src/HttpKernel/MicroNodeOutboundPathProcessor.php
++++ b/src/HttpKernel/MicroNodeOutboundPathProcessor.php
+@@ -22,50 +22,50 @@ class MicroNodeOutboundPathProcessor implements OutboundPathProcessorInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The alias manager interface.
+    *
+-   * @var \Drupal\path_alias\AliasManagerInterface
++   * @var AliasManagerInterface
+    */
+   protected $aliasManager;
+ 
+   /**
+    * The Site negotiator.
+    *
+-   * @var \Drupal\micro_site\SiteNegotiatorInterface
++   * @var SiteNegotiatorInterface
+    */
+   protected $negotiator;
+ 
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The micro node manager.
+    *
+-   * @var \Drupal\micro_node\MicroNodeManagerInterface
++   * @var MicroNodeManagerInterface
+    */
+   protected $microNodeManager;
+ 
+   /**
+    * Constructs a NodePathProcessor object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The domain loader.
+-   * @param \Drupal\path_alias\AliasManagerInterface $aliasManager
++   * @param AliasManagerInterface $aliasManager
+    *   The alias manager interface.
+-   * @param \Drupal\micro_site\SiteNegotiatorInterface $negotiator
++   * @param SiteNegotiatorInterface $negotiator
+    *   The domain negotiator.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+-   * @param \Drupal\micro_node\MicroNodeManagerInterface $micro_node_manager
++   * @param MicroNodeManagerInterface $micro_node_manager
+    *   The micro node manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, AliasManagerInterface $aliasManager, SiteNegotiatorInterface $negotiator, ModuleHandlerInterface $module_handler, MicroNodeManagerInterface $micro_node_manager) {
+diff --git a/src/MicroNodeManager.php b/src/MicroNodeManager.php
+index 73d4621..d25eca2 100644
+--- a/src/MicroNodeManager.php
++++ b/src/MicroNodeManager.php
+@@ -33,21 +33,21 @@ class MicroNodeManager implements MicroNodeManagerInterface {
+   /**
+    * The site record returned by the lookup request.
+    *
+-   * @var \Drupal\micro_site\Entity\SiteInterface
++   * @var SiteInterface
+    */
+   protected $site;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The request stack object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+@@ -55,36 +55,36 @@ class MicroNodeManager implements MicroNodeManagerInterface {
+   /**
+    * The module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The site negotiator.
+    *
+-   * @var \Drupal\micro_site\SiteNegotiatorInterface
++   * @var SiteNegotiatorInterface
+    */
+   protected $negotiator;
+ 
+   /**
+    * Constructs a DomainNegotiator object.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   The request stack object.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The Domain loader object.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\micro_site\SiteNegotiatorInterface $site_negotiator
++   * @param SiteNegotiatorInterface $site_negotiator
+    *   The site negotiator.
+    */
+   public function __construct(RequestStack $requestStack, ModuleHandlerInterface $module_handler, EntityTypeManagerInterface $entity_type_manager, ConfigFactoryInterface $config_factory, SiteNegotiatorInterface $site_negotiator) {
+@@ -99,7 +99,7 @@ class MicroNodeManager implements MicroNodeManagerInterface {
+    * {@inheritdoc}
+    */
+   public static function getCurrentSiteId() {
+-    /** @var \Drupal\micro_site\Entity\SiteInterface $site */
++    /** @var SiteInterface $site */
+     $site = \Drupal::service('micro_site.negotiator')->getActiveSite();
+ 
+     // We are not on a active site url. Try to load it from the Request.
+diff --git a/src/MicroNodeManagerInterface.php b/src/MicroNodeManagerInterface.php
+index 35b264c..17acb97 100644
+--- a/src/MicroNodeManagerInterface.php
++++ b/src/MicroNodeManagerInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\micro_node;
+ 
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\micro_site\Entity\SiteInterface;
+ use Drupal\Core\Session\AccountProxyInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -26,7 +27,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Get the sites owned by a user.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+    * @return array
+    *   An array of user's sites id.
+@@ -36,7 +37,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Get the sites referencing a user per role.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+    * @param string $field_name
+    *   The name of the field that holds our data.
+@@ -49,7 +50,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Get the sites referencing a user for any role.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+    *
+    * @return array
+@@ -60,7 +61,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Get the sites referencing a user with admin permissions (admin or manager).
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+    *
+    * @return array
+@@ -71,7 +72,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Count the sites owned by a user.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+    * @return integer|NULL
+    *   The count of sites owned by the user.
+@@ -81,10 +82,10 @@ interface MicroNodeManagerInterface {
+   /**
+    * Get the main site from a node.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $node
++   * @param EntityInterface $node
+    *   The node to check.
+    *
+-   * @return \Drupal\micro_site\Entity\SiteInterface|NULL
++   * @return SiteInterface|NULL
+    *   The site entity or NULL.
+    */
+   public function getMainSiteFromEntity(EntityInterface $node);
+@@ -92,7 +93,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Get the secondary site access field values from an entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to retrieve field data from.
+    * @param string $field_name
+    *   The name of the field that holds our data.
+@@ -105,7 +106,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Is the entity is published on all sites.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to retrieve field data from.
+    *
+    * @return boolean
+@@ -116,7 +117,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Is the entity is published on thr master.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to retrieve field data from.
+    *
+    * @return boolean
+@@ -127,7 +128,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Is the entity is published on others sites.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to retrieve field data from.
+    * @param string $field_name
+    *   The name of the field that holds our data.
+@@ -140,7 +141,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Does the entity can have several canonical url for each site ?
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to retrieve field data from.
+    * @param string $field_name
+    *   The name of the field that holds our data.
+@@ -161,7 +162,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Get the secondary site access field values from an entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to retrieve field data from.
+    * @param string $field_name
+    *   The name of the field that holds our data.
+@@ -174,7 +175,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Get the sites a user can reference.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+    *
+    * @return array
+@@ -185,7 +186,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Get the sites a user can update administrative fields.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+    *
+    * @return array
+@@ -196,7 +197,7 @@ interface MicroNodeManagerInterface {
+   /**
+    * Get the sites a user can update any content.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+    *
+    * @return array
+@@ -207,9 +208,9 @@ interface MicroNodeManagerInterface {
+   /**
+    * An user can cross publish content from a given site, to another sites.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+-   * @param \Drupal\micro_site\Entity\SiteInterface $site
++   * @param SiteInterface $site
+    *   The site entity.
+    *
+    * @return boolean
+@@ -220,9 +221,9 @@ interface MicroNodeManagerInterface {
+   /**
+    * An user can create content on a given site.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+-   * @param \Drupal\micro_site\Entity\SiteInterface $site
++   * @param SiteInterface $site
+    *   The site entity.
+    *
+    * @return boolean
+@@ -233,9 +234,9 @@ interface MicroNodeManagerInterface {
+   /**
+    * An user can update any content on a given site.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+-   * @param \Drupal\micro_site\Entity\SiteInterface $site
++   * @param SiteInterface $site
+    *   The site entity.
+    *
+    * @return boolean
+@@ -246,9 +247,9 @@ interface MicroNodeManagerInterface {
+   /**
+    * An user can access to the content tab overview.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+-   * @param \Drupal\micro_site\Entity\SiteInterface $site
++   * @param SiteInterface $site
+    *   The site entity.
+    *
+    * @return boolean
+@@ -260,14 +261,14 @@ interface MicroNodeManagerInterface {
+    * Check access on node when associated with a site entity. Useful to control
+    * if a node can be viewed if site entity is not published.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The node to check.
+    * @param string $op
+    *   The operation to check.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account proxy.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   function nodeAccess(NodeInterface $node, $op, AccountInterface $account);
+diff --git a/src/Plugin/Derivative/MicroNodeAddLocalActions.php b/src/Plugin/Derivative/MicroNodeAddLocalActions.php
+index 787c826..3e1b4b2 100644
+--- a/src/Plugin/Derivative/MicroNodeAddLocalActions.php
++++ b/src/Plugin/Derivative/MicroNodeAddLocalActions.php
+@@ -15,7 +15,7 @@ use Drupal\micro_site\SiteNegotiatorInterface;
+ class MicroNodeAddLocalActions extends DeriverBase implements ContainerDeriverInterface {
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager.
++   * @var EntityTypeManagerInterface $entityTypeManager .
+    *
+    * The entity type manager service.
+    */
+@@ -24,14 +24,14 @@ class MicroNodeAddLocalActions extends DeriverBase implements ContainerDeriverIn
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The site negotiator.
+    *
+-   * @var \Drupal\micro_site\SiteNegotiatorInterface
++   * @var SiteNegotiatorInterface
+    */
+   protected $negotiator;
+ 
+@@ -42,9 +42,9 @@ class MicroNodeAddLocalActions extends DeriverBase implements ContainerDeriverIn
+    *   The base plugin id.
+    * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\micro_site\SiteNegotiatorInterface $site_negotiator
++   * @param SiteNegotiatorInterface $site_negotiator
+    *   The site negotiator.
+    */
+   public function __construct($base_plugin_id, EntityTypeManagerInterface $entity_type_manager, ConfigFactoryInterface $config_factory, SiteNegotiatorInterface $site_negotiator) {
+diff --git a/src/Plugin/Derivative/MicroNodeAddLocalTasks.php b/src/Plugin/Derivative/MicroNodeAddLocalTasks.php
+index 0fc5a58..20932fa 100644
+--- a/src/Plugin/Derivative/MicroNodeAddLocalTasks.php
++++ b/src/Plugin/Derivative/MicroNodeAddLocalTasks.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\micro_node\Plugin\Derivative;
+ 
++use Drupal\micro_site\Entity\SiteTypeInterface;
+ use Drupal\Component\Plugin\Derivative\DeriverBase;
+ use Drupal\Core\Plugin\Discovery\ContainerDeriverInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -16,7 +17,7 @@ use Drupal\micro_site\SiteNegotiatorInterface;
+ class MicroNodeAddLocalTasks extends DeriverBase implements ContainerDeriverInterface {
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager.
++   * @var EntityTypeManagerInterface $entityTypeManager .
+    *
+    * The entity type manager service.
+    */
+@@ -25,14 +26,14 @@ class MicroNodeAddLocalTasks extends DeriverBase implements ContainerDeriverInte
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The site negotiator.
+    *
+-   * @var \Drupal\micro_site\SiteNegotiatorInterface
++   * @var SiteNegotiatorInterface
+    */
+   protected $negotiator;
+ 
+@@ -43,9 +44,9 @@ class MicroNodeAddLocalTasks extends DeriverBase implements ContainerDeriverInte
+    *   The base plugin id.
+    * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\micro_site\SiteNegotiatorInterface $site_negotiator
++   * @param SiteNegotiatorInterface $site_negotiator
+    *   The site negotiator.
+    */
+   public function __construct($base_plugin_id, EntityTypeManagerInterface $entity_type_manager, ConfigFactoryInterface $config_factory, SiteNegotiatorInterface $site_negotiator) {
+@@ -81,7 +82,7 @@ class MicroNodeAddLocalTasks extends DeriverBase implements ContainerDeriverInte
+     $site = $this->negotiator->getSite();
+     $site_types_tab = [];
+     if ($site instanceof SiteInterface) {
+-      /** @var \Drupal\micro_site\Entity\SiteTypeInterface $site_type */
++      /** @var SiteTypeInterface $site_type */
+       $site_type = $site->type->entity;
+       $site_types_tab = array_filter($site_type->getTypesTab());
+     }
+diff --git a/src/Routing/RouteProcessor.php b/src/Routing/RouteProcessor.php
+index 5e99060..5f8940f 100644
+--- a/src/Routing/RouteProcessor.php
++++ b/src/Routing/RouteProcessor.php
+@@ -23,7 +23,7 @@ class RouteProcessor implements OutboundRouteProcessorInterface {
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+@@ -37,27 +37,27 @@ class RouteProcessor implements OutboundRouteProcessorInterface {
+   /**
+    * The request stack object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The site negotiator.
+    *
+-   * @var \Drupal\micro_site\SiteNegotiatorInterface
++   * @var SiteNegotiatorInterface
+    */
+   protected $negotiator;
+ 
+   /**
+    * Constructs a RouteProcessor object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   The request stack object.
+-   * @param \Drupal\micro_site\SiteNegotiatorInterface $site_negotiator
++   * @param SiteNegotiatorInterface $site_negotiator
+    *   The site negotiator.
+    */
+   function __construct(ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, RequestStack $requestStack, SiteNegotiatorInterface $site_negotiator) {
+diff --git a/tests/src/Functional/NodeAccessAndUrlTest.php b/tests/src/Functional/NodeAccessAndUrlTest.php
+index 1d3b147..48fc03b 100644
+--- a/tests/src/Functional/NodeAccessAndUrlTest.php
++++ b/tests/src/Functional/NodeAccessAndUrlTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\micro_node\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Database\Database;
+ use Drupal\Core\Url;
+@@ -26,7 +27,7 @@ class NodeAccessAndUrlTest extends MicroSiteBase {
+   /**
+    * A simple user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+@@ -42,7 +43,7 @@ class NodeAccessAndUrlTest extends MicroSiteBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->configFactory->getEditable('micro_node.settings')->set('node_types', ['article', 'page'])->save(TRUE);
+     foreach (['article', 'page'] as $bundle) {
+@@ -56,7 +57,7 @@ class NodeAccessAndUrlTest extends MicroSiteBase {
+    */
+   public function testAccess() {
+     $this->drupalGet(Url::fromUri($this->masterUrl));
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     $generic = $this->createSiteType('generic', 'Generic', 'Generic site type');
+     $settings = ['user_id' => $this->microSiteOwnerUser->id(), 'registered' => TRUE, 'status' => TRUE];
+@@ -108,9 +109,9 @@ class NodeAccessAndUrlTest extends MicroSiteBase {
+     $views_url = '/micro-node-content';
+     // Check on master.
+     $this->drupalGet($this->masterUrl . $views_url);
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $xpath = $this->xpath('//article[contains(@class, "node--type-article")]');
+-    $this->assertEqual(count($xpath), 3, '3 articles found on master.');
++    $this->assertEquals(count($xpath), 3, '3 articles found on master.');
+     $this->assertSession()->pageTextContains('Article 1 master');
+     $this->assertSession()->pageTextContains('Article 2 master and site one');
+     $this->assertSession()->pageTextContains('Article 3 master and all sites');
+@@ -119,26 +120,26 @@ class NodeAccessAndUrlTest extends MicroSiteBase {
+     $this->assertSession()->pageTextNotContains('Article 6 site two');
+     // Check URLs
+     $xpath = $this->xpath("//h2/a[@href='/node/" . $node1->id() . "']");
+-    $this->assertEqual(count($xpath), 1, 'Correct URL found.');
++    $this->assertEquals(count($xpath), 1, 'Correct URL found.');
+     $xpath = $this->xpath("//h2/a[@href='/node/" . $node2->id() . "']");
+-    $this->assertEqual(count($xpath), 1, 'Correct URL found.');
++    $this->assertEquals(count($xpath), 1, 'Correct URL found.');
+     $xpath = $this->xpath("//h2/a[@href='/node/" . $node3->id() . "']");
+-    $this->assertEqual(count($xpath), 1, 'Correct URL found.');
++    $this->assertEquals(count($xpath), 1, 'Correct URL found.');
+     // Click response.
+     $this->clickLink($node1->label());
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->drupalGet($this->masterUrl . $views_url);
+     $this->clickLink($node2->label());
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->drupalGet($this->masterUrl . $views_url);
+     $this->clickLink($node3->label());
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     // Check on site one.
+     $this->drupalGet($site_one->getSitePath() . $views_url);
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $xpath = $this->xpath('//article[contains(@class, "node--type-article")]');
+-    $this->assertEqual(count($xpath), 4, '4 articles found on site one.');
++    $this->assertEquals(count($xpath), 4, '4 articles found on site one.');
+     $this->assertSession()->pageTextNotContains('Article 1 master');
+     $this->assertSession()->pageTextContains('Article 2 master and site one');
+     $this->assertSession()->pageTextContains('Article 3 master and all sites');
+@@ -147,31 +148,31 @@ class NodeAccessAndUrlTest extends MicroSiteBase {
+     $this->assertSession()->pageTextNotContains('Article 6 site two');
+     // Check URLs
+     $xpath = $this->xpath("//h2/a[@href='" . $this->masterUrl . "/node/" . $node2->id() . "']");
+-    $this->assertEqual(count($xpath), 1, 'Correct URL found.');
++    $this->assertEquals(count($xpath), 1, 'Correct URL found.');
+     $xpath = $this->xpath("//h2/a[@href='" . $this->masterUrl . "/node/" . $node3->id() . "']");
+-    $this->assertEqual(count($xpath), 1, 'Correct URL found.');
++    $this->assertEquals(count($xpath), 1, 'Correct URL found.');
+     $xpath = $this->xpath("//h2/a[@href='" . $site_one->getSitePath() . "/node/" . $node4->id() . "']");
+-    $this->assertEqual(count($xpath), 1, 'Correct URL found.');
++    $this->assertEquals(count($xpath), 1, 'Correct URL found.');
+     $xpath = $this->xpath("//h2/a[@href='" . $site_one->getSitePath() . "/node/" . $node5->id() . "']");
+-    $this->assertEqual(count($xpath), 1, 'Correct URL found.');
++    $this->assertEquals(count($xpath), 1, 'Correct URL found.');
+     // Click response.
+     $this->clickLink($node2->label());
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->drupalGet($site_one->getSitePath() . $views_url);
+     $this->clickLink($node3->label());
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->drupalGet($site_one->getSitePath() . $views_url);
+     $this->clickLink($node4->label());
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->drupalGet($site_one->getSitePath() . $views_url);
+     $this->clickLink($node5->label());
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     // Check on site two.
+     $this->drupalGet($site_two->getSitePath() . $views_url);
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $xpath = $this->xpath('//article[contains(@class, "node--type-article")]');
+-    $this->assertEqual(count($xpath), 3, '3 articles found on site two.');
++    $this->assertEquals(count($xpath), 3, '3 articles found on site two.');
+     $this->assertSession()->pageTextNotContains('Article 1 master');
+     $this->assertSession()->pageTextNotContains('Article 2 master and site one');
+     $this->assertSession()->pageTextContains('Article 3 master and all sites');
+@@ -180,36 +181,36 @@ class NodeAccessAndUrlTest extends MicroSiteBase {
+     $this->assertSession()->pageTextContains('Article 6 site two');
+     // Check URLs
+     $xpath = $this->xpath("//h2/a[@href='" . $this->masterUrl . "/node/" . $node3->id() . "']");
+-    $this->assertEqual(count($xpath), 1, 'Correct URL found.');
++    $this->assertEquals(count($xpath), 1, 'Correct URL found.');
+     $xpath = $this->xpath("//h2/a[@href='" . $site_one->getSitePath() . "/node/" . $node5->id() . "']");
+-    $this->assertEqual(count($xpath), 1, 'Correct URL found.');
++    $this->assertEquals(count($xpath), 1, 'Correct URL found.');
+     $xpath = $this->xpath("//h2/a[@href='" . $site_two->getSitePath() . "/node/" . $node6->id() . "']");
+-    $this->assertEqual(count($xpath), 1, 'Correct URL found.');
++    $this->assertEquals(count($xpath), 1, 'Correct URL found.');
+     // Click response.
+     $this->clickLink($node3->label());
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->drupalGet($site_two->getSitePath() . $views_url);
+     $this->clickLink($node5->label());
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->drupalGet($site_two->getSitePath() . $views_url);
+     $this->clickLink($node6->label());
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     // Test publish on master.
+     $node6->set(MicroNodeFields::NODE_SITES_PUBLISH_MASTER, TRUE);
+     $node6->save();
+ 
+     $this->drupalGet($this->masterUrl . $views_url);
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $xpath = $this->xpath('//article[contains(@class, "node--type-article")]');
+-    $this->assertEqual(count($xpath), 4, '4 articles found on master.');
++    $this->assertEquals(count($xpath), 4, '4 articles found on master.');
+     $this->assertSession()->pageTextContains('Article 6 site two');
+     // Check URLs
+     $xpath = $this->xpath("//h2/a[@href='" . $site_two->getSitePath() . "/node/" . $node6->id() . "']");
+-    $this->assertEqual(count($xpath), 1, 'Correct URL found.');
++    $this->assertEquals(count($xpath), 1, 'Correct URL found.');
+     // Click response.
+     $this->clickLink($node6->label());
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+   }
+ 
+ }
+diff --git a/tests/src/Functional/NodeAccessRecordsTest.php b/tests/src/Functional/NodeAccessRecordsTest.php
+index 6908012..2f4424e 100644
+--- a/tests/src/Functional/NodeAccessRecordsTest.php
++++ b/tests/src/Functional/NodeAccessRecordsTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\micro_node\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Database\Database;
+ use Drupal\Core\Url;
+@@ -26,7 +27,7 @@ class NodeAccessRecordsTest extends MicroSiteBase {
+   /**
+    * A user with permission to administer site configuration.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+@@ -42,7 +43,7 @@ class NodeAccessRecordsTest extends MicroSiteBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->configFactory->getEditable('micro_node.settings')->set('node_types', ['article', 'page'])->save(TRUE);
+     foreach (['article', 'page'] as $bundle) {
+@@ -56,7 +57,7 @@ class NodeAccessRecordsTest extends MicroSiteBase {
+    */
+   public function testAccessRecords() {
+     $this->drupalGet(Url::fromUri($this->masterUrl));
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     $generic = $this->createSiteType('generic', 'Generic', 'Generic site type');
+     $settings = ['user_id' => $this->microSiteOwnerUser->id(), 'registered' => TRUE, 'status' => TRUE];
+@@ -80,16 +81,16 @@ class NodeAccessRecordsTest extends MicroSiteBase {
+       ->fetchAll();
+ 
+     $this->assertCount(2, $records, 'Returned the correct number of rows.');
+-    $this->assertEqual($records[0]->realm, 'site_id', 'Grant with site_id acquired for node.');
+-    $this->assertEqual($records[0]->gid, $site_one->id(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[0]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[0]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[0]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[1]->realm, 'site_node_owner', 'Grant with site_node_owner acquired for node.');
+-    $this->assertEqual($records[1]->gid, $node1->getOwnerId(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[1]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[1]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[1]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[0]->realm, 'site_id', 'Grant with site_id acquired for node.');
++    $this->assertEquals($records[0]->gid, $site_one->id(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[0]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[0]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[0]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[1]->realm, 'site_node_owner', 'Grant with site_node_owner acquired for node.');
++    $this->assertEquals($records[1]->gid, $node1->getOwnerId(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[1]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[1]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[1]->grant_delete, 1, 'Grant delete stored.');
+ 
+     $node2 = $this->drupalCreateNode([
+       'type' => 'article',
+@@ -105,21 +106,21 @@ class NodeAccessRecordsTest extends MicroSiteBase {
+       ->fetchAll();
+ 
+     $this->assertCount(3, $records, 'Returned the correct number of rows.');
+-    $this->assertEqual($records[0]->realm, 'site_id', 'Grant with site_id acquired for node.');
+-    $this->assertEqual($records[0]->gid, $site_one->id(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[0]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[0]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[0]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[1]->realm, 'site_id', 'Grant with site_id acquired for node.');
+-    $this->assertEqual($records[1]->gid, $site_two->id(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[1]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[1]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[1]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[2]->realm, 'site_node_owner', 'Grant with site_node_owner acquired for node.');
+-    $this->assertEqual($records[2]->gid, $node2->getOwnerId(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[2]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[2]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[2]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[0]->realm, 'site_id', 'Grant with site_id acquired for node.');
++    $this->assertEquals($records[0]->gid, $site_one->id(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[0]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[0]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[0]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[1]->realm, 'site_id', 'Grant with site_id acquired for node.');
++    $this->assertEquals($records[1]->gid, $site_two->id(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[1]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[1]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[1]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[2]->realm, 'site_node_owner', 'Grant with site_node_owner acquired for node.');
++    $this->assertEquals($records[2]->gid, $node2->getOwnerId(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[2]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[2]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[2]->grant_delete, 1, 'Grant delete stored.');
+ 
+     // On master
+     $node3 = $this->drupalCreateNode([
+@@ -134,26 +135,26 @@ class NodeAccessRecordsTest extends MicroSiteBase {
+       ->fetchAll();
+ 
+     $this->assertCount(4, $records, 'Returned the correct number of rows.');
+-    $this->assertEqual($records[0]->realm, 'master', 'Grant with master acquired for node.');
+-    $this->assertEqual($records[0]->gid, 0, 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[0]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[0]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[0]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[1]->realm, 'master_article', 'Grant with master_article acquired for node.');
+-    $this->assertEqual($records[1]->gid, 0, 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[1]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[1]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[1]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[2]->realm, 'master_own_article', 'Grant with master_own_article acquired for node.');
+-    $this->assertEqual($records[2]->gid, $node3->getOwnerId(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[2]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[2]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[2]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[3]->realm, 'master_own_unpublished', 'Grant with master_own_unpublished acquired for node.');
+-    $this->assertEqual($records[3]->gid, $node3->getOwnerId(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[3]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[3]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[3]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[0]->realm, 'master', 'Grant with master acquired for node.');
++    $this->assertEquals($records[0]->gid, 0, 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[0]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[0]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[0]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[1]->realm, 'master_article', 'Grant with master_article acquired for node.');
++    $this->assertEquals($records[1]->gid, 0, 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[1]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[1]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[1]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[2]->realm, 'master_own_article', 'Grant with master_own_article acquired for node.');
++    $this->assertEquals($records[2]->gid, $node3->getOwnerId(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[2]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[2]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[2]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[3]->realm, 'master_own_unpublished', 'Grant with master_own_unpublished acquired for node.');
++    $this->assertEquals($records[3]->gid, $node3->getOwnerId(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[3]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[3]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[3]->grant_delete, 1, 'Grant delete stored.');
+ 
+     // On master and all sites
+     $node4 = $this->drupalCreateNode([
+@@ -169,31 +170,31 @@ class NodeAccessRecordsTest extends MicroSiteBase {
+       ->fetchAll();
+ 
+     $this->assertCount(5, $records, 'Returned the correct number of rows.');
+-    $this->assertEqual($records[0]->realm, 'master', 'Grant with master acquired for node.');
+-    $this->assertEqual($records[0]->gid, 0, 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[0]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[0]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[0]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[1]->realm, 'master_article', 'Grant with master_article acquired for node.');
+-    $this->assertEqual($records[1]->gid, 0, 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[1]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[1]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[1]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[2]->realm, 'master_own_article', 'Grant with master_own_article acquired for node.');
+-    $this->assertEqual($records[2]->gid, $node4->getOwnerId(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[2]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[2]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[2]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[3]->realm, 'master_own_unpublished', 'Grant with master_own_unpublished acquired for node.');
+-    $this->assertEqual($records[3]->gid, $node4->getOwnerId(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[3]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[3]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[3]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[4]->realm, 'site_all', 'Grant with site_all acquired for node.');
+-    $this->assertEqual($records[4]->gid, 0, 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[4]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[4]->grant_update, 0, 'Grant update stored.');
+-    $this->assertEqual($records[4]->grant_delete, 0, 'Grant delete stored.');
++    $this->assertEquals($records[0]->realm, 'master', 'Grant with master acquired for node.');
++    $this->assertEquals($records[0]->gid, 0, 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[0]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[0]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[0]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[1]->realm, 'master_article', 'Grant with master_article acquired for node.');
++    $this->assertEquals($records[1]->gid, 0, 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[1]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[1]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[1]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[2]->realm, 'master_own_article', 'Grant with master_own_article acquired for node.');
++    $this->assertEquals($records[2]->gid, $node4->getOwnerId(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[2]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[2]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[2]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[3]->realm, 'master_own_unpublished', 'Grant with master_own_unpublished acquired for node.');
++    $this->assertEquals($records[3]->gid, $node4->getOwnerId(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[3]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[3]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[3]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[4]->realm, 'site_all', 'Grant with site_all acquired for node.');
++    $this->assertEquals($records[4]->gid, 0, 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[4]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[4]->grant_update, 0, 'Grant update stored.');
++    $this->assertEquals($records[4]->grant_delete, 0, 'Grant delete stored.');
+ 
+     // Create an article node on site one and publish on master.
+     $node5 = $this->drupalCreateNode([
+@@ -211,36 +212,36 @@ class NodeAccessRecordsTest extends MicroSiteBase {
+ 
+     $this->assertCount(6, $records, 'Returned the correct number of rows.');
+ 
+-    $this->assertEqual($records[0]->realm, 'master', 'Grant with master acquired for node.');
+-    $this->assertEqual($records[0]->gid, 0, 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[0]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[0]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[0]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[1]->realm, 'master_article', 'Grant with master_article acquired for node.');
+-    $this->assertEqual($records[1]->gid, 0, 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[1]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[1]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[1]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[2]->realm, 'master_own_article', 'Grant with master_own_article acquired for node.');
+-    $this->assertEqual($records[2]->gid, $node5->getOwnerId(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[2]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[2]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[2]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[3]->realm, 'master_own_unpublished', 'Grant with master_own_unpublished acquired for node.');
+-    $this->assertEqual($records[3]->gid, $node5->getOwnerId(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[3]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[3]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[3]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[4]->realm, 'site_id', 'Grant with site_id acquired for node.');
+-    $this->assertEqual($records[4]->gid, $site_one->id(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[4]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[4]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[4]->grant_delete, 1, 'Grant delete stored.');
+-    $this->assertEqual($records[5]->realm, 'site_node_owner', 'Grant with site_node_owner acquired for node.');
+-    $this->assertEqual($records[5]->gid, $node5->getOwnerId(), 'Grant with proper id acquired for node.');
+-    $this->assertEqual($records[5]->grant_view, 1, 'Grant view stored.');
+-    $this->assertEqual($records[5]->grant_update, 1, 'Grant update stored.');
+-    $this->assertEqual($records[5]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[0]->realm, 'master', 'Grant with master acquired for node.');
++    $this->assertEquals($records[0]->gid, 0, 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[0]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[0]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[0]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[1]->realm, 'master_article', 'Grant with master_article acquired for node.');
++    $this->assertEquals($records[1]->gid, 0, 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[1]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[1]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[1]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[2]->realm, 'master_own_article', 'Grant with master_own_article acquired for node.');
++    $this->assertEquals($records[2]->gid, $node5->getOwnerId(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[2]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[2]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[2]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[3]->realm, 'master_own_unpublished', 'Grant with master_own_unpublished acquired for node.');
++    $this->assertEquals($records[3]->gid, $node5->getOwnerId(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[3]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[3]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[3]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[4]->realm, 'site_id', 'Grant with site_id acquired for node.');
++    $this->assertEquals($records[4]->gid, $site_one->id(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[4]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[4]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[4]->grant_delete, 1, 'Grant delete stored.');
++    $this->assertEquals($records[5]->realm, 'site_node_owner', 'Grant with site_node_owner acquired for node.');
++    $this->assertEquals($records[5]->gid, $node5->getOwnerId(), 'Grant with proper id acquired for node.');
++    $this->assertEquals($records[5]->grant_view, 1, 'Grant view stored.');
++    $this->assertEquals($records[5]->grant_update, 1, 'Grant update stored.');
++    $this->assertEquals($records[5]->grant_delete, 1, 'Grant delete stored.');
+   }
+ 
+ 
+diff --git a/tests/src/Functional/NodeCreateTest.php b/tests/src/Functional/NodeCreateTest.php
+index 408ccf7..9e9eef8 100644
+--- a/tests/src/Functional/NodeCreateTest.php
++++ b/tests/src/Functional/NodeCreateTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\micro_node\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Url;
+ use Drupal\micro_site\SiteUsers;
+@@ -27,7 +28,7 @@ class NodeCreateTest extends MicroSiteBase {
+   /**
+    * A user with permission to administer site configuration.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+@@ -43,7 +44,7 @@ class NodeCreateTest extends MicroSiteBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+   }
+ 
+@@ -52,7 +53,7 @@ class NodeCreateTest extends MicroSiteBase {
+    */
+   public function testNodeAccess() {
+     $this->drupalGet(Url::fromUri($this->masterUrl));
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     $generic = $this->createSiteType('generic', 'Generic', 'Generic site type');
+     $settings = ['user_id' => $this->microSiteOwnerUser->id()];
+@@ -65,21 +66,21 @@ class NodeCreateTest extends MicroSiteBase {
+     $site_one->setRegistered(TRUE);
+     $site_one->save();
+     $this->drupalGet(Url::fromUri($site_one->getSitePath()));
+-    $this->assertResponse(403);
++    $this->assertSession()->statusCodeEquals(403);
+     $this->logInUser($this->globalAdminUser);
+     $this->drupalGet(Url::fromUri($site_one->getSitePath()));
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $xpath = $this->xpath("//a[contains(@href, '/site/" . $site_one->id() . "/content')]");
+-    $this->assertEqual(count($xpath), 0, 'Tab content not found on the micro site home.');
++    $this->assertEquals(count($xpath), 0, 'Tab content not found on the micro site home.');
+ 
+     $this->drupalGet(Url::fromUri($this->masterUrl));
+     $this->logInUser($this->globalAdminUser);
+     $config_url = $this->masterUrl . '/admin/config/micro_site/node';
+     $this->drupalGet(Url::fromUri($config_url));
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->checkField('node_types[page]');
+     $this->pressButton('Save configuration');
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->assertSession()->pageTextContains('The configuration options have been saved.');
+ 
+     $generic->setTypes(['page']);
+@@ -87,20 +88,20 @@ class NodeCreateTest extends MicroSiteBase {
+ 
+     $this->drupalGet(Url::fromUri($site_one->getSitePath()));
+     $xpath = $this->xpath("//a[contains(@href, '/site/" . $site_one->id() . "/content')]");
+-    $this->assertEqual(count($xpath), 1, 'Tab content found on the micro site home.');
++    $this->assertEquals(count($xpath), 1, 'Tab content found on the micro site home.');
+ 
+     $this->clickLink('Content');
+     $this->assertSession()->pageTextContains('Add Basic page');
+     $this->assertSession()->pageTextNotContains('Add Article');
+     $xpath = $this->xpath("//a[contains(@href, '/site/" . $site_one->id() . "/add/page')]");
+-    $this->assertEqual(count($xpath), 1, 'Add Basic page link found.');
++    $this->assertEquals(count($xpath), 1, 'Add Basic page link found.');
+     $xpath = $this->xpath("//a[contains(@href, '/site/" . $site_one->id() . "/add/article')]");
+-    $this->assertEqual(count($xpath), 0, 'Add Article link not found.');
++    $this->assertEquals(count($xpath), 0, 'Add Article link not found.');
+ 
+     $this->drupalGet(Url::fromUri($config_url));
+     $this->checkField('node_types[article]');
+     $this->pressButton('Save configuration');
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->assertSession()->pageTextContains('The configuration options have been saved.');
+ 
+     $this->drupalGet(Url::fromUri($site_one->getSitePath()));
+@@ -115,54 +116,54 @@ class NodeCreateTest extends MicroSiteBase {
+     $this->assertSession()->pageTextContains('Add Article');
+     $this->assertSession()->pageTextContains('Add Basic page');
+     $xpath = $this->xpath("//a[contains(@href, '/site/" . $site_one->id() . "/add/article')]");
+-    $this->assertEqual(count($xpath), 1, 'Add Article link found.');
++    $this->assertEquals(count($xpath), 1, 'Add Article link found.');
+ 
+     $this->clickLink('Add Article');
+     $target_id = $site_one->label() . ' (' . $site_one->id() . ')';
+     $this->assertSession()->fieldValueEquals('site_id[0][target_id]', $target_id);
+     $this->fillField('title[0][value]', 'Article 1');
+     $this->pressButton('Save');
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->assertSession()->pageTextContains('Article Article 1 has been created.');
+     $articles = $this->entityTypeManager->getStorage('node')->loadByProperties(['title' => 'Article 1']);
+-    $this->assertEqual(count($articles), 1, 'One article found.');
++    $this->assertEquals(count($articles), 1, 'One article found.');
+     $article = reset($articles);
+     $article_url = '/node/' . $article->id();
+     $article_url_edit = '/node/' . $article->id() . '/edit';
+ 
+     // Admin user have access to the node
+     $this->drupalGet($this->masterUrl . $article_url);
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     $this->drupalGet($this->masterUrl);
+     $this->clickLink('Log out');
+ 
+     $this->drupalGet($this->masterUrl . $article_url);
+-    $this->assertResponse(403);
++    $this->assertSession()->statusCodeEquals(403);
+ 
+     $this->drupalGet($site_two->getSitePath() . $article_url);
+-    $this->assertResponse(403);
++    $this->assertSession()->statusCodeEquals(403);
+     $this->drupalGet($site_three->getSitePath() . $article_url);
+-    $this->assertResponse(403);
++    $this->assertSession()->statusCodeEquals(403);
+     // Global admin is logged in on site one.
+     $this->drupalGet($site_one->getSitePath() . $article_url);
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     $this->drupalGet($site_one->getSitePath());
+     $this->clickLink('Log out');
+     $this->drupalGet($site_one->getSitePath() . $article_url);
+-    $this->assertResponse(403);
++    $this->assertSession()->statusCodeEquals(403);
+ 
+     $user = $this->createUserWithPassword(['access content', 'view own unpublished site entity', 'view published site entities', 'publish on any assigned site']);
+     $this->drupalGet($site_one->getSitePath());
+     $this->logInUser($user, FALSE);
+     $this->drupalGet($site_one->getSitePath() . $article_url);
+-    $this->assertResponse(403);
++    $this->assertSession()->statusCodeEquals(403);
+ 
+     $site_one->set(SiteUsers::MICRO_SITE_MEMBER, $user);
+     $site_one->save();
+     $this->drupalGet($site_one->getSitePath() . $article_url);
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     $site_one->setPublished(TRUE);
+     $site_one->save();
+@@ -170,26 +171,26 @@ class NodeCreateTest extends MicroSiteBase {
+     $this->drupalGet($site_one->getSitePath());
+     $this->clickLink('Log out');
+     $this->drupalGet($site_one->getSitePath() . $article_url);
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     $this->drupalGet($site_one->getSitePath());
+     $this->logInUser($user);
+     $xpath = $this->xpath("//a[contains(@href, '/site/" . $site_one->id() . "/content')]");
+-    $this->assertEqual(count($xpath), 0, 'Tab content not accessible by member.');
++    $this->assertEquals(count($xpath), 0, 'Tab content not accessible by member.');
+     $site_one->set(SiteUsers::MICRO_SITE_CONTRIBUTOR, $user);
+     $site_one->set(SiteUsers::MICRO_SITE_MEMBER, []);
+     $site_one->save();
+ 
+     $this->drupalGet($site_one->getSitePath());
+     $xpath = $this->xpath("//a[contains(@href, '/site/" . $site_one->id() . "/content')]");
+-    $this->assertEqual(count($xpath), 1, 'Tab content accessible by contributor.');
++    $this->assertEquals(count($xpath), 1, 'Tab content accessible by contributor.');
+     $this->clickLink('Content');
+     $this->assertSession()->pageTextContains('Article 1');
+     $xpath = $this->xpath("//a[contains(@href, '/node/" . $article->id() . "/edit')]");
+-    $this->assertEqual(count($xpath), 0, 'Article not editable by member.');
++    $this->assertEquals(count($xpath), 0, 'Article not editable by member.');
+ 
+     $this->drupalGet($site_one->getSitePath() . $article_url_edit);
+-    $this->assertResponse(403);
++    $this->assertSession()->statusCodeEquals(403);
+ 
+     $site_one->set(SiteUsers::MICRO_SITE_MANAGER, [$user]);
+     $site_one->set(SiteUsers::MICRO_SITE_CONTRIBUTOR, []);
+@@ -204,9 +205,9 @@ class NodeCreateTest extends MicroSiteBase {
+     $this->drupalGet($site_one->getSitePath());
+     $this->clickLink('Content');
+     $xpath = $this->xpath("//a[contains(@href, '/node/" . $article->id() . "/edit')]");
+-    $this->assertEqual(count($xpath), 1, 'Article editable by manager.');
++    $this->assertEquals(count($xpath), 1, 'Article editable by manager.');
+     $this->drupalGet($site_one->getSitePath() . $article_url_edit);
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->assertSession()->pageTextContains('Others sites');
+     $this->assertSession()->pageTextContains('Disable main site canonical url');
+     $this->assertSession()->pageTextNotContains('Publish on master');
+@@ -218,7 +219,7 @@ class NodeCreateTest extends MicroSiteBase {
+     $site_one->save();
+     $this->logInUser($new_user);
+     $this->drupalGet($site_one->getSitePath() . $article_url_edit);
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+     $this->assertSession()->pageTextContains('Others sites');
+     $this->assertSession()->pageTextContains('Disable main site canonical url');
+     $this->assertSession()->pageTextContains('Publish on master');
+diff --git a/tests/src/Functional/NodeEditRedirectTest.php b/tests/src/Functional/NodeEditRedirectTest.php
+index 61f1d5f..df8dc6d 100644
+--- a/tests/src/Functional/NodeEditRedirectTest.php
++++ b/tests/src/Functional/NodeEditRedirectTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\micro_node\Functional;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Url;
+ use Drupal\micro_node\MicroNodeFields;
+@@ -29,7 +30,7 @@ class NodeEditRedirectTest extends MicroSiteBase {
+   /**
+    * A user with permission to administer site configuration.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+@@ -45,7 +46,7 @@ class NodeEditRedirectTest extends MicroSiteBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->configFactory->getEditable('micro_node.settings')->set('node_types', ['article', 'page'])->save(TRUE);
+     foreach (['article', 'page'] as $bundle) {
+diff --git a/tests/src/Traits/MicroNodeTestTrait.php b/tests/src/Traits/MicroNodeTestTrait.php
+index 2013bf6..6edabbe 100644
+--- a/tests/src/Traits/MicroNodeTestTrait.php
++++ b/tests/src/Traits/MicroNodeTestTrait.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\micro_node\Traits;
+ 
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ use Drupal\Core\Session\AccountInterface;
+ use Drupal\micro_node\MicroNodeFields;
+ 
+@@ -17,11 +19,11 @@ trait MicroNodeTestTrait {
+    * @param $bundle
+    * @param string $mode
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function configureEntityFormDisplay($entity_type, $bundle, $mode = 'default') {
+     // Ensure that form display is well configured.
+-    /** @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface $display_repository */
++    /** @var EntityDisplayRepositoryInterface $display_repository */
+     $display_repository = \Drupal::service('entity_display.repository');
+     $entity_form_display = $display_repository->getFormDisplay($entity_type, $bundle, $mode);
+     $options = [

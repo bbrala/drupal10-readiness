@@ -1,0 +1,4343 @@
+diff --git a/association.install b/association.install
+index 6980c23..8ea696b 100644
+--- a/association.install
++++ b/association.install
+@@ -1,5 +1,12 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\Core\Entity\Sql\SqlEntityStorageInterface;
++use Drupal\association\Entity\Storage\AssociationPageStorage;
++use Drupal\association\Entity\AssociationPage;
++use Drupal\association\Entity\AssociationTypeInterface;
++use Drupal\association\Entity\Storage\AssociationLinkStorage;
++use Drupal\association\Entity\AssociationLink;
+ /**
+  * @file
+  * Drupal hooks for installation, updating and checking requirements.
+@@ -66,17 +73,17 @@ function association_modules_preuninstall($module) {
+  * @see \Drupal\association\Entity\Storage\AssociationLinkStorageSchema::initializeBaseTable()
+  */
+ function association_update_9101() {
+-  /** @var \Drupal\Core\Entity\EntityFieldManagerInterface */
++  /** @var EntityFieldManagerInterface */
+   $field_manager = \Drupal::service('entity_field.manager');
+   $entity_type_manager = \Drupal::entityTypeManager();
+ 
+-  /** @var \Drupal\Core\Entity\Sql\SqlEntityStorageInterface */
++  /** @var SqlEntityStorageInterface */
+   $entity_storage = $entity_type_manager->getStorage('association_link');
+   $table_name = $entity_type_manager
+     ->getDefinition('association_link')
+     ->getBaseTable();
+ 
+-  /** @var \Drupal\Core\Field\BaseFieldDefinition[] */
++  /** @var BaseFieldDefinition[] */
+   $base_fields = $field_manager->getBaseFieldDefinitions('association_link');
+   $base_fields = [
+     'association' => $base_fields['association'],
+@@ -120,7 +127,7 @@ function association_update_9101() {
+  * Add a revisionable status base field which is needed for workflows.
+  */
+ function association_update_9103(&$sandbox = []) {
+-  /** @var \Drupal\association\Entity\Storage\AssociationPageStorage */
++  /** @var AssociationPageStorage */
+   $page_storage = \Drupal::entityTypeManager()->getStorage('association_page');
+   $query = $page_storage->getQuery()
+     ->accessCheck(FALSE);
+@@ -153,7 +160,7 @@ function association_update_9103(&$sandbox = []) {
+     ->execute();
+ 
+   if ($ids) {
+-    /** @var \Drupal\association\Entity\AssociationPage */
++    /** @var AssociationPage */
+     foreach ($page_storage->loadMultiple($ids) as $page) {
+       $assoc_status = $page->getAssociation()->isActive();
+       $page
+@@ -161,7 +168,7 @@ function association_update_9103(&$sandbox = []) {
+         ->save();
+ 
+       $rids = $page_storage->revisionIds($page);
+-      /** @var \Drupal\association\Entity\AssociationPage */
++      /** @var AssociationPage */
+       foreach ($page_storage->loadMultipleRevisions($rids) as $revision) {
+         $revision
+           ->set('status', [$assoc_status])
+@@ -191,7 +198,7 @@ function association_update_9103(&$sandbox = []) {
+  * definition. Updates configuration to new format.
+  */
+ function association_update_9104() {
+-  /** @var \Drupal\association\Entity\AssociationTypeInterface[] */
++  /** @var AssociationTypeInterface[] */
+   $assoc_types = \Drupal::entityTypeManager()
+     ->getStorage('association_type')
+     ->loadMultiple();
+@@ -221,7 +228,7 @@ function association_update_9104() {
+  * Add a target entity bundle to allow for multiple entity bundles per "tag".
+  */
+ function association_update_9105(&$sandbox = []) {
+-  /** @var \Drupal\association\Entity\Storage\AssociationLinkStorage */
++  /** @var AssociationLinkStorage */
+   $link_storage = \Drupal::entityTypeManager()->getStorage('association_link');
+   $query = $link_storage->getQuery()->accessCheck(FALSE);
+ 
+@@ -246,7 +253,7 @@ function association_update_9105(&$sandbox = []) {
+     ->execute();
+ 
+   if ($ids) {
+-    /** @var \Drupal\association\Entity\AssociationLink */
++    /** @var AssociationLink */
+     foreach ($link_storage->loadMultiple($ids) as $link) {
+       $assoc = $link->getAssociation();
+       $behavior = $assoc ? $assoc->getBehavior() : NULL;
+diff --git a/association.module b/association.module
+index c763a8c..1996240 100644
+--- a/association.module
++++ b/association.module
+@@ -1,5 +1,10 @@
+ <?php
+ 
++use Drupal\association\Entity\AssociationTypeInterface;
++use Drupal\association\EntityAdapterManagerInterface;
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
++use Drupal\association\Entity\Storage\AssociationLinkStorageInterface;
+ /**
+  * @file
+  * Drupal module hooks and global functions for the entity assocation module.
+@@ -50,7 +55,7 @@ function association_menu_links_discovered_alter(array &$links) {
+     return;
+   }
+ 
+-  /** @var \Drupal\association\Entity\AssociationTypeInterface[] */
++  /** @var AssociationTypeInterface[] */
+   $assoc_types = \Drupal::entityTypeManager()
+     ->getStorage('association_type')
+     ->loadMultiple();
+@@ -131,7 +136,7 @@ function association_data_type_info_alter(&$data_types) {
+   $link_type_def = $entity_type_manager->getDefinition('association_link');
+ 
+   if ($link_type_def && !empty($data_types['entity:association_link'])) {
+-    /** @var \Drupal\association\EntityAdapterManagerInterface */
++    /** @var EntityAdapterManagerInterface */
+     $adapter_manager = \Drupal::service('plugin.manager.association.entity_adapter');
+     $data_type_def = $data_types['entity:association_link'];
+ 
+@@ -357,12 +362,12 @@ function association_entity_update(EntityInterface $entity) {
+ 
+   $adapter_manager = \Drupal::service('plugin.manager.association.entity_adapter');
+   if ($adapter_manager->isAssociable($entity)) {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $tags = [];
+ 
+     // Invalidate association cache tags when the associated entity is updated.
+     // Ensures entity updates propagate to other associated entities and blocks.
+-    /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface */
++    /** @var EntityReferenceFieldItemListInterface */
+     foreach ($entity->get('associations') as $item) {
+       if ($link = $item->entity) {
+         $tags = Cache::mergeTags($tags, $link->getCacheTagsToInvalidate());
+@@ -382,7 +387,7 @@ function association_entity_delete(EntityInterface $entity) {
+   $adapter_manager = \Drupal::service('plugin.manager.association.entity_adapter');
+ 
+   if ($adapter_manager->isAssociable($entity)) {
+-    /** @var \Drupal\association\Entity\Storage\AssociationLinkStorageInterface */
++    /** @var AssociationLinkStorageInterface */
+     $link_storage = \Drupal::entityTypeManager()
+       ->getStorage('association_link');
+ 
+diff --git a/modules/association_menu/association_menu.module b/modules/association_menu/association_menu.module
+index 860b0ca..e663c71 100644
+--- a/modules/association_menu/association_menu.module
++++ b/modules/association_menu/association_menu.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\association\Entity\AssociationLink;
+ /**
+  * @file
+  * Provides the Drupal hooks and global module include for association_nav.
+@@ -44,7 +45,7 @@ function association_menu_entity_insert(EntityInterface $entity) {
+  * Implements hook_ENTITY_TYPE_delete() for association_link.
+  */
+ function association_menu_association_link_delete(EntityInterface $entity) {
+-  /** @var \Drupal\association\Entity\AssociationLink $entity */
++  /** @var AssociationLink $entity */
+   if (!$entity->isAssociationPurging()) {
+     \Drupal::service('association_menu.storage')
+       ->removeAssociated($entity);
+diff --git a/modules/association_menu/src/AssociatedEntityMenuItem.php b/modules/association_menu/src/AssociatedEntityMenuItem.php
+index db666cf..a44cbc9 100644
+--- a/modules/association_menu/src/AssociatedEntityMenuItem.php
++++ b/modules/association_menu/src/AssociatedEntityMenuItem.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\association_menu;
+ 
++use Drupal\Core\Entity\EntityMalformedException;
++use Drupal\Core\Entity\Exception\UndefinedLinkTemplateException;
+ use Drupal\association_menu\Exception\InvalidMenuUrlException;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Url;
+@@ -26,7 +28,7 @@ class AssociatedEntityMenuItem extends MenuItemBase implements MenuItemInterface
+   /**
+    * The associated entity this menu link represents.
+    *
+-   * @var \Drupal\Core\Entity\EntityInterface
++   * @var EntityInterface
+    */
+   public $entity;
+ 
+@@ -35,7 +37,7 @@ class AssociatedEntityMenuItem extends MenuItemBase implements MenuItemInterface
+    *
+    * @param array $values
+    *   The menu item values like the ID, enable status.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The associated entity this menu link should represent.
+    */
+   public function __construct(array $values, EntityInterface $entity) {
+@@ -81,7 +83,7 @@ class AssociatedEntityMenuItem extends MenuItemBase implements MenuItemInterface
+   /**
+    * Get the associated entity this menu link implements.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   The associated entity this menu link represents.
+    */
+   public function getEntity(): ?EntityInterface {
+@@ -103,9 +105,9 @@ class AssociatedEntityMenuItem extends MenuItemBase implements MenuItemInterface
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\association_menu\Exception\InvalidMenuUrlException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
+-   * @throws \Drupal\Core\Entity\Exception\UndefinedLinkTemplateException
++   * @throws InvalidMenuUrlException
++   * @throws EntityMalformedException
++   * @throws UndefinedLinkTemplateException
+    */
+   protected function buildUrl(): Url {
+     if (!$this->entity) {
+diff --git a/modules/association_menu/src/AssociationMenuBuilder.php b/modules/association_menu/src/AssociationMenuBuilder.php
+index 48d6438..3a4dcf2 100644
+--- a/modules/association_menu/src/AssociationMenuBuilder.php
++++ b/modules/association_menu/src/AssociationMenuBuilder.php
+@@ -14,14 +14,14 @@ class AssociationMenuBuilder implements AssociationMenuBuilderInterface {
+   /**
+    * The default route match to use when determining the menu active trail.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * Creates a new instance of the AssociationMenuBuilder class.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $current_route_match
++   * @param RouteMatchInterface $current_route_match
+    *   The default route match to use when determining the menu active trail.
+    */
+   public function __construct(RouteMatchInterface $current_route_match) {
+@@ -89,9 +89,9 @@ class AssociationMenuBuilder implements AssociationMenuBuilderInterface {
+    * items that are not expanded or are not accessible, will not render their
+    * child items.
+    *
+-   * @param \Drupal\association_menu\MenuItemInterface $item
++   * @param MenuItemInterface $item
+    *   The loaded association menu storage item, with children attached.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match to use to determine the active trail.
+    * @param int $max_depth
+    *   The maximum depth that the menu navigation should build to.
+diff --git a/modules/association_menu/src/AssociationMenuBuilderInterface.php b/modules/association_menu/src/AssociationMenuBuilderInterface.php
+index 3b6c5fe..f902c8a 100644
+--- a/modules/association_menu/src/AssociationMenuBuilderInterface.php
++++ b/modules/association_menu/src/AssociationMenuBuilderInterface.php
+@@ -18,7 +18,7 @@ interface AssociationMenuBuilderInterface {
+    *
+    * @param array $menu
+    *   The loaded menu item data.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match information to determine the menu active trail from.
+    *
+    * @return array
+@@ -32,9 +32,9 @@ interface AssociationMenuBuilderInterface {
+   /**
+    * Organize the menu items into nested tree, and renderable menu links.
+    *
+-   * @param \Drupal\association_menu\MenuItemInterface[] $menu_items
++   * @param MenuItemInterface[] $menu_items
+    *   Loaded enabled menu items to build into renderable menu items.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match to determine the menu active trail from.
+    *
+    * @return array
+diff --git a/modules/association_menu/src/AssociationMenuStorage.php b/modules/association_menu/src/AssociationMenuStorage.php
+index ff04e5a..9709af4 100644
+--- a/modules/association_menu/src/AssociationMenuStorage.php
++++ b/modules/association_menu/src/AssociationMenuStorage.php
+@@ -29,75 +29,75 @@ class AssociationMenuStorage implements AssociationMenuStorageInterface {
+   /**
+    * An array of cached navigation data, already sorted and access checked.
+    *
+-   * @var \Drupal\association_menu\MenuItemInterface[]
++   * @var MenuItemInterface[]
+    */
+   protected $menus = [];
+ 
+   /**
+    * Database connection where the association navigation data is stored.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $db;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The access manager.
+    *
+-   * @var \Drupal\Core\Access\AccessManagerInterface
++   * @var AccessManagerInterface
+    */
+   protected $accessManager;
+ 
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * The JSON data serializer.
+    *
+-   * @var \Drupal\Component\Serialization\SerializationInterface
++   * @var SerializationInterface
+    */
+   protected $json;
+ 
+   /**
+    * The association menu cache backend.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cacheBackend;
+ 
+   /**
+    * The account to use for access checks by default.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+    * Create a new instance of the AssociationMenuStorage manager class.
+    *
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database connection to use for storage and retrieval of menu items.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Access\AccessManagerInterface $access_manager
++   * @param AccessManagerInterface $access_manager
+    *   The access manager.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   The event dispatcher.
+-   * @param \Drupal\Component\Serialization\SerializationInterface $json
++   * @param SerializationInterface $json
+    *   The database storage JSON serializer for array data.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   The association menu cache backend.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account to use for access checks by default.
+    */
+   public function __construct(Connection $database, EntityTypeManagerInterface $entity_type_manager, AccessManagerInterface $access_manager, EventDispatcherInterface $event_dispatcher, SerializationInterface $json, CacheBackendInterface $cache_backend, AccountInterface $account) {
+@@ -154,7 +154,7 @@ class AssociationMenuStorage implements AssociationMenuStorageInterface {
+    *   The raw menu item data (usually from DB), to load and clean up. These
+    *   values are loaded into the appropriate menu item instance type.
+    *
+-   * @return \Drupal\association_menu\MenuItemInterface|null
++   * @return MenuItemInterface|null
+    *   Returns a loaded menu item object from the menu values.
+    */
+   protected function createItem(array $values): ?MenuItemInterface {
+diff --git a/modules/association_menu/src/AssociationMenuStorageInterface.php b/modules/association_menu/src/AssociationMenuStorageInterface.php
+index 6497857..29fe45b 100644
+--- a/modules/association_menu/src/AssociationMenuStorageInterface.php
++++ b/modules/association_menu/src/AssociationMenuStorageInterface.php
+@@ -17,7 +17,7 @@ interface AssociationMenuStorageInterface {
+   /**
+    * Gets the menu cache tags for the provided entity association.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The entity association to fetch menu cache tags for.
+    *
+    * @return string[]
+@@ -37,13 +37,13 @@ interface AssociationMenuStorageInterface {
+   /**
+    * Get the loaded menu items to prepare for display.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association to fetch navigation information for.
+-   * @param \Drupal\Core\Session\AccountInterface|null $account
++   * @param AccountInterface|null $account
+    *   The user account to fetch the menu tree for. This should only the menu
+    *   tree, with only items the user has access to.
+    *
+-   * @return \Drupal\association_menu\MenuItemInterface[]
++   * @return MenuItemInterface[]
+    *   The navigation menu tree loaded for the requested Association.
+    */
+   public function getMenu(AssociationInterface $association, AccountInterface $account = NULL): array;
+@@ -51,7 +51,7 @@ interface AssociationMenuStorageInterface {
+   /**
+    * Remove all menu items for an Entity Association.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The entity association to remove all menu items from.
+    */
+   public function deleteMenu(AssociationInterface $association): void;
+@@ -62,7 +62,7 @@ interface AssociationMenuStorageInterface {
+    * This method loads the menu items, and prepares them for use with admin
+    * forms, and editing.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association to fetch navigation information for.
+    * @param array $filters
+    *   Additional conditions to apply when getting the menu items. The array
+@@ -72,7 +72,7 @@ interface AssociationMenuStorageInterface {
+    *   Should the menu items be return flatten with all items at a single depth.
+    *   The default FALSE value, will return the menu items built as a tree.
+    *
+-   * @return \Drupal\association_menu\MenuItemInterface[]
++   * @return MenuItemInterface[]
+    *   An array of menu items belonging to the association.
+    */
+   public function getMenuItems(AssociationInterface $association, array $filters = [], $flatten = FALSE): array;
+@@ -80,12 +80,12 @@ interface AssociationMenuStorageInterface {
+   /**
+    * Fetches the menu item data for a single item in a format for admin forms.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association which owns the menu item being requested.
+    * @param int $menu_item_id
+    *   The ID of the menu item to fetch.
+    *
+-   * @return \Drupal\association_menu\MenuItemInterface
++   * @return MenuItemInterface
+    *   The loaded menu item data.
+    *
+    * @throws \InvalidArgumentException
+@@ -97,7 +97,7 @@ interface AssociationMenuStorageInterface {
+   /**
+    * Add or update menu items to an association menu.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association to add this navigation item to.
+    * @param array $values
+    *   Menu item data, including the title, route, entity, parent, weight,
+@@ -112,7 +112,7 @@ interface AssociationMenuStorageInterface {
+    * associated entity content. These should only be disabled, but cannot be
+    * removed unless the entire association is being deleted.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association which owns the menu item being deleted.
+    * @param int $menu_item_id
+    *   The ID of the menu item to delete.
+@@ -127,7 +127,7 @@ interface AssociationMenuStorageInterface {
+   /**
+    * Update tree related data for the association menu links.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The entity association which owns the menu items being updated.
+    * @param array $menu_items
+    *   An array of menu items to update. Menu link ID must be available as this
+@@ -138,7 +138,7 @@ interface AssociationMenuStorageInterface {
+   /**
+    * Adds an associated entity to the navigation menu.
+    *
+-   * @param \Drupal\association\Entity\AssociatedEntityInterface $entity
++   * @param AssociatedEntityInterface $entity
+    *   Add an associated entity to the navigation menu.
+    * @param array $options
+    *   Additional URL options if there are any.
+@@ -148,7 +148,7 @@ interface AssociationMenuStorageInterface {
+   /**
+    * Removes an associated entity from the navigation menu.
+    *
+-   * @param \Drupal\association\Entity\AssociatedEntityInterface $entity
++   * @param AssociatedEntityInterface $entity
+    *   The associated entity to remove from the navigation menu.
+    */
+   public function removeAssociated(AssociatedEntityInterface $entity): void;
+diff --git a/modules/association_menu/src/Event/MenuLinksAlterEvent.php b/modules/association_menu/src/Event/MenuLinksAlterEvent.php
+index 57f0cc6..ac848aa 100644
+--- a/modules/association_menu/src/Event/MenuLinksAlterEvent.php
++++ b/modules/association_menu/src/Event/MenuLinksAlterEvent.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association_menu\Event;
+ 
++use Drupal\association_menu\MenuItemInterface;
+ use Drupal\association\Entity\AssociationInterface;
+ use Drupal\Component\EventDispatcher\Event;
+ use Drupal\Core\Cache\CacheableMetadata;
+@@ -24,41 +25,41 @@ class MenuLinksAlterEvent extends Event {
+   /**
+    * The user account context the menu is built for.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+    * The entity association the menu is being built for.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface
++   * @var AssociationInterface
+    */
+   protected $association;
+ 
+   /**
+    * The cache metadata for the association menu.
+    *
+-   * @var \Drupal\Core\Cache\CacheableMetadata
++   * @var CacheableMetadata
+    */
+   protected $cache;
+ 
+   /**
+    * Association menu items to alter.
+    *
+-   * @var \Drupal\association_menu\MenuItemInterface[]
++   * @var MenuItemInterface[]
+    */
+   protected $menuItems;
+ 
+   /**
+    * Creates a new instance of the MenuLinksAlterEvent class.
+    *
+-   * @param \Drupal\association_menu\MenuItemInterface[] $menu_items
++   * @param MenuItemInterface[] $menu_items
+    *   The menu items to be altered by listeners of this event.
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The entity association the menu belongs to.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user account context the menu is being built with.
+-   * @param \Drupal\Core\Cache\CacheableMetadata $cache
++   * @param CacheableMetadata $cache
+    *   The menu cache metadata.
+    */
+   public function __construct(array &$menu_items, AssociationInterface $association, AccountInterface $account, CacheableMetadata $cache) {
+@@ -78,7 +79,7 @@ class MenuLinksAlterEvent extends Event {
+    * For instance, menu items are inserted for nodes from the current route. The
+    * cache context "route.node" should be added.
+    *
+-   * @return \Drupal\Core\Cache\CacheableMetadata
++   * @return CacheableMetadata
+    *   The association menu cache metadata.
+    */
+   public function getCache(): CacheableMetadata {
+@@ -88,7 +89,7 @@ class MenuLinksAlterEvent extends Event {
+   /**
+    * The user account the menu access checks will be run against.
+    *
+-   * @return \Drupal\Core\Session\AccountInterface
++   * @return AccountInterface
+    *   The user account these menu items are being generated for and will be
+    *   check for access against.
+    */
+@@ -99,7 +100,7 @@ class MenuLinksAlterEvent extends Event {
+   /**
+    * Gets the entity association these menu items belong to.
+    *
+-   * @return \Drupal\association\Entity\AssociationInterface
++   * @return AssociationInterface
+    *   The entity association the menu is being build for.
+    */
+   public function getAssociation(): AssociationInterface {
+@@ -109,7 +110,7 @@ class MenuLinksAlterEvent extends Event {
+   /**
+    * Get a reference to the menu link items array to alter.
+    *
+-   * @return \Drupal\association_menu\MenuItemInterface[]
++   * @return MenuItemInterface[]
+    *   Reference to the array of menu items which are being altered. This
+    *   allows the entire set of menu items to be manipulated before rendering.
+    */
+diff --git a/modules/association_menu/src/Event/MenuLinksLoadEvent.php b/modules/association_menu/src/Event/MenuLinksLoadEvent.php
+index 294fdad..53833b3 100644
+--- a/modules/association_menu/src/Event/MenuLinksLoadEvent.php
++++ b/modules/association_menu/src/Event/MenuLinksLoadEvent.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association_menu\Event;
+ 
++use Drupal\association_menu\MenuItemInterface;
+ use Drupal\association\Entity\AssociationInterface;
+ use Drupal\Component\EventDispatcher\Event;
+ use Drupal\Core\Cache\CacheableMetadata;
+@@ -20,32 +21,32 @@ class MenuLinksLoadEvent extends Event {
+   /**
+    * The entity association the menu is being built for.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface
++   * @var AssociationInterface
+    */
+   protected $association;
+ 
+   /**
+    * Cache metadata for the menu items.
+    *
+-   * @var \Drupal\Core\Cache\CacheableMetadata
++   * @var CacheableMetadata
+    */
+   protected $cache;
+ 
+   /**
+    * Reference to the menu items being loaded.
+    *
+-   * @var \Drupal\association_menu\MenuItemInterface[]
++   * @var MenuItemInterface[]
+    */
+   protected $menuItems;
+ 
+   /**
+    * Creates a new instance of the MenuLinksAlterEvent class.
+    *
+-   * @param \Drupal\association_menu\MenuItemInterface[] $menu_items
++   * @param MenuItemInterface[] $menu_items
+    *   The menu items to be altered by listeners of this event.
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The entity association the menu belongs to.
+-   * @param \Drupal\Core\Cache\CacheableMetadata $cache
++   * @param CacheableMetadata $cache
+    *   The menu cache metadata.
+    */
+   public function __construct(array &$menu_items, AssociationInterface $association, CacheableMetadata $cache) {
+@@ -64,7 +65,7 @@ class MenuLinksLoadEvent extends Event {
+    * For instance, menu items are inserted for nodes from the current route.
+    * The cache context "route.node" should be added.
+    *
+-   * @return \Drupal\Core\Cache\CacheableMetadata
++   * @return CacheableMetadata
+    *   The association menu cache metadata.
+    */
+   public function getCache(): CacheableMetadata {
+@@ -74,7 +75,7 @@ class MenuLinksLoadEvent extends Event {
+   /**
+    * Gets the entity association these menu items belong to.
+    *
+-   * @return \Drupal\association\Entity\AssociationInterface
++   * @return AssociationInterface
+    *   The entity association the menu is being build for.
+    */
+   public function getAssociation(): AssociationInterface {
+@@ -84,7 +85,7 @@ class MenuLinksLoadEvent extends Event {
+   /**
+    * Get a reference to the menu link items array of the menu being loaded.
+    *
+-   * @return \Drupal\association_menu\MenuItemInterface[]
++   * @return MenuItemInterface[]
+    *   Reference to the array of menu items which are being loaded. This
+    *   allows the entire set of menu items to be manipulated before being
+    *   cached.
+diff --git a/modules/association_menu/src/Form/AssociationMenuForm.php b/modules/association_menu/src/Form/AssociationMenuForm.php
+index 05a20a3..dcf63ce 100644
+--- a/modules/association_menu/src/Form/AssociationMenuForm.php
++++ b/modules/association_menu/src/Form/AssociationMenuForm.php
+@@ -25,23 +25,23 @@ class AssociationMenuForm extends FormBase implements ContainerInjectionInterfac
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Association menu item storage manager.
+    *
+-   * @var \Drupal\association_menu\AssociationMenuStorageInterface
++   * @var AssociationMenuStorageInterface
+    */
+   protected $menuStorage;
+ 
+   /**
+    * Create a new instance of the entity association menu management form.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\association_menu\AssociationMenuStorageInterface $association_menu_storage
++   * @param AssociationMenuStorageInterface $association_menu_storage
+    *   Association navigation storage manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, AssociationMenuStorageInterface $association_menu_storage) {
+@@ -144,7 +144,7 @@ class AssociationMenuForm extends FormBase implements ContainerInjectionInterfac
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $items = $form_state->getValue('menu_tree');
+     $assocId = $form_state->get('association_id');
+-    /** @var \Drupal\association\Entity\AssociationInterface */
++    /** @var AssociationInterface */
+     $association = $this->entityTypeManager
+       ->getStorage('association')
+       ->load($assocId);
+@@ -183,9 +183,9 @@ class AssociationMenuForm extends FormBase implements ContainerInjectionInterfac
+   /**
+    * Build the table row, and subtree rows for the navigation tree.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association this menu item belongs to.
+-   * @param \Drupal\association_menu\MenuItemInterface $item
++   * @param MenuItemInterface $item
+    *   Menu item to build into the data row.
+    * @param array $table
+    *   Reference to the table form element.
+diff --git a/modules/association_menu/src/Form/MenuItemDeleteConfirm.php b/modules/association_menu/src/Form/MenuItemDeleteConfirm.php
+index e6090a5..d894a02 100644
+--- a/modules/association_menu/src/Form/MenuItemDeleteConfirm.php
++++ b/modules/association_menu/src/Form/MenuItemDeleteConfirm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association_menu\Form;
+ 
++use Drupal\association_menu\MenuItemInterface;
+ use Drupal\association\Entity\AssociationInterface;
+ use Drupal\association_menu\AssociationMenuStorageInterface;
+ use Drupal\association_menu\AssociatedEntityMenuItem;
+@@ -20,28 +21,28 @@ class MenuItemDeleteConfirm extends ConfirmFormBase {
+   /**
+    * The association the menu item belongs to.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface
++   * @var AssociationInterface
+    */
+   protected $association;
+ 
+   /**
+    * The menu item being deleted.
+    *
+-   * @var \Drupal\association_menu\MenuItemInterface
++   * @var MenuItemInterface
+    */
+   protected $menuItem;
+ 
+   /**
+    * Association menu item storage manager.
+    *
+-   * @var \Drupal\association_menu\AssociationMenuStorageInterface
++   * @var AssociationMenuStorageInterface
+    */
+   protected $menuStorage;
+ 
+   /**
+    * Create a new instance of the association menu delete confirm form.
+    *
+-   * @param \Drupal\association_menu\AssociationMenuStorageInterface $association_menu_storage
++   * @param AssociationMenuStorageInterface $association_menu_storage
+    *   Association navigation storage manager.
+    */
+   public function __construct(AssociationMenuStorageInterface $association_menu_storage) {
+@@ -69,9 +70,9 @@ class MenuItemDeleteConfirm extends ConfirmFormBase {
+    *
+    * @param array $form
+    *   Current form structure and elements.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state, values and build information.
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The entity association which this menu item is being deleted.
+    * @param int $menu_item_id
+    *   The ID of the menu item to delete.
+diff --git a/modules/association_menu/src/Form/MenuItemEditForm.php b/modules/association_menu/src/Form/MenuItemEditForm.php
+index 0d57961..d33254a 100644
+--- a/modules/association_menu/src/Form/MenuItemEditForm.php
++++ b/modules/association_menu/src/Form/MenuItemEditForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\association_menu\Form;
+ 
++use Drupal\association_menu\MenuItemInterface;
++use Drupal\association_menu\MenuItemBase;
+ use Drupal\association\Entity\AssociationInterface;
+ use Drupal\association_menu\AssociatedEntityMenuItem;
+ use Drupal\association_menu\AssociationMenuStorageInterface;
+@@ -21,37 +23,37 @@ class MenuItemEditForm extends FormBase {
+   /**
+    * Menu item being edited by this form.
+    *
+-   * @var \Drupal\association_menu\MenuItemInterface
++   * @var MenuItemInterface
+    */
+   protected $item;
+ 
+   /**
+    * The association which this menu item belongs to.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface
++   * @var AssociationInterface
+    */
+   protected $association;
+ 
+   /**
+    * Provides path resolution and validation services.
+    *
+-   * @var \Drupal\Core\Path\PathValidatorInterface
++   * @var PathValidatorInterface
+    */
+   protected $pathValidator;
+ 
+   /**
+    * Association menu item storage manager.
+    *
+-   * @var \Drupal\association_menu\AssociationMenuStorageInterface
++   * @var AssociationMenuStorageInterface
+    */
+   protected $menuStorage;
+ 
+   /**
+    * Create a new instance of the association menu item edit form.
+    *
+-   * @param \Drupal\Core\Path\PathValidatorInterface $path_validator
++   * @param PathValidatorInterface $path_validator
+    *   Provides path resolution and validation services.
+-   * @param \Drupal\association_menu\AssociationMenuStorageInterface $association_menu_storage
++   * @param AssociationMenuStorageInterface $association_menu_storage
+    *   Association navigation storage manager.
+    */
+   public function __construct(PathValidatorInterface $path_validator, AssociationMenuStorageInterface $association_menu_storage) {
+@@ -81,9 +83,9 @@ class MenuItemEditForm extends FormBase {
+    *
+    * @param array $form
+    *   Current form structure and elements.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state, values and build information.
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The entity association which this menu item is being built for.
+    * @param int|null $menu_item_id
+    *   The ID of the menu item to edit, or NULL if creating a new menu item.
+@@ -102,7 +104,7 @@ class MenuItemEditForm extends FormBase {
+ 
+     try {
+       if ($menu_item_id) {
+-        /** @var \Drupal\association_menu\MenuItemBase */
++        /** @var MenuItemBase */
+         $item = $this->menuStorage->getMenuItem($association, $menu_item_id);
+         $this->item = $item;
+ 
+diff --git a/modules/association_menu/src/Form/RefreshMenuLinksForm.php b/modules/association_menu/src/Form/RefreshMenuLinksForm.php
+index 6bf118e..4a2b574 100644
+--- a/modules/association_menu/src/Form/RefreshMenuLinksForm.php
++++ b/modules/association_menu/src/Form/RefreshMenuLinksForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\association_menu\Form;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\association_menu\AssociationMenuStorageInterface;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -20,7 +22,7 @@ class RefreshMenuLinksForm extends FormBase {
+   /**
+    * Gets the entity type manager.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @return EntityTypeManagerInterface
+    *   The entity type manager.
+    */
+   protected static function getEntityTypeManager() {
+@@ -30,7 +32,7 @@ class RefreshMenuLinksForm extends FormBase {
+   /**
+    * Get the association menu storage manager.
+    *
+-   * @return \Drupal\association_menu\AssociationMenuStorageInterface
++   * @return AssociationMenuStorageInterface
+    *   The association menu storage manager.
+    */
+   protected static function getAssociationMenuStorage() {
+diff --git a/modules/association_menu/src/MenuItemBase.php b/modules/association_menu/src/MenuItemBase.php
+index 959f682..c2d7ca5 100644
+--- a/modules/association_menu/src/MenuItemBase.php
++++ b/modules/association_menu/src/MenuItemBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association_menu;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Core\Url;
+ 
+ /**
+@@ -26,7 +27,7 @@ abstract class MenuItemBase implements MenuItemInterface {
+   /**
+    * The link text to be used for the menu item.
+    *
+-   * @var \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @var TranslatableMarkup|string
+    */
+   public $title;
+ 
+@@ -68,14 +69,14 @@ abstract class MenuItemBase implements MenuItemInterface {
+   /**
+    * Children menu items if set.
+    *
+-   * @var \Drupal\association_menu\MenuItemInterface[]
++   * @var MenuItemInterface[]
+    */
+   public $children = [];
+ 
+   /**
+    * The menu item URL.
+    *
+-   * @var \Drupal\Core\Url
++   * @var Url
+    *
+    * @see \Drupal\association_menu\MenuItemBase::buildUrl()
+    */
+@@ -215,7 +216,7 @@ abstract class MenuItemBase implements MenuItemInterface {
+   /**
+    * Generate the URL for this menu item.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   A newly generated URL instance for this menu item based on the menu
+    *   item subclass.
+    */
+diff --git a/modules/association_menu/src/MenuItemInterface.php b/modules/association_menu/src/MenuItemInterface.php
+index a75b476..4b343e8 100644
+--- a/modules/association_menu/src/MenuItemInterface.php
++++ b/modules/association_menu/src/MenuItemInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\association_menu;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\association_menu\Exception\InvalidMenuUrlException;
+ use Drupal\Core\Url;
+ 
+ /**
+@@ -40,7 +42,7 @@ interface MenuItemInterface {
+   /**
+    * Get the menu item title.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @return TranslatableMarkup|string
+    *   Get the value to use as the menu title.
+    */
+   public function getTitle();
+@@ -105,11 +107,11 @@ interface MenuItemInterface {
+   /**
+    * Get the URL for this menu item.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   The URL for this menu item. A menu item without a link should be a URL
+    *   instance with a "<nolink>" route.
+    *
+-   * @throws \Drupal\association_menu\Exception\InvalidMenuUrlException
++   * @throws InvalidMenuUrlException
+    */
+   public function getUrl(): Url;
+ 
+diff --git a/modules/association_menu/src/Plugin/Block/AssociationMenuBlock.php b/modules/association_menu/src/Plugin/Block/AssociationMenuBlock.php
+index 8c7cfc3..3009151 100644
+--- a/modules/association_menu/src/Plugin/Block/AssociationMenuBlock.php
++++ b/modules/association_menu/src/Plugin/Block/AssociationMenuBlock.php
+@@ -36,14 +36,14 @@ class AssociationMenuBlock extends BlockBase implements ContainerFactoryPluginIn
+   /**
+    * Fetches and saves manager for association navigation menu items.
+    *
+-   * @var \Drupal\association_menu\AssociationMenuStorageInterface
++   * @var AssociationMenuStorageInterface
+    */
+   protected $menuStorage;
+ 
+   /**
+    * Builds association navigation data into renderable menu.
+    *
+-   * @var \Drupal\association_menu\AssociationMenuBuilderInterface
++   * @var AssociationMenuBuilderInterface
+    */
+   protected $menuBuilder;
+ 
+@@ -56,9 +56,9 @@ class AssociationMenuBlock extends BlockBase implements ContainerFactoryPluginIn
+    *   The block plugin identifier.
+    * @param mixed $plugin_definition
+    *   The block plugin definition.
+-   * @param \Drupal\association_menu\AssociationMenuStorageInterface $association_menu_storage
++   * @param AssociationMenuStorageInterface $association_menu_storage
+    *   Fetches and saves manager for association menu items.
+-   * @param \Drupal\association_menu\AssociationMenuBuilderInterface $association_menu_builder
++   * @param AssociationMenuBuilderInterface $association_menu_builder
+    *   Builds association menu data into renderable array.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, AssociationMenuStorageInterface $association_menu_storage, AssociationMenuBuilderInterface $association_menu_builder) {
+diff --git a/src/Access/AssociatedNodeRevisionAccess.php b/src/Access/AssociatedNodeRevisionAccess.php
+index 4f774e3..33df883 100644
+--- a/src/Access/AssociatedNodeRevisionAccess.php
++++ b/src/Access/AssociatedNodeRevisionAccess.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\association\Access;
+ 
++use Drupal\association\Entity\Storage\AssociationLinkStorageInterface;
++use Drupal\association\Entity\AssociationLink;
+ use Drupal\association\AssociationNegotiatorInterface;
+ use Drupal\association\EntityAdapterManagerInterface;
+ use Drupal\association\Entity\AssociationInterface;
+@@ -23,41 +25,41 @@ class AssociatedNodeRevisionAccess extends NodeRevisionAccessCheck {
+   /**
+    * The node revision access checker being decorated.
+    *
+-   * @var \Drupal\node\Access\NodeRevisionAccessCheck
++   * @var NodeRevisionAccessCheck
+    */
+   protected $accessCheck;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The negotiator to determine the owning association by the node context.
+    *
+-   * @var \Drupal\association\AssociationNegotiatorInterface
++   * @var AssociationNegotiatorInterface
+    */
+   protected $negotiator;
+ 
+   /**
+    * The association entity adapter manager.
+    *
+-   * @var \Drupal\association\EntityAdapterManagerInterface
++   * @var EntityAdapterManagerInterface
+    */
+   protected $adapterManager;
+ 
+   /**
+    * Creates a new instance of the AssociatedNodeRevisionAccess decorator class.
+    *
+-   * @param \Drupal\node\Access\NodeRevisionAccessCheck $access_check
++   * @param NodeRevisionAccessCheck $access_check
+    *   The node revision access checker being decorated.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\association\AssociationNegotiatorInterface $association_negotiator
++   * @param AssociationNegotiatorInterface $association_negotiator
+    *   The negotiator to determine the owning association by the node context.
+-   * @param \Drupal\association\EntityAdapterManagerInterface $entity_adapter_manager
++   * @param EntityAdapterManagerInterface $entity_adapter_manager
+    *   The association entity adapter manager.
+    */
+   public function __construct(NodeRevisionAccessCheck $access_check, EntityTypeManagerInterface $entity_type_manager, AssociationNegotiatorInterface $association_negotiator, EntityAdapterManagerInterface $entity_adapter_manager) {
+@@ -71,10 +73,10 @@ class AssociatedNodeRevisionAccess extends NodeRevisionAccessCheck {
+   /**
+    * Finds teh association which this entity belongs if it has one.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to find the association entity for.
+    *
+-   * @return \Drupal\association\Entity\AssociationInterface|null
++   * @return AssociationInterface|null
+    *   Get the association entity which owns this associated entity, or NULL
+    *   if the node is not part of an entity association.
+    */
+@@ -82,9 +84,9 @@ class AssociatedNodeRevisionAccess extends NodeRevisionAccessCheck {
+     if ($this->adapterManager->isAssociable($entity)) {
+       // Because this is potentially a revision, avoid loading the associations
+       // from the computed field, and instead get directly from entity storage.
+-      /** @var \Drupal\association\Entity\Storage\AssociationLinkStorageInterface $linkStorage */
++      /** @var AssociationLinkStorageInterface $linkStorage */
+       $linkStorage = $this->entityTypeManager->getStorage('association_link');
+-      /** @var \Drupal\association\Entity\AssociationLink[] $links */
++      /** @var AssociationLink[] $links */
+       $links = $linkStorage->loadByEntityInfo($entity->getEntityTypeId(), $entity->id());
+ 
+       return !empty($links) ? reset($links)->getAssociation() : NULL;
+diff --git a/src/Access/AssociationLinkedEntityManageAccess.php b/src/Access/AssociationLinkedEntityManageAccess.php
+index b57ea4c..b114ac1 100644
+--- a/src/Access/AssociationLinkedEntityManageAccess.php
++++ b/src/Access/AssociationLinkedEntityManageAccess.php
+@@ -24,14 +24,14 @@ class AssociationLinkedEntityManageAccess implements AccessInterface {
+   /**
+    * The association negotiator which determines the active association.
+    *
+-   * @var \Drupal\association\AssociationNegotiatorInterface
++   * @var AssociationNegotiatorInterface
+    */
+   protected $associationNegotiator;
+ 
+   /**
+    * Creates a new instance of the AssociationLinkedEntityManageAccess class.
+    *
+-   * @param \Drupal\association\AssociationNegotiatorInterface $association_negotiator
++   * @param AssociationNegotiatorInterface $association_negotiator
+    *   The association negotiator which determines the active association from
+    *   the current route match.
+    */
+@@ -47,7 +47,7 @@ class AssociationLinkedEntityManageAccess implements AccessInterface {
+ 
+     if ($entity = $route_match->getParameter($paramName)) {
+       if ($assoc = $this->associationNegotiator->byEntity($entity)) {
+-        /** @var \Drupal\Core\Access\AccessResult $access */
++        /** @var AccessResult $access */
+         $access = $assoc->access('manage', $account, TRUE);
+         return $access->addCacheableDependency($entity);
+       }
+diff --git a/src/Adapter/AssociatedQueryAlterTrait.php b/src/Adapter/AssociatedQueryAlterTrait.php
+index 77d8be4..59936dd 100644
+--- a/src/Adapter/AssociatedQueryAlterTrait.php
++++ b/src/Adapter/AssociatedQueryAlterTrait.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Adapter;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\association\AssociationPermissions;
+ use Drupal\Core\Database\Query\SelectInterface;
+ use Drupal\Core\Database\Query\ConditionInterface;
+@@ -25,14 +26,14 @@ trait AssociatedQueryAlterTrait {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Get the entity type manager.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @return EntityTypeManagerInterface
+    *   The entity type manager.
+    */
+   protected function getEntityTypeManager() {
+@@ -56,7 +57,7 @@ trait AssociatedQueryAlterTrait {
+    *
+    * @param string $op
+    *   The entity operation taking place.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user account to test association type access for.
+    *
+    * @return string[]|true
+@@ -114,7 +115,7 @@ trait AssociatedQueryAlterTrait {
+   /**
+    * Ensure that the neccessary association tables are available.
+    *
+-   * @param \Drupal\Core\Database\Query\SelectInterface $query
++   * @param SelectInterface $query
+    *   The query to be altered.
+    *
+    * @return string[]
+@@ -190,16 +191,16 @@ trait AssociatedQueryAlterTrait {
+   /**
+    * Build conditions to apply to a query to enforce association access.
+    *
+-   * @param \Drupal\Core\Database\Query\SelectInterface $query
++   * @param SelectInterface $query
+    *   The query being altered.
+    * @param array $aliases
+    *   The entity table aliases as would be returned by static::ensureTable().
+    * @param string $op
+    *   The entity operation being performed.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account to check the operation access for.
+    *
+-   * @return \Drupal\Core\Database\Query\ConditionInterface|null
++   * @return ConditionInterface|null
+    *   The access criteria to apply the query in order to apply entity
+    *   association constraints based on access. NULL is return if no conditions
+    *   should be applied.
+diff --git a/src/Adapter/EntityAdapter.php b/src/Adapter/EntityAdapter.php
+index f95b875..62416df 100644
+--- a/src/Adapter/EntityAdapter.php
++++ b/src/Adapter/EntityAdapter.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\association\Adapter;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\association\Entity\AssociatedEntityInterface;
+ use Drupal\association\Event\AssociationEvents;
+ use Drupal\association\Event\QueryAccessAlterEvent;
+ use Drupal\Core\Access\AccessResultInterface;
+@@ -43,35 +45,35 @@ class EntityAdapter extends PluginBase implements EntityAdapterInterface, Contai
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity type bundle info manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityBundleInfo;
+ 
+   /**
+    * The form builder.
+    *
+-   * @var \Drupal\Core\Form\FormBuilderInterface
++   * @var FormBuilderInterface
+    */
+   protected $formBuilder;
+ 
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * List of entity bundles supported for association link target entities.
+    *
+-   * @var \Drupal\Core\StringTranslation\TranslatableMarkup[]|string[]
++   * @var TranslatableMarkup[]|string[]
+    */
+   protected $bundles;
+ 
+@@ -84,13 +86,13 @@ class EntityAdapter extends PluginBase implements EntityAdapterInterface, Contai
+    *   The unique plugin ID.
+    * @param mixed $plugin_definition
+    *   Plugin definitions from discovery.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle info manager.
+-   * @param \Drupal\Core\Form\FormBuilderInterface $form_builder
++   * @param FormBuilderInterface $form_builder
+    *   The form builder.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   The event dispatcher.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, EntityTypeBundleInfoInterface $entity_type_bundle_info, FormBuilderInterface $form_builder, EventDispatcherInterface $event_dispatcher) {
+@@ -181,7 +183,7 @@ class EntityAdapter extends PluginBase implements EntityAdapterInterface, Contai
+     }
+ 
+     if ($entity->hasField('associations')) {
+-      /** @var \Drupal\association\Entity\AssociatedEntityInterface */
++      /** @var AssociatedEntityInterface */
+       $assocLink = $entity->get('associations')->entity;
+ 
+       if ($assocLink) {
+@@ -223,7 +225,7 @@ class EntityAdapter extends PluginBase implements EntityAdapterInterface, Contai
+           $access = AccessResult::forbidden()->addCacheableDependency($access);
+         }
+ 
+-        /** @var \Drupal\Core\Access\AccessResult $access */
++        /** @var AccessResult $access */
+         return $access->addCacheableDependency($assoc);
+       }
+     }
+diff --git a/src/Adapter/EntityAdapterInterface.php b/src/Adapter/EntityAdapterInterface.php
+index f338622..2548c34 100644
+--- a/src/Adapter/EntityAdapterInterface.php
++++ b/src/Adapter/EntityAdapterInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\association\Adapter;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Database\Query\SelectInterface;
+@@ -47,7 +49,7 @@ interface EntityAdapterInterface extends PluginInspectionInterface {
+   /**
+    * Get the entity type display label.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   Entity type label.
+    */
+   public function getLabel();
+@@ -58,7 +60,7 @@ interface EntityAdapterInterface extends PluginInspectionInterface {
+    * Entity adapters are able to limit or allow association type behaviors from
+    * using bundles of this entity, by choosing which bundles are returned here.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup[]|string[]
++   * @return TranslatableMarkup[]|string[]
+    *   List of bundles of this entity type, this adapter allows to be created
+    *   and linked to associations. The array key is the bundle machine ID for
+    *   the bundle, and the value is the bundle label.
+@@ -68,7 +70,7 @@ interface EntityAdapterInterface extends PluginInspectionInterface {
+   /**
+    * Get entity operation links for the provided entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity instance to get the edit operations for.
+    *
+    * @return array
+@@ -86,14 +88,14 @@ interface EntityAdapterInterface extends PluginInspectionInterface {
+   /**
+    * Check if user has access to an operation from association restrictions.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   Entity being checked for access of an operation.
+    * @param string $op
+    *   The operation to be performed on the entity.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Account information of the user trying to perform the operation.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   A result of the access check.
+    */
+   public function checkAccess(ContentEntityInterface $entity, $op, AccountInterface $account): AccessResultInterface;
+@@ -101,11 +103,11 @@ interface EntityAdapterInterface extends PluginInspectionInterface {
+   /**
+    * Alters database query to apply entity association access to content.
+    *
+-   * @param \Drupal\Core\Database\Query\SelectInterface $query
++   * @param SelectInterface $query
+    *   The query to apply the access checks for.
+    * @param string $op
+    *   The entity operation being performed.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account to apply the access permissions for.
+    */
+   public function accessQueryAlter(SelectInterface $query, $op, AccountInterface $account): void;
+@@ -118,10 +120,10 @@ interface EntityAdapterInterface extends PluginInspectionInterface {
+    * @param array $values
+    *   Additional values to populate for the newly created entity.
+    *
+-   * @return \Drupal\Core\Entity\ContentEntityInterface
++   * @return ContentEntityInterface
+    *   A newly created entity if possible. NULL is returned if creation fails.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    * @throws \InvalidArgumentException
+    */
+   public function createEntity($bundle, array $values = []): ContentEntityInterface;
+@@ -129,11 +131,11 @@ interface EntityAdapterInterface extends PluginInspectionInterface {
+   /**
+    * Build the entity operation form for the requested operation.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity the form is operating on.
+    * @param string $op
+    *   The entity operation to build the form for.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Optional form state, if one is already created. If no form state is
+    *   provided as a parameter, a new form state will be created.
+    *
+diff --git a/src/Annotation/AssociationBehavior.php b/src/Annotation/AssociationBehavior.php
+index f79b2f5..a466653 100644
+--- a/src/Annotation/AssociationBehavior.php
++++ b/src/Annotation/AssociationBehavior.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Annotation;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -29,7 +30,7 @@ class AssociationBehavior extends Plugin {
+   /**
+    * The human friendly name for admin configuration forms.
+    *
+-   * @var \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @var TranslatableMarkup|string
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/AssociationNegotiator.php b/src/AssociationNegotiator.php
+index 2a44c3d..d7f2946 100644
+--- a/src/AssociationNegotiator.php
++++ b/src/AssociationNegotiator.php
+@@ -18,7 +18,7 @@ class AssociationNegotiator implements AssociationNegotiatorInterface {
+    * association of the current route, and since this shouldn't change for the
+    * route it's possible to keep this result instead of repetitive resolutions.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface|false
++   * @var AssociationInterface|false
+    */
+   private $defaultRouteAssoc = NULL;
+ 
+@@ -28,14 +28,14 @@ class AssociationNegotiator implements AssociationNegotiatorInterface {
+    * Associations are keyed by the "{$entity_type_id}:{$entity_id}" they
+    * were discovered by.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface[]
++   * @var AssociationInterface[]
+    */
+   private $byEntityCache = [];
+ 
+   /**
+    * The current route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+@@ -49,14 +49,14 @@ class AssociationNegotiator implements AssociationNegotiatorInterface {
+   /**
+    * A flat sorted list of association negotiatorss.
+    *
+-   * @var \Drupal\association\AssociationNegotiatorInterface[]
++   * @var AssociationNegotiatorInterface[]
+    */
+   private $sorted;
+ 
+   /**
+    * Create a new instance of the AssociationNegotiator service collector.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match, to be used as a default when a route match
+    *   is not provided during calls to the static::byRoute() method.
+    */
+@@ -75,7 +75,7 @@ class AssociationNegotiator implements AssociationNegotiatorInterface {
+   /**
+    * Sort and flatten the current list of negotiators if static::sorted is NULL.
+    *
+-   * @return \Drupal\association\AssociationNegotiatorInterface[]
++   * @return AssociationNegotiatorInterface[]
+    *   The sorted and flattened list of AssociationNegotiatorInterface handlers.
+    */
+   protected function getSorted() {
+@@ -92,14 +92,14 @@ class AssociationNegotiator implements AssociationNegotiatorInterface {
+   /**
+    * Add more negotiator services by priority to the resolution stack.
+    *
+-   * @param \Drupal\association\AssociationNegotiatorInterface $negotiator
++   * @param AssociationNegotiatorInterface $negotiator
+    *   A association negotiator to add to the list of negotiators.
+    * @param int $priority
+    *   The priority of the negotiator being added. Lower numbers have a higher
+    *   priority. Priorities of less than 0, will trigger before the default, and
+    *   priorities higher than 1, will trigger after the default.
+    *
+-   * @return \Drupal\association\AssociationNegotiatorInterface
++   * @return AssociationNegotiatorInterface
+    *   Return itself to allow for chaining.
+    */
+   public function addNegotiator(AssociationNegotiatorInterface $negotiator, $priority = 0) {
+diff --git a/src/AssociationNegotiatorInterface.php b/src/AssociationNegotiatorInterface.php
+index 02a0013..f387314 100644
+--- a/src/AssociationNegotiatorInterface.php
++++ b/src/AssociationNegotiatorInterface.php
+@@ -14,10 +14,10 @@ interface AssociationNegotiatorInterface {
+   /**
+    * Determine which association is active for this route.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface|null $route_match
++   * @param RouteMatchInterface|null $route_match
+    *   The route data to fetch the active Entity Association from.
+    *
+-   * @return \Drupal\association\Entity\AssociationInterface|null
++   * @return AssociationInterface|null
+    *   An Entity Association, if one could be found otherwise return NULL.
+    */
+   public function byRoute(RouteMatchInterface $route_match = NULL): ?AssociationInterface;
+@@ -25,10 +25,10 @@ interface AssociationNegotiatorInterface {
+   /**
+    * Determine which Entity Association an entity belongs to.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to determine the Entity Association from.
+    *
+-   * @return \Drupal\association\Entity\AssociationInterface|null
++   * @return AssociationInterface|null
+    *   An Entity Association, if one could be found that applies to this entity,
+    *   otherwise return NULL.
+    */
+diff --git a/src/AssociationPermissions.php b/src/AssociationPermissions.php
+index 5acacc5..3726d2f 100644
+--- a/src/AssociationPermissions.php
++++ b/src/AssociationPermissions.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\association;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\association\Entity\AssociationTypeInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -18,14 +20,14 @@ class AssociationPermissions implements ContainerInjectionInterface {
+   /**
+    * The entity storage handler for association type entities.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $assocTypeStorage;
+ 
+   /**
+    * Create a new instance of the AssociationPermissions utility class.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -44,10 +46,10 @@ class AssociationPermissions implements ContainerInjectionInterface {
+   /**
+    * Fetch association entity operations available for an association type.
+    *
+-   * @param \Drupal\association\Entity\AssociationTypeInterface $type
++   * @param AssociationTypeInterface $type
+    *   The association_type bundle entity.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup[]|string[]
++   * @return TranslatableMarkup[]|string[]
+    *   An array of operation labels, keyed by the string identifier for the
+    *   operation. For the case of association entities, these are the access
+    *   permission identifiers, and for association landing page entities, the
+@@ -78,7 +80,7 @@ class AssociationPermissions implements ContainerInjectionInterface {
+   /**
+    * Get the permission key to use for an operation for an association type.
+    *
+-   * @param \Drupal\association\Entity\AssociationTypeInterface|string $type
++   * @param AssociationTypeInterface|string $type
+    *   The association bundle entity.
+    * @param string $op
+    *   String name of the operation to get the permission for.
+@@ -130,7 +132,7 @@ class AssociationPermissions implements ContainerInjectionInterface {
+   /**
+    * Get permissions that are specific to this association type (bundle).
+    *
+-   * @param \Drupal\association\Entity\AssociationTypeInterface $type
++   * @param AssociationTypeInterface $type
+    *   The association type to build the permission(s) for.
+    * @param string|null $op
+    *   A specific operation to be performed or NULL to return all the
+diff --git a/src/Behavior/Form/ConfigureManifestBehaviorForm.php b/src/Behavior/Form/ConfigureManifestBehaviorForm.php
+index 1b47d41..d41af78 100644
+--- a/src/Behavior/Form/ConfigureManifestBehaviorForm.php
++++ b/src/Behavior/Form/ConfigureManifestBehaviorForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Behavior\Form;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\association\EntityAdapterManagerInterface;
+ use Drupal\association\Entity\AssociationTypeInterface;
+ use Drupal\association\Plugin\BehaviorFormInterface;
+@@ -32,21 +33,21 @@ class ConfigureManifestBehaviorForm extends PluginFormBase implements BehaviorFo
+   /**
+    * The plugin being configured by this plugin form.
+    *
+-   * @var \Drupal\association\Plugin\BehaviorInterface
++   * @var BehaviorInterface
+    */
+   protected $plugin;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Association entity adapter plugin manager.
+    *
+-   * @var \Drupal\association\EntityAdapterManagerInterface
++   * @var EntityAdapterManagerInterface
+    */
+   protected $adapterManager;
+ 
+@@ -63,16 +64,16 @@ class ConfigureManifestBehaviorForm extends PluginFormBase implements BehaviorFo
+    * Array of values meant to be used as available options for a select form
+    * element, when building out the association link tag definitions.
+    *
+-   * @var \Drupal\Core\StringTranslation\TranslatableMarkup[]|string[]
++   * @var TranslatableMarkup[]|string[]
+    */
+   protected $entityBundleOpts;
+ 
+   /**
+    * Create a new instance of the ConfigureManifestBehaviorPluginForm form.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\association\EntityAdapterManagerInterface $entity_adapter_manager
++   * @param EntityAdapterManagerInterface $entity_adapter_manager
+    *   Association entity adapter plugin manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityAdapterManagerInterface $entity_adapter_manager) {
+@@ -120,7 +121,7 @@ class ConfigureManifestBehaviorForm extends PluginFormBase implements BehaviorFo
+    *   The suggested machine name to use for this association link tag.
+    * @param array $element
+    *   The machine name form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state, build info and values.
+    *
+    * @return bool
+@@ -345,7 +346,7 @@ class ConfigureManifestBehaviorForm extends PluginFormBase implements BehaviorFo
+    *
+    * @param array $element
+    *   The add new entity elements to update.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state, build and values information.
+    * @param array $complete_form
+    *   Reference to the entire form elements.
+@@ -374,7 +375,7 @@ class ConfigureManifestBehaviorForm extends PluginFormBase implements BehaviorFo
+    *
+    * @param array $form
+    *   Reference to the complete form structure and elements.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state, build info and values.
+    */
+   public static function addTagValidate(array &$form, FormStateInterface $form_state) {
+@@ -398,7 +399,7 @@ class ConfigureManifestBehaviorForm extends PluginFormBase implements BehaviorFo
+    *
+    * @param array $form
+    *   Reference to the entire form structure for the edit form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state, build and values.
+    */
+   public static function addTagSubmit(array &$form, FormStateInterface $form_state) {
+@@ -438,7 +439,7 @@ class ConfigureManifestBehaviorForm extends PluginFormBase implements BehaviorFo
+    *
+    * @param array $form
+    *   Reference to the entire form structure for the edit form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state, build and values.
+    *
+    * @return array
+@@ -460,7 +461,7 @@ class ConfigureManifestBehaviorForm extends PluginFormBase implements BehaviorFo
+    *
+    * @param array $form
+    *   Reference to the entire form structure for the edit form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state, build and values.
+    */
+   public static function removeTagSubmit(array &$form, FormStateInterface $form_state) {
+@@ -483,10 +484,10 @@ class ConfigureManifestBehaviorForm extends PluginFormBase implements BehaviorFo
+    *
+    * @param array $form
+    *   Reference to the entire form structure for the edit form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state, build and values.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   An AJAX response which updates after the removal of a relatable entity.
+    */
+   public static function removeTagAjax(array &$form, FormStateInterface $form_state) {
+diff --git a/src/Behavior/ManagerBuilderBase.php b/src/Behavior/ManagerBuilderBase.php
+index 0e7f6b3..75a5e0f 100644
+--- a/src/Behavior/ManagerBuilderBase.php
++++ b/src/Behavior/ManagerBuilderBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Behavior;
+ 
++use Drupal\association\Entity\Storage\AssociationLinkStorageInterface;
+ use Drupal\association\Entity\AssociationInterface;
+ use Drupal\association\Entity\AssociationLink;
+ use Drupal\association\EntityAdapterManagerInterface;
+@@ -29,37 +30,37 @@ abstract class ManagerBuilderBase implements ManagerBuilderInterface, PluginAwar
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity adapter plugin manager.
+    *
+-   * @var \Drupal\association\EntityAdapterManagerInterface
++   * @var EntityAdapterManagerInterface
+    */
+   protected $adapterManager;
+ 
+   /**
+    * The association entity to build the management pages with.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface
++   * @var AssociationInterface
+    */
+   protected $association;
+ 
+   /**
+    * The association type behavior plugin.
+    *
+-   * @var \Drupal\association\Plugin\BehaviorInterface
++   * @var BehaviorInterface
+    */
+   protected $plugin;
+ 
+   /**
+    * Base constructor for association type behavior content manager builders.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\association\EntityAdapterManagerInterface $entity_adapter_manager
++   * @param EntityAdapterManagerInterface $entity_adapter_manager
+    *   The entity adapter plugin manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityAdapterManagerInterface $entity_adapter_manager) {
+@@ -124,11 +125,11 @@ abstract class ManagerBuilderBase implements ManagerBuilderInterface, PluginAwar
+   /**
+    * Fetches all content linked to the assocation.
+    *
+-   * @return \Drupal\association\Entity\AssociationLink[]
++   * @return AssociationLink[]
+    *   Loads link entities for the association entity this builder is set to.
+    */
+   protected function getLinkedEntities(): array {
+-    /** @var \Drupal\association\Entity\Storage\AssociationLinkStorageInterface */
++    /** @var AssociationLinkStorageInterface */
+     $linkStorage = $this->entityTypeManager->getStorage('association_link');
+     return $linkStorage->loadByAssociation($this->association);
+   }
+@@ -136,7 +137,7 @@ abstract class ManagerBuilderBase implements ManagerBuilderInterface, PluginAwar
+   /**
+    * Get a renderable of the canonical link for the linked target entity.
+    *
+-   * @param \Drupal\association\Entity\AssociationLink $association_link
++   * @param AssociationLink $association_link
+    *   The loaded association link entities.
+    *
+    * @return array
+@@ -169,7 +170,7 @@ abstract class ManagerBuilderBase implements ManagerBuilderInterface, PluginAwar
+   /**
+    * An array of link definitions for entity operations.
+    *
+-   * @param \Drupal\association\Entity\AssociationLink $association_link
++   * @param AssociationLink $association_link
+    *   The loaded association link entities.
+    *
+    * @return array
+diff --git a/src/Behavior/ManagerBuilderInterface.php b/src/Behavior/ManagerBuilderInterface.php
+index 813ecee..517f84a 100644
+--- a/src/Behavior/ManagerBuilderInterface.php
++++ b/src/Behavior/ManagerBuilderInterface.php
+@@ -19,7 +19,7 @@ interface ManagerBuilderInterface extends CacheableDependencyInterface {
+    * This association needs to be set before calling buildeManageUI() or the
+    * cacheable dependency methods.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $assoc
++   * @param AssociationInterface $assoc
+    *   The association entity to build the content management UI for.
+    */
+   public function setAssociation(AssociationInterface $assoc);
+diff --git a/src/Cache/Context/AssociationRouteCacheContext.php b/src/Cache/Context/AssociationRouteCacheContext.php
+index 2951da6..6380077 100644
+--- a/src/Cache/Context/AssociationRouteCacheContext.php
++++ b/src/Cache/Context/AssociationRouteCacheContext.php
+@@ -19,23 +19,23 @@ class AssociationRouteCacheContext implements CacheContextInterface {
+   /**
+    * Information about a route, typically this is matching the current route.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The association negotiator, determines the active association.
+    *
+-   * @var \Drupal\association\AssociationNegotiatorInterface
++   * @var AssociationNegotiatorInterface
+    */
+   protected $assocNegotiator;
+ 
+   /**
+    * Create a new instance of the AssociationRouteCacheContext class.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   A route match object to get parameter and user information from.
+-   * @param \Drupal\association\AssociationNegotiatorInterface $association_negotiator
++   * @param AssociationNegotiatorInterface $association_negotiator
+    *   The association negotiator, determines the active association for the
+    *   route match.
+    */
+@@ -54,7 +54,7 @@ class AssociationRouteCacheContext implements CacheContextInterface {
+   /**
+    * Get the association for this route if one can be determined.
+    *
+-   * @return \Drupal\association\Entity\AssociationInterface|null
++   * @return AssociationInterface|null
+    *   The association linked to this route if there is one.
+    */
+   protected function getAssociation(): ?AssociationInterface {
+diff --git a/src/ContextProvider/AssociationRouteContext.php b/src/ContextProvider/AssociationRouteContext.php
+index b67363f..d023f65 100644
+--- a/src/ContextProvider/AssociationRouteContext.php
++++ b/src/ContextProvider/AssociationRouteContext.php
+@@ -21,23 +21,23 @@ class AssociationRouteContext implements ContextProviderInterface {
+   /**
+    * The route match object.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The association negotiator, to fetch the active association for the route.
+    *
+-   * @var \Drupal\association\AssociationNegotiatorInterface
++   * @var AssociationNegotiatorInterface
+    */
+   protected $assocNegotiator;
+ 
+   /**
+    * Constructs an instance of the AssociationRouteContext class.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match object.
+-   * @param \Drupal\association\AssociationNegotiatorInterface $association_negotiator
++   * @param AssociationNegotiatorInterface $association_negotiator
+    *   The association negotiator, fetches the active association for the route.
+    */
+   public function __construct(RouteMatchInterface $route_match, AssociationNegotiatorInterface $association_negotiator) {
+diff --git a/src/Controller/AssociationLinkController.php b/src/Controller/AssociationLinkController.php
+index b44e13f..6a015ad 100644
+--- a/src/Controller/AssociationLinkController.php
++++ b/src/Controller/AssociationLinkController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\association\Controller;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\Core\Entity\EntityFormInterface;
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\association\AssociationNegotiatorInterface;
+ use Drupal\association\EntityAdapterManagerInterface;
+ use Drupal\association\Entity\AssociationLink;
+@@ -28,32 +31,32 @@ class AssociationLinkController implements ContainerInjectionInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The association negotiator for determining the active association.
+    *
+-   * @var \Drupal\association\AssociationNegotiatorInterface
++   * @var AssociationNegotiatorInterface
+    */
+   protected $associationNegotiator;
+ 
+   /**
+    * The entity type adapter plugin manager.
+    *
+-   * @var \Drupal\association\EntityAdapterManagerInterface
++   * @var EntityAdapterManagerInterface
+    */
+   protected $entityAdapterManager;
+ 
+   /**
+    * Create a new instance of the AssociationController class.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\association\AssociationNegotiatorInterface $association_negotiator
++   * @param AssociationNegotiatorInterface $association_negotiator
+    *   The association negotiator for determining the active association.
+-   * @param \Drupal\association\EntityAdapterManagerInterface $entity_adapter_manager
++   * @param EntityAdapterManagerInterface $entity_adapter_manager
+    *   The entity type adapter manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, AssociationNegotiatorInterface $association_negotiator, EntityAdapterManagerInterface $entity_adapter_manager) {
+@@ -78,12 +81,12 @@ class AssociationLinkController implements ContainerInjectionInterface {
+   /**
+    * Callback to generate the page title of the association link create form.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association entity the content is being built for.
+    * @param string $tag
+    *   The tag to identify what type of association link to build.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @return TranslatableMarkup|string
+    *   A string or translation to use as the page title.
+    */
+   public function getAddTitle(AssociationInterface $association, $tag) {
+@@ -95,7 +98,7 @@ class AssociationLinkController implements ContainerInjectionInterface {
+   /**
+    * Build the create association_link entity form.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association entity whose content is being managed.
+    * @param string $tag
+    *   The tag to identify what type of association link to build.
+@@ -131,9 +134,9 @@ class AssociationLinkController implements ContainerInjectionInterface {
+ 
+         // Was form submitted, and was the new entity appropriately saved?
+         if ($formState->isExecuted() && !$formState->isRebuilding()) {
+-          /** @var \Drupal\Core\Entity\EntityFormInterface */
++          /** @var EntityFormInterface */
+           $formObj = $formState->getFormObject();
+-          /** @var \Drupal\Core\Entity\ContentEntityInterface */
++          /** @var ContentEntityInterface */
+           $entity = $formObj->getEntity();
+ 
+           // @todo Sees that an ID was assigned to this entity. This might not
+@@ -174,10 +177,10 @@ class AssociationLinkController implements ContainerInjectionInterface {
+   /**
+    * Callback to generate the page title of the association link edit form.
+    *
+-   * @param \Drupal\association\Entity\AssociationLink $association_link
++   * @param AssociationLink $association_link
+    *   The association link entity the page content is being built for.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @return TranslatableMarkup|string
+    *   A string or translation to use as the page title.
+    */
+   public function getEditTitle(AssociationLink $association_link) {
+@@ -189,7 +192,7 @@ class AssociationLinkController implements ContainerInjectionInterface {
+   /**
+    * Build the edit association link entity form.
+    *
+-   * @param \Drupal\association\Entity\AssociationLink $association_link
++   * @param AssociationLink $association_link
+    *   The association_link that links the association to the target entity.
+    *
+    * @return array
+@@ -227,10 +230,10 @@ class AssociationLinkController implements ContainerInjectionInterface {
+   /**
+    * Callback to generate the page title of the association entity delete form.
+    *
+-   * @param \Drupal\association\Entity\AssociationLink $association_link
++   * @param AssociationLink $association_link
+    *   The association entity to delete.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @return TranslatableMarkup|string
+    *   A string or translation to use as the page title.
+    */
+   public function getDeleteTitle(AssociationLink $association_link) {
+@@ -242,7 +245,7 @@ class AssociationLinkController implements ContainerInjectionInterface {
+   /**
+    * Build the delete associated entity content form.
+    *
+-   * @param \Drupal\association\Entity\AssociationLink $association_link
++   * @param AssociationLink $association_link
+    *   The association link that is being deleted.
+    *
+    * @return array
+diff --git a/src/Controller/AssociationManagementController.php b/src/Controller/AssociationManagementController.php
+index 1b7d7f5..7ec5772 100644
+--- a/src/Controller/AssociationManagementController.php
++++ b/src/Controller/AssociationManagementController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Controller;
+ 
++use Drupal\Component\Render\MarkupInterface;
+ use Drupal\association\AssociationNegotiatorInterface;
+ use Drupal\association\Behavior\ManagerBuilderInterface;
+ use Drupal\association\Entity\AssociationInterface;
+@@ -27,33 +28,33 @@ class AssociationManagementController implements ContainerInjectionInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The association negotiator which determines the active association.
+    *
+-   * @var \Drupal\association\AssociationNegotiatorInterface
++   * @var AssociationNegotiatorInterface
+    */
+   protected $associationNegotiator;
+ 
+   /**
+    * Helper for instaniating class instances from full namespaced classes.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ClassResolverInterface
++   * @var ClassResolverInterface
+    */
+   protected $classResolver;
+ 
+   /**
+    * Create a new instance of the AssociationManagementController class.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\association\AssociationNegotiatorInterface $association_negotiator
++   * @param AssociationNegotiatorInterface $association_negotiator
+    *   The association negotiator which determines the active association for
+    *   other entities and routes.
+-   * @param \Drupal\Core\DependencyInjection\ClassResolverInterface $class_resolver
++   * @param ClassResolverInterface $class_resolver
+    *   Helper for instaniating class instances from full namespaced classes.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, AssociationNegotiatorInterface $association_negotiator, ClassResolverInterface $class_resolver) {
+@@ -76,10 +77,10 @@ class AssociationManagementController implements ContainerInjectionInterface {
+   /**
+    * Callback to generate the page title of the association management page.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association entity whose entity content is being managed.
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface|string
++   * @return MarkupInterface|string
+    *   A string or markup to use as the page title.
+    */
+   public function manageContentTitle(AssociationInterface $association) {
+@@ -92,7 +93,7 @@ class AssociationManagementController implements ContainerInjectionInterface {
+   /**
+    * Build the association entity content management page.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association entity whose content is being managed.
+    *
+    * @return array
+@@ -127,11 +128,11 @@ class AssociationManagementController implements ContainerInjectionInterface {
+   /**
+    * Gets the page title to use for the linked entity management page.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   Route match for the current request. Used to determine the association
+    *   to build the management page for.
+    *
+-   * @return \Drupal\Component\Render\MarkupInterface|string
++   * @return MarkupInterface|string
+    *   A string or markup to use as the page title.
+    */
+   public function entityManageTitle(RouteMatchInterface $route_match) {
+@@ -148,7 +149,7 @@ class AssociationManagementController implements ContainerInjectionInterface {
+   /**
+    * Create the association management page from a linked entity.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   Route match for the current request. Used to determine the association
+    *   to build the management page for.
+    *
+diff --git a/src/Controller/AssociationPageController.php b/src/Controller/AssociationPageController.php
+index 26f11a4..d80488b 100644
+--- a/src/Controller/AssociationPageController.php
++++ b/src/Controller/AssociationPageController.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\association\Controller;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\association\Entity\Storage\AssociationPageStorage;
++use Drupal\Core\Entity\RevisionableContentEntityBase;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Link;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+@@ -24,23 +28,23 @@ class AssociationPageController implements ContainerInjectionInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Create a new instance of AssociationPageController class.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, DateFormatterInterface $date_formatter) {
+@@ -63,14 +67,14 @@ class AssociationPageController implements ContainerInjectionInterface {
+    *
+    * @param string $entity_type_id
+    *   The entity type ID, which should also be the ID of the entity parameter.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+    */
+   public function revisionOverview($entity_type_id, RouteMatchInterface $route_match) {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface */
++    /** @var ContentEntityInterface */
+     $entity = $route_match->getParameter($entity_type_id);
+ 
+     // If entity does not implementat the RevisionableInterface we should
+@@ -80,7 +84,7 @@ class AssociationPageController implements ContainerInjectionInterface {
+       throw new NotFoundHttpException();
+     }
+ 
+-    /** @var \Drupal\association\Entity\Storage\AssociationPageStorage */
++    /** @var AssociationPageStorage */
+     $entityStorage = $this->entityTypeManager->getStorage($entity_type_id);
+     $accessHandler = $this->entityTypeManager->getAccessControlHandler($entity_type_id);
+ 
+@@ -104,7 +108,7 @@ class AssociationPageController implements ContainerInjectionInterface {
+ 
+     $rows = [];
+     foreach ($entityStorage->revisionIds($entity, $langcode) as $revId) {
+-      /** @var \Drupal\Core\Entity\RevisionableContentEntityBase */
++      /** @var RevisionableContentEntityBase */
+       $revision = $entityStorage->loadRevision($revId);
+ 
+       if ($revision && $revision->getTranslation($langcode)->isRevisionTranslationAffected()) {
+@@ -182,10 +186,10 @@ class AssociationPageController implements ContainerInjectionInterface {
+   /**
+    * Page title callback for an entity revision.
+    *
+-   * @param \Drupal\Core\Entity\RevisionableInterface $revision
++   * @param RevisionableInterface $revision
+    *   The association page loaded revision entity.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @return TranslatableMarkup|string
+    *   A title that can be used as the page title for this entity revision.
+    */
+   public function revisionPageTitle(RevisionableInterface $revision) {
+@@ -202,9 +206,9 @@ class AssociationPageController implements ContainerInjectionInterface {
+   /**
+    * Displays the revision of the entity of the requested type.
+    *
+-   * @param \Drupal\Core\Entity\RevisionableInterface $revision
++   * @param RevisionableInterface $revision
+    *   The loaded entity revision.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+    *
+    * @return array
+diff --git a/src/DefaultAssociationNegotiator.php b/src/DefaultAssociationNegotiator.php
+index 61a03d5..4f80a57 100644
+--- a/src/DefaultAssociationNegotiator.php
++++ b/src/DefaultAssociationNegotiator.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\association;
+ 
++use Drupal\association\Entity\AssociationLink;
++use Drupal\association\Entity\Storage\AssociationLinkStorageInterface;
+ use Drupal\association\Entity\AssociatedEntityInterface;
+ use Drupal\association\Entity\AssociationInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+@@ -23,23 +25,23 @@ class DefaultAssociationNegotiator implements AssociationNegotiatorInterface {
+   /**
+    * Manage entity types which are linkable to Entity Associations.
+    *
+-   * @var \Drupal\association\EntityAdapterManagerInterface
++   * @var EntityAdapterManagerInterface
+    */
+   protected $adapterManager;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Construct a new instance of the DefaultAssociationNegotiator class.
+    *
+-   * @param \Drupal\association\EntityAdapterManagerInterface $entity_adapter_manager
++   * @param EntityAdapterManagerInterface $entity_adapter_manager
+    *   Manage entity types which are linkable to Entity Associations.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityAdapterManagerInterface $entity_adapter_manager, EntityTypeManagerInterface $entity_type_manager) {
+@@ -83,15 +85,15 @@ class DefaultAssociationNegotiator implements AssociationNegotiatorInterface {
+       if ($entity instanceof ContentEntityInterface) {
+         // Loaded content entities, will store in the computed associations
+         // field any association_link entities joining them.
+-        /** @var \Drupal\association\Entity\AssociationLink */
++        /** @var AssociationLink */
+         $assocLink = $entity->hasField('associations') ? $entity->get('associations')->entity : NULL;
+       }
+       elseif (is_numeric($entity)) {
+         // If the entity is just the ID, then attempt look for a matching
+         // association_link which matches this entity type and ID.
+-        /** @var \Drupal\association\Entity\Storage\AssociationLinkStorageInterface */
++        /** @var AssociationLinkStorageInterface */
+         $linkStorage = $this->entityTypeManager->getStorage('association_link');
+-        /** @var \Drupal\association\Entity\AssociationLink[] */
++        /** @var AssociationLink[] */
+         $links = $linkStorage->loadByEntityInfo($entityTypeId, $entity);
+         $assocLink = reset($links);
+       }
+@@ -106,12 +108,12 @@ class DefaultAssociationNegotiator implements AssociationNegotiatorInterface {
+    * {@inheritdoc}
+    */
+   public function byEntity(EntityInterface $entity): ?AssociationInterface {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     if ($entity instanceof AssociatedEntityInterface) {
+       return $entity->getAssociation();
+     }
+     elseif ($this->adapterManager->isAssociable($entity)) {
+-      /** @var \Drupal\association\Entity\AssociationLink */
++      /** @var AssociationLink */
+       $association = $entity->get('associations')->entity;
+       return $association ? $association->getAssociation() : NULL;
+     }
+diff --git a/src/Entity/Access/AssociationAccessControlHandler.php b/src/Entity/Access/AssociationAccessControlHandler.php
+index 29309bd..fbbfd1a 100644
+--- a/src/Entity/Access/AssociationAccessControlHandler.php
++++ b/src/Entity/Access/AssociationAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity\Access;
+ 
++use Drupal\association\Entity\AssociationInterface;
+ use Drupal\association\AssociationPermissions;
+ use Drupal\association\Entity\AssociationTypeInterface;
+ use Drupal\Core\Access\AccessResult;
+@@ -23,16 +24,16 @@ class AssociationAccessControlHandler extends EntityAccessControlHandler impleme
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Create a new instance of SubjecAccessControlHandler class.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   Entity type definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityTypeManagerInterface $entity_type_manager) {
+@@ -82,7 +83,7 @@ class AssociationAccessControlHandler extends EntityAccessControlHandler impleme
+         ->cachePerPermissions();
+     }
+     else {
+-      /** @var \Drupal\Core\Access\AccessResult */
++      /** @var AccessResult */
+       $result = parent::access($entity, $operation, $account, TRUE);
+       $result->cachePerPermissions();
+     }
+@@ -94,7 +95,7 @@ class AssociationAccessControlHandler extends EntityAccessControlHandler impleme
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\association\Entity\AssociationInterface $entity */
++    /** @var AssociationInterface $entity */
+     try {
+       if ($operation === 'view') {
+         if ($entity->isActive() && $account->hasPermission('access content')) {
+diff --git a/src/Entity/Access/PageAccessControlHandler.php b/src/Entity/Access/PageAccessControlHandler.php
+index f31b677..3b83834 100644
+--- a/src/Entity/Access/PageAccessControlHandler.php
++++ b/src/Entity/Access/PageAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity\Access;
+ 
++use Drupal\association\Entity\AssociationPage;
+ use Drupal\association\AssociationPermissions;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+@@ -20,16 +21,16 @@ class PageAccessControlHandler extends EntityAccessControlHandler implements Ent
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Create a new instance of the association page access handler.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   Entity type definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityTypeManagerInterface $entity_type_manager) {
+@@ -59,7 +60,7 @@ class PageAccessControlHandler extends EntityAccessControlHandler implements Ent
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\association\Entity\AssociationPage $entity */
++    /** @var AssociationPage $entity */
+     $association = $entity->getAssociation();
+ 
+     switch ($operation) {
+diff --git a/src/Entity/AssociatedEntityInterface.php b/src/Entity/AssociatedEntityInterface.php
+index e7d1918..a3eaea0 100644
+--- a/src/Entity/AssociatedEntityInterface.php
++++ b/src/Entity/AssociatedEntityInterface.php
+@@ -12,7 +12,7 @@ interface AssociatedEntityInterface extends ContentEntityInterface {
+   /**
+    * Get the association this entity is associated to.
+    *
+-   * @return \Drupal\association\Entity\AssociationInterface|null
++   * @return AssociationInterface|null
+    *   The association this entity is associated to.
+    */
+   public function getAssociation(): ?AssociationInterface;
+diff --git a/src/Entity/Association.php b/src/Entity/Association.php
+index 558a304..3bf8e66 100644
+--- a/src/Entity/Association.php
++++ b/src/Entity/Association.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity;
+ 
++use Drupal\Core\Field\Plugin\Field\FieldType\EntityReferenceItem;
+ use Drupal\association\Entity\Exception\AlreadyAssociatedException;
+ use Drupal\association\Plugin\BehaviorInterface;
+ use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+@@ -85,7 +86,7 @@ class Association extends ContentEntityBase implements AssociationInterface {
+    * This field is boolean FALSE if there is no companion page available for
+    * this entity. There should only be a single landing page per association.
+    *
+-   * @var \Drupal\association\Entity\AssociationPage|bool
++   * @var AssociationPage|bool
+    */
+   protected $associationPage;
+ 
+@@ -218,9 +219,9 @@ class Association extends ContentEntityBase implements AssociationInterface {
+ 
+       if (!$entity->isNew() && $entity->id()) {
+         // Ensure this entity isn't already part of the association.
+-        /** @var \Drupal\Core\Field\Plugin\Field\FieldType\EntityReferenceItem */
++        /** @var EntityReferenceItem */
+         foreach ($entity->get('associations') as $item) {
+-          /** @var \Drupal\association\Entity\AssociationLink */
++          /** @var AssociationLink */
+           $assocLink = $item->entity;
+           if ($assocLink->assocation->target_id == $this->id()) {
+             $error = sprintf('Entity %s of type %s is already associated to "%s (id:%s)"', $entity->id(), $entityTypeId, $this->label(), $this->id());
+@@ -435,7 +436,7 @@ class Association extends ContentEntityBase implements AssociationInterface {
+    * {@inheritdoc}
+    */
+   public static function bundleFieldDefinitions(EntityTypeInterface $entity_type, $bundle, array $base_field_definitions) {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition[] $base_field_definitions */
++    /** @var BaseFieldDefinition[] $base_field_definitions */
+     $fields = [];
+ 
+     try {
+diff --git a/src/Entity/AssociationInterface.php b/src/Entity/AssociationInterface.php
+index 2939808..be424a0 100644
+--- a/src/Entity/AssociationInterface.php
++++ b/src/Entity/AssociationInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity;
+ 
++use Drupal\association\Entity\Exception\AlreadyAssociatedException;
+ use Drupal\association\Plugin\BehaviorInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityChangedInterface;
+@@ -26,7 +27,7 @@ interface AssociationInterface extends ContentEntityInterface, EntityChangedInte
+   /**
+    * Gets the association type instance for this association.
+    *
+-   * @return \Drupal\association\Entity\AssociationType
++   * @return AssociationType
+    *   Get the bundle entity for this association.
+    */
+   public function getType();
+@@ -34,7 +35,7 @@ interface AssociationInterface extends ContentEntityInterface, EntityChangedInte
+   /**
+    * Get the behavior plugin to use with this association entity.
+    *
+-   * @return \Drupal\association\Plugin\BehaviorInterface|null
++   * @return BehaviorInterface|null
+    *   Returns the association type behavior plugin that should be used
+    *   with this association entity.
+    */
+@@ -45,17 +46,17 @@ interface AssociationInterface extends ContentEntityInterface, EntityChangedInte
+    *
+    * @param string $tag
+    *   The association behavior tag.
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity to associate. The "associations" field will get updated
+    *   with the association_link.
+    * @param bool $save_link
+    *   (optional) Should the association link be saved? Can only happen if
+    *   $entity has been saved and has a valid entity ID.
+    *
+-   * @return \Drupal\association\Entity\AssociationLink
++   * @return AssociationLink
+    *   The association_link instance created to link the association and entity.
+    *
+-   * @throws \Drupal\association\Entity\Exception\AlreadyAssociatedException
++   * @throws AlreadyAssociatedException
+    */
+   public function associateEntity($tag, ContentEntityInterface $entity, $save_link = TRUE): ?AssociationLink;
+ 
+@@ -70,7 +71,7 @@ interface AssociationInterface extends ContentEntityInterface, EntityChangedInte
+   /**
+    * Get the companion landing page if one is available.
+    *
+-   * @return \Drupal\association\Entity\AssociationPage|false
++   * @return AssociationPage|false
+    *   The companion association page if there is one, otherwise boolean FALSE.
+    */
+   public function getPage();
+diff --git a/src/Entity/AssociationLink.php b/src/Entity/AssociationLink.php
+index cb1f6e3..ca00a1f 100644
+--- a/src/Entity/AssociationLink.php
++++ b/src/Entity/AssociationLink.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity;
+ 
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Entity\ContentEntityBase;
+ use Drupal\Core\Entity\EntityMalformedException;
+@@ -128,7 +129,7 @@ class AssociationLink extends ContentEntityBase implements AssociatedEntityInter
+   /**
+    * Fetch the entity targeted by this association.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   Entity targeted by this association.
+    */
+   public function getTarget() {
+@@ -171,7 +172,7 @@ class AssociationLink extends ContentEntityBase implements AssociatedEntityInter
+    * {@inheritdoc}
+    */
+   public static function baseFieldDefinitions(EntityTypeInterface $entity_type) {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition[] */
++    /** @var BaseFieldDefinition[] */
+     $fields = parent::baseFieldDefinitions($entity_type);
+ 
+     $fields['association'] = BaseFieldDefinition::create('entity_reference')
+diff --git a/src/Entity/AssociationPage.php b/src/Entity/AssociationPage.php
+index 42fd4ee..446d01d 100644
+--- a/src/Entity/AssociationPage.php
++++ b/src/Entity/AssociationPage.php
+@@ -85,7 +85,7 @@ class AssociationPage extends RevisionableContentEntityBase implements Associate
+   /**
+    * The association entity this page belongs to.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface
++   * @var AssociationInterface
+    */
+   protected $association;
+ 
+@@ -124,7 +124,7 @@ class AssociationPage extends RevisionableContentEntityBase implements Associate
+   /**
+    * Gets the association type instance for this landing page.
+    *
+-   * @return \Drupal\association\Entity\AssociationType
++   * @return AssociationType
+    *   Get the bundle entity for this association page.
+    */
+   public function getType() {
+@@ -219,7 +219,7 @@ class AssociationPage extends RevisionableContentEntityBase implements Associate
+     parent::preSave($storage);
+ 
+     foreach ($this->getTranslationLanguages() as $langcode => $language) {
+-      /** @var \Drupal\association\Entity\AssociationInterface */
++      /** @var AssociationInterface */
+       $translation = $this->getTranslation($langcode);
+ 
+       // If no owner has been set explicitly, make the anonymous user the owner.
+@@ -252,7 +252,7 @@ class AssociationPage extends RevisionableContentEntityBase implements Associate
+    * {@inheritdoc}
+    */
+   public static function baseFieldDefinitions(EntityTypeInterface $entity_type) {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition[] */
++    /** @var BaseFieldDefinition[] */
+     $fields = parent::baseFieldDefinitions($entity_type);
+     $fields += static::publishedBaseFieldDefinitions($entity_type);
+ 
+diff --git a/src/Entity/AssociationType.php b/src/Entity/AssociationType.php
+index da40c82..d46802a 100644
+--- a/src/Entity/AssociationType.php
++++ b/src/Entity/AssociationType.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity;
+ 
++use Drupal\association\Plugin\BehaviorPluginManagerInterface;
+ use Drupal\association\Plugin\BehaviorInterface;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+@@ -108,14 +109,14 @@ class AssociationType extends EntityBundleBase implements AssociationTypeInterfa
+   /**
+    * The loaded association behavior handling plugin.
+    *
+-   * @var \Drupal\association\Plugin\BehaviorInterface
++   * @var BehaviorInterface
+    */
+   protected $loadedBehavior;
+ 
+   /**
+    * Get the plugin manager for creating new plugin instances.
+    *
+-   * @return \Drupal\association\Plugin\BehaviorPluginManagerInterface
++   * @return BehaviorPluginManagerInterface
+    *   Plugin manager for creating and managing association behavior plugins.
+    */
+   protected static function getBehaviorManager() {
+diff --git a/src/Entity/AssociationTypeInterface.php b/src/Entity/AssociationTypeInterface.php
+index 0c87e6f..980c216 100644
+--- a/src/Entity/AssociationTypeInterface.php
++++ b/src/Entity/AssociationTypeInterface.php
+@@ -47,7 +47,7 @@ interface AssociationTypeInterface extends ConfigEntityInterface {
+    *   Force the rebuilding of the behavior plugin, even if it was already
+    *   instantiated.
+    *
+-   * @return \Drupal\association\Plugin\BehaviorInterface|null
++   * @return BehaviorInterface|null
+    *   Get the plugin to control the behavior of the associations of this type.
+    *   Should always return a behavior, unless data has been corrupted.
+    */
+diff --git a/src/Entity/Controller/AssociationListBuilder.php b/src/Entity/Controller/AssociationListBuilder.php
+index 56a3444..9b4fd59 100644
+--- a/src/Entity/Controller/AssociationListBuilder.php
++++ b/src/Entity/Controller/AssociationListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity\Controller;
+ 
++use Drupal\association\Entity\AssociationInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ use Drupal\Core\Link;
+@@ -26,7 +27,7 @@ class AssociationListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\association\Entity\AssociationInterface $entity */
++    /** @var AssociationInterface $entity */
+     $row['label'] = Link::fromTextAndUrl($entity->label(), $entity->toUrl());
+     $row['type'] = $entity->getType()->label();
+ 
+@@ -37,7 +38,7 @@ class AssociationListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function getDefaultOperations(EntityInterface $entity) {
+-    /** @var \Drupal\association\Entity\AssociationInterface $entity */
++    /** @var AssociationInterface $entity */
+     $operations = parent::getDefaultOperations($entity);
+ 
+     if (isset($operations['edit'])) {
+diff --git a/src/Entity/Controller/AssociationTypeListBuilder.php b/src/Entity/Controller/AssociationTypeListBuilder.php
+index 8530386..4dbe340 100644
+--- a/src/Entity/Controller/AssociationTypeListBuilder.php
++++ b/src/Entity/Controller/AssociationTypeListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity\Controller;
+ 
++use Drupal\association\Entity\AssociationTypeInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityListBuilder;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -18,18 +19,18 @@ class AssociationTypeListBuilder extends ConfigEntityListBuilder {
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * Create a new instance of the AssociationTypeListBuilder.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type instance.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage for this entity type.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $entity_storage, AccountInterface $current_user) {
+@@ -74,7 +75,7 @@ class AssociationTypeListBuilder extends ConfigEntityListBuilder {
+   public function getDefaultOperations(EntityInterface $entity) {
+     $operations = parent::getDefaultOperations($entity);
+ 
+-    /** @var \Drupal\association\Entity\AssociationTypeInterface $entity */
++    /** @var AssociationTypeInterface $entity */
+     if ($entity->hasPage() && $this->moduleHandler->moduleExists('field_ui')) {
+       $urlParams = ['association_type' => $entity->id()];
+ 
+diff --git a/src/Entity/Form/AssociationDeleteConfirm.php b/src/Entity/Form/AssociationDeleteConfirm.php
+index 3d1ff53..900303f 100644
+--- a/src/Entity/Form/AssociationDeleteConfirm.php
++++ b/src/Entity/Form/AssociationDeleteConfirm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity\Form;
+ 
++use Drupal\association\Entity\AssociationInterface;
+ use Drupal\association\Utility\DeleteAssociationBatchOp;
+ use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -22,7 +23,7 @@ class AssociationDeleteConfirm extends EntityDeleteConfirm {
+   public function buildForm(array $form, FormStateInterface $form_state) {
+     $form = parent::buildForm($form, $form_state);
+ 
+-    /** @var \Drupal\association\Entity\AssociationInterface */
++    /** @var AssociationInterface */
+     $entity = $this->getEntity();
+     $associationType = $entity->getType();
+     $tParams = [
+@@ -54,7 +55,7 @@ class AssociationDeleteConfirm extends EntityDeleteConfirm {
+       parent::submitForm($form, $form_state);
+     }
+     elseif ($method === 'delete_all') {
+-      /** @var \Drupal\association\Entity\AssociationInterface */
++      /** @var AssociationInterface */
+       $entity = $this->getEntity();
+       $behavior = $entity->getBehavior();
+       $associations = [$entity->id()];
+diff --git a/src/Entity/Form/AssociationDeleteMultipleConfirm.php b/src/Entity/Form/AssociationDeleteMultipleConfirm.php
+index 3a72365..281bddc 100644
+--- a/src/Entity/Form/AssociationDeleteMultipleConfirm.php
++++ b/src/Entity/Form/AssociationDeleteMultipleConfirm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity\Form;
+ 
++use Drupal\association\Entity\AssociationInterface;
+ use Drupal\association\Utility\DeleteAssociationBatchOp;
+ use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Entity\Form\DeleteMultipleForm;
+@@ -45,7 +46,7 @@ class AssociationDeleteMultipleConfirm extends DeleteMultipleForm {
+     elseif ($method === 'delete_all') {
+       $storage = $this->entityTypeManager->getStorage($this->entityTypeId);
+       $associationIds = array_keys($this->selection);
+-      /** @var \Drupal\association\Entity\AssociationInterface[] */
++      /** @var AssociationInterface[] */
+       $entities = $storage->loadMultiple($associationIds);
+ 
+       $bundles = [];
+diff --git a/src/Entity/Form/AssociationForm.php b/src/Entity/Form/AssociationForm.php
+index 3a01ac3..9c9cdf1 100644
+--- a/src/Entity/Form/AssociationForm.php
++++ b/src/Entity/Form/AssociationForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity\Form;
+ 
++use Drupal\association\Entity\AssociationInterface;
+ use Drupal\Core\Entity\ContentEntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -39,7 +40,7 @@ class AssociationForm extends ContentEntityForm {
+   public function save(array $form, FormStateInterface $form_state) {
+     $status = parent::save($form, $form_state);
+ 
+-    /** @var \Drupal\association\Entity\AssociationInterface $entity */
++    /** @var AssociationInterface $entity */
+     $entity = $this->getEntity();
+     $msgParams = [
+       '%label' => $entity->label(),
+diff --git a/src/Entity/Form/AssociationPageRevisionDeleteConfirm.php b/src/Entity/Form/AssociationPageRevisionDeleteConfirm.php
+index 3029e2b..1c2ab18 100644
+--- a/src/Entity/Form/AssociationPageRevisionDeleteConfirm.php
++++ b/src/Entity/Form/AssociationPageRevisionDeleteConfirm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity\Form;
+ 
++use Drupal\Core\Entity\RevisionLogInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\toolshed\Entity\Form\RevisionConfirmBase;
+ 
+@@ -14,7 +15,7 @@ class AssociationPageRevisionDeleteConfirm extends RevisionConfirmBase {
+    * {@inheritdoc}
+    */
+   public function getQuestion() {
+-    /** @var \Drupal\Core\Entity\RevisionLogInterface */
++    /** @var RevisionLogInterface */
+     $entity = $this->getEntity();
+ 
+     return $this->t('Are you sure you want to delete the revision from %revision-date?', [
+@@ -33,7 +34,7 @@ class AssociationPageRevisionDeleteConfirm extends RevisionConfirmBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Entity\RevisionLogInterface */
++    /** @var RevisionLogInterface */
+     $entity = $this->entity;
+     $entityStorage = $this->entityTypeManager
+       ->getStorage($entity->getEntityTypeId());
+diff --git a/src/Entity/Form/AssociationPageRevisionRevertConfirm.php b/src/Entity/Form/AssociationPageRevisionRevertConfirm.php
+index 348c20d..b579280 100644
+--- a/src/Entity/Form/AssociationPageRevisionRevertConfirm.php
++++ b/src/Entity/Form/AssociationPageRevisionRevertConfirm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity\Form;
+ 
++use Drupal\Core\Entity\RevisionLogInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\toolshed\Entity\Form\RevisionConfirmBase;
+ 
+@@ -14,7 +15,7 @@ class AssociationPageRevisionRevertConfirm extends RevisionConfirmBase {
+    * {@inheritdoc}
+    */
+   public function getQuestion() {
+-    /** @var \Drupal\Core\Entity\RevisionLogInterface */
++    /** @var RevisionLogInterface */
+     $entity = $this->getEntity();
+ 
+     return $this->t('Are you sure you want to revert to the revision from %revision-date?', [
+@@ -33,7 +34,7 @@ class AssociationPageRevisionRevertConfirm extends RevisionConfirmBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\Core\Entity\RevisionLogInterface */
++    /** @var RevisionLogInterface */
+     $entity = $this->entity;
+ 
+     $tParams = [
+diff --git a/src/Entity/Form/AssociationTypeForm.php b/src/Entity/Form/AssociationTypeForm.php
+index 3533ddd..cb3a42f 100644
+--- a/src/Entity/Form/AssociationTypeForm.php
++++ b/src/Entity/Form/AssociationTypeForm.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\association\Entity\Form;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\association\Entity\AssociationTypeInterface;
++use Drupal\Core\Ajax\AjaxResponse;
+ use Drupal\association\Plugin\BehaviorFormInterface;
+ use Drupal\association\Plugin\BehaviorInterface;
+ use Drupal\association\Plugin\BehaviorPluginManagerInterface;
+@@ -23,32 +26,32 @@ class AssociationTypeForm extends EntityForm {
+   /**
+    * Service providing entity bundle information.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityBundleInfo;
+ 
+   /**
+    * The form factory for getting form objects for plugins operations.
+    *
+-   * @var \Drupal\Core\Plugin\PluginFormFactoryInterface
++   * @var PluginFormFactoryInterface
+    */
+   protected $pluginFormFactory;
+ 
+   /**
+    * Association type behavior plugin manager.
+    *
+-   * @var \Drupal\association\Plugin\BehaviorPluginManagerInterface
++   * @var BehaviorPluginManagerInterface
+    */
+   protected $behaviorManager;
+ 
+   /**
+    * Create a new instance of the AssociationTypeForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_bundle_info
+    *   Service providing entity bundle information.
+-   * @param \Drupal\Core\Plugin\PluginFormFactoryInterface $plugin_form_factory
++   * @param PluginFormFactoryInterface $plugin_form_factory
+    *   The form factory for getting form objects for plugins operations.
+-   * @param \Drupal\association\Plugin\BehaviorPluginManagerInterface $behavior_manager
++   * @param BehaviorPluginManagerInterface $behavior_manager
+    *   Association type behavior plugin manager.
+    */
+   public function __construct(EntityTypeBundleInfoInterface $entity_bundle_info, PluginFormFactoryInterface $plugin_form_factory, BehaviorPluginManagerInterface $behavior_manager) {
+@@ -93,7 +96,7 @@ class AssociationTypeForm extends EntityForm {
+   /**
+    * Get a list of behavior plugins available for use with association types.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|string[]
++   * @return TranslatableMarkup|string[]
+    *   An array of behavior plugin labels, keyed by the plugin ID.
+    */
+   protected function getPluginOptions() {
+@@ -109,10 +112,10 @@ class AssociationTypeForm extends EntityForm {
+   /**
+    * Get an instance of the plugin configuration form if there is one.
+    *
+-   * @param \Drupal\association\Plugin\BehaviorInterface $plugin
++   * @param BehaviorInterface $plugin
+    *   The association behavior plugin to generate a configuration form for.
+    *
+-   * @return \Drupal\association\Plugin\BehaviorFormInterface|null
++   * @return BehaviorFormInterface|null
+    *   A loaded plugin object if the plugin has a configuration form.
+    */
+   protected function getConfigurePluginForm(BehaviorInterface $plugin): ?BehaviorFormInterface {
+@@ -138,7 +141,7 @@ class AssociationTypeForm extends EntityForm {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\association\Entity\AssociationTypeInterface $entity */
++    /** @var AssociationTypeInterface $entity */
+     $entity = $this->entity;
+     $hasData = $entity->hasData();
+ 
+@@ -269,9 +272,9 @@ class AssociationTypeForm extends EntityForm {
+     if (!empty($pluginId)) {
+       try {
+         $config = [];
+-        /** @var \Drupal\association\Entity\AssociationTypeInterface $entity */
++        /** @var AssociationTypeInterface $entity */
+         $entity = $this->getEntity();
+-        /** @var \Drupal\association\Entity\AssociationTypeInterface $current */
++        /** @var AssociationTypeInterface $current */
+         $current = $this->entityTypeManager
+           ->getStorage('association_type')
+           ->load($entity->id());
+@@ -299,7 +302,7 @@ class AssociationTypeForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\association\Entity\AssociationTypeInterface $entity */
++    /** @var AssociationTypeInterface $entity */
+     $entity = $this->entity;
+ 
+     try {
+@@ -342,10 +345,10 @@ class AssociationTypeForm extends EntityForm {
+    *
+    * @param array $form
+    *   Complete form structure and element definitions.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Current state, build information and user input for the form.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse|array
++   * @return AjaxResponse|array
+    *   A set of AJAX commands or a renderable array with the form changes to
+    *   perform through AJAX.
+    */
+diff --git a/src/Entity/Routing/AssociationHtmlRouteProvider.php b/src/Entity/Routing/AssociationHtmlRouteProvider.php
+index 1fdeb9a..c938003 100644
+--- a/src/Entity/Routing/AssociationHtmlRouteProvider.php
++++ b/src/Entity/Routing/AssociationHtmlRouteProvider.php
+@@ -55,10 +55,10 @@ class AssociationHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Create the association content management route if it exists.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route content management if available.
+    */
+   protected function getContentManagementRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/Entity/Routing/AssociationLinkHtmlRouteProvider.php b/src/Entity/Routing/AssociationLinkHtmlRouteProvider.php
+index 0155cd7..f7f3275 100644
+--- a/src/Entity/Routing/AssociationLinkHtmlRouteProvider.php
++++ b/src/Entity/Routing/AssociationLinkHtmlRouteProvider.php
+@@ -38,10 +38,10 @@ class AssociationLinkHtmlRouteProvider implements EntityRouteProviderInterface {
+   /**
+    * Create the route to add a new linked content entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route if an add-content link template is available.
+    */
+   public function getAddLinkedContentRoute(EntityTypeInterface $entity_type) {
+@@ -76,10 +76,10 @@ class AssociationLinkHtmlRouteProvider implements EntityRouteProviderInterface {
+   /**
+    * Create the route to edit the associated target entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route if an edit-content link template is available.
+    */
+   public function getEditLinkedContentRoute(EntityTypeInterface $entity_type) {
+@@ -116,10 +116,10 @@ class AssociationLinkHtmlRouteProvider implements EntityRouteProviderInterface {
+   /**
+    * Create the route to delete associated target entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route if an delete-content link template is available.
+    */
+   public function getDeleteLinkedContentRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/Entity/Routing/AssociationPageHtmlRouteProvider.php b/src/Entity/Routing/AssociationPageHtmlRouteProvider.php
+index 4eb57c9..daebc00 100644
+--- a/src/Entity/Routing/AssociationPageHtmlRouteProvider.php
++++ b/src/Entity/Routing/AssociationPageHtmlRouteProvider.php
+@@ -41,11 +41,11 @@ class AssociationPageHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Create a route for managing entity revisions.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   Entity type definition for the entity type to build the revision route
+    *   history list page.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   If a link template definition is available a revision history route then
+    *   returns the route for it. Otherwise returns NULL.
+    */
+@@ -82,10 +82,10 @@ class AssociationPageHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Create a route for viewing a revision of an association landing page.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   If a link template definition is available for the route than create a
+    *   route object for it. Otherwise return NULL if no link template defined.
+    */
+@@ -118,10 +118,10 @@ class AssociationPageHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Create a route for reverting a revision of an entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   If a link template definition is available for the route than create a
+    *   route object for it. Otherwise return NULL if no link template defined.
+    */
+@@ -157,10 +157,10 @@ class AssociationPageHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Create a route for deleting a revision of an entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   If a link template definition is available for the route than create a
+    *   route object for it. Otherwise return NULL if no link template defined.
+    */
+diff --git a/src/Entity/Storage/AssociationLinkStorageInterface.php b/src/Entity/Storage/AssociationLinkStorageInterface.php
+index 917f9ad..7a0704b 100644
+--- a/src/Entity/Storage/AssociationLinkStorageInterface.php
++++ b/src/Entity/Storage/AssociationLinkStorageInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity\Storage;
+ 
++use Drupal\association\Entity\AssociationLink;
+ use Drupal\association\Entity\AssociationInterface;
+ use Drupal\Core\Entity\ContentEntityStorageInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -21,10 +22,10 @@ interface AssociationLinkStorageInterface extends ContentEntityStorageInterface
+   /**
+    * Get the associations links that belong to the provided association.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   Association to find the association links for.
+    *
+-   * @return \Drupal\association\Entity\AssociationLink[]
++   * @return AssociationLink[]
+    *   The loaded association links which belong to the association requested.
+    */
+   public function loadByAssociation(AssociationInterface $association);
+@@ -35,10 +36,10 @@ interface AssociationLinkStorageInterface extends ContentEntityStorageInterface
+    * These are all the association links that link/join the requested entity
+    * to an entity association.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The association target content to find all the association links for.
+    *
+-   * @return \Drupal\association\Entity\AssociationLink[]
++   * @return AssociationLink[]
+    *   The loaded association links which target the provided content entity.
+    */
+   public function loadByTarget(EntityInterface $entity);
+@@ -54,7 +55,7 @@ interface AssociationLinkStorageInterface extends ContentEntityStorageInterface
+    * @param string|int $entity_id
+    *   The ID of the target entity to find association links for.
+    *
+-   * @return \Drupal\association\Entity\AssociationLink[]
++   * @return AssociationLink[]
+    *   The loaded association links which target the provided content entity.
+    */
+   public function loadByEntityInfo($entity_type_id, $entity_id);
+diff --git a/src/Entity/Storage/AssociationPageStorage.php b/src/Entity/Storage/AssociationPageStorage.php
+index 4e55ec5..37243c2 100644
+--- a/src/Entity/Storage/AssociationPageStorage.php
++++ b/src/Entity/Storage/AssociationPageStorage.php
+@@ -20,7 +20,7 @@ class AssociationPageStorage extends SqlContentEntityStorage {
+   /**
+    * Get available revision IDs for a content entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to find revisions for.
+    * @param string $langcode
+    *   If provided, only return revision IDs that have this translation. If not
+diff --git a/src/Entity/Storage/AssociationStorage.php b/src/Entity/Storage/AssociationStorage.php
+index 7e065df..5c113a1 100644
+--- a/src/Entity/Storage/AssociationStorage.php
++++ b/src/Entity/Storage/AssociationStorage.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Entity\Storage;
+ 
++use Drupal\association\Entity\AssociationInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\Sql\SqlContentEntityStorage;
+ 
+@@ -19,7 +20,7 @@ class AssociationStorage extends SqlContentEntityStorage {
+    * {@inheritdoc}
+    */
+   protected function doSave($id, EntityInterface $entity) {
+-    /** @var \Drupal\association\Entity\AssociationInterface $entity */
++    /** @var AssociationInterface $entity */
+     $isNew = $entity->isNew();
+     $status = parent::doSave($id, $entity);
+ 
+diff --git a/src/Entity/Views/AssociationLinkViewsData.php b/src/Entity/Views/AssociationLinkViewsData.php
+index 82b4f50..ee2dad1 100644
+--- a/src/Entity/Views/AssociationLinkViewsData.php
++++ b/src/Entity/Views/AssociationLinkViewsData.php
+@@ -20,24 +20,24 @@ class AssociationLinkViewsData extends EntityViewsData {
+   /**
+    * The entity type adapter plugin manager.
+    *
+-   * @var \Drupal\association\EntityAdapterManagerInterface
++   * @var EntityAdapterManagerInterface
+    */
+   protected $entityAdapterManager;
+ 
+   /**
+    * Constructs a AssociationLinkViewsData object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type to provide views integration for.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $translation_manager
++   * @param TranslationInterface $translation_manager
+    *   The translation manager.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\association\EntityAdapterManagerInterface $entity_adapter_manager
++   * @param EntityAdapterManagerInterface $entity_adapter_manager
+    *   Manager entity type adapters for associating to association entities.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityTypeManagerInterface $entity_type_manager, ModuleHandlerInterface $module_handler, TranslationInterface $translation_manager, EntityFieldManagerInterface $entity_field_manager, EntityAdapterManagerInterface $entity_adapter_manager) {
+diff --git a/src/EntityAdapterManagerInterface.php b/src/EntityAdapterManagerInterface.php
+index 85eb07d..409f891 100644
+--- a/src/EntityAdapterManagerInterface.php
++++ b/src/EntityAdapterManagerInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association;
+ 
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\association\Adapter\EntityAdapterInterface;
+ use Drupal\Component\Plugin\PluginManagerInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -30,7 +31,7 @@ interface EntityAdapterManagerInterface extends PluginManagerInterface {
+   /**
+    * Helper method to check if an entity can be the linked to an association.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity to check if it can be the target of an association.
+    *
+    * @return bool
+@@ -52,16 +53,16 @@ interface EntityAdapterManagerInterface extends PluginManagerInterface {
+   /**
+    * Fetch the entity adapter plugin appropriate for the $entity parameter.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity to fetch the adapter plugin for.
+    * @param bool $exception_on_invalid
+    *   If true (the default) throw an exception if the entity does not have a
+    *   matching adapter.
+    *
+-   * @return \Drupal\association\Adapter\EntityAdapterInterface|null
++   * @return EntityAdapterInterface|null
+    *   The adapter plugin if an appropriate one could be found.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws PluginNotFoundException
+    *   If entity type is unsuppported and does not have a valid entity type
+    *   adapter plugin available.
+    */
+@@ -76,10 +77,10 @@ interface EntityAdapterManagerInterface extends PluginManagerInterface {
+    *   If true (the default) throw an exception if the entity does not have a
+    *   matching adapter.
+    *
+-   * @return \Drupal\association\Adapter\EntityAdapterInterface|null
++   * @return EntityAdapterInterface|null
+    *   The adapter plugin if an appropriate one could be found.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws PluginNotFoundException
+    *   If entity type is unsuppported and does not have a valid entity type
+    *   adapter plugin available.
+    */
+diff --git a/src/EntityUpdater/EntityUpdaterInterface.php b/src/EntityUpdater/EntityUpdaterInterface.php
+index 44b36d6..c878700 100644
+--- a/src/EntityUpdater/EntityUpdaterInterface.php
++++ b/src/EntityUpdater/EntityUpdaterInterface.php
+@@ -17,7 +17,7 @@ interface EntityUpdaterInterface {
+    * This method is also expected to perform checks like module requirements
+    * or other need dependencies.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association who's content will be updated.
+    *
+    * @return bool
+@@ -52,9 +52,9 @@ interface EntityUpdaterInterface {
+   /**
+    * Performs the updates to the content entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The content entity being update by the updater.
+-   * @param \Drupal\association\Entity\AssociationLink $link
++   * @param AssociationLink $link
+    *   The association link which links the association and the content entity.
+    */
+   public function update(EntityInterface $entity, AssociationLink $link);
+diff --git a/src/Event/AssociatedEntityFormEvent.php b/src/Event/AssociatedEntityFormEvent.php
+index fd061f6..12bf41d 100644
+--- a/src/Event/AssociatedEntityFormEvent.php
++++ b/src/Event/AssociatedEntityFormEvent.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Event;
+ 
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\association\Entity\AssociationInterface;
+ use Drupal\Component\EventDispatcher\Event;
+ use Drupal\Core\Entity\ContentEntityInterface;
+@@ -22,14 +23,14 @@ class AssociatedEntityFormEvent extends Event {
+   /**
+    * The entity assocation which the form is operating on.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface
++   * @var AssociationInterface
+    */
+   protected $association;
+ 
+   /**
+    * The entity being operated on the the entity operation form.
+    *
+-   * @var \Drupal\Core\Entity\EntityInterface
++   * @var EntityInterface
+    */
+   protected $entity;
+ 
+@@ -43,7 +44,7 @@ class AssociatedEntityFormEvent extends Event {
+   /**
+    * The entity operation form state.
+    *
+-   * @var \Drupal\Core\Form\FormStateInterface
++   * @var FormStateInterface
+    */
+   protected $formState;
+ 
+@@ -54,11 +55,11 @@ class AssociatedEntityFormEvent extends Event {
+    *   The entity form operation being performed.
+    * @param array $form
+    *   The reference to the form renderable form elements.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form rebuild info, state and values.
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity being edited by the form.
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The entity association to which this entity is a part of.
+    */
+   public function __construct($op, array &$form, FormStateInterface $form_state, ContentEntityInterface $entity, AssociationInterface $association) {
+@@ -102,7 +103,7 @@ class AssociatedEntityFormEvent extends Event {
+   /**
+    * Gets the entity the form operation is targeting.
+    *
+-   * @return \Drupal\Core\Entity\ContentEntityInterface
++   * @return ContentEntityInterface
+    *   Get the content entity being operated on.
+    */
+   public function getEntity(): ContentEntityInterface {
+@@ -112,7 +113,7 @@ class AssociatedEntityFormEvent extends Event {
+   /**
+    * Get the association this content entity belongs to.
+    *
+-   * @return \Drupal\association\Entity\AssociationInterface
++   * @return AssociationInterface
+    *   The entity assocation owning this content.
+    */
+   public function getAssociation(): AssociationInterface {
+@@ -132,7 +133,7 @@ class AssociatedEntityFormEvent extends Event {
+   /**
+    * The form state.
+    *
+-   * @return \Drupal\Core\Form\FormStateInterface
++   * @return FormStateInterface
+    *   The form state.
+    */
+   public function getFormState(): FormStateInterface {
+diff --git a/src/Event/AssociatedEntityUpdaterAlterEvent.php b/src/Event/AssociatedEntityUpdaterAlterEvent.php
+index 29fbcb2..05a8790 100644
+--- a/src/Event/AssociatedEntityUpdaterAlterEvent.php
++++ b/src/Event/AssociatedEntityUpdaterAlterEvent.php
+@@ -20,7 +20,7 @@ class AssociatedEntityUpdaterAlterEvent extends Event {
+   /**
+    * Association entity being updated.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface
++   * @var AssociationInterface
+    */
+   protected $association;
+ 
+@@ -29,7 +29,7 @@ class AssociatedEntityUpdaterAlterEvent extends Event {
+    *
+    * @param string[] $updaters
+    *   Captures a reference to the updaters fully scoped class names.
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association linked to the content entities being updated.
+    */
+   public function __construct(array &$updaters, AssociationInterface $association) {
+@@ -51,7 +51,7 @@ class AssociatedEntityUpdaterAlterEvent extends Event {
+   /**
+    * Get the association linked to the content that will be updated.
+    *
+-   * @return \Drupal\association\Entity\AssociationInterface
++   * @return AssociationInterface
+    *   The association linked to the content to get updated.
+    */
+   public function getAssociation(): AssociationInterface {
+diff --git a/src/Event/QueryAccessAlterEvent.php b/src/Event/QueryAccessAlterEvent.php
+index cc74bec..a0d820d 100644
+--- a/src/Event/QueryAccessAlterEvent.php
++++ b/src/Event/QueryAccessAlterEvent.php
+@@ -29,14 +29,14 @@ class QueryAccessAlterEvent extends Event {
+    * be added. In this case you replace it with a new condition group. Keep in
+    * mind that in normal cases the expectation is that this is an "OR" group.
+    *
+-   * @var \Drupal\Core\Database\Query\ConditionInterface|null
++   * @var ConditionInterface|null
+    */
+   protected $accessCondition;
+ 
+   /**
+    * The query being altered.
+    *
+-   * @var \Drupal\Core\Database\Query\SelectInterface
++   * @var SelectInterface
+    */
+   protected $query;
+ 
+@@ -50,7 +50,7 @@ class QueryAccessAlterEvent extends Event {
+   /**
+    * The account to use for access permission and access checks.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+@@ -59,14 +59,14 @@ class QueryAccessAlterEvent extends Event {
+    *
+    * @param string $operation
+    *   The entity operation being performed.
+-   * @param \Drupal\Core\Database\Query\SelectInterface $query
++   * @param SelectInterface $query
+    *   The query being altered.
+-   * @param \Drupal\Core\Database\Query\ConditionInterface|null $condition
++   * @param ConditionInterface|null $condition
+    *   A reference to the query condition with the association access filters.
+    * @param string[] $table_aliases
+    *   The table aliases from the query for the entity base, association,
+    *   and association link tables.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account to use for access and permission checks.
+    */
+   public function __construct($operation, SelectInterface $query, ?ConditionInterface &$condition, array $table_aliases, AccountInterface $account) {
+@@ -90,7 +90,7 @@ class QueryAccessAlterEvent extends Event {
+    *
+    * Keep in mind that the expectation is that this is an "OR" group.
+    *
+-   * @return \Drupal\Core\Database\Query\ConditionInterface|null
++   * @return ConditionInterface|null
+    *   Get the current access condition with the association based access
+    *   constraints applied. This can be NULL if there are currently no
+    *   query constraints needed.
+@@ -105,7 +105,7 @@ class QueryAccessAlterEvent extends Event {
+    * It is recommend in most cases to only alter the condition and not to
+    * change the query directly.
+    *
+-   * @return \Drupal\Core\Database\Query\SelectInterface
++   * @return SelectInterface
+    *   The query being altered.
+    */
+   public function getQuery(): SelectInterface {
+@@ -139,7 +139,7 @@ class QueryAccessAlterEvent extends Event {
+   /**
+    * Get the account to use for permission and access checks.
+    *
+-   * @return \Drupal\Core\Session\AccountInterface
++   * @return AccountInterface
+    *   Gets the account to compare permission and access with.
+    */
+   public function getAccount(): AccountInterface {
+diff --git a/src/EventSubscriber/ConfigValidationEventSubscriber.php b/src/EventSubscriber/ConfigValidationEventSubscriber.php
+index cea1dfe..3440bbc 100644
+--- a/src/EventSubscriber/ConfigValidationEventSubscriber.php
++++ b/src/EventSubscriber/ConfigValidationEventSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\EventSubscriber;
+ 
++use Drupal\association\Entity\AssociationTypeInterface;
+ use Drupal\Core\Config\ConfigImporterEvent;
+ use Drupal\Core\Config\ConfigImportValidateEventSubscriberBase;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -14,14 +15,14 @@ class ConfigValidationEventSubscriber extends ConfigImportValidateEventSubscribe
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Create a new instance of the ConfigValidationEvent subscriber.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -43,7 +44,7 @@ class ConfigValidationEventSubscriber extends ConfigImportValidateEventSubscribe
+           ->getSourceStorage()
+           ->read($configName);
+ 
+-        /** @var \Drupal\association\Entity\AssociationTypeInterface */
++        /** @var AssociationTypeInterface */
+         $associationType = $this->entityTypeManager
+           ->getStorage('association_type')
+           ->load($matches[1]);
+diff --git a/src/Field/AssociationReferenceItemList.php b/src/Field/AssociationReferenceItemList.php
+index 579f3da..550dd19 100644
+--- a/src/Field/AssociationReferenceItemList.php
++++ b/src/Field/AssociationReferenceItemList.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\association\Field;
+ 
++use Drupal\association\Entity\AssociationLink;
++use Drupal\association\Entity\Storage\AssociationLinkStorageInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Field\EntityReferenceFieldItemList;
+ use Drupal\Core\TypedData\ComputedItemListTrait;
+@@ -20,15 +22,15 @@ class AssociationReferenceItemList extends EntityReferenceFieldItemList {
+   /**
+    * Fetch association entities linked to this content entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity which this field belongs to.
+    *
+-   * @return \Drupal\association\Entity\AssociationLink[]
++   * @return AssociationLink[]
+    *   An array of found association links the $entity belongs to.
+    *   This can be an empty array, if no associations can be found.
+    */
+   protected function getAssociations(EntityInterface $entity) {
+-    /** @var \Drupal\association\Entity\Storage\AssociationLinkStorageInterface */
++    /** @var AssociationLinkStorageInterface */
+     $linkStorage = \Drupal::entityTypeManager()->getStorage('association_link');
+     return $linkStorage->loadByTarget($entity);
+   }
+diff --git a/src/Menu/AssociatedEntityLocalTask.php b/src/Menu/AssociatedEntityLocalTask.php
+index 789f39f..ea1bd48 100644
+--- a/src/Menu/AssociatedEntityLocalTask.php
++++ b/src/Menu/AssociatedEntityLocalTask.php
+@@ -27,7 +27,7 @@ class AssociatedEntityLocalTask extends LocalTaskDefault implements LocalTaskInt
+   /**
+    * Negotiator to determine the active association from the route.
+    *
+-   * @var \Drupal\association\AssociationNegotiatorInterface
++   * @var AssociationNegotiatorInterface
+    */
+   protected $associationNegotiator;
+ 
+@@ -40,7 +40,7 @@ class AssociatedEntityLocalTask extends LocalTaskDefault implements LocalTaskInt
+    *   The plugin identifier string.
+    * @param mixed $plugin_definition
+    *   The plugin deifnition.
+-   * @param \Drupal\association\AssociationNegotiatorInterface $association_negotiator
++   * @param AssociationNegotiatorInterface $association_negotiator
+    *   The association negotiator which determines which association is active
+    *   based on the current route.
+    */
+diff --git a/src/Plugin/Association/Behavior/EntityListBehavior.php b/src/Plugin/Association/Behavior/EntityListBehavior.php
+index 839fd9e..36156db 100644
+--- a/src/Plugin/Association/Behavior/EntityListBehavior.php
++++ b/src/Plugin/Association/Behavior/EntityListBehavior.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Plugin\Association\Behavior;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\association\Entity\AssociationTypeInterface;
+ use Drupal\association\Plugin\BehaviorBase;
+ use Drupal\association\Plugin\BehaviorFormInterface;
+@@ -27,7 +28,7 @@ class EntityListBehavior extends BehaviorBase implements BehaviorFormInterface {
+   /**
+    * List of labels for behavior tags, keyed by the tag identifier.
+    *
+-   * @var \Drupal\Core\StringTranslation\TranslatableMarkup[]|string[]
++   * @var TranslatableMarkup[]|string[]
+    */
+   protected $tagLabels = [];
+ 
+@@ -147,7 +148,7 @@ class EntityListBehavior extends BehaviorBase implements BehaviorFormInterface {
+     $entityTypes = $form_state->getValue('entity_types');
+ 
+     if ($typeId = $form_state->get('association_type')) {
+-      /** @var \Drupal\association\Entity\AssociationTypeInterface */
++      /** @var AssociationTypeInterface */
+       $type = $this->entityTypeManager->getStorage('association_type')->load($typeId);
+       if (!$type->hasData()) {
+         return;
+diff --git a/src/Plugin/BehaviorBase.php b/src/Plugin/BehaviorBase.php
+index be850bb..cd568c6 100644
+--- a/src/Plugin/BehaviorBase.php
++++ b/src/Plugin/BehaviorBase.php
+@@ -23,14 +23,14 @@ abstract class BehaviorBase extends PluginBase implements BehaviorInterface, Con
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Manager entity type adapters for associating to association entities.
+    *
+-   * @var \Drupal\association\EntityAdapterManagerInterface
++   * @var EntityAdapterManagerInterface
+    */
+   protected $adapterManager;
+ 
+@@ -43,9 +43,9 @@ abstract class BehaviorBase extends PluginBase implements BehaviorInterface, Con
+    *   The plugin identifier.
+    * @param mixed $plugin_definition
+    *   The plugin definition (from plugin discovery).
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\association\EntityAdapterManagerInterface $entity_adapter_manager
++   * @param EntityAdapterManagerInterface $entity_adapter_manager
+    *   Manager entity type adapters for associating to association entities.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, EntityAdapterManagerInterface $entity_adapter_manager) {
+diff --git a/src/Plugin/BehaviorFormInterface.php b/src/Plugin/BehaviorFormInterface.php
+index b758958..a5f3f04 100644
+--- a/src/Plugin/BehaviorFormInterface.php
++++ b/src/Plugin/BehaviorFormInterface.php
+@@ -21,9 +21,9 @@ interface BehaviorFormInterface extends PluginFormInterface {
+    *
+    * @param array $form
+    *   The form elements and structure.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state, values and build information.
+-   * @param \Drupal\association\Entity\AssociationTypeInterface $association_type
++   * @param AssociationTypeInterface $association_type
+    *   The association type entity which this behavior is being configured for.
+    */
+   public function buildConfigurationForm(array $form, FormStateInterface $form_state, AssociationTypeInterface $association_type = NULL);
+diff --git a/src/Plugin/BehaviorInterface.php b/src/Plugin/BehaviorInterface.php
+index fbde8e4..0cd1d4e 100644
+--- a/src/Plugin/BehaviorInterface.php
++++ b/src/Plugin/BehaviorInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Plugin;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\association\Entity\AssociationInterface;
+ use Drupal\association\Entity\AssociationTypeInterface;
+ use Drupal\Component\Plugin\ConfigurableInterface;
+@@ -57,7 +58,7 @@ interface BehaviorInterface extends PluginInspectionInterface, ConfigurableInter
+    * @param string $bundle
+    *   The machine name of the entity bundle to generate the label for.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @return TranslatableMarkup|string
+    *   The display label to go with this tag.
+    */
+   public function getTagLabel($tag, $entity_type_id, $bundle);
+@@ -97,7 +98,7 @@ interface BehaviorInterface extends PluginInspectionInterface, ConfigurableInter
+   /**
+    * Determine if a user has access to create an associated entity.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association that the target entity will be created for.
+    * @param string $tag
+    *   Behavior identifier for the content entity to create. The meaning of this
+@@ -107,10 +108,10 @@ interface BehaviorInterface extends PluginInspectionInterface, ConfigurableInter
+    *   The machine name of the entity type being tested for access.
+    * @param string $bundle
+    *   The machine name of the entity bundle.
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Account to check permissions for.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   Access result for if the target entity can be created by this account
+    *   and for this association.
+    */
+@@ -119,7 +120,7 @@ interface BehaviorInterface extends PluginInspectionInterface, ConfigurableInter
+   /**
+    * Create a new entity appropriate for this association behavior tag.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The association that the target entity will be created for.
+    * @param string $tag
+    *   Identifier for the target entity to create for this behavior.
+@@ -128,7 +129,7 @@ interface BehaviorInterface extends PluginInspectionInterface, ConfigurableInter
+    * @param string $bundle
+    *   The entity bundle machine name.
+    *
+-   * @return \Drupal\Core\Entity\ContentEntityInterface
++   * @return ContentEntityInterface
+    *   A newly created entity appropriate for the behavior tag.
+    *
+    * @throws \InvalidArgumentException
+@@ -144,7 +145,7 @@ interface BehaviorInterface extends PluginInspectionInterface, ConfigurableInter
+    * data and needs to make sure the changes are safe for this behavior's
+    * current state.
+    *
+-   * @param \Drupal\association\Entity\AssociationTypeInterface $association_type
++   * @param AssociationTypeInterface $association_type
+    *   The association type to validate configurations for.
+    * @param array $changes
+    *   The proposed configuration changes.
+diff --git a/src/Plugin/BehaviorPluginManager.php b/src/Plugin/BehaviorPluginManager.php
+index a2851bd..ba9960b 100644
+--- a/src/Plugin/BehaviorPluginManager.php
++++ b/src/Plugin/BehaviorPluginManager.php
+@@ -16,9 +16,9 @@ class BehaviorPluginManager extends DefaultPluginManager implements BehaviorPlug
+    *
+    * @param \Traversable $namespaces
+    *   Namespaces available for Drupal to crawl for plugin discovery.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   The cache backend to cache definitions and maps.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Plugin/Block/AssociationBlock.php b/src/Plugin/Block/AssociationBlock.php
+index e11f680..769a5fe 100644
+--- a/src/Plugin/Block/AssociationBlock.php
++++ b/src/Plugin/Block/AssociationBlock.php
+@@ -35,42 +35,42 @@ class AssociationBlock extends BlockBase implements ContainerFactoryPluginInterf
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Retrieves the bundle information for various entity types.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityBundleInfo;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The entity display repository manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
++   * @var EntityDisplayRepositoryInterface
+    */
+   protected $entityDisplayRepo;
+ 
+   /**
+    * Association menu item storage manager.
+    *
+-   * @var \Drupal\association_menu\AssociationMenuStorageInterface
++   * @var AssociationMenuStorageInterface
+    */
+   protected $menuStorage;
+ 
+   /**
+    * Association menu builder, if available.
+    *
+-   * @var \Drupal\association_menu\AssociationMenuBuilderInterface
++   * @var AssociationMenuBuilderInterface
+    */
+   protected $menuBuilder;
+ 
+@@ -90,13 +90,13 @@ class AssociationBlock extends BlockBase implements ContainerFactoryPluginInterf
+    *   The unique identifier for this plugin.
+    * @param mixed $plugin_definition
+    *   The plugin definition from discovery or a deriver.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_bundle_info
+    *   Retrieves the bundle information for various entity types.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
++   * @param EntityDisplayRepositoryInterface $entity_display_repository
+    *   The entity display repository manager.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, EntityTypeBundleInfoInterface $entity_bundle_info, EntityFieldManagerInterface $entity_field_manager, EntityDisplayRepositoryInterface $entity_display_repository) {
+@@ -145,7 +145,7 @@ class AssociationBlock extends BlockBase implements ContainerFactoryPluginInterf
+    * Having this service available indicates that menus are available to the
+    * block and unlocks the menu configurations.
+    *
+-   * @param \Drupal\association_menu\AssociationMenuStorageInterface $menu_storage
++   * @param AssociationMenuStorageInterface $menu_storage
+    *   The association menu item storage manager.
+    */
+   public function setAssociationMenuStorage(AssociationMenuStorageInterface $menu_storage) {
+@@ -158,7 +158,7 @@ class AssociationBlock extends BlockBase implements ContainerFactoryPluginInterf
+    * Having this service available indicates that menus are available to the
+    * block and unlocks the menu display.
+    *
+-   * @param \Drupal\association_menu\AssociationMenuBuilderInterface $menu_builder
++   * @param AssociationMenuBuilderInterface $menu_builder
+    *   The association menu builder to use with this block.
+    */
+   public function setAssociationMenuBuilder(AssociationMenuBuilderInterface $menu_builder) {
+@@ -364,7 +364,7 @@ class AssociationBlock extends BlockBase implements ContainerFactoryPluginInterf
+    * included in the block display, and if the menu services are available to
+    * build and display the menu.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface $association
++   * @param AssociationInterface $association
+    *   The entity association to fetch the menu for.
+    *
+    * @return array|null
+diff --git a/src/Plugin/Condition/AssociationType.php b/src/Plugin/Condition/AssociationType.php
+index 3751271..6d9760e 100644
+--- a/src/Plugin/Condition/AssociationType.php
++++ b/src/Plugin/Condition/AssociationType.php
+@@ -26,14 +26,14 @@ class AssociationType extends ConditionPluginBase implements ContainerFactoryPlu
+   /**
+    * The association negotiator.
+    *
+-   * @var \Drupal\association\AssociationNegotiatorInterface
++   * @var AssociationNegotiatorInterface
+    */
+   protected $assocNegotiator;
+ 
+   /**
+    * The entity type bundle information.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityBundleInfo;
+ 
+@@ -47,9 +47,9 @@ class AssociationType extends ConditionPluginBase implements ContainerFactoryPlu
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle information.
+-   * @param \Drupal\association\AssociationNegotiatorInterface $association_negotiator
++   * @param AssociationNegotiatorInterface $association_negotiator
+    *   The association negotiator.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeBundleInfoInterface $entity_type_bundle_info, AssociationNegotiatorInterface $association_negotiator) {
+diff --git a/src/Plugin/Derivative/AssociatedEntityLocalTaskDeriver.php b/src/Plugin/Derivative/AssociatedEntityLocalTaskDeriver.php
+index f505c40..dd38d94 100644
+--- a/src/Plugin/Derivative/AssociatedEntityLocalTaskDeriver.php
++++ b/src/Plugin/Derivative/AssociatedEntityLocalTaskDeriver.php
+@@ -23,14 +23,14 @@ class AssociatedEntityLocalTaskDeriver extends DeriverBase implements ContainerD
+   /**
+    * The route provider.
+    *
+-   * @var \Drupal\Core\Routing\RouteProviderInterface
++   * @var RouteProviderInterface
+    */
+   protected $routeProvider;
+ 
+   /**
+    * Plugin manager for entity adapters.
+    *
+-   * @var \Drupal\association\EntityAdapterManagerInterface
++   * @var EntityAdapterManagerInterface
+    */
+   protected $entityAdapterManager;
+ 
+@@ -39,9 +39,9 @@ class AssociatedEntityLocalTaskDeriver extends DeriverBase implements ContainerD
+    *
+    * @param string $base_plugin_id
+    *   The plugin ID of the deriver definition.
+-   * @param \Drupal\Core\Routing\RouteProviderInterface $route_provider
++   * @param RouteProviderInterface $route_provider
+    *   The route provider.
+-   * @param \Drupal\association\EntityAdapterManagerInterface $entity_adapter_manager
++   * @param EntityAdapterManagerInterface $entity_adapter_manager
+    *   Plugin manager for entity adapters.
+    */
+   public function __construct($base_plugin_id, RouteProviderInterface $route_provider, EntityAdapterManagerInterface $entity_adapter_manager) {
+diff --git a/src/Plugin/Derivative/RouteExistsLocalTaskDeriver.php b/src/Plugin/Derivative/RouteExistsLocalTaskDeriver.php
+index d1cf3b6..a4c4d39 100644
+--- a/src/Plugin/Derivative/RouteExistsLocalTaskDeriver.php
++++ b/src/Plugin/Derivative/RouteExistsLocalTaskDeriver.php
+@@ -26,7 +26,7 @@ class RouteExistsLocalTaskDeriver extends DeriverBase implements ContainerDerive
+   /**
+    * The route provider.
+    *
+-   * @var \Drupal\Core\Routing\RouteProviderInterface
++   * @var RouteProviderInterface
+    */
+   protected $routeProvider;
+ 
+@@ -35,7 +35,7 @@ class RouteExistsLocalTaskDeriver extends DeriverBase implements ContainerDerive
+    *
+    * @param string $base_plugin_id
+    *   The plugin ID of the deriver definition.
+-   * @param \Drupal\Core\Routing\RouteProviderInterface $route_provider
++   * @param RouteProviderInterface $route_provider
+    *   The route provider.
+    */
+   public function __construct($base_plugin_id, RouteProviderInterface $route_provider) {
+diff --git a/src/Plugin/QueueWorker/AssociatedEntityUpdater.php b/src/Plugin/QueueWorker/AssociatedEntityUpdater.php
+index c0b064f..0d2ba40 100644
+--- a/src/Plugin/QueueWorker/AssociatedEntityUpdater.php
++++ b/src/Plugin/QueueWorker/AssociatedEntityUpdater.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\association\Plugin\QueueWorker;
+ 
++use Drupal\association\EntityUpdater\EntityUpdaterInterface;
++use Drupal\association\Entity\AssociationLink;
+ use Drupal\Core\DependencyInjection\ClassResolverInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -37,21 +39,21 @@ class AssociatedEntityUpdater extends QueueWorkerBase implements ContainerFactor
+   /**
+    * The dependency injection class resolver.
+    *
+-   * @var \Drupal\Core\DependencyInjection\ClassResolverInterface
++   * @var ClassResolverInterface
+    */
+   protected $classResolver;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The queue worker factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+@@ -64,11 +66,11 @@ class AssociatedEntityUpdater extends QueueWorkerBase implements ContainerFactor
+    *   The plugin identifier.
+    * @param mixed $plugin_definition
+    *   The plugin definition.
+-   * @param \Drupal\Core\DependencyInjection\ClassResolverInterface $class_resolver
++   * @param ClassResolverInterface $class_resolver
+    *   The dependency injection class resolver.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   The queue worker factory.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, ClassResolverInterface $class_resolver, EntityTypeManagerInterface $entity_type_manager, QueueFactory $queue_factory) {
+@@ -99,7 +101,7 @@ class AssociatedEntityUpdater extends QueueWorkerBase implements ContainerFactor
+    * @param object $item
+    *   The queue item data being worked on.
+    *
+-   * @return \Drupal\association\EntityUpdater\EntityUpdaterInterface[]
++   * @return EntityUpdaterInterface[]
+    *   The list of entity updaters to use when updating associated content.
+    */
+   protected function processUpdaters($item): array {
+@@ -148,7 +150,7 @@ class AssociatedEntityUpdater extends QueueWorkerBase implements ContainerFactor
+           ->execute();
+ 
+         if ($ids) {
+-          /** @var \Drupal\association\Entity\AssociationLink */
++          /** @var AssociationLink */
+           foreach ($storage->loadMultiple($ids) as $link) {
+             foreach ($updaters as $updater) {
+               $updater->update($link->getTarget(), $link);
+diff --git a/src/Plugin/views/argument/AssociationArgument.php b/src/Plugin/views/argument/AssociationArgument.php
+index e5faebb..9d19665 100644
+--- a/src/Plugin/views/argument/AssociationArgument.php
++++ b/src/Plugin/views/argument/AssociationArgument.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Plugin\views\argument;
+ 
++use Drupal\Core\Entity\ContentEntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\views\Plugin\views\argument\NumericArgument;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -16,7 +17,7 @@ class AssociationArgument extends NumericArgument {
+   /**
+    * The storage handler.
+    *
+-   * @var \Drupal\Core\Entity\ContentEntityStorageInterface
++   * @var ContentEntityStorageInterface
+    */
+   protected $assocStorage;
+ 
+@@ -29,7 +30,7 @@ class AssociationArgument extends NumericArgument {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Plugin/views/argument_default/AssociationArgumentDefault.php b/src/Plugin/views/argument_default/AssociationArgumentDefault.php
+index 3fa35f2..434ed57 100644
+--- a/src/Plugin/views/argument_default/AssociationArgumentDefault.php
++++ b/src/Plugin/views/argument_default/AssociationArgumentDefault.php
+@@ -23,14 +23,14 @@ class AssociationArgumentDefault extends ArgumentDefaultPluginBase implements Ca
+   /**
+    * The route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * Association negotiator, for fetching the active association from the route.
+    *
+-   * @var \Drupal\association\AssociationNegotiatorInterface
++   * @var AssociationNegotiatorInterface
+    */
+   protected $assocNegotiator;
+ 
+@@ -43,9 +43,9 @@ class AssociationArgumentDefault extends ArgumentDefaultPluginBase implements Ca
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   Route match object to use when searching for an association entity.
+-   * @param \Drupal\association\AssociationNegotiatorInterface $association_negotiator
++   * @param AssociationNegotiatorInterface $association_negotiator
+    *   The association negotiator, which determines the active association from
+    *   routes or from entities.
+    */
+diff --git a/src/Routing/AssociationRouteSubscriber.php b/src/Routing/AssociationRouteSubscriber.php
+index a79a281..a04756e 100644
+--- a/src/Routing/AssociationRouteSubscriber.php
++++ b/src/Routing/AssociationRouteSubscriber.php
+@@ -19,32 +19,32 @@ class AssociationRouteSubscriber extends RouteSubscriberBase {
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity adapter manager.
+    *
+-   * @var \Drupal\association\EntityAdapterManagerInterface
++   * @var EntityAdapterManagerInterface
+    */
+   protected $entityAdapterManager;
+ 
+   /**
+    * Constructs an AssociationRouteSubscriber object.
+    *
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\association\EntityAdapterManagerInterface $entity_adapter_manager
++   * @param EntityAdapterManagerInterface $entity_adapter_manager
+    *   The entity adapter manager.
+    */
+   public function __construct(ModuleHandlerInterface $module_handler, EntityTypeManagerInterface $entity_type_manager, EntityAdapterManagerInterface $entity_adapter_manager) {
+@@ -111,7 +111,7 @@ class AssociationRouteSubscriber extends RouteSubscriberBase {
+    * The access check addition ensures that the field_ui admin is only included
+    * for association types that have pages enabled.
+    *
+-   * @param \Symfony\Component\Routing\RouteCollection $collection
++   * @param RouteCollection $collection
+    *   The routes collection to alter the routes field_ui from.
+    */
+   protected function alterFieldUiRoutes(RouteCollection $collection) {
+diff --git a/src/Utility/AssociationPathautoHelper.php b/src/Utility/AssociationPathautoHelper.php
+index 0f68b9f..b27f884 100644
+--- a/src/Utility/AssociationPathautoHelper.php
++++ b/src/Utility/AssociationPathautoHelper.php
+@@ -20,32 +20,32 @@ class AssociationPathautoHelper {
+   /**
+    * The entity type adapter plugin manager.
+    *
+-   * @var \Drupal\association\EntityAdapterManagerInterface
++   * @var EntityAdapterManagerInterface
+    */
+   protected $entityAdapterManager;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity type bundle information manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityBundleInfo;
+ 
+   /**
+    * Create a new instance of the AssociationPathautoHelper class.
+    *
+-   * @param \Drupal\association\EntityAdapterManagerInterface $entity_adapter_manager
++   * @param EntityAdapterManagerInterface $entity_adapter_manager
+    *   The entity type adapter plugin manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle information manager.
+    */
+   public function __construct(EntityAdapterManagerInterface $entity_adapter_manager, EntityTypeManagerInterface $entity_type_manager, EntityTypeBundleInfoInterface $entity_type_bundle_info) {
+@@ -61,7 +61,7 @@ class AssociationPathautoHelper {
+    *   The pathauto pattern entity being updated.
+    * @param array $form
+    *   Reference to the form elements and structures of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form build, values and input state for the form.
+    */
+   public function alterForm(PathautoPatternInterface $pattern, array &$form, FormStateInterface $form_state) {
+@@ -129,11 +129,11 @@ class AssociationPathautoHelper {
+    * @param string $entity_type_id
+    *   The entity type ID of the entity being built. Should only be
+    *   "pathauto_pattern" for this builder.
+-   * @param \Drupal\Core\Entity\EntityInterface $pattern
++   * @param EntityInterface $pattern
+    *   The pathauto_pattern entity being updated.
+    * @param array $form
+    *   Reference to the form elements and structures of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form build, values and input state for the form.
+    */
+   public function buildEntity($entity_type_id, EntityInterface $pattern, array &$form, FormStateInterface $form_state) {
+diff --git a/src/Utility/DeleteAssociationBatchOp.php b/src/Utility/DeleteAssociationBatchOp.php
+index a82daf2..964d55d 100644
+--- a/src/Utility/DeleteAssociationBatchOp.php
++++ b/src/Utility/DeleteAssociationBatchOp.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\association\Utility;
+ 
++use Drupal\association\Entity\AssociationInterface;
+ /**
+  * Batch operations for deleting associations and linked entities.
+  */
+@@ -12,7 +13,7 @@ class DeleteAssociationBatchOp {
+   /**
+    * Deleted all entities linked to an entity association of a single type.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface[] $associations
++   * @param AssociationInterface[] $associations
+    *   Array of association entity IDs to delete the linked entities for.
+    * @param string $entity_type
+    *   The type of entity to delete.
+@@ -95,7 +96,7 @@ class DeleteAssociationBatchOp {
+    * operation will not clear any entities as this will be run after all the
+    * remove by entity type operations are run.
+    *
+-   * @param \Drupal\association\Entity\AssociationInterface[] $associations
++   * @param AssociationInterface[] $associations
+    *   Array of association entity IDs to delete the linked entities for.
+    * @param array $context
+    *   Reference to batch context. This maintains the current progress and
+diff --git a/tests/src/Functional/AssociatedEntityFormTest.php b/tests/src/Functional/AssociatedEntityFormTest.php
+index 9e7cb02..cc7bfd4 100644
+--- a/tests/src/Functional/AssociatedEntityFormTest.php
++++ b/tests/src/Functional/AssociatedEntityFormTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\association\Functional;
+ 
++use Drupal\association\Entity\AssociationTypeInterface;
++use Drupal\association\Entity\AssociationInterface;
+ use Drupal\Core\Url;
+ use Drupal\Tests\association\Traits\AssociationCreationTrait;
+ use Drupal\Tests\BrowserTestBase;
+@@ -35,14 +37,14 @@ class AssociatedEntityFormTest extends BrowserTestBase {
+   /**
+    * The association type with a basic entity list for testing.
+    *
+-   * @var \Drupal\association\Entity\AssociationTypeInterface
++   * @var AssociationTypeInterface
+    */
+   protected $assocType;
+ 
+   /**
+    * The association entity to associate nodes to.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface
++   * @var AssociationInterface
+    */
+   protected $association;
+ 
+diff --git a/tests/src/Kernel/AssociatedEntityTestBase.php b/tests/src/Kernel/AssociatedEntityTestBase.php
+index 3e5826f..021c22f 100644
+--- a/tests/src/Kernel/AssociatedEntityTestBase.php
++++ b/tests/src/Kernel/AssociatedEntityTestBase.php
+@@ -78,7 +78,7 @@ abstract class AssociatedEntityTestBase extends KernelTestBase {
+    * @param bool $should_save
+    *   Should the newly created node type entity be saved before being returned.
+    *
+-   * @return \Drupal\node\NodeTypeInterface
++   * @return NodeTypeInterface
+    *   The created node type entity with the values and settings applied from
+    *   the $values parameter.
+    */
+@@ -118,7 +118,7 @@ abstract class AssociatedEntityTestBase extends KernelTestBase {
+    * @param bool $should_save
+    *   Should the newly created node entity be saved before being returned.
+    *
+-   * @return \Drupal\node\NodeInterface
++   * @return NodeInterface
+    *   The created node entity with the values from the $value parameter.
+    */
+   protected function createNode(array $values = [], $should_save = TRUE): NodeInterface {
+diff --git a/tests/src/Kernel/AssociationConditionTest.php b/tests/src/Kernel/AssociationConditionTest.php
+index eb58473..6726ecc 100644
+--- a/tests/src/Kernel/AssociationConditionTest.php
++++ b/tests/src/Kernel/AssociationConditionTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\association\Kernel;
+ 
++use Drupal\association\Entity\AssociationInterface;
+ /**
+  * Test the association type condition plugin.
+  *
+@@ -12,7 +13,7 @@ class AssociationConditionTest extends AssociatedEntityTestBase {
+   /**
+    * An array of pre-built association instances for use with tests.
+    *
+-   * @var \Drupal\association\Entity\AssociationInterface[]
++   * @var AssociationInterface[]
+    */
+   protected $associations;
+ 
+diff --git a/tests/src/Kernel/AssociationPageTest.php b/tests/src/Kernel/AssociationPageTest.php
+index 40ba7a7..84ca312 100644
+--- a/tests/src/Kernel/AssociationPageTest.php
++++ b/tests/src/Kernel/AssociationPageTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\association\Kernel;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\Tests\association\Traits\AssociationCreationTrait;
+ use Drupal\Tests\user\Traits\UserCreationTrait;
+@@ -50,7 +51,7 @@ class AssociationPageTest extends KernelTestBase {
+    * deleted and has page management operations.
+    */
+   public function testTypeWithPage(): void {
+-    /** @var \Drupal\Core\Entity\EntityTypeManagerInterface */
++    /** @var EntityTypeManagerInterface */
+     $entityTypeManager = $this->container->get('entity_type.manager');
+ 
+     $assocType = $this->createAssociationType([
+@@ -96,7 +97,7 @@ class AssociationPageTest extends KernelTestBase {
+    * and should not have any page management related operations.
+    */
+   public function testTypeWithoutPage(): void {
+-    /** @var \Drupal\Core\Entity\EntityTypeManagerInterface */
++    /** @var EntityTypeManagerInterface */
+     $entityTypeManager = $this->container->get('entity_type.manager');
+ 
+     $assocType = $this->createAssociationType([
+diff --git a/tests/src/Kernel/EntityAdapterTest.php b/tests/src/Kernel/EntityAdapterTest.php
+index 586f15e..7f3e51b 100644
+--- a/tests/src/Kernel/EntityAdapterTest.php
++++ b/tests/src/Kernel/EntityAdapterTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\association\Kernel;
+ 
++use Drupal\association\EntityAdapterManagerInterface;
++use Drupal\Core\Entity\EntityFormInterface;
+ use Drupal\association\Adapter\EntityAdapterInterface;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -27,11 +29,11 @@ class EntityAdapterTest extends AssociatedEntityTestBase {
+    *   Either the machine name of the entity type to fetch the adapter for,
+    *   or an instance of an entity to match the adapter to.
+    *
+-   * @return \Drupal\association\Adapter\EntityAdapterInterface
++   * @return EntityAdapterInterface
+    *   The entity adapter of the entity type requested.
+    */
+   protected function getEntityAdapter($entity_type_id): EntityAdapterInterface {
+-    /** @var \Drupal\association\EntityAdapterManagerInterface */
++    /** @var EntityAdapterManagerInterface */
+     $adapterManager = $this->container->get('plugin.manager.association.entity_adapter');
+ 
+     return $entity_type_id instanceof EntityInterface
+@@ -73,7 +75,7 @@ class EntityAdapterTest extends AssociatedEntityTestBase {
+     $createState = new FormState();
+     $adapter->getEntityForm($node, 'create', $createState);
+ 
+-    /** @var \Drupal\Core\Entity\EntityFormInterface */
++    /** @var EntityFormInterface */
+     $form = $createState->getFormObject();
+     $expectedClass = $nodeTypeDef->getFormClass('create') ?? $nodeTypeDef->getFormClass('default');
+ 
+diff --git a/tests/src/Traits/AssociationCreationTrait.php b/tests/src/Traits/AssociationCreationTrait.php
+index 76ba021..6cc234a 100644
+--- a/tests/src/Traits/AssociationCreationTrait.php
++++ b/tests/src/Traits/AssociationCreationTrait.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\association\Traits;
+ 
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\user\UserInterface;
+ use Drupal\association\Entity\AssociationInterface;
+ use Drupal\association\Entity\AssociationTypeInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -14,14 +16,14 @@ trait AssociationCreationTrait {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Get the entity type manager.
+    *
+-   * @return \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @return EntityTypeManagerInterface
+    *   The entity type manager.
+    */
+   protected function getEntityTypeManager(): EntityTypeManagerInterface {
+@@ -48,10 +50,10 @@ trait AssociationCreationTrait {
+    * @param bool $should_save
+    *   Should the new entity be saved? Default is to save the entity.
+    *
+-   * @return \Drupal\association\Entity\AssociationTypeInterface
++   * @return AssociationTypeInterface
+    *   The association_type entity created from the values.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   Throw an EntityStorageException when an association type with the same
+    *   ID already exists.
+    */
+@@ -96,7 +98,7 @@ trait AssociationCreationTrait {
+    * @param bool $should_save
+    *   Should the association entity be saved? By default the entity is saved.
+    *
+-   * @return \Drupal\association\Entity\AssociationInterface
++   * @return AssociationInterface
+    *   An association entity created from the supplied values.
+    */
+   protected function createAssociation(array $values = [], $should_save = TRUE): AssociationInterface {
+@@ -111,7 +113,7 @@ trait AssociationCreationTrait {
+         $values['uid'] = $account->id();
+       }
+       elseif (method_exists($this, 'setUpCurrentUser')) {
+-        /** @var \Drupal\user\UserInterface */
++        /** @var UserInterface */
+         $account = $this->setUpCurrentUser();
+         $values['uid'] = $account->id();
+       }

@@ -1,0 +1,375 @@
+diff --git a/libraries_delay_load.module b/libraries_delay_load.module
+index 6f4c7a9..c891f9e 100644
+--- a/libraries_delay_load.module
++++ b/libraries_delay_load.module
+@@ -54,7 +54,7 @@ function libraries_delay_load_page_attachments(array &$page) {
+ function libraries_delay_load_js_alter(&$javascript, AttachedAssetsInterface $assets) {
+   // Only run if we have the delayer library added.
+   // The library is currently only attached to pages.
+-  $delayerJsFile = drupal_get_path('module', 'libraries_delay_load') . '/js/delayer.js';
++  $delayerJsFile = \Drupal::service('extension.list.module')->getPath('libraries_delay_load') . '/js/delayer.js';
+   if (isset($javascript[$delayerJsFile])) {
+     \Drupal::service('libraries_delay_load.delayer.js')->processAssetArray($javascript);
+   }
+diff --git a/src/Asset/JsDelayer.php b/src/Asset/JsDelayer.php
+index 03ef727..82e16a2 100644
+--- a/src/Asset/JsDelayer.php
++++ b/src/Asset/JsDelayer.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\libraries_delay_load\Asset;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Asset\JsOptimizer;
+ use Drupal\Component\Datetime\Time;
+ use Drupal\libraries_delay_load\Event\StrategiesOrderAlter;
+ use Drupal\Component\Utility\Crypt;
+@@ -19,21 +21,21 @@ class JsDelayer {
+   /**
+    * A config object for the libraries_delay_load configuration.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * A JS asset optimizer.
+    *
+-   * @var \Drupal\Core\Asset\JsOptimizer
++   * @var JsOptimizer
+    */
+   protected $optimizer;
+ 
+   /**
+    * The file system service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+@@ -47,31 +49,31 @@ class JsDelayer {
+   /**
+    * The event dispatcher service.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * System time service.
+    *
+-   * @var \Drupal\Component\Datetime\Time
++   * @var Time
+    */
+   protected $time;
+ 
+   /**
+    * Constructs the JsDelayer object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   A config factory for retrieving required config objects.
+-   * @param \Drupal\Core\Asset\AssetOptimizerInterface $optimizer
++   * @param AssetOptimizerInterface $optimizer
+    *   The optimizer for a single JS asset.
+    * @param \Drupal\Core\Asset\FileSystemInterface $file_system
+    *   The file system to write and delete files.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type sevice.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   The event dispatcher service.
+-   * @param \Drupal\Component\Datetime\Time $time
++   * @param Time $time
+    *    System time service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, AssetOptimizerInterface $optimizer, FileSystemInterface $file_system, EntityTypeManagerInterface $entity_type_manager, EventDispatcherInterface $event_dispatcher, Time $time) {
+@@ -110,7 +112,7 @@ class JsDelayer {
+ 
+     if (!$strategy) {
+       // Remove ourselves, as not useful on this page.
+-      $delayerJsFile = drupal_get_path('module', 'libraries_delay_load') . '/js/delayer.js';
++      $delayerJsFile = \Drupal::service('extension.list.module')->getPath('libraries_delay_load') . '/js/delayer.js';
+       unset($javascript[$delayerJsFile]);
+       return;
+     }
+@@ -148,7 +150,7 @@ class JsDelayer {
+     $uri = $this->writeFile($fileContent, $cid);
+ 
+     // Copy the js settings from libraries_delay_load.
+-    $delayerJsFile = drupal_get_path('module', 'libraries_delay_load') . '/js/delayer.js';
++    $delayerJsFile = \Drupal::service('extension.list.module')->getPath('libraries_delay_load') . '/js/delayer.js';
+     $settingsFile = $javascript[$delayerJsFile];
+     $settingsFile['data'] = $uri;
+     $javascript['delayerSettings'] = $settingsFile;
+@@ -231,7 +233,7 @@ class JsDelayer {
+     $event = new StrategiesOrderAlter($strategies);
+ 
+     // Get the event_dispatcher service and dispatch the event.
+-    $this->eventDispatcher->dispatch(StrategiesOrderAlter::EVENT_NAME, $event);
++    $this->eventDispatcher->dispatch($event, StrategiesOrderAlter::EVENT_NAME);
+ 
+     // Get updated strategies list.
+     $strategies = $event->getStrategies();
+@@ -306,7 +308,7 @@ class JsDelayer {
+       $uri = $this->writeFile($data, $cid);
+ 
+       // Only workaround to get the URL from an URI with public://.
+-      $url = file_create_url($uri);
++      $url = \Drupal::service('file_url_generator')->generateAbsoluteString($uri);
+ 
+       // Sets the group at the right position.
+       $group[$position] = ['type' => 'external', 'data' => $url];
+diff --git a/src/Controller/JsDelayStrategyListBuilder.php b/src/Controller/JsDelayStrategyListBuilder.php
+index cb6e2eb..4976017 100644
+--- a/src/Controller/JsDelayStrategyListBuilder.php
++++ b/src/Controller/JsDelayStrategyListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\libraries_delay_load\Controller;
+ 
++use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Config\Entity\DraggableListBuilder;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -37,7 +38,7 @@ class JsDelayStrategyListBuilder extends DraggableListBuilder {
+   /**
+    * Builds a row for an entity in the entity listing.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity for which to build the row.
+    *
+    * @return array
+@@ -80,7 +81,7 @@ class JsDelayStrategyListBuilder extends DraggableListBuilder {
+    * {@inheritdoc}
+    */
+   public function getDefaultOperations(EntityInterface $entity) {
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityInterface $entity */
++    /** @var ConfigEntityInterface $entity */
+     $operations = parent::getDefaultOperations($entity);
+ 
+     if (!$entity->hasLinkTemplate('duplicate-form')) {
+diff --git a/src/Event/StrategiesOrderAlter.php b/src/Event/StrategiesOrderAlter.php
+index a5f49a6..a96c63c 100644
+--- a/src/Event/StrategiesOrderAlter.php
++++ b/src/Event/StrategiesOrderAlter.php
+@@ -2,7 +2,7 @@
+ 
+ namespace Drupal\libraries_delay_load\Event;
+ 
+-use Symfony\Component\EventDispatcher\Event;
++use Symfony\Contracts\EventDispatcher\Event;
+ 
+ /**
+  * Event that is fired after we retrieve the collection of available strategies.
+diff --git a/src/Form/JsDelayStrategyDeleteForm.php b/src/Form/JsDelayStrategyDeleteForm.php
+index beba364..1a0041a 100644
+--- a/src/Form/JsDelayStrategyDeleteForm.php
++++ b/src/Form/JsDelayStrategyDeleteForm.php
+@@ -49,7 +49,7 @@ class JsDelayStrategyDeleteForm extends EntityConfirmFormBase {
+    * delete forms, this is typically the route that points at the list
+    * controller.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   The URL to go to if the user cancels the deletion.
+    */
+   public function getCancelUrl() {
+@@ -61,7 +61,7 @@ class JsDelayStrategyDeleteForm extends EntityConfirmFormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+diff --git a/src/Form/JsDelayStrategyForm.php b/src/Form/JsDelayStrategyForm.php
+index acbf952..7755fa4 100644
+--- a/src/Form/JsDelayStrategyForm.php
++++ b/src/Form/JsDelayStrategyForm.php
+@@ -16,14 +16,14 @@ class JsDelayStrategyForm extends EntityForm {
+   /**
+    * The entity storage factory for querying.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $entityStorage;
+ 
+   /**
+    * Construct the JsDelayStrategyForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   An entity query factory for the entity type.
+    */
+   public function __construct(EntityStorageInterface $entity_storage) {
+@@ -241,7 +241,7 @@ class JsDelayStrategyForm extends EntityForm {
+    *   The entity ID.
+    * @param array $element
+    *   The form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return bool
+@@ -264,7 +264,7 @@ class JsDelayStrategyForm extends EntityForm {
+    *
+    * @param array $form
+    *   From render array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Current state of form.
+    *
+    * @return array
+@@ -279,7 +279,7 @@ class JsDelayStrategyForm extends EntityForm {
+    *
+    * @param array $form
+    *   From render array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Current state of form.
+    *
+    * @return array
+@@ -396,7 +396,7 @@ class JsDelayStrategyForm extends EntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   An associative array containing the current state of the form.
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+diff --git a/tests/modules/libraries_delay_load_strategies_test/src/EventSubscriber/StrategiesOrderTestSubscriber.php b/tests/modules/libraries_delay_load_strategies_test/src/EventSubscriber/StrategiesOrderTestSubscriber.php
+index a34a519..1c57cf0 100644
+--- a/tests/modules/libraries_delay_load_strategies_test/src/EventSubscriber/StrategiesOrderTestSubscriber.php
++++ b/tests/modules/libraries_delay_load_strategies_test/src/EventSubscriber/StrategiesOrderTestSubscriber.php
+@@ -27,7 +27,7 @@ class StrategiesOrderTestSubscriber implements EventSubscriberInterface {
+   /**
+    * Set the last strategy as the one to use.
+    *
+-   * @param \Drupal\libraries_delay_load\Event\StrategiesOrderAlter $event
++   * @param StrategiesOrderAlter $event
+    *   The event.
+    */
+   public function updateOrder(StrategiesOrderAlter $event) {
+diff --git a/tests/src/Kernel/JsDelayerStrategiesAlterTest.php b/tests/src/Kernel/JsDelayerStrategiesAlterTest.php
+index f7da2d1..75a02d7 100644
+--- a/tests/src/Kernel/JsDelayerStrategiesAlterTest.php
++++ b/tests/src/Kernel/JsDelayerStrategiesAlterTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\libraries_delay_load\Kernel;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\KernelTests\KernelTestBase;
+ 
+ /**
+@@ -21,7 +22,7 @@ class JsDelayerStrategiesAlterTest extends KernelTestBase {
+   /**
+    * The entity storage for JS Delay Load config entities.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $jsDelayLoadStorage;
+ 
+@@ -44,7 +45,7 @@ class JsDelayerStrategiesAlterTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installConfig(['libraries_delay_load']);
+diff --git a/tests/src/Kernel/JsDelayerTest.php b/tests/src/Kernel/JsDelayerTest.php
+index e2f0444..a93aa46 100644
+--- a/tests/src/Kernel/JsDelayerTest.php
++++ b/tests/src/Kernel/JsDelayerTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\libraries_delay_load\Kernel;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Component\Utility\Crypt;
+ use Drupal\KernelTests\KernelTestBase;
+ 
+@@ -22,14 +24,14 @@ class JsDelayerTest extends KernelTestBase {
+   /**
+    * The entity storage for JS Delay Load config entities.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $jsDelayLoadStorage;
+ 
+   /**
+    * The file system interface.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+@@ -52,7 +54,7 @@ class JsDelayerTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installConfig(['libraries_delay_load']);
+@@ -62,7 +64,7 @@ class JsDelayerTest extends KernelTestBase {
+     $this->jsDelayLoadStorage = $this->container->get('entity_type.manager')->getStorage('js_delay_strategy');
+     $this->fileSystem = $this->container->get('file_system');
+ 
+-    $this->jsPath = drupal_get_path('module', 'libraries_delay_load_javascript_test') . '/js/';
++    $this->jsPath = \Drupal::service('extension.list.module')->getPath('libraries_delay_load_javascript_test') . '/js/';
+   }
+ 
+   /**
+@@ -100,7 +102,7 @@ class JsDelayerTest extends KernelTestBase {
+     $randomJs = $this->jsPath . 'js_random.js';
+     $this->assertArrayHasKey($randomJs, $resultJavascript);
+     $this->assertArrayHasKey($this->jsPath . 'js6.js', $resultJavascript);
+-    $selfJs = drupal_get_path('module', 'libraries_delay_load') . '/js/delayer.js';
++    $selfJs = \Drupal::service('extension.list.module')->getPath('libraries_delay_load') . '/js/delayer.js';
+     $this->assertArrayHasKey($selfJs, $resultJavascript);
+ 
+     // Check that a file containing the delayerSettings has been added.
+@@ -178,7 +180,7 @@ class JsDelayerTest extends KernelTestBase {
+     $randomJs = $this->jsPath . 'js_random.js';
+     $this->assertArrayHasKey($randomJs, $resultJavascript);
+     $this->assertArrayHasKey($this->jsPath . 'js6.js', $resultJavascript);
+-    $selfJs = drupal_get_path('module', 'libraries_delay_load') . '/js/delayer.js';
++    $selfJs = \Drupal::service('extension.list.module')->getPath('libraries_delay_load') . '/js/delayer.js';
+     $this->assertArrayHasKey($selfJs, $resultJavascript);
+ 
+     // Check that a file containing the delayerSettings has been added.
+@@ -259,7 +261,7 @@ class JsDelayerTest extends KernelTestBase {
+     $this->jsDelayer->processAssetArray($resultJavascript);
+ 
+     // Remove delayer.js, as should have been removed by the function.
+-    $delayerJsFile = drupal_get_path('module', 'libraries_delay_load') . '/js/delayer.js';
++    $delayerJsFile = \Drupal::service('extension.list.module')->getPath('libraries_delay_load') . '/js/delayer.js';
+     unset($inputJavascript[$delayerJsFile]);
+ 
+     $this->assertEquals($resultJavascript, $inputJavascript);
+@@ -308,7 +310,7 @@ class JsDelayerTest extends KernelTestBase {
+     $inputJavascript[$externalJs2] = ['type' => 'external', 'data' => $externalJs2];
+ 
+     // We need to add our javascript.
+-    $selfJs = drupal_get_path('module', 'libraries_delay_load') . '/js/delayer.js';
++    $selfJs = \Drupal::service('extension.list.module')->getPath('libraries_delay_load') . '/js/delayer.js';
+     $inputJavascript[$selfJs] = ['type' => 'file', 'data' => $selfJs];
+ 
+     return $inputJavascript;

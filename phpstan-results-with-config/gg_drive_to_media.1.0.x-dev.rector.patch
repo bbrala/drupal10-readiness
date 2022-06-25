@@ -1,0 +1,234 @@
+diff --git a/src/Controller/GgDriveToMediaController.php b/src/Controller/GgDriveToMediaController.php
+index ecbd9b8..bf38bae 100644
+--- a/src/Controller/GgDriveToMediaController.php
++++ b/src/Controller/GgDriveToMediaController.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\gg_drive_to_media\Controller;
+ 
++use Drupal\Core\Routing\RouteMatchInterface;
++use Symfony\Component\HttpFoundation\Request;
++use Drupal\gg_drive_to_media\GoogleDriveFilesToMediaManager;
++use Drupal\google_api_client\Entity\GoogleApiClient;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Link;
+ use Drupal\google_api_client\Service\GoogleApiClientService;
+@@ -17,40 +21,40 @@ use Symfony\Component\VarDumper\VarDumper;
+ class GgDriveToMediaController extends ControllerBase {
+ 
+   /**
+-   * @var \Drupal\google_api_client\Service\GoogleApiClientService
++   * @var GoogleApiClientService
+    */
+   protected $googleApiClientService;
+ 
+   /**
+-   * @var \Google\Service\Drive
++   * @var Drive
+    */
+   protected $googleDriveService;
+ 
+   /**
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $currentRequest;
+ 
+   /**
+    *
+-   * @var \Drupal\gg_drive_to_media\GoogleDriveFilesToMediaManager
++   * @var GoogleDriveFilesToMediaManager
+    */
+   protected $ggDriveToMedia;
+ 
+   /**
+-   * @param \Drupal\google_api_client\Service\GoogleApiClientService $googleApiClientService
++   * @param GoogleApiClientService $googleApiClientService
+    */
+   public function __construct(GoogleApiClientService $googleApiClientService) {
+     $this->googleApiClientService = $googleApiClientService;
+     try {
+       $config = $this->config('gg_drive_to_media.settings');
+       $google_api_client_id = $config->get('google_api_client_id');
+-      /** @var \Drupal\google_api_client\Entity\GoogleApiClient[] $google_api_clients */
++      /** @var GoogleApiClient[] $google_api_clients */
+       $google_api_clients = $this->entityTypeManager()
+         ->getStorage('google_api_client')
+         ->loadByProperties([
+diff --git a/src/Form/MigrateDriveFileToMediaForm.php b/src/Form/MigrateDriveFileToMediaForm.php
+index 7ece5e3..8804db4 100644
+--- a/src/Form/MigrateDriveFileToMediaForm.php
++++ b/src/Form/MigrateDriveFileToMediaForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gg_drive_to_media\Form;
+ 
++use Drupal\gg_drive_to_media\GoogleDriveFilesToMediaManager;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -13,7 +14,7 @@ use Symfony\Component\VarDumper\VarDumper;
+ class MigrateDriveFileToMediaForm extends FormBase {
+ 
+   /**
+-   * @var \Drupal\gg_drive_to_media\GoogleDriveFilesToMediaManager
++   * @var GoogleDriveFilesToMediaManager
+    */
+   protected $ggDriveToMedia;
+ 
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index aec236b..14facd4 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -19,16 +19,16 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a SiteInformationForm object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entityTypeManager) {
+@@ -67,7 +67,7 @@ class SettingsForm extends ConfigFormBase {
+   public function buildForm(array $form, FormStateInterface $form_state) {
+     $config = $this->config('gg_drive_to_media.settings');
+     if ($google_api_client_id = $config->get('google_api_client_id')) {
+-      /** @var \Drupal\google_api_client\Entity\GoogleApiClient[] $google_api_clients */
++      /** @var GoogleApiClient[] $google_api_clients */
+       $google_api_clients = $this->entityTypeManager
+         ->getStorage('google_api_client')
+         ->loadByProperties([
+@@ -111,7 +111,7 @@ class SettingsForm extends ConfigFormBase {
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $values = $form_state->getValues();
+     if ($values['google_api_client_id']) {
+-      /** @var \Drupal\google_api_client\Entity\GoogleApiClient $google_api_client */
++      /** @var GoogleApiClient $google_api_client */
+       $google_api_client = $this->entityTypeManager
+         ->getStorage('google_api_client')
+         ->loadByProperties([
+diff --git a/src/GoogleDriveFilesToMediaManager.php b/src/GoogleDriveFilesToMediaManager.php
+index 57ab1e3..638ecf7 100644
+--- a/src/GoogleDriveFilesToMediaManager.php
++++ b/src/GoogleDriveFilesToMediaManager.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gg_drive_to_media;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\google_api_client\Entity\GoogleApiClient;
++use GuzzleHttp\Psr7\Response;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Link;
+@@ -24,55 +27,55 @@ class GoogleDriveFilesToMediaManager {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The 'gg_drive_to_media.settings' config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The current route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * The google_api_client.client service.
+    *
+-   * @var \Drupal\google_api_client\Service\GoogleApiClientService
++   * @var GoogleApiClientService
+    */
+   protected $googleApiClientService;
+ 
+   /**
+-   * @var \Google\Service\Drive
++   * @var Drive
+    */
+   protected $googleDriveService;
+ 
+   /**
+    * Constructs a GoogleDriveFilesToMediaManager object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The current route match.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\google_api_client\Service\GoogleApiClientService $google_api_client_service
++   * @param GoogleApiClientService $google_api_client_service
+    *   The google_api_client.client service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, ConfigFactoryInterface $config_factory, RouteMatchInterface $route_match, RequestStack $request_stack, GoogleApiClientService $google_api_client_service) {
+@@ -86,7 +89,7 @@ class GoogleDriveFilesToMediaManager {
+ 
+   protected function setGoogleDriveService() {
+     $google_api_client_id = $this->config->get('google_api_client_id');
+-    /** @var \Drupal\google_api_client\Entity\GoogleApiClient[] $google_api_clients */
++    /** @var GoogleApiClient[] $google_api_clients */
+     $google_api_clients = $this->entityTypeManager
+       ->getStorage('google_api_client')
+       ->loadByProperties([
+@@ -176,7 +179,7 @@ class GoogleDriveFilesToMediaManager {
+ 
+   public function searchTermByFolderID($dir_id) {
+     $term_storage = $this->entityTypeManager->getStorage('taxonomy_term');
+-    /** @var \Drupal\taxonomy\Entity\Term[] $terms */
++    /** @var Term[] $terms */
+     $terms = $term_storage->loadByProperties([
+       'field_google_folder_id' => $dir_id,
+     ]);
+@@ -220,7 +223,7 @@ class GoogleDriveFilesToMediaManager {
+ 
+     foreach ($files as $file) {
+       if (preg_match($pattern, $file->getName()) && !$this->checkMediaExist($file)) {
+-        /** @var \GuzzleHttp\Psr7\Response $file_response */
++        /** @var Response $file_response */
+         $file_response = $this->googleDriveService->files->get($file->getId(), ['alt' => 'media']);
+         $file_content = $file_response->getBody();
+         file_put_contents($this->getFolderDestination($dir_id) . '/' . $file->getName(), $file_content);

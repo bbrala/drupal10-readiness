@@ -1,0 +1,822 @@
+diff --git a/avatars.install b/avatars.install
+index 47e7cea..aba57da 100644
+--- a/avatars.install
++++ b/avatars.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
+ /**
+ * @file
+ * Install, update and uninstall functions for the AK module.
+@@ -22,7 +23,7 @@ function avatars_install() {
+     'alt_field_required' => '',
+   ];
+ 
+-  /** @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface $displayRepo */
++  /** @var EntityDisplayRepositoryInterface $displayRepo */
+   $displayRepo = \Drupal::service('entity_display.repository');
+ 
+   // Shows avatar generator setting
+@@ -144,7 +145,7 @@ function avatars_update_8002() {
+  * Remove allowed_values_function.
+  */
+ function avatars_update_8003() {
+-  /** @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface $displayRepo */
++  /** @var EntityDisplayRepositoryInterface $displayRepo */
+   $displayRepo = \Drupal::service('entity_display.repository');
+   $displayRepo->getFormDisplay('user', 'user', 'default')
+     ->setComponent(AK_FIELD_AVATAR_GENERATOR, [
+diff --git a/avatars.module b/avatars.module
+index 834364d..163dc42 100644
+--- a/avatars.module
++++ b/avatars.module
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\avatars\AvatarGeneratorStorageInterface;
++use Drupal\Component\Datetime\TimeInterface;
++use Drupal\avatars\AvatarManager;
++use Drupal\field\Entity\FieldConfig;
+ use Drupal\avatars\Entity\AvatarGenerator;
+ use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -38,10 +42,10 @@ const AK_FIELD_AVATAR_GENERATOR = 'avatars_avatar_generator';
+ function avatars_cron() {
+   $intervals = \Drupal::config('avatars.settings')->get('refresh_interval');
+   $avatars_preview_storage = \Drupal::entityTypeManager()->getStorage('avatars_preview');
+-  /** @var \Drupal\avatars\AvatarGeneratorStorageInterface $avatars_generator_storage */
++  /** @var AvatarGeneratorStorageInterface $avatars_generator_storage */
+   $avatars_generator_storage = \Drupal::entityTypeManager()->getStorage('avatar_generator');
+   $avatars_generators = $avatars_generator_storage->getEnabledAvatarGenerators();
+-  /** @var \Drupal\Component\Datetime\TimeInterface $timeService */
++  /** @var TimeInterface $timeService */
+   $timeService = \Drupal::time();
+   $now = $timeService->getRequestTime();
+ 
+@@ -77,9 +81,9 @@ function avatars_cron() {
+  * Implements hook_entity_field_access().
+  */
+ function avatars_entity_field_access($operation, FieldDefinitionInterface $field_definition, AccountInterface $account, FieldItemListInterface $items = NULL) {
+-  /** @var \Drupal\avatars\AvatarManager $avatar_manager */
++  /** @var AvatarManager $avatar_manager */
+   $avatar_manager = \Drupal::service('avatars.avatar_manager');
+-  /** @var \Drupal\field\Entity\FieldConfig $field_definition */
++  /** @var FieldConfig $field_definition */
+   if ($field_definition->getName() == AK_FIELD_PICTURE_ACTIVE && $operation == 'view' && $field_definition->getTargetEntityTypeId() == 'user') {
+     if ($items) {
+       $user = $items->getEntity();
+@@ -94,12 +98,11 @@ function avatars_entity_field_access($operation, FieldDefinitionInterface $field
+  */
+ function avatars_entity_presave(EntityInterface $entity) {
+   if ($entity instanceof UserInterface && !$entity->isNew()) {
+-    /** @var \Drupal\avatars\AvatarManager $avatar_manager */
++    /** @var AvatarManager $avatar_manager */
+     $avatar_manager = \Drupal::service('avatars.avatar_manager');
+     $avatar_manager->invalidateUserAvatar($entity);
+     // @todo: only notify if value of AK_FIELD_PICTURE_USER changed
+-
+-    /** @var \Drupal\avatars\AvatarGeneratorStorageInterface $avatars_generator_storage */
++    /** @var AvatarGeneratorStorageInterface $avatars_generator_storage */
+     $avatars_generator_storage = \Drupal::entityTypeManager()->getStorage('avatar_generator');
+     foreach ($avatars_generator_storage->getEnabledAvatarGenerators() as $avatar_generator) {
+       if ($avatar_generator->getPlugin()->getPluginId() == 'user') {
+@@ -119,9 +122,9 @@ function avatars_entity_update(EntityInterface $entity) {
+   if ($entity instanceof UserInterface && isset($entity->original)) {
+     $original = $entity->original;
+     if ($original->getEmail() != $entity->getEmail()) {
+-      /** @var \Drupal\avatars\AvatarManager $avatar_manager */
++      /** @var AvatarManager $avatar_manager */
+       $avatar_manager = \Drupal::service('avatars.avatar_manager');
+-      /** @var \Drupal\avatars\AvatarGeneratorStorageInterface $avatars_generator_storage */
++      /** @var AvatarGeneratorStorageInterface $avatars_generator_storage */
+       $avatars_generator_storage = \Drupal::entityTypeManager()->getStorage('avatar_generator');
+       foreach ($avatars_generator_storage->getEnabledAvatarGenerators() as $avatar_generator) {
+         $definition = $avatar_generator->getPlugin()->getPluginDefinition();
+@@ -141,7 +144,7 @@ function avatars_entity_update(EntityInterface $entity) {
+  */
+ function avatars_file_storage_load(array $entities) {
+   /** @var $entities \Drupal\file\FileInterface[] */
+-  /** @var \Drupal\avatars\AvatarManager $avatar_manager */
++  /** @var AvatarManager $avatar_manager */
+   $avatar_manager = \Drupal::service('avatars.avatar_manager');
+ 
+   foreach ($entities as $file) {
+@@ -192,7 +195,7 @@ function template_preprocess_avatar_preview_radio(array &$variables) {
+  */
+ function avatars_callback_avatar_generators(FieldStorageDefinitionInterface $definition, FieldableEntityInterface $entity = NULL, &$cacheable = TRUE) {
+   // @todo remove this, add update hook for existing field form displays.
+-  /** @var \Drupal\avatars\AvatarGeneratorStorageInterface $avatars_generator_storage */
++  /** @var AvatarGeneratorStorageInterface $avatars_generator_storage */
+   $avatars_generator_storage = \Drupal::entityTypeManager()->getStorage('avatar_generator');
+ 
+   $options = ['_none' => t('Site default')];
+diff --git a/avatars_gravatar/src/GravatarInterface.php b/avatars_gravatar/src/GravatarInterface.php
+index eb3ba4c..9c0651a 100644
+--- a/avatars_gravatar/src/GravatarInterface.php
++++ b/avatars_gravatar/src/GravatarInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\avatars_gravatar;
+ 
++use Drupal\avatars\Exception\AvatarException;
+ /**
+  * Provides an interface for the Gravatar.com API.
+  */
+@@ -67,7 +68,7 @@ interface GravatarInterface {
+    * @param string|null $type
+    *   An avatar type.
+    *
+-   * @throws \Drupal\avatars\Exception\AvatarException
++   * @throws AvatarException
+    *   Thrown if the passed type is invalid.
+    *
+    * @return \Drupal\avatars_gravatar\GravatarInterface
+@@ -110,7 +111,7 @@ interface GravatarInterface {
+    * @param string|null $rating
+    *   The rating to set, or NULL if no rating.
+    *
+-   * @throws \Drupal\avatars\Exception\AvatarException
++   * @throws AvatarException
+    *   Thrown if the rating is invalid.
+    *
+    * @return \Drupal\avatars_gravatar\GravatarInterface
+diff --git a/src/Annotation/AvatarGenerator.php b/src/Annotation/AvatarGenerator.php
+index 1cb519a..77b3ecc 100644
+--- a/src/Annotation/AvatarGenerator.php
++++ b/src/Annotation/AvatarGenerator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\avatars\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -21,7 +22,7 @@ class AvatarGenerator extends Plugin {
+   /**
+    * The human-readable name of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    * @ingroup plugin_translatable
+    */
+   public $label;
+@@ -36,7 +37,7 @@ class AvatarGenerator extends Plugin {
+   /**
+    * The description of the avatar generator.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    * @ingroup plugin_translatable
+    */
+   public $description;
+diff --git a/src/AvatarBaseInterface.php b/src/AvatarBaseInterface.php
+index 9e826a3..029d5b5 100644
+--- a/src/AvatarBaseInterface.php
++++ b/src/AvatarBaseInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\avatars;
+ 
++use Drupal\avatars\Exception\AvatarException;
+ /**
+  * Interface for Avatar APIs.
+  */
+@@ -43,7 +44,7 @@ interface AvatarBaseInterface {
+    *   Whether the ID has been pre-obfuscated, otherwise it will happen when the
+    *   URL is generated.
+    *
+-   * @throws \Drupal\avatars\Exception\AvatarException
++   * @throws AvatarException
+    *   Thrown if the identifier is malformed.
+    *
+    * @return \Drupal\avatars\AvatarBaseInterface
+@@ -81,7 +82,7 @@ interface AvatarBaseInterface {
+    * @param string $type
+    *   The avatar type.
+    *
+-   * @throws \Drupal\avatars\Exception\AvatarException
++   * @throws AvatarException
+    *   Thrown if this the type is not defined.
+    *
+    * @return \Drupal\avatars\AvatarBaseInterface
+@@ -99,7 +100,7 @@ interface AvatarBaseInterface {
+    * @param int|null $height
+    *   The height of the avatar, or NULL to mirror value for width.
+    *
+-   * @throws \Drupal\avatars\Exception\AvatarException
++   * @throws AvatarException
+    *   Thrown if the passed dimensions are invalid.
+    *
+    * @return \Drupal\avatars\AvatarBaseInterface
+@@ -121,7 +122,7 @@ interface AvatarBaseInterface {
+    * @param bool $secure_request
+    *   If the request should be secure.
+    *
+-   * @throws \Drupal\avatars\Exception\AvatarException
++   * @throws AvatarException
+    *   Thrown if API does not support the requested secure state.
+    *
+    * @return \Drupal\avatars\AvatarBaseInterface
+@@ -143,7 +144,7 @@ interface AvatarBaseInterface {
+   /**
+    * Gets the URL for the avatar.
+    *
+-   * @throws \Drupal\avatars\Exception\AvatarException
++   * @throws AvatarException
+    *   Thrown if missing parameters.
+    *
+    * @return string
+diff --git a/src/AvatarGeneratorInterface.php b/src/AvatarGeneratorInterface.php
+index 7800b36..fd38450 100644
+--- a/src/AvatarGeneratorInterface.php
++++ b/src/AvatarGeneratorInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\avatars;
+ 
++use Drupal\avatars\Plugin\AvatarGenerator\AvatarGeneratorPluginInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ 
+ /**
+@@ -12,7 +13,7 @@ interface AvatarGeneratorInterface extends ConfigEntityInterface {
+   /**
+    * Returns the plugin instance.
+    *
+-   * @return \Drupal\avatars\Plugin\AvatarGenerator\AvatarGeneratorPluginInterface
++   * @return AvatarGeneratorPluginInterface
+    *   The plugin instance for this avatar generator.
+    */
+   public function getPlugin();
+diff --git a/src/AvatarGeneratorStorageInterface.php b/src/AvatarGeneratorStorageInterface.php
+index 07ec506..e49398e 100644
+--- a/src/AvatarGeneratorStorageInterface.php
++++ b/src/AvatarGeneratorStorageInterface.php
+@@ -12,7 +12,7 @@ interface AvatarGeneratorStorageInterface extends ConfigEntityStorageInterface {
+   /**
+    * Get all enabled avatar generator plugin instances.
+    *
+-   * @return \Drupal\avatars\AvatarGeneratorInterface[]
++   * @return AvatarGeneratorInterface[]
+    *   An array of avatar generator plugin instances.
+    */
+   public function getEnabledAvatarGenerators();
+diff --git a/src/AvatarManager.php b/src/AvatarManager.php
+index e475d12..f11a63b 100644
+--- a/src/AvatarManager.php
++++ b/src/AvatarManager.php
+@@ -27,68 +27,68 @@ class AvatarManager implements AvatarManagerInterface {
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The HTTP client to fetch the feed data with.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * The cache tag invalidator.
+    *
+-   * @var \Drupal\Core\Cache\CacheTagsInvalidatorInterface
++   * @var CacheTagsInvalidatorInterface
+    */
+   protected $cacheTagInvalidator;
+ 
+   /**
+    * The logger factory.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * The file usage service.
+    *
+-   * @var \Drupal\file\FileUsage\FileUsageInterface
++   * @var FileUsageInterface
+    */
+   protected $fileUsage;
+ 
+   /**
+    * Storage for avatar generator storage entities.
+    *
+-   * @var \Drupal\avatars\AvatarGeneratorStorageInterface
++   * @var AvatarGeneratorStorageInterface
+    */
+   protected $avatarGeneratorStorage;
+ 
+   /**
+    * The avatar generator plugin manager.
+    *
+-   * @var \Drupal\avatars\AvatarGeneratorPluginManagerInterface
++   * @var AvatarGeneratorPluginManagerInterface
+    */
+   protected $avatarGenerator;
+ 
+   /**
+    * Constructs a new AvatarManager object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+-   * @param \GuzzleHttp\ClientInterface $http_client
++   * @param ClientInterface $http_client
+    *   The Guzzle HTTP client.
+-   * @param \Drupal\Core\Cache\CacheTagsInvalidatorInterface $cache_tag_invalidator
++   * @param CacheTagsInvalidatorInterface $cache_tag_invalidator
+    *   The cache tag invalidator.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger channel factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\file\FileUsage\FileUsageInterface $file_usage
++   * @param FileUsageInterface $file_usage
+    *   The file usage service.
+-   * @param \Drupal\avatars\AvatarGeneratorPluginManagerInterface $avatar_generator
++   * @param AvatarGeneratorPluginManagerInterface $avatar_generator
+    *   The avatar generator plugin manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, ClientInterface $http_client, CacheTagsInvalidatorInterface $cache_tag_invalidator, LoggerChannelFactoryInterface $logger_factory, EntityTypeManagerInterface $entity_type_manager, FileUsageInterface $file_usage, AvatarGeneratorPluginManagerInterface $avatar_generator) {
+@@ -195,13 +195,13 @@ class AvatarManager implements AvatarManagerInterface {
+     // Otherwise get the URL of the avatar, download it, and store it as a file.
+     if (!$file && $url = $plugin->generateUri($user)) {
+       $directory = 'public://avatar_kit/' . $avatar_generator->id();
+-      /** @var \Drupal\Core\File\FileSystemInterface $fileSystem */
++      /** @var FileSystemInterface $fileSystem */
+       $fileSystem = \Drupal::service('file_system');
+       if ($fileSystem->prepareDirectory($directory, FileSystemInterface::CREATE_DIRECTORY)) {
+         try {
+           if (($result = $this->httpClient->get($url)) && ($result->getStatusCode() == 200)) {
+             $file_path = $directory . '/' . $user->id() . '.jpg';
+-            $file = file_save_data($result->getBody(), $file_path, FileSystemInterface::EXISTS_REPLACE);
++            $file = \Drupal::service('file.repository')->writeData($result->getBody(), $file_path, FileSystemInterface::EXISTS_REPLACE);
+           }
+         }
+         catch (ClientException $e) {
+diff --git a/src/AvatarManagerInterface.php b/src/AvatarManagerInterface.php
+index 86d653f..778a62a 100644
+--- a/src/AvatarManagerInterface.php
++++ b/src/AvatarManagerInterface.php
+@@ -13,7 +13,7 @@ interface AvatarManagerInterface {
+   /**
+    * Check user avatar for changes, and inserts the avatar into the user entity.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user entity.
+    */
+   public function syncAvatar(UserInterface $user);
+@@ -23,10 +23,10 @@ interface AvatarManagerInterface {
+    *
+    * Loads each avatar until a valid avatar is found.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user entity.
+    *
+-   * @return \Drupal\avatars\AvatarPreviewInterface|null
++   * @return AvatarPreviewInterface|null
+    *   An avatar preview entity.
+    */
+   public function findValidAvatar(UserInterface $user);
+@@ -34,14 +34,14 @@ interface AvatarManagerInterface {
+   /**
+    * Create avatar if it does not exist.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user entity.
+-   * @param \Drupal\avatars\AvatarGeneratorInterface $avatar_generator
++   * @param AvatarGeneratorInterface $avatar_generator
+    *   An avatar generator instance.
+    * @param int $scope
+    *   Caching scope level.
+    *
+-   * @return \Drupal\avatars\AvatarPreviewInterface|false
++   * @return AvatarPreviewInterface|false
+    *   An avatar preview entity.
+    */
+   public function refreshAvatarGenerator(UserInterface $user, AvatarGeneratorInterface $avatar_generator, $scope);
+@@ -49,10 +49,10 @@ interface AvatarManagerInterface {
+   /**
+    * Downloads all avatar previews for a user.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user entity.
+    *
+-   * @return \Drupal\avatars\AvatarPreviewInterface[]
++   * @return AvatarPreviewInterface[]
+    *   An array of refreshed avatar preview entities.
+    */
+   public function refreshAllAvatars(UserInterface $user);
+@@ -63,12 +63,12 @@ interface AvatarManagerInterface {
+    * Ignores any existing caches. Use refreshAvatarGenerator to take advantage
+    * of internal caching.
+    *
+-   * @param \Drupal\avatars\AvatarGeneratorInterface $avatar_generator
++   * @param AvatarGeneratorInterface $avatar_generator
+    *   An avatar generator instance.
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user entity.
+    *
+-   * @return \Drupal\file\FileInterface|false
++   * @return FileInterface|false
+    *   The file containing an avatar.
+    */
+   public function getAvatarFile(AvatarGeneratorInterface $avatar_generator, UserInterface $user);
+@@ -78,7 +78,7 @@ interface AvatarManagerInterface {
+    *
+    * Ordered by priority.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user entity.
+    *
+    * @return \Generator
+@@ -93,7 +93,7 @@ interface AvatarManagerInterface {
+    *
+    * Call if the avatar has changed, or is expected to change.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user entity.
+    */
+   public function invalidateUserAvatar(UserInterface $user);
+@@ -101,9 +101,9 @@ interface AvatarManagerInterface {
+   /**
+    * Triggers expected change for dynamic avatar generator.
+    *
+-   * @param \Drupal\avatars\AvatarGeneratorInterface $avatar_generator
++   * @param AvatarGeneratorInterface $avatar_generator
+    *   An avatar generator instance.
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user entity.
+    */
+   public function notifyDynamicChange(AvatarGeneratorInterface $avatar_generator, UserInterface $user);
+@@ -111,12 +111,12 @@ interface AvatarManagerInterface {
+   /**
+    * Gets a lit of active plugins a user has permission to use.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user entity.
+    * @param bool $exclude_user_preference
+    *   Exclude 'user preference' plugin types.
+    *
+-   * @return \Drupal\avatars\AvatarGeneratorInterface[]|\Generator
++   * @return AvatarGeneratorInterface[]|\Generator
+    *   An array of avatar generator entities.
+    */
+   public function getAvatarGeneratorsForUser(UserInterface $user, $exclude_user_preference = TRUE);
+@@ -124,7 +124,7 @@ interface AvatarManagerInterface {
+   /**
+    * Determines if a file entity is an avatar preview.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   The file entity to check.
+    *
+    * @return int|false
+diff --git a/src/AvatarPreviewInterface.php b/src/AvatarPreviewInterface.php
+index fd3996f..39e7d91 100644
+--- a/src/AvatarPreviewInterface.php
++++ b/src/AvatarPreviewInterface.php
+@@ -80,7 +80,7 @@ interface AvatarPreviewInterface extends ContentEntityInterface {
+   /**
+    * Get associated user.
+    *
+-   * @return \Drupal\user\UserInterface
++   * @return UserInterface
+    *   A user entity.
+    */
+   public function getUser();
+@@ -88,7 +88,7 @@ interface AvatarPreviewInterface extends ContentEntityInterface {
+   /**
+    * Set associated user.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user entity.
+    *
+    * @return \Drupal\avatars\AvatarPreviewInterface
+@@ -99,7 +99,7 @@ interface AvatarPreviewInterface extends ContentEntityInterface {
+   /**
+    * Get associated avatar file.
+    *
+-   * @return \Drupal\file\FileInterface|null
++   * @return FileInterface|null
+    *   A file entity.
+    */
+   public function getAvatar();
+@@ -107,7 +107,7 @@ interface AvatarPreviewInterface extends ContentEntityInterface {
+   /**
+    * Set associated avatar file.
+    *
+-   * @param \Drupal\file\FileInterface|null $file
++   * @param FileInterface|null $file
+    *   A file entity, or NULL if the generator did not create an avatar.
+    *
+    * @return \Drupal\avatars\AvatarPreviewInterface
+@@ -156,9 +156,9 @@ interface AvatarPreviewInterface extends ContentEntityInterface {
+   /**
+    * Queries for an avatar preview and loads it.
+    *
+-   * @param \Drupal\avatars\AvatarGeneratorInterface $avatar_generator
++   * @param AvatarGeneratorInterface $avatar_generator
+    *   An avatar generator instance.
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   A user entity.
+    *
+    * @return \Drupal\avatars\AvatarPreviewInterface|false
+diff --git a/src/Entity/AvatarGenerator.php b/src/Entity/AvatarGenerator.php
+index d273da6..1cd4ab8 100644
+--- a/src/Entity/AvatarGenerator.php
++++ b/src/Entity/AvatarGenerator.php
+@@ -97,14 +97,14 @@ class AvatarGenerator extends ConfigEntityBase implements AvatarGeneratorInterfa
+   /**
+    * The plugin collection that holds the plugin for this entity.
+    *
+-   * @var \Drupal\avatars\AvatarGeneratorPluginCollection
++   * @var AvatarGeneratorPluginCollection
+    */
+   protected $pluginCollection;
+ 
+   /**
+    * Encapsulates the creation of this avatar generator's LazyPluginCollection.
+    *
+-   * @return \Drupal\avatars\AvatarGeneratorPluginCollection
++   * @return AvatarGeneratorPluginCollection
+    *   The avatar generators's plugin collection.
+    */
+   protected function getPluginCollection() {
+diff --git a/src/Entity/AvatarPreview.php b/src/Entity/AvatarPreview.php
+index 4d3fdee..4ac496b 100644
+--- a/src/Entity/AvatarPreview.php
++++ b/src/Entity/AvatarPreview.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\avatars\Entity;
+ 
++use Drupal\file\FileUsage\FileUsageInterface;
+ use Drupal\Core\Entity\ContentEntityBase;
+ use Drupal\avatars\AvatarPreviewInterface;
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -170,7 +171,7 @@ class AvatarPreview extends ContentEntityBase implements AvatarPreviewInterface
+     parent::postSave($storage, $update);
+ 
+     if (!$update && $this->getAvatar()) {
+-      /** @var \Drupal\file\FileUsage\FileUsageInterface $file_usage */
++      /** @var FileUsageInterface $file_usage */
+       $file_usage = \Drupal::service('file.usage');
+       $file_usage->add($this->getAvatar(), 'avatars', $this->getEntityTypeId(), $this->id());
+     }
+@@ -182,7 +183,7 @@ class AvatarPreview extends ContentEntityBase implements AvatarPreviewInterface
+   public static function preDelete(EntityStorageInterface $storage, array $entities) {
+     parent::preDelete($storage, $entities);
+ 
+-    /** @var \Drupal\file\FileUsage\FileUsageInterface $file_usage */
++    /** @var FileUsageInterface $file_usage */
+     $file_usage = \Drupal::service('file.usage');
+ 
+     /** @var static[] $entities */
+diff --git a/src/Form/AvatarGeneratorForm.php b/src/Form/AvatarGeneratorForm.php
+index d308a2a..5b715a0 100644
+--- a/src/Form/AvatarGeneratorForm.php
++++ b/src/Form/AvatarGeneratorForm.php
+@@ -19,14 +19,14 @@ class AvatarGeneratorForm extends EntityForm {
+   /**
+    * The avatar generator plugin manager.
+    *
+-   * @var \Drupal\avatars\AvatarGeneratorPluginManagerInterface
++   * @var AvatarGeneratorPluginManagerInterface
+    */
+   protected $avatarGenerator;
+ 
+   /**
+    * Constructs a \Drupal\avatars\Form\AvatarGeneratorForm object.
+    *
+-   * @param \Drupal\avatars\AvatarGeneratorPluginManagerInterface $avatar_generator
++   * @param AvatarGeneratorPluginManagerInterface $avatar_generator
+    *   The avatar generator plugin manager.
+    */
+   public function __construct(AvatarGeneratorPluginManagerInterface $avatar_generator) {
+@@ -48,7 +48,7 @@ class AvatarGeneratorForm extends EntityForm {
+   public function buildForm(array $form, FormStateInterface $form_state) {
+     $form = parent::buildForm($form, $form_state);
+ 
+-    /** @var \Drupal\avatars\AvatarGeneratorInterface $avatar_generator */
++    /** @var AvatarGeneratorInterface $avatar_generator */
+     $avatar_generator = $this->getEntity();
+ 
+     if (!$avatar_generator->isNew()) {
+@@ -113,7 +113,7 @@ class AvatarGeneratorForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function validateForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\avatars\AvatarGeneratorInterface $avatar_generator */
++    /** @var AvatarGeneratorInterface $avatar_generator */
+     $avatar_generator = $this->getEntity();
+ 
+     if ($avatar_generator->isNew()) {
+@@ -137,7 +137,7 @@ class AvatarGeneratorForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\avatars\AvatarGeneratorInterface $avatar_generator */
++    /** @var AvatarGeneratorInterface $avatar_generator */
+     $avatar_generator = $this->getEntity();
+ 
+     if (!$avatar_generator->isNew()) {
+@@ -152,7 +152,7 @@ class AvatarGeneratorForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\avatars\AvatarGeneratorInterface $avatar_generator */
++    /** @var AvatarGeneratorInterface $avatar_generator */
+     $avatar_generator = $this->getEntity();
+     $saved = $avatar_generator->save();
+ 
+diff --git a/src/Form/Settings.php b/src/Form/Settings.php
+index f79801d..a461cda 100644
+--- a/src/Form/Settings.php
++++ b/src/Form/Settings.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\avatars\Form;
+ 
++use Drupal\avatars\AvatarGeneratorInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\avatars\AvatarGeneratorPluginManagerInterface;
+@@ -19,16 +20,16 @@ class Settings extends ConfigFormBase {
+   /**
+    * The avatar generator plugin manager.
+    *
+-   * @var \Drupal\avatars\AvatarGeneratorPluginManagerInterface
++   * @var AvatarGeneratorPluginManagerInterface
+    */
+   protected $avatarGenerator;
+ 
+   /**
+    * Constructs a \Drupal\system\ConfigFormBase object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\avatars\AvatarGeneratorPluginManagerInterface $avatar_generator
++   * @param AvatarGeneratorPluginManagerInterface $avatar_generator
+    *   The avatar generator plugin manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, AvatarGeneratorPluginManagerInterface $avatar_generator) {
+@@ -104,7 +105,7 @@ class Settings extends ConfigFormBase {
+       ],
+     ];
+ 
+-    /** @var \Drupal\avatars\AvatarGeneratorInterface[] $instances */
++    /** @var AvatarGeneratorInterface[] $instances */
+     $instances = AvatarGenerator::loadMultiple();
+     uasort($instances, '\Drupal\avatars\Entity\AvatarGenerator::sort');
+ 
+@@ -203,7 +204,7 @@ class Settings extends ConfigFormBase {
+ 
+     // Generators are already sorted correctly.
+     foreach ($form_state->getValue('avatar_generators') as $id => $row) {
+-      /** @var \Drupal\avatars\AvatarGeneratorInterface $avatar_generator */
++      /** @var AvatarGeneratorInterface $avatar_generator */
+       $avatar_generator = AvatarGenerator::load($id);
+       $avatar_generator
+         ->setStatus($row['enabled'])
+diff --git a/src/Permissions.php b/src/Permissions.php
+index 14e833a..1c4a16d 100644
+--- a/src/Permissions.php
++++ b/src/Permissions.php
+@@ -16,14 +16,14 @@ class Permissions implements ContainerInjectionInterface {
+   /**
+    * The avatar generator plugin manager.
+    *
+-   * @var \Drupal\avatars\AvatarGeneratorPluginManagerInterface
++   * @var AvatarGeneratorPluginManagerInterface
+    */
+   protected $avatarGenerator;
+ 
+   /**
+    * Constructs the permission generator.
+    *
+-   * @param \Drupal\avatars\AvatarGeneratorPluginManagerInterface $avatar_generator
++   * @param AvatarGeneratorPluginManagerInterface $avatar_generator
+    *   The avatar generator plugin manager.
+    */
+   public function __construct(AvatarGeneratorPluginManagerInterface $avatar_generator) {
+@@ -48,7 +48,7 @@ class Permissions implements ContainerInjectionInterface {
+   public function avatarGenerators() {
+     $permissions = [];
+ 
+-    /** @var \Drupal\avatars\AvatarGeneratorStorageInterface $avatars_generator_storage */
++    /** @var AvatarGeneratorStorageInterface $avatars_generator_storage */
+     $avatars_generator_storage = \Drupal::entityTypeManager()->getStorage('avatar_generator');
+     foreach ($avatars_generator_storage->loadMultiple() as $instance) {
+       if ($instance->getPlugin()->getPluginId() == 'user_preference') {
+diff --git a/src/Plugin/AvatarGenerator/AvatarGeneratorBase.php b/src/Plugin/AvatarGenerator/AvatarGeneratorBase.php
+index dde190b..f3a340a 100644
+--- a/src/Plugin/AvatarGenerator/AvatarGeneratorBase.php
++++ b/src/Plugin/AvatarGenerator/AvatarGeneratorBase.php
+@@ -69,7 +69,7 @@ abstract class AvatarGeneratorBase extends PluginBase implements AvatarGenerator
+   /**
+    * Create a site-unique identifier for a user.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   A user account.
+    *
+    * @return string
+diff --git a/src/Plugin/AvatarGenerator/AvatarGeneratorPluginInterface.php b/src/Plugin/AvatarGenerator/AvatarGeneratorPluginInterface.php
+index 603a76d..1e92343 100644
+--- a/src/Plugin/AvatarGenerator/AvatarGeneratorPluginInterface.php
++++ b/src/Plugin/AvatarGenerator/AvatarGeneratorPluginInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\avatars\Plugin\AvatarGenerator;
+ 
++use Drupal\file\FileInterface;
+ use Drupal\Component\Plugin\ConfigurableInterface;
+ use Drupal\Component\Plugin\DependentPluginInterface;
+ use Drupal\Core\Plugin\PluginFormInterface;
+@@ -25,10 +26,10 @@ interface AvatarGeneratorPluginInterface extends PluginInspectionInterface, Deri
+   /**
+    * Gets File object for an avatar.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   A user account.
+    *
+-   * @return \Drupal\file\FileInterface
++   * @return FileInterface
+    *   A file object.
+    */
+   public function getFile(AccountInterface $account);
+@@ -36,7 +37,7 @@ interface AvatarGeneratorPluginInterface extends PluginInspectionInterface, Deri
+   /**
+    * Creates a URI to an avatar.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   A user account.
+    *
+    * @return string
+diff --git a/src/Plugin/Field/FieldWidget/AvatarGeneratorPreviewWidget.php b/src/Plugin/Field/FieldWidget/AvatarGeneratorPreviewWidget.php
+index 97ef9a3..456dfd7 100644
+--- a/src/Plugin/Field/FieldWidget/AvatarGeneratorPreviewWidget.php
++++ b/src/Plugin/Field/FieldWidget/AvatarGeneratorPreviewWidget.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\avatars\Plugin\Field\FieldWidget;
+ 
++use Drupal\user\UserInterface;
++use Drupal\avatars\AvatarManager;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Field\Plugin\Field\FieldWidget\OptionsButtonsWidget;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -85,10 +87,10 @@ class AvatarGeneratorPreviewWidget extends OptionsButtonsWidget {
+       $default_value = '_none';
+     }
+ 
+-    /** @var \Drupal\user\UserInterface $user */
++    /** @var UserInterface $user */
+     $user = $items->getEntity();
+ 
+-    /** @var \Drupal\avatars\AvatarManager $avatar_manager */
++    /** @var AvatarManager $avatar_manager */
+     $avatar_manager = \Drupal::service('avatars.avatar_manager');
+ 
+     $options = [];
+diff --git a/tests/modules/avatars_test/src/Controller/AvatarKitTestController.php b/tests/modules/avatars_test/src/Controller/AvatarKitTestController.php
+index b88a202..173e86f 100644
+--- a/tests/modules/avatars_test/src/Controller/AvatarKitTestController.php
++++ b/tests/modules/avatars_test/src/Controller/AvatarKitTestController.php
+@@ -15,7 +15,9 @@ class AvatarKitTestController extends ControllerBase {
+    */
+   public function image() {
+     $headers = ['Content-Type' => 'image/png'];
+-    $file = drupal_get_path('core', '') . '/misc/druplicon.png';
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Unsupported extension type encountered, using extension.path.resolver instead of extension.list
++    $file = \Drupal::service('extension.path.resolver')->getPath('core', '') . '/misc/druplicon.png';
+     return new BinaryFileResponse($file, 200, $headers);
+   }
+ 

@@ -1,0 +1,174 @@
+diff --git a/opigno_forum.module b/opigno_forum.module
+index b6069da..68268d5 100644
+--- a/opigno_forum.module
++++ b/opigno_forum.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\group\Entity\GroupInterface;
++use Drupal\group\GroupMembership;
+ /**
+  * @file
+  * Contains opigno_forum.module.
+@@ -25,7 +27,7 @@ use Drupal\user\Entity\User;
+ function opigno_forum_entity_presave(EntityInterface $entity) {
+   if ($entity->getEntityTypeId() === 'group'
+     && $entity->bundle() === 'learning_path') {
+-    /** @var \Drupal\group\Entity\Group $entity */
++    /** @var Group $entity */
+     // Create a forum for the training
+     // if it is enabled and not already exists.
+     $enable_forum = $entity->get('field_learning_path_enable_forum')
+@@ -117,7 +119,7 @@ function opigno_forum_node_insert(NodeInterface $node) {
+  *
+  * @param int $tid
+  *   Forum tid.
+- * @param \Drupal\Core\Session\AccountInterface $account
++ * @param AccountInterface $account
+  *   User to check.
+  *
+  * @return bool
+@@ -133,9 +135,9 @@ function _opigno_forum_access($tid, AccountInterface $account) {
+   // Get user groups.
+   $membership_service = \Drupal::service('group.membership_loader');
+   $memberships = $membership_service->loadByUser($account);
+-  /** @var \Drupal\group\Entity\GroupInterface[] $groups */
++  /** @var GroupInterface[] $groups */
+   $groups = array_map(function ($membership) {
+-    /** @var \Drupal\group\GroupMembership $membership */
++    /** @var GroupMembership $membership */
+     return $membership->getGroup();
+   }, $memberships);
+ 
+@@ -273,7 +275,7 @@ function opigno_forum_theme() {
+  * @param array $variables
+  */
+ function template_preprocess_opigno_forum_last_topics_block(array &$variables) {
+-  /** @var \Drupal\opigno_forum\ForumTopicRender $forum_topic_render */
++  /** @var ForumTopicRender $forum_topic_render */
+   $forum_topic_render = \Drupal::classResolver(ForumTopicRender::class);
+   $forum_topic_render->preprocessForumLastTopicsBlock($variables);
+ }
+@@ -286,7 +288,7 @@ function template_preprocess_opigno_forum_last_topics_block(array &$variables) {
+  * @param array $variables
+  */
+ function template_preprocess_opigno_forum_last_topics_item(array &$variables) {
+-  /** @var \Drupal\opigno_forum\ForumTopicRender $forum_topic_render */
++  /** @var ForumTopicRender $forum_topic_render */
+   $forum_topic_render = \Drupal::classResolver(ForumTopicRender::class);
+   $forum_topic_render->preprocessForumLastTopicsItem($variables);
+ }
+diff --git a/src/ForumTopicHandler.php b/src/ForumTopicHandler.php
+index bc4795a..aefffcd 100644
+--- a/src/ForumTopicHandler.php
++++ b/src/ForumTopicHandler.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\opigno_forum;
+ 
++use Drupal\group\Entity\GroupInterface;
++use Drupal\group\Entity\GroupTypeInterface;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+@@ -17,23 +19,23 @@ class ForumTopicHandler implements ContainerInjectionInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * ForumTopicHandler constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager) {
+@@ -67,13 +69,13 @@ class ForumTopicHandler implements ContainerInjectionInterface {
+   /**
+    * Performs node creation tasks.
+    *
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   A newly created node.
+    */
+   public function onNodeInsert(NodeInterface $node) {
+     $node_type_id = $node->bundle();
+     if ($this->isForumTopicType($node_type_id) && $this->isLearningPathContent($node_type_id) && ($gid = $this->getForumTopicGroupId($node))) {
+-      /** @var \Drupal\group\Entity\GroupInterface $group */
++      /** @var GroupInterface $group */
+       $group = $this->entityTypeManager->getStorage('group')->load($gid);
+       // The target entity will be saved again while being added to the group,
+       // which would trigger recursive save and integrity constraint violation
+@@ -97,7 +99,7 @@ class ForumTopicHandler implements ContainerInjectionInterface {
+    */
+   public function isLearningPathContent($node_type_id) {
+     try {
+-      /** @var \Drupal\group\Entity\GroupTypeInterface $group_type */
++      /** @var GroupTypeInterface $group_type */
+       $group_type = $this->entityTypeManager->getStorage('group_type')->load('learning_path');
+       $group_type->getContentPlugin('group_node:' . $node_type_id);
+       return TRUE;
+@@ -124,7 +126,7 @@ class ForumTopicHandler implements ContainerInjectionInterface {
+   /**
+    * Returns the group associated with the specified topic.
+    *
+-   * @param \Drupal\node\NodeInterface $topic
++   * @param NodeInterface $topic
+    *   A forum topic node object.
+    *
+    * @return string|null
+diff --git a/src/ForumTopicRender.php b/src/ForumTopicRender.php
+index 93f4794..b8284ca 100644
+--- a/src/ForumTopicRender.php
++++ b/src/ForumTopicRender.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\opigno_forum;
+ 
++use Drupal\Core\Entity\EntityMalformedException;
++use Drupal\node\Entity\Node;
+ /**
+  * Forum topic render helper class.
+  */
+@@ -22,10 +24,10 @@ class ForumTopicRender {
+   /**
+    * Prepares variables for opigno_forum_last_topics_item template.
+    *
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws EntityMalformedException
+    */
+   public function preprocessForumLastTopicsItem(array &$variables): void {
+-    /** @var \Drupal\node\Entity\Node $topic */
++    /** @var Node $topic */
+     $topic = &$variables["topic"];
+     $variables['name'] = $topic->label();
+     $variables['link'] = $topic->toUrl()->toString();
+diff --git a/src/Plugin/Block/LastTopicBlock.php b/src/Plugin/Block/LastTopicBlock.php
+index fb64a5a..54ac023 100644
+--- a/src/Plugin/Block/LastTopicBlock.php
++++ b/src/Plugin/Block/LastTopicBlock.php
+@@ -22,7 +22,7 @@ class LastTopicBlock extends BlockBase implements ContainerFactoryPluginInterfac
+   /**
+    * Service forum_manager definition.
+    *
+-   * @var \Drupal\forum\ForumManagerInterface
++   * @var ForumManagerInterface
+    */
+   protected $forumManager;
+ 

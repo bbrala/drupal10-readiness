@@ -1,0 +1,378 @@
+diff --git a/social_auth_vipps.info.yml b/social_auth_vipps.info.yml
+index d89818c..353581b 100644
+--- a/social_auth_vipps.info.yml
++++ b/social_auth_vipps.info.yml
+@@ -2,8 +2,7 @@ name: Social Auth Vipps
+ type: module
+ description: 'Social Auth integration for Vipps.'
+ package: Social
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ configure: social_auth_vipps.settings_form
+ dependencies:
+   - social_auth:social_auth
+diff --git a/social_auth_vipps.install b/social_auth_vipps.install
+index c7ae9d7..6ef262c 100644
+--- a/social_auth_vipps.install
++++ b/social_auth_vipps.install
+@@ -14,7 +14,7 @@ function social_auth_vipps_install() {
+   SocialAuthController::setLoginButtonSettings('social_auth_vipps', 'social_auth_vipps.redirect_to_vipps', 'img/vipps_logo.png');
+ 
+   $config = \Drupal::configFactory()->getEditable('social_auth.settings');
+-  $imgPath = drupal_get_path('module', 'social_auth_vipps') . '/img/log_in_with_vipps_btn.svg';
++  $imgPath = \Drupal::service('extension.list.module')->getPath('social_auth_vipps') . '/img/log_in_with_vipps_btn.svg';
+   $config->set('log_in_with_vipps_btn', $imgPath)->save();
+ }
+ 
+diff --git a/social_auth_vipps.module b/social_auth_vipps.module
+index 8a34966..ddb2bbf 100644
+--- a/social_auth_vipps.module
++++ b/social_auth_vipps.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Config\ConfigFactoryInterface;
+ /**
+  * @file
+  * Hook implementations for Social Auth Vipps module.
+@@ -43,11 +44,11 @@ function social_auth_vipps_form_alter(&$form, FormStateInterface $form_state, $f
+  *
+  * @param array $form
+  *   Login form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   Login form state.
+  */
+ function social_auth_vipps_show_vipps_login_button(&$form, FormStateInterface $form_state) {
+-  /** @var \Drupal\Core\Config\ConfigFactoryInterface $configFactory */
++  /** @var ConfigFactoryInterface $configFactory */
+   $configFactory = Drupal::service('config.factory');
+   $config = $configFactory->get(VippsAuthSettingsForm::SETTINGS);
+ 
+diff --git a/src/Controller/VippsAuthController.php b/src/Controller/VippsAuthController.php
+index d59ce05..5c222a2 100644
+--- a/src/Controller/VippsAuthController.php
++++ b/src/Controller/VippsAuthController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_auth_vipps\Controller;
+ 
++use Drupal\social_auth_vipps\Provider\VippsResourceOwner;
+ use Drupal\Core\Messenger\MessengerInterface;
+ use Drupal\Core\Render\RendererInterface;
+ use Drupal\social_api\Plugin\NetworkManager;
+@@ -20,19 +21,19 @@ class VippsAuthController extends OAuth2ControllerBase {
+   /**
+    * VippsAuthController constructor.
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+-   * @param \Drupal\social_api\Plugin\NetworkManager $network_manager
++   * @param NetworkManager $network_manager
+    *   Used to get an instance of social_auth_vipps network plugin.
+-   * @param \Drupal\social_auth\User\UserAuthenticator $user_authenticator
++   * @param UserAuthenticator $user_authenticator
+    *   Manages user login/registration.
+-   * @param \Drupal\social_auth_vipps\VippsAuthManager $vipps_manager
++   * @param VippsAuthManager $vipps_manager
+    *   Used to manage authentication methods.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request
++   * @param RequestStack $request
+    *   Used to access GET parameters.
+-   * @param \Drupal\social_auth\SocialAuthDataHandler $data_handler
++   * @param SocialAuthDataHandler $data_handler
+    *   The Social Auth data handler.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   Used to handle metadata for redirection to authentication URL.
+    */
+   public function __construct(
+@@ -63,7 +64,7 @@ class VippsAuthController extends OAuth2ControllerBase {
+    * Vipps returns the user here after user has authenticated.
+    */
+   public function callback() {
+-    /** @var \Drupal\social_auth_vipps\Provider\VippsResourceOwner|null $profile */
++    /** @var VippsResourceOwner|null $profile */
+     $profile = $this->processCallback();
+ 
+     // If authentication was successful.
+diff --git a/src/EventSubscriber/CallbackEventSubscriber.php b/src/EventSubscriber/CallbackEventSubscriber.php
+index c37f829..197284b 100644
+--- a/src/EventSubscriber/CallbackEventSubscriber.php
++++ b/src/EventSubscriber/CallbackEventSubscriber.php
+@@ -2,10 +2,11 @@
+ 
+ namespace Drupal\social_auth_vipps\EventSubscriber;
+ 
++use Symfony\Component\HttpFoundation\Request;
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Core\Messenger\MessengerInterface;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ use Drupal\Core\Url;
+ use Symfony\Component\HttpFoundation\RequestStack;
+@@ -20,23 +21,23 @@ class CallbackEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request|null
++   * @var Request|null
+    */
+   private $request;
+ 
+   /**
+    * Drupal messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   private $messenger;
+ 
+   /**
+    * CallbackEventSubscriber constructor.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   Request stack.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Drupal messenger.
+    */
+   public function __construct(RequestStack $requestStack, MessengerInterface $messenger) {
+@@ -47,10 +48,10 @@ class CallbackEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Check possible errors.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   Response event.
+    */
+-  public function checkForErrors(GetResponseEvent $event) {
++  public function checkForErrors(RequestEvent $event) {
+     if (!empty($this->request->get('error'))) {
+       $this->messenger->addError($this->request->get('error_description'));
+ 
+diff --git a/src/Plugin/Network/VippsAuth.php b/src/Plugin/Network/VippsAuth.php
+index 87244ed..72c4957 100644
+--- a/src/Plugin/Network/VippsAuth.php
++++ b/src/Plugin/Network/VippsAuth.php
+@@ -34,7 +34,7 @@ class VippsAuth extends NetworkBase implements VippsAuthInterface {
+    *   The initialized 3rd party library instance.
+    *   False if library could not be initialized.
+    *
+-   * @throws \Drupal\social_api\SocialApiException
++   * @throws SocialApiException
+    *   If the SDK library does not exist.
+    */
+   protected function initSdk() {
+@@ -44,7 +44,7 @@ class VippsAuth extends NetworkBase implements VippsAuthInterface {
+       throw new SocialApiException(sprintf('The Vipps library for PHP League OAuth2 not found. Class: %s.', $class_name));
+     }
+ 
+-    /** @var \Drupal\social_auth_vipps\Settings\VippsAuthSettings $settings */
++    /** @var VippsAuthSettings $settings */
+     $settings = $this->settings;
+ 
+     if ($this->validateConfig($settings)) {
+@@ -71,7 +71,7 @@ class VippsAuth extends NetworkBase implements VippsAuthInterface {
+   /**
+    * Checks that module is configured.
+    *
+-   * @param \Drupal\social_auth_vipps\Settings\VippsAuthSettings $settings
++   * @param VippsAuthSettings $settings
+    *   The Vipps auth settings.
+    *
+    * @return bool
+diff --git a/src/Provider/Exception/VippsIdentityProviderException.php b/src/Provider/Exception/VippsIdentityProviderException.php
+index 6bae1bf..f0d504d 100644
+--- a/src/Provider/Exception/VippsIdentityProviderException.php
++++ b/src/Provider/Exception/VippsIdentityProviderException.php
+@@ -15,7 +15,7 @@ class VippsIdentityProviderException extends IdentityProviderException {
+   /**
+    * Creates client exception from response.
+    *
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   Response.
+    * @param string $data
+    *   Parsed response data.
+@@ -33,7 +33,7 @@ class VippsIdentityProviderException extends IdentityProviderException {
+   /**
+    * Creates oauth exception from response.
+    *
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   Response.
+    * @param string $data
+    *   Parsed response data.
+@@ -51,7 +51,7 @@ class VippsIdentityProviderException extends IdentityProviderException {
+   /**
+    * Creates identity exception from response.
+    *
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   Response.
+    * @param string $message
+    *   Message.
+diff --git a/src/Provider/Vipps.php b/src/Provider/Vipps.php
+index 6ed7c46..6105071 100644
+--- a/src/Provider/Vipps.php
++++ b/src/Provider/Vipps.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_auth_vipps\Provider;
+ 
++use League\OAuth2\Client\Provider\ResourceOwnerInterface;
+ use Drupal\social_auth_vipps\OptionProvider\VippsAuthOptionProvider;
+ use Drupal\social_auth_vipps\Provider\Exception\VippsIdentityProviderException;
+ use League\OAuth2\Client\Token\AccessToken;
+@@ -64,7 +65,7 @@ class Vipps extends AbstractProvider {
+   /**
+    * Get provider url to fetch user details.
+    *
+-   * @param \League\OAuth2\Client\Token\AccessToken $token
++   * @param AccessToken $token
+    *   Access token.
+    *
+    * @return string
+@@ -92,12 +93,12 @@ class Vipps extends AbstractProvider {
+    * @link https://developer.github.com/v3/#client-errors
+    * @link https://developer.github.com/v3/oauth/#common-errors-for-the-access-token-request
+    *
+-   * @param \Psr\Http\Message\ResponseInterface $response
++   * @param ResponseInterface $response
+    *   Response.
+    * @param string $data
+    *   Parsed response data.
+    *
+-   * @throws \Drupal\social_auth_vipps\Provider\Exception\VippsIdentityProviderException
++   * @throws VippsIdentityProviderException
+    */
+   protected function checkResponse(ResponseInterface $response, $data) {
+     if ($response->getStatusCode() >= 400) {
+@@ -113,10 +114,10 @@ class Vipps extends AbstractProvider {
+    *
+    * @param array $response
+    *   Response.
+-   * @param \League\OAuth2\Client\Token\AccessToken $token
++   * @param AccessToken $token
+    *   Access token.
+    *
+-   * @return \League\OAuth2\Client\Provider\ResourceOwnerInterface
++   * @return ResourceOwnerInterface
+    *   Resource owner.
+    */
+   protected function createResourceOwner(array $response, AccessToken $token) {
+diff --git a/src/Provider/VippsResourceOwner.php b/src/Provider/VippsResourceOwner.php
+index 4161066..e9b330b 100644
+--- a/src/Provider/VippsResourceOwner.php
++++ b/src/Provider/VippsResourceOwner.php
+@@ -173,7 +173,7 @@ class VippsResourceOwner implements ResourceOwnerInterface {
+    * @param string $domain
+    *   Vipps domain.
+    *
+-   * @return \League\OAuth2\Client\Provider\ResourceOwnerInterface
++   * @return ResourceOwnerInterface
+    *   Resource Owner.
+    */
+   public function setDomain($domain) {
+@@ -195,7 +195,7 @@ class VippsResourceOwner implements ResourceOwnerInterface {
+   /**
+    * Verification guard.
+    *
+-   * @throws \Drupal\social_auth_vipps\Provider\Exception\EmailNotVerifiedException
++   * @throws EmailNotVerifiedException
+    */
+   public function verificationGuard() {
+     if (!$this->emailVerified()) {
+diff --git a/src/VippsAuthManager.php b/src/VippsAuthManager.php
+index 682f91e..fb62cec 100644
+--- a/src/VippsAuthManager.php
++++ b/src/VippsAuthManager.php
+@@ -15,9 +15,9 @@ class VippsAuthManager extends OAuth2Manager {
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $configFactory
++   * @param ConfigFactory $configFactory
+    *   Used for accessing configuration object factory.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory
++   * @param LoggerChannelFactoryInterface $logger_factory
+    *   The logger factory.
+    */
+   public function __construct(ConfigFactory $configFactory, LoggerChannelFactoryInterface $logger_factory) {
+diff --git a/tests/src/Functional/SocialAuthVippsLoginBlockTest.php b/tests/src/Functional/SocialAuthVippsLoginBlockTest.php
+index 2f34819..bc71ce4 100644
+--- a/tests/src/Functional/SocialAuthVippsLoginBlockTest.php
++++ b/tests/src/Functional/SocialAuthVippsLoginBlockTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\social_auth_vipps\Functional;
+ 
++use Behat\Mink\Exception\ResponseTextException;
+ use Drupal\Tests\social_auth\Functional\SocialAuthTestBase;
+ 
+ /**
+@@ -23,7 +24,7 @@ class SocialAuthVippsLoginBlockTest extends SocialAuthTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->provider = 'vipps';
+@@ -32,7 +33,7 @@ class SocialAuthVippsLoginBlockTest extends SocialAuthTestBase {
+   /**
+    * Test that the path is included in the login block.
+    *
+-   * @throws \Behat\Mink\Exception\ResponseTextException
++   * @throws ResponseTextException
+    */
+   public function testLinkExistsInBlock() {
+     $this->checkLinkToProviderExists();
+diff --git a/tests/src/Functional/SocialAuthVippsSettingsFormTest.php b/tests/src/Functional/SocialAuthVippsSettingsFormTest.php
+index f51bf89..4a2d819 100644
+--- a/tests/src/Functional/SocialAuthVippsSettingsFormTest.php
++++ b/tests/src/Functional/SocialAuthVippsSettingsFormTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\social_auth_vipps\Functional;
+ 
++use Behat\Mink\Exception\ElementNotFoundException;
++use Behat\Mink\Exception\ExpectationException;
+ use Drupal\Tests\social_auth\Functional\SocialAuthTestBase;
+ 
+ /**
+@@ -23,7 +25,7 @@ class SocialAuthVippsSettingsFormTest extends SocialAuthTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     $this->module = 'social_auth_vipps';
+     $this->provider = 'vipps';
+     $this->moduleType = 'social-auth';
+@@ -43,8 +45,8 @@ class SocialAuthVippsSettingsFormTest extends SocialAuthTestBase {
+   /**
+    * Test if permissions are set correctly for settings page.
+    *
+-   * @throws \Behat\Mink\Exception\ElementNotFoundException
+-   * @throws \Behat\Mink\Exception\ExpectationException
++   * @throws ElementNotFoundException
++   * @throws ExpectationException
+    */
+   public function testPermissionForSettingsPage() {
+     $this->checkPermissionForSettingsPage();
+@@ -52,6 +54,7 @@ class SocialAuthVippsSettingsFormTest extends SocialAuthTestBase {
+ 
+   /**
+    * Test settings form submission.
++   * @doesNotPerformAssertions
+    */
+   public function testSettingsFormSubmission() {
+     $this->edit = [

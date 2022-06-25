@@ -1,0 +1,1343 @@
+diff --git a/ckeditor5_sections.module b/ckeditor5_sections.module
+index cdb1530..cacc17c 100644
+--- a/ckeditor5_sections.module
++++ b/ckeditor5_sections.module
+@@ -1,5 +1,10 @@
+ <?php
+ 
++use Drupal\ckeditor5_sections\SectionsCollector;
++use Drupal\Core\Extension\ModuleHandler;
++use Drupal\ckeditor5_sections\MentionProviderPluginManager;
++use Drupal\ckeditor5_sections\MentionProvider\MentionProviderInterface;
++use Drupal\Core\Entity\EntityRepositoryInterface;
+ /**
+  * @file
+  * Contains hook implementations for the ckeditor5_sections module.
+@@ -15,17 +20,17 @@ use Symfony\Component\Filesystem\Filesystem;
+  */
+ function ckeditor5_sections_library_info_alter(&$libraries, $extension) {
+   if ($extension === 'ckeditor5_sections') {
+-    /** @var \Drupal\ckeditor5_sections\SectionsCollector $collector */
++    /** @var SectionsCollector $collector */
+     $collector = \Drupal::service('ckeditor5_sections.sections_collector');
+     $stylesheets = $collector->getStyleSheets();
+     foreach ($stylesheets as $stylesheet) {
+       $fileSystem = new Filesystem();
+-      $relative = $fileSystem->makePathRelative(dirname($stylesheet), drupal_get_path('module', 'ckeditor5_sections')) . basename($stylesheet);
++      $relative = $fileSystem->makePathRelative(dirname($stylesheet), \Drupal::service('extension.list.module')->getPath('ckeditor5_sections')) . basename($stylesheet);
+       $libraries['sections']['css']['base'][$relative] = [];
+     }
+     // Add CKEditor5 inspector if enabled in e.g. development.settings.yml.
+     if (\Drupal::getContainer()->hasParameter('ckeditor5_sections.enable_inspector') && \Drupal::getContainer()->getParameter('ckeditor5_sections.enable_inspector')) {
+-      /** @var \Drupal\Core\Extension\ModuleHandler $module_handler */
++      /** @var ModuleHandler $module_handler */
+       $module_handler = \Drupal::service('module_handler');
+       $module_path = $module_handler->getModule('ckeditor5_sections')->getPath();
+       $path_to_inspector_js = 'editor/node_modules/@ckeditor/ckeditor5-inspector/build/inspector.js';
+@@ -94,13 +99,13 @@ function ckeditor5_sections_page_attachments(array &$attachments) {
+  * Implements hook_ckeditor5_sections_editor_settings_alter().
+  */
+ function ckeditor5_sections_ckeditor5_sections_editor_settings_alter(array &$settings) {
+-  /** @var \Drupal\ckeditor5_sections\MentionProviderPluginManager $mention_provider */
++  /** @var MentionProviderPluginManager $mention_provider */
+   $mention_provider = \Drupal::service('plugin.manager.ckeditor5_sections.mention_provider');
+   $definitions = $mention_provider->getDefinitions();
+ 
+   $feeds = [];
+   foreach ($definitions as $id => $definition) {
+-    /** @var \Drupal\ckeditor5_sections\MentionProvider\MentionProviderInterface $plugin */
++    /** @var MentionProviderInterface $plugin */
+     $plugin = $mention_provider->createInstance($id);
+     $feeds[] = $plugin->getMentionFeedDefinition();
+   }
+@@ -142,7 +147,7 @@ function ckeditor5_sections_attach_entities(DocumentSection $section) {
+   $uuid = $section->get('data-media-uuid');
+   if ($type && $uuid) {
+     $entityType = explode(':', $type)[0];
+-    /** @var \Drupal\Core\Entity\EntityRepositoryInterface $entityRepository */
++    /** @var EntityRepositoryInterface $entityRepository */
+     $entityRepository = \Drupal::service('entity.repository');
+     $section->set('entity', $entityRepository->loadEntityByUuid($entityType, $uuid));
+   }
+diff --git a/modules/ckeditor5_sections_token/src/Plugin/MentionProvider/TokenMentionProvider.php b/modules/ckeditor5_sections_token/src/Plugin/MentionProvider/TokenMentionProvider.php
+index a208fed..fa50d9e 100644
+--- a/modules/ckeditor5_sections_token/src/Plugin/MentionProvider/TokenMentionProvider.php
++++ b/modules/ckeditor5_sections_token/src/Plugin/MentionProvider/TokenMentionProvider.php
+@@ -48,7 +48,7 @@ class TokenMentionProvider extends BaseMentionProvider implements ContainerFacto
+   protected $treeBuilder;
+ 
+   /**
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+diff --git a/src/Annotation/MentionProvider.php b/src/Annotation/MentionProvider.php
+index dea66c5..66fe446 100644
+--- a/src/Annotation/MentionProvider.php
++++ b/src/Annotation/MentionProvider.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ckeditor5_sections\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -31,7 +32,7 @@ class MentionProvider extends Plugin {
+   /**
+    * The human-readable name of the mention provider.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    * @ingroup plugin_translatable
+    */
+   public $title;
+diff --git a/src/Annotation/SectionValidation.php b/src/Annotation/SectionValidation.php
+index 09a0fce..4c40772 100644
+--- a/src/Annotation/SectionValidation.php
++++ b/src/Annotation/SectionValidation.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ckeditor5_sections\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -24,7 +25,7 @@ class SectionValidation extends Plugin {
+   /**
+    * The title of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Controller/ContentPreviewController.php b/src/Controller/ContentPreviewController.php
+index 07096e9..1339b7f 100644
+--- a/src/Controller/ContentPreviewController.php
++++ b/src/Controller/ContentPreviewController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ckeditor5_sections\Controller;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Symfony\Component\HttpFoundation\Response;
+ 
+ /**
+@@ -17,10 +18,10 @@ class ContentPreviewController extends MediaPreviewController {
+    * @param string $display
+    *   The display to use.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Response.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function preview($uuid, $display) {
+     $node = $this->entityRepository->loadEntityByUuid("node", $uuid);
+diff --git a/src/Controller/MediaDialogController.php b/src/Controller/MediaDialogController.php
+index b8d9f02..3b9183f 100644
+--- a/src/Controller/MediaDialogController.php
++++ b/src/Controller/MediaDialogController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ckeditor5_sections\Controller;
+ 
++use Symfony\Component\HttpFoundation\Request;
+ use Drupal\Core\Controller\ControllerBase;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Symfony\Component\HttpFoundation\RequestStack;
+@@ -18,7 +19,7 @@ class MediaDialogController extends ControllerBase {
+   /**
+    * The currently active request object.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+@@ -32,7 +33,7 @@ class MediaDialogController extends ControllerBase {
+   /**
+    * MediaDialogController constructor.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   Request stack.
+    */
+   public function __construct(RequestStack $requestStack) {
+diff --git a/src/Controller/MediaPreviewController.php b/src/Controller/MediaPreviewController.php
+index a961407..ca8fbaf 100644
+--- a/src/Controller/MediaPreviewController.php
++++ b/src/Controller/MediaPreviewController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ckeditor5_sections\Controller;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Entity\EntityRepositoryInterface;
+ use Drupal\Core\Render\RendererInterface;
+@@ -11,12 +12,12 @@ use Symfony\Component\HttpFoundation\Response;
+ class MediaPreviewController extends ControllerBase {
+ 
+   /**
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+@@ -30,8 +31,8 @@ class MediaPreviewController extends ControllerBase {
+   /**
+    * MediaPreviewController constructor.
+    *
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entityRepository
++   * @param RendererInterface $renderer
++   * @param EntityRepositoryInterface $entityRepository
+    */
+   public function __construct(RendererInterface $renderer, EntityRepositoryInterface $entityRepository) {
+     $this->entityRepository = $entityRepository;
+@@ -46,9 +47,9 @@ class MediaPreviewController extends ControllerBase {
+    * @param string $display
+    *   The display to use.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function preview($uuid, $display) {
+     $media = $this->entityRepository->loadEntityByUuid('media', $uuid);
+diff --git a/src/Controller/MentionProviderController.php b/src/Controller/MentionProviderController.php
+index 9c3bb48..b4dfc53 100644
+--- a/src/Controller/MentionProviderController.php
++++ b/src/Controller/MentionProviderController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\ckeditor5_sections\Controller;
+ 
++use Drupal\Core\Access\AccessResultInterface;
++use Drupal\ckeditor5_sections\MentionProvider\MentionProviderInterface;
+ use Drupal\ckeditor5_sections\MentionProviderPluginManager;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Access\AccessResult;
+@@ -19,14 +21,14 @@ class MentionProviderController extends ControllerBase {
+   /**
+    * Mention Provider plugin manager.
+    *
+-   * @var \Drupal\ckeditor5_sections\MentionProviderPluginManager
++   * @var MentionProviderPluginManager
+    */
+   protected $mentionProviderPluginManager;
+ 
+   /**
+    * MentionProviderController constructor.
+    *
+-   * @param \Drupal\ckeditor5_sections\MentionProviderPluginManager $mentionProviderPluginManager
++   * @param MentionProviderPluginManager $mentionProviderPluginManager
+    *   MentionProviderPluginManager.
+    */
+   public function __construct(MentionProviderPluginManager $mentionProviderPluginManager) {
+@@ -45,12 +47,12 @@ class MentionProviderController extends ControllerBase {
+   /**
+    * Access callback for query access.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Run access checks for this account.
+    * @param string $mention_provider_id
+    *   Mention provider id in route.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function access(AccountInterface $account, $mention_provider_id) {
+@@ -65,15 +67,15 @@ class MentionProviderController extends ControllerBase {
+    *
+    * @param string $mention_provider_id
+    *   Mention provider plugin id.
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   Request object.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   JSON Response of matched mention items.
+    */
+   public function query($mention_provider_id, Request $request) {
+     try {
+-      /** @var \Drupal\ckeditor5_sections\MentionProvider\MentionProviderInterface $plugin */
++      /** @var MentionProviderInterface $plugin */
+       $plugin = $this->mentionProviderPluginManager->createInstance($mention_provider_id);
+     }
+     catch (PluginException $exception) {
+diff --git a/src/DocumentConverter.php b/src/DocumentConverter.php
+index 94a6d40..ec13cd3 100644
+--- a/src/DocumentConverter.php
++++ b/src/DocumentConverter.php
+@@ -19,17 +19,17 @@ use Drupal\Core\TypedData\TypedDataManagerInterface;
+ class DocumentConverter implements DocumentConverterInterface {
+ 
+   /**
+-   * @var \Drupal\Core\TypedData\TypedDataManagerInterface
++   * @var TypedDataManagerInterface
+    */
+   protected $typedDataManager;
+ 
+   /**
+-   * @var \Drupal\ckeditor5_sections\SectionsCollectorInterface
++   * @var SectionsCollectorInterface
+    */
+   protected $sectionsCollector;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -41,7 +41,7 @@ class DocumentConverter implements DocumentConverterInterface {
+   protected $typeNodeMap;
+ 
+   /**
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -55,13 +55,13 @@ class DocumentConverter implements DocumentConverterInterface {
+   /**
+    * DocumentConverter constructor.
+    *
+-   * @param \Drupal\Core\TypedData\TypedDataManagerInterface $typedDataManager
++   * @param TypedDataManagerInterface $typedDataManager
+    *   A typed data manager to register new data types.
+-   * @param \Drupal\ckeditor5_sections\SectionsCollectorInterface $sectionsCollector
++   * @param SectionsCollectorInterface $sectionsCollector
+    *   The sections collector to retrieve all defined templates.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler
++   * @param ModuleHandlerInterface $moduleHandler
+    *   The module handler to invoke alter hooks on type definitions.
+    * @param string $templateDirectory
+    *   The template directory to use.
+@@ -77,7 +77,7 @@ class DocumentConverter implements DocumentConverterInterface {
+     $this->typedDataManager = $typedDataManager;
+     $this->entityTypeManager = $entityTypeManager;
+     $this->moduleHandler = $moduleHandler;
+-    $this->templateDirectory = $templateDirectory ?: drupal_get_path('module', 'ckeditor5_sections') . '/sections';
++    $this->templateDirectory = $templateDirectory ?: \Drupal::service('extension.list.module')->getPath('ckeditor5_sections') . '/sections';
+   }
+ 
+   /**
+@@ -97,7 +97,7 @@ class DocumentConverter implements DocumentConverterInterface {
+   /**
+    * Rebuild a document from its data representation.
+    *
+-   * @param \Drupal\ckeditor5_sections\DocumentSection $section
++   * @param DocumentSection $section
+    *   The data representation of a document.
+    *
+    * @return \DOMDocument
+@@ -120,7 +120,7 @@ class DocumentConverter implements DocumentConverterInterface {
+   /**
+    * Process one node in a template.
+    *
+-   * @param \Drupal\ckeditor5_sections\DocumentSection $section
++   * @param DocumentSection $section
+    *   The current section object to write data to.
+    * @param \DOMElement $el
+    *   The current template DOM node.
+diff --git a/src/DocumentConverterInterface.php b/src/DocumentConverterInterface.php
+index cb45987..b6e7d33 100644
+--- a/src/DocumentConverterInterface.php
++++ b/src/DocumentConverterInterface.php
+@@ -73,7 +73,7 @@ interface DocumentConverterInterface {
+    * @param string $document
+    *   The document to be parsed for the data.
+    *
+-   * @return \Drupal\ckeditor5_sections\DocumentSection
++   * @return DocumentSection
+    *   The root section object.
+    */
+   public function extractSectionData($document);
+@@ -81,7 +81,7 @@ interface DocumentConverterInterface {
+   /**
+    * Rebuild a document from a DocumentSection object.
+    *
+-   * @param \Drupal\ckeditor5_sections\DocumentSection $section
++   * @param DocumentSection $section
+    *   The input section.
+    *
+    * @return \DOMDocument
+diff --git a/src/Field/SectionsHTMLField.php b/src/Field/SectionsHTMLField.php
+index 59269f8..21836b8 100644
+--- a/src/Field/SectionsHTMLField.php
++++ b/src/Field/SectionsHTMLField.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ckeditor5_sections\Field;
+ 
++use Drupal\ckeditor5_sections\DocumentConverter;
+ use Drupal\Core\TypedData\TypedData;
+ 
+ /**
+@@ -22,7 +23,7 @@ class SectionsHTMLField extends TypedData {
+ 
+     $data = $item->sections;
+ 
+-    /** @var \Drupal\ckeditor5_sections\DocumentConverter $documentConverter */
++    /** @var DocumentConverter $documentConverter */
+     $documentConverter = \Drupal::service('ckeditor5_sections.document_converter');
+ 
+     if (!$data) {
+@@ -36,7 +37,7 @@ class SectionsHTMLField extends TypedData {
+ 
+   public function setValue($value, $notify = TRUE) {
+     if ($value) {
+-      /** @var \Drupal\ckeditor5_sections\DocumentConverter $documentConverter */
++      /** @var DocumentConverter $documentConverter */
+       $documentConverter = \Drupal::service('ckeditor5_sections.document_converter');
+       $doc = $documentConverter->extractSectionData($value);
+       $this->parent->setValue(json_encode($doc->getValue()));
+diff --git a/src/Field/SectionsProcessedDataField.php b/src/Field/SectionsProcessedDataField.php
+index 8ebb665..3b1e11d 100644
+--- a/src/Field/SectionsProcessedDataField.php
++++ b/src/Field/SectionsProcessedDataField.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\ckeditor5_sections\Field;
+ 
++use Drupal\Core\Render\Renderer;
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\ckeditor5_sections\DocumentSection;
+ use Drupal\Core\Entity\Plugin\DataType\EntityAdapter;
+ use Drupal\Core\Render\RenderContext;
+@@ -23,7 +25,7 @@ class SectionsProcessedDataField extends TypedData {
+     $filterFormat = $item->getFieldDefinition()->getSetting('filter_format');
+ 
+     if ($filterFormat) {
+-      /** @var \Drupal\Core\Render\Renderer $renderer */
++      /** @var Renderer $renderer */
+       $renderer = \Drupal::service('renderer');
+ 
+       $build = [
+@@ -73,7 +75,7 @@ class SectionsProcessedDataField extends TypedData {
+   /**
+    * Returns the parent entity.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    */
+   protected function getParentEntity() {
+     $parent = $this;
+diff --git a/src/Field/SectionsProcessedHTMLField.php b/src/Field/SectionsProcessedHTMLField.php
+index a0e15f5..a2c9994 100644
+--- a/src/Field/SectionsProcessedHTMLField.php
++++ b/src/Field/SectionsProcessedHTMLField.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ckeditor5_sections\Field;
+ 
++use Drupal\ckeditor5_sections\DocumentConverter;
+ use Drupal\Core\TypedData\TypedData;
+ 
+ /**
+@@ -15,7 +16,7 @@ class SectionsProcessedHTMLField extends TypedData {
+     $item = $this->getParent();
+     $data = $item->sections_processed;
+ 
+-    /** @var \Drupal\ckeditor5_sections\DocumentConverter $documentConverter */
++    /** @var DocumentConverter $documentConverter */
+     $documentConverter = \Drupal::service('ckeditor5_sections.document_converter');
+ 
+     if (!$data) {
+@@ -28,7 +29,7 @@ class SectionsProcessedHTMLField extends TypedData {
+ 
+   public function setValue($value, $notify = TRUE) {
+     if ($value) {
+-      /** @var \Drupal\ckeditor5_sections\DocumentConverter $documentConverter */
++      /** @var DocumentConverter $documentConverter */
+       $documentConverter = \Drupal::service('ckeditor5_sections.document_converter');
+       $doc = $documentConverter->extractSectionData($value);
+       $this->parent->setValue(json_encode($doc->getValue()));
+diff --git a/src/Form/SectionsMediaLibraryUploadForm.php b/src/Form/SectionsMediaLibraryUploadForm.php
+index cb768a1..17c987e 100644
+--- a/src/Form/SectionsMediaLibraryUploadForm.php
++++ b/src/Form/SectionsMediaLibraryUploadForm.php
+@@ -24,7 +24,7 @@ class SectionsMediaLibraryUploadForm extends FileUploadForm {
+    *
+    * @param array $element
+    *   The upload element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -87,7 +87,7 @@ class SectionsMediaLibraryUploadForm extends FileUploadForm {
+   /**
+    * Returns the return type for the widget.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return string
+diff --git a/src/MentionProvider/MentionProviderInterface.php b/src/MentionProvider/MentionProviderInterface.php
+index 70bddbd..4dac02b 100644
+--- a/src/MentionProvider/MentionProviderInterface.php
++++ b/src/MentionProvider/MentionProviderInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\ckeditor5_sections\MentionProvider;
+ 
++use Drupal\Core\Url;
++use Drupal\filter\FilterProcessResult;
+ use Drupal\Component\Plugin\DerivativeInspectionInterface;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ 
+@@ -21,7 +23,7 @@ interface MentionProviderInterface extends PluginInspectionInterface, Derivative
+   /**
+    * Provide URL to controller responding to the mention entered in the editor.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   URL to the query endpoint.
+    */
+   public function getQueryUrl();
+@@ -32,7 +34,7 @@ interface MentionProviderInterface extends PluginInspectionInterface, Derivative
+    * @param string $queryText
+    *   Query text to match.
+    *
+-   * @return \Drupal\ckeditor5_sections\MentionProvider\MentionProviderItem[]
++   * @return MentionProviderItem[]
+    *   Array of mention items.
+    */
+   public function query($queryText);
+@@ -45,7 +47,7 @@ interface MentionProviderInterface extends PluginInspectionInterface, Derivative
+    * @param string $langcode
+    *   Langcode to process.
+    *
+-   * @return \Drupal\filter\FilterProcessResult
++   * @return FilterProcessResult
+    *   Processed filter result.
+    */
+   public function process($text, $langcode);
+diff --git a/src/MentionProviderPermissions.php b/src/MentionProviderPermissions.php
+index c05c50f..0a0cbda 100644
+--- a/src/MentionProviderPermissions.php
++++ b/src/MentionProviderPermissions.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\ckeditor5_sections;
+ 
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\ckeditor5_sections\MentionProvider\MentionProviderInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -15,14 +17,14 @@ class MentionProviderPermissions implements ContainerInjectionInterface {
+   /**
+    * Mention Provider plugin manager.
+    *
+-   * @var \Drupal\ckeditor5_sections\MentionProviderPluginManager
++   * @var MentionProviderPluginManager
+    */
+   protected $mentionProviderPluginManager;
+ 
+   /**
+    * MentionProviderController constructor.
+    *
+-   * @param \Drupal\ckeditor5_sections\MentionProviderPluginManager $mentionProviderPluginManager
++   * @param MentionProviderPluginManager $mentionProviderPluginManager
+    *   MentionProviderPluginManager.
+    */
+   public function __construct(MentionProviderPluginManager $mentionProviderPluginManager) {
+@@ -44,14 +46,14 @@ class MentionProviderPermissions implements ContainerInjectionInterface {
+    * @return array
+    *   Permissions array.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    *   If the instance cannot be created, such as if the ID is invalid.
+    */
+   public function permissions() {
+     $permissions = [];
+ 
+     foreach ($this->mentionProviderPluginManager->getDefinitions() as $plugin_id => $definition) {
+-      /** @var \Drupal\ckeditor5_sections\MentionProvider\MentionProviderInterface $mentionProvider */
++      /** @var MentionProviderInterface $mentionProvider */
+       $mentionProvider = $this->mentionProviderPluginManager->createInstance($plugin_id);
+       $permissions += [
+         'access ckeditor5 sections mention provider ' . $plugin_id => [
+diff --git a/src/MentionProviderPluginManager.php b/src/MentionProviderPluginManager.php
+index af5bed0..3c4b72e 100644
+--- a/src/MentionProviderPluginManager.php
++++ b/src/MentionProviderPluginManager.php
+@@ -17,9 +17,9 @@ class MentionProviderPluginManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Plugin/DataType/Deriver/DocumentSectionDeriver.php b/src/Plugin/DataType/Deriver/DocumentSectionDeriver.php
+index 0febe99..adb3974 100644
+--- a/src/Plugin/DataType/Deriver/DocumentSectionDeriver.php
++++ b/src/Plugin/DataType/Deriver/DocumentSectionDeriver.php
+@@ -28,7 +28,7 @@ class DocumentSectionDeriver extends DeriverBase {
+    * Returns an array with all the available document section types from the
+    * system.
+    *
+-   * @return \Drupal\ckeditor5_sections\DocumentSection[]
++   * @return DocumentSection[]
+    */
+   protected function getSectionTypes() {
+     $section_types = \Drupal::getContainer()->get('ckeditor5_sections.document_converter')->getSectionTypeDefinitions();
+diff --git a/src/Plugin/Deriver/SectionDeriverBase.php b/src/Plugin/Deriver/SectionDeriverBase.php
+index f12ef08..21e5869 100644
+--- a/src/Plugin/Deriver/SectionDeriverBase.php
++++ b/src/Plugin/Deriver/SectionDeriverBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\ckeditor5_sections\Plugin\Deriver;
+ 
++use Drupal\ckeditor5_sections\DocumentConverter;
++use Drupal\Core\TypedData\DataDefinitionInterface;
+ use Drupal\ckeditor5_sections\DocumentConverterInterface;
+ use Drupal\ckeditor5_sections\TypedData\DocumentSectionDataDefinition;
+ use Drupal\Component\Plugin\Derivative\DeriverBase;
+@@ -15,18 +17,18 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class SectionDeriverBase extends DeriverBase implements ContainerDeriverInterface {
+ 
+   /**
+-   * @var \Drupal\Core\TypedData\TypedDataManagerInterface
++   * @var TypedDataManagerInterface
+    */
+   protected $typedDataManager;
+ 
+   /**
+-   * @var \Drupal\ckeditor5_sections\DocumentConverter
++   * @var DocumentConverter
+    */
+   protected $documentConverter;
+ 
+   /**
+-   * @param \Drupal\Core\TypedData\TypedDataManagerInterface $typedDataManager
+-   * @param \Drupal\ckeditor5_sections\DocumentConverterInterface $documentConverter
++   * @param TypedDataManagerInterface $typedDataManager
++   * @param DocumentConverterInterface $documentConverter
+    */
+   public function __construct(
+     TypedDataManagerInterface $typedDataManager,
+@@ -49,7 +51,7 @@ class SectionDeriverBase extends DeriverBase implements ContainerDeriverInterfac
+   /**
+    * Returns all available sections as typed data definitions.
+    *
+-   * @return \Drupal\Core\TypedData\DataDefinitionInterface[]
++   * @return DataDefinitionInterface[]
+    *   Array keys are data type IDs.
+    */
+   protected function getSectionTypeDefinitions() {
+@@ -67,9 +69,9 @@ class SectionDeriverBase extends DeriverBase implements ContainerDeriverInterfac
+   /**
+    * Returns nested sections as typed data definitions.
+    *
+-   * @param \Drupal\Core\TypedData\DataDefinitionInterface $definition
++   * @param DataDefinitionInterface $definition
+    *
+-   * @return \Drupal\Core\TypedData\DataDefinitionInterface[]
++   * @return DataDefinitionInterface[]
+    *   Array keys are data type IDs.
+    */
+   protected function getNestedSectionTypeDefinitions($definition) {
+diff --git a/src/Plugin/Editor/CKEditor5Sections.php b/src/Plugin/Editor/CKEditor5Sections.php
+index f800c64..70592ab 100644
+--- a/src/Plugin/Editor/CKEditor5Sections.php
++++ b/src/Plugin/Editor/CKEditor5Sections.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\ckeditor5_sections\Plugin\Editor;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\ckeditor\CKEditorPluginManager;
++use Drupal\Core\Asset\LibraryDiscoveryInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\ckeditor5_sections\SectionsCollectorInterface;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Utility\NestedArray;
+@@ -44,36 +48,36 @@ class CKEditor5Sections extends EditorBase implements ContainerFactoryPluginInte
+   /**
+    * The module handler to invoke hooks on.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $linkitProfileStorage;
+ 
+   /**
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cache;
+ 
+   /**
+-   * @var \Drupal\ckeditor5_sections\SectionsCollectorInterface
++   * @var SectionsCollectorInterface
+    */
+   protected $sectionsCollector;
+ 
+@@ -86,20 +90,20 @@ class CKEditor5Sections extends EditorBase implements ContainerFactoryPluginInte
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\ckeditor\CKEditorPluginManager $ckeditor_plugin_manager
++   * @param CKEditorPluginManager $ckeditor_plugin_manager
+    *   The CKEditor plugin manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke hooks on.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cacheBackend
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param CacheBackendInterface $cacheBackend
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *
+-   * @param \Drupal\Core\Asset\LibraryDiscoveryInterface $libraryDiscovery
++   * @param LibraryDiscoveryInterface $libraryDiscovery
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws InvalidPluginDefinitionException
+    */
+   public function __construct(
+     array $configuration,
+@@ -257,7 +261,7 @@ class CKEditor5Sections extends EditorBase implements ContainerFactoryPluginInte
+     $settings = $editor->getSettings();
+     $sections = $this->sectionsCollector->getSections();
+ 
+-    /** @var \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler */
++    /** @var ModuleHandlerInterface $moduleHandler */
+     $moduleHandler = \Drupal::service('module_handler');
+     $moduleHandler->alter('ckeditor5_sections_attributes', $templateAttributes);
+ 
+@@ -280,7 +284,7 @@ class CKEditor5Sections extends EditorBase implements ContainerFactoryPluginInte
+    * @param array $element
+    *   An associative array containing the properties and children of the
+    *   generic form element.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form for the form this element belongs to.
+    *
+    * @see \Drupal\Core\Render\Element\FormElement::processPattern()
+diff --git a/src/Plugin/Field/FieldType/SectionsItem.php b/src/Plugin/Field/FieldType/SectionsItem.php
+index 5da1ac6..bfecf0c 100644
+--- a/src/Plugin/Field/FieldType/SectionsItem.php
++++ b/src/Plugin/Field/FieldType/SectionsItem.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ckeditor5_sections\Plugin\Field\FieldType;
+ 
++use Drupal\ckeditor5_sections\SectionsCollectorInterface;
+ use Drupal\ckeditor5_sections\Field\SectionsDataField;
+ use Drupal\ckeditor5_sections\Field\SectionsHTMLField;
+ use Drupal\ckeditor5_sections\Field\SectionsProcessedDataField;
+@@ -43,7 +44,7 @@ class SectionsItem extends FieldItemBase {
+       '#default_value' => $this->getSetting('template'),
+       '#required' => TRUE,
+     ];
+-    /** @var \Drupal\ckeditor5_sections\SectionsCollectorInterface $sectionsCollector */
++    /** @var SectionsCollectorInterface $sectionsCollector */
+     $sectionsCollector = \Drupal::service('ckeditor5_sections.sections_collector');
+     foreach ($sectionsCollector->getSections() as $id => $section) {
+       $element['template']['#options'][$id] = $section['label'];
+diff --git a/src/Plugin/Filter/CKEditor5SectionsMediaFilter.php b/src/Plugin/Filter/CKEditor5SectionsMediaFilter.php
+index 611ee8e..29b6192 100644
+--- a/src/Plugin/Filter/CKEditor5SectionsMediaFilter.php
++++ b/src/Plugin/Filter/CKEditor5SectionsMediaFilter.php
+@@ -26,21 +26,21 @@ class CKEditor5SectionsMediaFilter extends FilterBase implements ContainerFactor
+   /**
+    * Renderer service object.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity repository.
+    *
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+diff --git a/src/Plugin/Filter/MentionFilter.php b/src/Plugin/Filter/MentionFilter.php
+index d582934..0c63419 100644
+--- a/src/Plugin/Filter/MentionFilter.php
++++ b/src/Plugin/Filter/MentionFilter.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ckeditor5_sections\Plugin\Filter;
+ 
++use Drupal\ckeditor5_sections\MentionProvider\MentionProviderInterface;
+ use Drupal\ckeditor5_sections\MentionProviderPluginManager;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Utility\Token;
+@@ -24,7 +25,7 @@ class MentionFilter extends FilterBase implements ContainerFactoryPluginInterfac
+   /**
+    * Token.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $token;
+ 
+@@ -59,7 +60,7 @@ class MentionFilter extends FilterBase implements ContainerFactoryPluginInterfac
+     // Use all mention providers.
+     $mentionProviders = $this->mentionProviderPluginManager->getDefinitions();
+     foreach ($mentionProviders as $id => $info) {
+-      /** @var \Drupal\ckeditor5_sections\MentionProvider\MentionProviderInterface $mentionProvider */
++      /** @var MentionProviderInterface $mentionProvider */
+       $mentionProvider = $this->mentionProviderPluginManager->createInstance($id);
+ 
+       $processed = $mentionProvider->process($result->getProcessedText(), $langcode);
+diff --git a/src/Plugin/Validation/Constraint/SectionValidationValidator.php b/src/Plugin/Validation/Constraint/SectionValidationValidator.php
+index 2f867c3..0134d96 100644
+--- a/src/Plugin/Validation/Constraint/SectionValidationValidator.php
++++ b/src/Plugin/Validation/Constraint/SectionValidationValidator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ckeditor5_sections\Plugin\Validation\Constraint;
+ 
++use Drupal\ckeditor5_sections\SectionValidation\SectionValidationInterface;
+ use Drupal\ckeditor5_sections\Exceptions\SectionValidationException;
+ use Drupal\ckeditor5_sections\SectionValidationPluginManager;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+@@ -22,7 +23,7 @@ class SectionValidationValidator extends ConstraintValidator implements Containe
+   /**
+    * Section validation plugin manager.
+    *
+-   * @var \Drupal\ckeditor5_sections\SectionValidationPluginManager
++   * @var SectionValidationPluginManager
+    */
+   protected $sectionValidationPluginManager;
+ 
+@@ -56,7 +57,7 @@ class SectionValidationValidator extends ConstraintValidator implements Containe
+       throw new UnexpectedTypeException($data, 'ComplexData');
+     }
+ 
+-    /** @var \Drupal\ckeditor5_sections\SectionValidation\SectionValidationInterface $validationPlugin */
++    /** @var SectionValidationInterface $validationPlugin */
+     $validationPlugin = $this->sectionValidationPluginManager->createInstance($constraint->name, [
+       'attributes' => $constraint->attributes,
+     ]);
+diff --git a/src/SectionValidation/SectionValidationInterface.php b/src/SectionValidation/SectionValidationInterface.php
+index 1770dcb..48d9633 100644
+--- a/src/SectionValidation/SectionValidationInterface.php
++++ b/src/SectionValidation/SectionValidationInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\ckeditor5_sections\SectionValidation;
+ 
++use Drupal\ckeditor5_sections\Exceptions\SectionValidationException;
+ use Drupal\Core\TypedData\TypedData;
+ 
+ /**
+@@ -12,10 +13,10 @@ interface SectionValidationInterface {
+   /**
+    * Validates (typed) data of a document section.
+    *
+-   * @param \Drupal\Core\TypedData\TypedData $data
++   * @param TypedData $data
+    *   Data to validate.
+    *
+-   * @throws \Drupal\ckeditor5_sections\Exceptions\SectionValidationException
++   * @throws SectionValidationException
+    *   Throws SectionValidationException on error.
+    */
+   public function validate(TypedData $data);
+diff --git a/src/SectionValidationPluginManager.php b/src/SectionValidationPluginManager.php
+index 3cb1f8d..1b27b82 100644
+--- a/src/SectionValidationPluginManager.php
++++ b/src/SectionValidationPluginManager.php
+@@ -17,9 +17,9 @@ class SectionValidationPluginManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/SectionsCollector.php b/src/SectionsCollector.php
+index ae33404..adb8291 100644
+--- a/src/SectionsCollector.php
++++ b/src/SectionsCollector.php
+@@ -14,12 +14,12 @@ use Symfony\Component\Yaml\Yaml;
+ class SectionsCollector implements SectionsCollectorInterface, EventSubscriberInterface {
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+-   * @var \Drupal\ckeditor5_sections\TwigProcessor
++   * @var TwigProcessor
+    */
+   protected $twigProcessor;
+ 
+@@ -35,8 +35,8 @@ class SectionsCollector implements SectionsCollectorInterface, EventSubscriberIn
+   /**
+    * SectionsCollector constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
+-   * @param \Drupal\ckeditor5_sections\TwigProcessor $twigProcessor
++   * @param EntityTypeManagerInterface $entityTypeManager
++   * @param TwigProcessor $twigProcessor
+    */
+   public function __construct(
+     EntityTypeManagerInterface $entityTypeManager,
+@@ -45,7 +45,7 @@ class SectionsCollector implements SectionsCollectorInterface, EventSubscriberIn
+   ) {
+     $this->entityTypeManager = $entityTypeManager;
+     $this->twigProcessor = $twigProcessor;
+-    $this->directory = $directory ?: drupal_get_path('module', 'ckeditor5_sections') . '/sections';
++    $this->directory = $directory ?: \Drupal::service('extension.list.module')->getPath('ckeditor5_sections') . '/sections';
+   }
+ 
+   /**
+@@ -71,7 +71,7 @@ class SectionsCollector implements SectionsCollectorInterface, EventSubscriberIn
+    */
+   public function getStyleSheets($directory = NULL) {
+     if (!$directory) {
+-      $directory = drupal_get_path('module', 'ckeditor5_sections') . '/sections';
++      $directory = \Drupal::service('extension.list.module')->getPath('ckeditor5_sections') . '/sections';
+     }
+     $files = \Drupal::service('file_system')->scanDirectory($directory, '/.*.css/');
+     $styleSheets = [];
+@@ -89,7 +89,7 @@ class SectionsCollector implements SectionsCollectorInterface, EventSubscriberIn
+    * @return array
+    */
+   public function getSectionDefinitions($directory = NULL) {
+-    /** @var \Drupal\ckeditor5_sections\DocumentConverter $document_converter */
++    /** @var DocumentConverter $document_converter */
+     $document_converter = \Drupal::getContainer()->get('ckeditor5_sections.document_converter');
+ 
+     $templates = $this->getSections();
+@@ -105,7 +105,7 @@ class SectionsCollector implements SectionsCollectorInterface, EventSubscriberIn
+    */
+   protected function collectSectionsFromDirectory($directory) {
+     if ($directory === '') {
+-      $directory = drupal_get_path('module', 'ckeditor5_sections') . '/sections';
++      $directory = \Drupal::service('extension.list.module')->getPath('ckeditor5_sections') . '/sections';
+     }
+     $files = \Drupal::service('file_system')->scanDirectory($directory, '/.*.yml/');
+     $sections = [];
+@@ -133,7 +133,7 @@ class SectionsCollector implements SectionsCollectorInterface, EventSubscriberIn
+   /**
+    * Fires after the configuration import.
+    *
+-   * @param \Drupal\Core\Config\ConfigImporterEvent $event
++   * @param ConfigImporterEvent $event
+    */
+   public function afterConfigImport(ConfigImporterEvent $event) {
+     foreach ($event->getChangelist() as $list) {
+diff --git a/src/TwigProcessor.php b/src/TwigProcessor.php
+index a0a8db1..f6b38c9 100644
+--- a/src/TwigProcessor.php
++++ b/src/TwigProcessor.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\ckeditor5_sections;
+ 
++use Twig\Error\LoaderError;
++use Twig\Error\RuntimeError;
++use Twig\Error\SyntaxError;
+ use Drupal\Core\Template\TwigEnvironment;
+ 
+ /**
+@@ -12,14 +15,14 @@ use Drupal\Core\Template\TwigEnvironment;
+ class TwigProcessor {
+ 
+   /**
+-   * @var \Drupal\Core\Template\TwigEnvironment
++   * @var TwigEnvironment
+    */
+   protected $twigEnvironment;
+ 
+   /**
+    * TwigProcessor constructor.
+    *
+-   * @param \Drupal\Core\Template\TwigEnvironment $twig_environment
++   * @param TwigEnvironment $twig_environment
+    */
+   public function __construct(TwigEnvironment $twig_environment) {
+     $this->twigEnvironment = $twig_environment;
+@@ -32,9 +35,9 @@ class TwigProcessor {
+    *
+    * @return string
+    *
+-   * @throws \Twig\Error\LoaderError
+-   * @throws \Twig\Error\RuntimeError
+-   * @throws \Twig\Error\SyntaxError
++   * @throws LoaderError
++   * @throws RuntimeError
++   * @throws SyntaxError
+    */
+   public function processTwigTemplate($file_path) {
+     $template = $this->twigEnvironment->load($file_path);
+diff --git a/src/TypedData/DocumentSectionDataDefinition.php b/src/TypedData/DocumentSectionDataDefinition.php
+index b51ffdd..7e78cce 100644
+--- a/src/TypedData/DocumentSectionDataDefinition.php
++++ b/src/TypedData/DocumentSectionDataDefinition.php
+@@ -116,7 +116,7 @@ class DocumentSectionDataDefinition extends MapDataDefinition {
+   /**
+    * Apply core constraints (ck-min/ck-max).
+    *
+-   * @param \Drupal\Core\TypedData\DataDefinitionInterface $data
++   * @param DataDefinitionInterface $data
+    * @param $field
+    */
+   protected function applyCoreConstraints(DataDefinitionInterface $data, $field) {
+@@ -146,7 +146,7 @@ class DocumentSectionDataDefinition extends MapDataDefinition {
+   /**
+    * Apply core validation and name validation rules/constraints.
+    *
+-   * @param \Drupal\Core\TypedData\DataDefinitionInterface $data
++   * @param DataDefinitionInterface $data
+    * @param $field_name
+    * @param $field
+    */
+diff --git a/tests/ckeditor5_sections_test/tests/Kernel/DocumentSectionTypedDataBasicValidationTest.php b/tests/ckeditor5_sections_test/tests/Kernel/DocumentSectionTypedDataBasicValidationTest.php
+index 05a963d..c5d79e6 100644
+--- a/tests/ckeditor5_sections_test/tests/Kernel/DocumentSectionTypedDataBasicValidationTest.php
++++ b/tests/ckeditor5_sections_test/tests/Kernel/DocumentSectionTypedDataBasicValidationTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\ckeditor5_sections_test\Unit;
+ 
++use Drupal\Core\TypedData\TypedDataManagerInterface;
+ use Drupal\ckeditor5_sections\Plugin\Validation\Constraint\SectionTypeConstraint;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\Core\Validation\Plugin\Validation\Constraint\CountConstraint;
+@@ -19,7 +20,7 @@ class DocumentSectionTypedDataBasicValidationTest extends KernelTestBase {
+   /**
+    * TypedDataManager.
+    *
+-   * @var \Drupal\Core\TypedData\TypedDataManagerInterface
++   * @var TypedDataManagerInterface
+    */
+   protected $typedDataManager;
+ 
+@@ -72,8 +73,8 @@ class DocumentSectionTypedDataBasicValidationTest extends KernelTestBase {
+     // Assert that if we manipulate the type that we get a validation error.
+     $teaserSection->set('__type', 'invalid-type');
+     $errors = $teaserSection->validate();
+-    $this->assertEqual($errors->count(), 1);
+-    $this->assertEqual($errors->get(0)->getCode(), SectionTypeConstraint::INVALID_SECTION_TYPE);
++    $this->assertEquals($errors->count(), 1);
++    $this->assertEquals($errors->get(0)->getCode(), SectionTypeConstraint::INVALID_SECTION_TYPE);
+ 
+     // @todo: validate ck-contains?
+   }
+@@ -87,32 +88,32 @@ class DocumentSectionTypedDataBasicValidationTest extends KernelTestBase {
+     $teaserSection = $this->typedDataManager->create($teaserSectionTypeDataDefinition, $teaserJson);
+ 
+     $contraints = $teaserSectionTypeDataDefinition->getPropertyDefinitions()['headline']->getConstraints();
+-    $this->assertEqual(3, count($contraints));
++    $this->assertEquals(3, count($contraints));
+ 
+     // Note: using array_key_exists as constraint value can be NULL.
+     $this->assertArrayHasKey('Length', $contraints);
+-    $this->assertEqual($contraints['Length']['min'], 2);
+-    $this->assertEqual($contraints['Length']['max'], 255);
++    $this->assertEquals($contraints['Length']['min'], 2);
++    $this->assertEquals($contraints['Length']['max'], 255);
+     $this->assertArrayHasKey('NotBlank', $contraints);
+     $this->assertArrayHasKey('PrimitiveType', $contraints);
+ 
+     // ck-min: 2 - too short.
+     $teaserSection->set('headline', 'A');
+     $errors = $teaserSection->validate();
+-    $this->assertEqual($errors->count(), 1);
+-    $this->assertEqual($errors->get(0)->getCode(), LengthConstraint::TOO_SHORT_ERROR);
++    $this->assertEquals($errors->count(), 1);
++    $this->assertEquals($errors->get(0)->getCode(), LengthConstraint::TOO_SHORT_ERROR);
+ 
+     // ck-max: 255.
+     $teaserSection->set('headline', str_repeat('A', 256));
+     $errors = $teaserSection->validate();
+-    $this->assertEqual($errors->count(), 1);
+-    $this->assertEqual($errors->get(0)->getCode(), LengthConstraint::TOO_LONG_ERROR);
++    $this->assertEquals($errors->count(), 1);
++    $this->assertEquals($errors->get(0)->getCode(), LengthConstraint::TOO_LONG_ERROR);
+ 
+     // ck-min: 2 - blank!
+     $teaserSection->set('headline', '');
+     $errors = $teaserSection->validate();
+-    $this->assertEqual($errors->count(), 1);
+-    $this->assertEqual($errors->get(0)->getCode(), NotBlank::IS_BLANK_ERROR);
++    $this->assertEquals($errors->count(), 1);
++    $this->assertEquals($errors->get(0)->getCode(), NotBlank::IS_BLANK_ERROR);
+   }
+ 
+   /**
+@@ -121,24 +122,24 @@ class DocumentSectionTypedDataBasicValidationTest extends KernelTestBase {
+   public function testContainerRangeValidation() {
+     $pageDefinition = $this->typedDataManager->createDataDefinition('section:test_page');
+     $contraints = $pageDefinition->getPropertyDefinitions()['sections']->getConstraints();
+-    $this->assertEqual(1, count($contraints));
++    $this->assertEquals(1, count($contraints));
+     $this->assertTrue(isset($contraints['Count']));
+-    $this->assertEqual($contraints['Count']['min'], 1);
+-    $this->assertEqual($contraints['Count']['max'], 5);
++    $this->assertEquals($contraints['Count']['min'], 1);
++    $this->assertEquals($contraints['Count']['max'], 5);
+ 
+     // ck-min: 1 - no sections, too few.
+     $tooFew = json_decode(file_get_contents(__DIR__ . '/assets/validation/page_too_few.json'), TRUE);
+     $section = $this->typedDataManager->create($pageDefinition, $tooFew);
+     $errors = $section->validate();
+-    $this->assertEqual($errors->count(), 1);
+-    $this->assertEqual($errors->get(0)->getCode(), CountConstraint::TOO_FEW_ERROR);
++    $this->assertEquals($errors->count(), 1);
++    $this->assertEquals($errors->get(0)->getCode(), CountConstraint::TOO_FEW_ERROR);
+ 
+     // ck-max: 5 - 6 sections, trigger too many error.
+     $tooMany = json_decode(file_get_contents(__DIR__ . '/assets/validation/page_too_many.json'), TRUE);
+     $section = $this->typedDataManager->create($pageDefinition, $tooMany);
+     $errors = $section->validate();
+-    $this->assertEqual($errors->count(), 1);
+-    $this->assertEqual($errors->get(0)->getCode(), CountConstraint::TOO_MANY_ERROR);
++    $this->assertEquals($errors->count(), 1);
++    $this->assertEquals($errors->get(0)->getCode(), CountConstraint::TOO_MANY_ERROR);
+   }
+ 
+ }
+diff --git a/tests/ckeditor5_sections_test/tests/Kernel/DocumentSectionTypedDataCustomValidationTest.php b/tests/ckeditor5_sections_test/tests/Kernel/DocumentSectionTypedDataCustomValidationTest.php
+index 7efe947..54df30f 100644
+--- a/tests/ckeditor5_sections_test/tests/Kernel/DocumentSectionTypedDataCustomValidationTest.php
++++ b/tests/ckeditor5_sections_test/tests/Kernel/DocumentSectionTypedDataCustomValidationTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\ckeditor5_sections_test\Unit;
+ 
++use Drupal\Core\TypedData\TypedDataManagerInterface;
+ use Drupal\ckeditor5_sections_test\Plugin\SectionValidation\ExampleButtonValidation;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\KernelTests\KernelTestBase;
+@@ -13,7 +14,7 @@ class DocumentSectionTypedDataCustomValidationTest extends KernelTestBase {
+   /**
+    * TypedDataManager.
+    *
+-   * @var \Drupal\Core\TypedData\TypedDataManagerInterface
++   * @var TypedDataManagerInterface
+    */
+   protected $typedDataManager;
+ 
+@@ -54,7 +55,7 @@ class DocumentSectionTypedDataCustomValidationTest extends KernelTestBase {
+   public function testNamedValidationConstraints() {
+     $definition = $this->typedDataManager->createDataDefinition('section:test_teaser');
+     $link = $definition->getPropertyDefinitions()['link'];
+-    $this->assertEqual(2, count($link->getConstraints()));
++    $this->assertEquals(2, count($link->getConstraints()));
+     $this->assertEquals($link->getConstraint('SectionType'), [
+       'type' => 'button',
+     ]);
+@@ -78,8 +79,8 @@ class DocumentSectionTypedDataCustomValidationTest extends KernelTestBase {
+     $linkInvalid = json_decode(file_get_contents(__DIR__ . '/assets/validation/teaser_link_invalid.json'), TRUE);
+     $section = $this->typedDataManager->create($definition, $linkInvalid);
+     $errors = $section->validate();
+-    $this->assertEqual(1, $errors->count());
+-    $this->assertEqual($errors->get(0)->getCode(), ExampleButtonValidation::MUST_FILL_OUT_BOTH_OR_NONE);
++    $this->assertEquals(1, $errors->count());
++    $this->assertEquals($errors->get(0)->getCode(), ExampleButtonValidation::MUST_FILL_OUT_BOTH_OR_NONE);
+   }
+ 
+   /**
+@@ -90,7 +91,7 @@ class DocumentSectionTypedDataCustomValidationTest extends KernelTestBase {
+     $linkValid = json_decode(file_get_contents(__DIR__ . '/assets/validation/teaser_link.json'), TRUE);
+     $section = $this->typedDataManager->create($definition, $linkValid);
+     $errors = $section->validate();
+-    $this->assertEqual(0, $errors->count());
++    $this->assertEquals(0, $errors->count());
+   }
+ 
+ }
+diff --git a/tests/src/Kernel/DocumentConverterTest.php b/tests/src/Kernel/DocumentConverterTest.php
+index f776d34..7ac496e 100644
+--- a/tests/src/Kernel/DocumentConverterTest.php
++++ b/tests/src/Kernel/DocumentConverterTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\ckeditor5_sections\Kernel;
+ 
++use Symfony\Component\Serializer\Normalizer\NormalizerInterface;
++use Drupal\ckeditor5_sections\DocumentSection;
++use Drupal\ckeditor5_sections\DocumentConverter;
+ use Drupal\ckeditor5_sections\Normalizer\DocumentSectionNormalizer;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\media\Entity\Media;
+@@ -32,7 +35,7 @@ class DocumentConverterTest extends KernelTestBase {
+   ];
+ 
+   /**
+-   * @var \Symfony\Component\Serializer\Normalizer\NormalizerInterface
++   * @var NormalizerInterface
+    */
+   protected $normalizer;
+ 
+@@ -101,10 +104,10 @@ class DocumentConverterTest extends KernelTestBase {
+    * @dataProvider extractSectionDataProvider
+    */
+   public function testExtractSectionData($document, $result) {
+-    /** @var \Symfony\Component\Serializer\Normalizer\NormalizerInterface $normalizer */
++    /** @var NormalizerInterface $normalizer */
+     $normalizer = new DocumentSectionNormalizer();;
+     $documentParser = $this->getDocumentConverter();
+-    /** @var \Drupal\ckeditor5_sections\DocumentSection $data */
++    /** @var DocumentSection $data */
+     $data = $documentParser->extractSectionData($document);
+     $this->assertEquals($result, $normalizer->normalize($data, 'json'));
+   }
+@@ -114,10 +117,10 @@ class DocumentConverterTest extends KernelTestBase {
+    * @dataProvider extractSectionDataProvider
+    */
+   public function testNormalization($document, $result) {
+-    /** @var \Symfony\Component\Serializer\Normalizer\NormalizerInterface $normalizer */
++    /** @var NormalizerInterface $normalizer */
+     $normalizer = new DocumentSectionNormalizer();
+     $documentParser = $this->getDocumentConverter();
+-    /** @var \Drupal\ckeditor5_sections\DocumentSection $data */
++    /** @var DocumentSection $data */
+     $data = $documentParser->extractSectionData($document);
+     $this->assertEquals($data, $normalizer->denormalize($normalizer->normalize($data)));
+   }
+@@ -127,7 +130,7 @@ class DocumentConverterTest extends KernelTestBase {
+    * @dataProvider extractSectionDataProvider
+    */
+   public function testBuildDocument($document, $data) {
+-    /** @var \Drupal\ckeditor5_sections\DocumentConverter $documentParser */
++    /** @var DocumentConverter $documentParser */
+     $documentParser = $this->getDocumentConverter();
+     $normalizer = new DocumentSectionNormalizer();
+     $doc = $normalizer->denormalize($data);
+diff --git a/tests/src/Kernel/SectionsCollectorTest.php b/tests/src/Kernel/SectionsCollectorTest.php
+index 8b23d6e..025ddaa 100644
+--- a/tests/src/Kernel/SectionsCollectorTest.php
++++ b/tests/src/Kernel/SectionsCollectorTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\ckeditor5_sections\Kernel;
+ 
++use Drupal\ckeditor5_sections\SectionsCollector;
+ use Drupal\KernelTests\KernelTestBase;
+ 
+ /**
+@@ -15,7 +16,7 @@ class SectionsCollectorTest extends KernelTestBase {
+   /**
+    * The service under test.
+    *
+-   * @var \Drupal\ckeditor5_sections\SectionsCollector
++   * @var SectionsCollector
+    */
+   protected $sectionsCollector;
+ 
+@@ -92,7 +93,7 @@ class SectionsCollectorTest extends KernelTestBase {
+     \Drupal::getContainer()->set('string_translation', $string_translation);
+ 
+     // Get the dummy templates and run them through the method.
+-    $path = drupal_get_path('module', 'ckeditor5_sections_test') . '/templates';
++    $path = \Drupal::service('extension.list.module')->getPath('ckeditor5_sections_test') . '/templates';
+     $sections = $this->sectionsCollector->getSections($path);
+ 
+     // Check to ensure the expected strings are where we want them.
+diff --git a/tests/src/Kernel/SectionsFieldTest.php b/tests/src/Kernel/SectionsFieldTest.php
+index fa2ea60..e94f982 100644
+--- a/tests/src/Kernel/SectionsFieldTest.php
++++ b/tests/src/Kernel/SectionsFieldTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\ckeditor5_sections\Kernel;
+ 
++use Drupal\Core\Entity\EntityRepositoryInterface;
+ use Drupal\ckeditor5_sections\DocumentSection;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\field\Entity\FieldConfig;
+@@ -97,7 +98,7 @@ class SectionsFieldTest extends EntityKernelTestBase {
+     $data = $this->entity->body->sections;
+     $this->assertInstanceOf(DocumentSection::class, $data);
+     $expected = $this->document;
+-    /** @var \Drupal\Core\Entity\EntityRepositoryInterface $entityRepository */
++    /** @var EntityRepositoryInterface $entityRepository */
+     $entityRepository = $this->container->get('entity.repository');
+     $expected['sections'][0]['content']['entity'] = $entityRepository->loadEntityByUuid('entity_test', $this->embeddedEntity->uuid());
+     $expected['sections'][1]['headline'] = 'This is the headline';
+@@ -111,7 +112,7 @@ class SectionsFieldTest extends EntityKernelTestBase {
+     $data = $this->entity->body->sections_processed;
+     $this->assertInstanceOf(DocumentSection::class, $data);
+     $expected = $this->document;
+-    /** @var \Drupal\Core\Entity\EntityRepositoryInterface $entityRepository */
++    /** @var EntityRepositoryInterface $entityRepository */
+     $entityRepository = $this->container->get('entity.repository');
+     $expected['sections'][0]['content']['entity'] = $entityRepository->loadEntityByUuid('entity_test', $this->embeddedEntity->uuid());
+     $expected['sections'][1]['headline'] = 'This is THE HEADLINE';

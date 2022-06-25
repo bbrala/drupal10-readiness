@@ -1,0 +1,4678 @@
+diff --git a/brightcove.install b/brightcove.install
+index d425597..a294fb7 100644
+--- a/brightcove.install
++++ b/brightcove.install
+@@ -1,6 +1,8 @@
+ <?php
+ 
+ declare(strict_types = 1);
++use Drupal\Core\Database\Connection;
++use Drupal\Core\Config\TypedConfigManager;
+ 
+ /**
+  * @file
+@@ -172,12 +174,12 @@ function brightcove_update_8102(array &$sandbox): void {
+  * Sets a default callback for the reference_id.
+  */
+ function brightcove_update_8103(array &$sandbox): void {
+-  /** @var \Drupal\Core\Field\BaseFieldDefinition $installed_field_definition */
++  /** @var BaseFieldDefinition $installed_field_definition */
+   $installed_field_definition = \Drupal::entityDefinitionUpdateManager()->getFieldStorageDefinition('reference_id', 'brightcove_video');
+   $installed_field_definition->setDefaultValueCallback('\Drupal\brightcove\Entity\BrightcoveVideo::getDefaultReferenceId');
+   \Drupal::entityDefinitionUpdateManager()->updateFieldStorageDefinition($installed_field_definition);
+ 
+-  /** @var \Drupal\Core\Field\BaseFieldDefinition $installed_field_definition */
++  /** @var BaseFieldDefinition $installed_field_definition */
+   $installed_field_definition = \Drupal::entityDefinitionUpdateManager()->getFieldStorageDefinition('reference_id', 'brightcove_playlist');
+   $installed_field_definition->setDefaultValueCallback('\Drupal\brightcove\Entity\BrightcovePlaylist::getDefaultReferenceId');
+   \Drupal::entityDefinitionUpdateManager()->updateFieldStorageDefinition($installed_field_definition);
+@@ -420,7 +422,7 @@ function brightcove_update_8108(array &$sandbox): void {
+ function brightcove_update_8109(array &$sandbox): void {
+   $container = \Drupal::getContainer();
+ 
+-  /** @var \Drupal\Core\Database\Connection $connection */
++  /** @var Connection $connection */
+   $connection = $container->get('database');
+ 
+   // Get existing brightcove subscription entities. At this point the config
+@@ -470,7 +472,7 @@ function brightcove_update_8109(array &$sandbox): void {
+   }
+ 
+   // Clear cached definitions.
+-  /** @var \Drupal\Core\Config\TypedConfigManager $typed_config_manager */
++  /** @var TypedConfigManager $typed_config_manager */
+   $typed_config_manager = $container->get('config.typed');
+   $typed_config_manager->clearCachedDefinitions();
+ }
+@@ -509,7 +511,7 @@ function brightcove_update_8110(array &$sandbox): void {
+  * Change "changed time" to 1 to force update of the player entities.
+  */
+ function brightcove_update_8111(array &$sandbox): void {
+-  /** @var \Drupal\brightcove\Entity\BrightcovePlayer[] $players */
++  /** @var BrightcovePlayer[] $players */
+   $players = BrightcovePlayer::loadMultiple();
+   foreach ($players as $player) {
+     $player->setChangedTime(1)->save();
+diff --git a/brightcove.module b/brightcove.module
+index 303170c..9e40f7a 100644
+--- a/brightcove.module
++++ b/brightcove.module
+@@ -6,6 +6,12 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\brightcove\Entity\BrightcovePlaylist;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\brightcove\Entity\BrightcoveApiClient;
++use Drupal\brightcove\Entity\BrightcovePlayer;
++use Drupal\file\FileInterface;
+ 
+ use Drupal\brightcove\BrightcoveCustomFieldInterface;
+ use Drupal\brightcove\BrightcovePlaylistInterface;
+@@ -121,7 +127,7 @@ function _brightcove_initiate_sync(): void {
+   if ($update_create_queues_empty) {
+     $brightcove_api_clients = BrightcoveAPIClient::loadMultiple();
+ 
+-    /** @var \Drupal\brightcove\Entity\BrightcoveAPIClient $api_client */
++    /** @var BrightcoveAPIClient $api_client */
+     foreach ($brightcove_api_clients as $api_client) {
+       $client_queue->createItem($api_client->id());
+     }
+@@ -130,7 +136,7 @@ function _brightcove_initiate_sync(): void {
+   // Start Subscription queue workers.
+   if ($update_create_queues_empty && $subscriptions_queue->numberOfItems() === 0 && $subscription_queue->numberOfItems() === 0 && $subscription_delete_queue->numberOfItems() === 0) {
+     // Check for new Subscriptions.
+-    /** @var \Drupal\brightcove\Entity\BrightcoveAPIClient[] $brightcove_api_clients */
++    /** @var BrightcoveAPIClient[] $brightcove_api_clients */
+     $brightcove_api_clients = BrightcoveAPIClient::loadMultiple();
+     foreach ($brightcove_api_clients as $api_client) {
+       $subscriptions_queue->createItem($api_client->id());
+@@ -192,7 +198,7 @@ function brightcove_entity_extra_field_info(): array {
+  * Implements hook_ENTITY_TYPE_view().
+  */
+ function brightcove_brightcove_video_view(array &$build, EntityInterface $entity, EntityViewDisplayInterface $display, string $view_mode): void {
+-  /** @var \Drupal\brightcove\Entity\BrightcoveVideo $entity */
++  /** @var BrightcoveVideo $entity */
+   if ($display->getComponent('brightcove_player')) {
+     $build['brightcove_player'] = _brightcove_get_player_field($entity);
+   }
+@@ -228,7 +234,7 @@ function brightcove_brightcove_video_view(array &$build, EntityInterface $entity
+  * Implements hook_ENTITY_TYPE_view().
+  */
+ function brightcove_brightcove_playlist_view(array &$build, EntityInterface $entity, EntityViewDisplayInterface $display, string $view_mode): void {
+-  /** @var \Drupal\brightcove\Entity\BrightcovePlaylist $entity */
++  /** @var BrightcovePlaylist $entity */
+   if ($display->getComponent('brightcove_player')) {
+     $build['brightcove_player'] = _brightcove_get_player_field($entity);
+   }
+@@ -237,13 +243,13 @@ function brightcove_brightcove_playlist_view(array &$build, EntityInterface $ent
+ /**
+  * Gets a player field for the given entity.
+  *
+- * @param \Drupal\brightcove\BrightcoveVideoPlaylistCMSEntityInterface $entity
++ * @param BrightcoveVideoPlaylistCMSEntityInterface $entity
+  *
+  * @return array|null
+  *   Renderable array for the player field.
+  *
+- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++ * @throws InvalidPluginDefinitionException
++ * @throws PluginNotFoundException
+  */
+ function _brightcove_get_player_field(BrightcoveVideoPlaylistCMSEntityInterface $entity): ?array {
+   $container = \Drupal::getContainer();
+@@ -255,12 +261,12 @@ function _brightcove_get_player_field(BrightcoveVideoPlaylistCMSEntityInterface
+     $player_storage = $container->get('entity_type.manager')
+       ->getStorage('brightcove_player');
+ 
+-    /** @var \Drupal\brightcove\Entity\BrightcoveApiClient $api_client */
++    /** @var BrightcoveApiClient $api_client */
+     $api_client = $container->get('entity_type.manager')
+       ->getStorage('brightcove_api_client')
+       ->load($entity->getApiClient());
+ 
+-    /** @var \Drupal\brightcove\Entity\BrightcovePlayer $player */
++    /** @var BrightcovePlayer $player */
+     $player = $entity->getPlayer();
+     if ($player) {
+       $player = $player_storage->load($player);
+@@ -414,8 +420,7 @@ function brightcove_entity_access(EntityInterface $entity, $operation, AccountIn
+  * Implements hook_ENTITY_TYPE_delete().
+  */
+ function brightcove_file_delete(EntityInterface $entity): void {
+-  /** @var \Drupal\file\FileInterface $entity */
+-
++  /** @var FileInterface $entity */
+   // Condition to check whether the poster or the thumbnail has reference to
+   // the deleted file.
+   $condition = new Condition('OR');
+diff --git a/modules/brightcove_gallery/src/Entity/InPageExperience.php b/modules/brightcove_gallery/src/Entity/InPageExperience.php
+index e258fd8..ae1dbe5 100644
+--- a/modules/brightcove_gallery/src/Entity/InPageExperience.php
++++ b/modules/brightcove_gallery/src/Entity/InPageExperience.php
+@@ -101,7 +101,7 @@ final class InPageExperience extends BrightcoveEntity implements InPageExperienc
+   /**
+    * Initializes an In-Page Experience entity.
+    *
+-   * @param \Drupal\brightcove\BrightcoveAPIClientInterface $api_client
++   * @param BrightcoveAPIClientInterface $api_client
+    *   API Client.
+    * @param string $id
+    *   ID.
+diff --git a/modules/brightcove_gallery/src/Entity/InPageExperienceInterface.php b/modules/brightcove_gallery/src/Entity/InPageExperienceInterface.php
+index c44ae3c..e295831 100644
+--- a/modules/brightcove_gallery/src/Entity/InPageExperienceInterface.php
++++ b/modules/brightcove_gallery/src/Entity/InPageExperienceInterface.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove_gallery\Entity;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\brightcove\Entity\BrightcoveEntityInterface;
+ use Drupal\Core\StringTranslation\TranslationInterface;
+ 
+@@ -86,10 +87,10 @@ interface InPageExperienceInterface extends BrightcoveEntityInterface {
+   /**
+    * Gets the allowed values for the published status.
+    *
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface|null $string_translation
++   * @param TranslationInterface|null $string_translation
+    *   The list of allowed published status values.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup[]
++   * @return TranslatableMarkup[]
+    *   The list of allowed published status values.
+    */
+   public static function getPublishedStatusAllowedValues(TranslationInterface $string_translation = NULL): array;
+diff --git a/modules/brightcove_gallery/src/EntityHandler.php b/modules/brightcove_gallery/src/EntityHandler.php
+index ef2bc26..d840810 100644
+--- a/modules/brightcove_gallery/src/EntityHandler.php
++++ b/modules/brightcove_gallery/src/EntityHandler.php
+@@ -23,16 +23,16 @@ final class EntityHandler implements ContainerInjectionInterface {
+   /**
+    * API Client storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $apiClientStorage;
+ 
+   /**
+    * Initializes an entity extra field info handler.
+    *
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $api_client_storage
++   * @param EntityStorageInterface $api_client_storage
+    *   API Client storage.
+    */
+   public function __construct(TranslationInterface $string_translation, EntityStorageInterface $api_client_storage) {
+@@ -81,9 +81,9 @@ final class EntityHandler implements ContainerInjectionInterface {
+    *
+    * @param array &$build
+    *   A renderable array representing the entity content.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity object.
+-   * @param \Drupal\Core\Entity\Display\EntityViewDisplayInterface $display
++   * @param EntityViewDisplayInterface $display
+    *   The entity view display holding the display options configured for the
+    *   entity components.
+    * @param string $view_mode
+diff --git a/modules/brightcove_gallery/src/Form/InPageExperienceDelete.php b/modules/brightcove_gallery/src/Form/InPageExperienceDelete.php
+index 14aad4a..32b16da 100644
+--- a/modules/brightcove_gallery/src/Form/InPageExperienceDelete.php
++++ b/modules/brightcove_gallery/src/Form/InPageExperienceDelete.php
+@@ -25,14 +25,14 @@ final class InPageExperienceDelete extends EntityConfirmFormBase {
+   /**
+    * In-Page Experience storage.
+    *
+-   * @var \Drupal\brightcove_gallery\Entity\Storage\InPageExperienceStorageInterface
++   * @var InPageExperienceStorageInterface
+    */
+   private $inPageExperienceStorage;
+ 
+   /**
+    * Initializes an In-Page Experience entity delete confirmation form builder.
+    *
+-   * @param \Drupal\brightcove_gallery\Entity\Storage\InPageExperienceStorageInterface $in_page_experience_storage
++   * @param InPageExperienceStorageInterface $in_page_experience_storage
+    *   In-Page Experience entity storage.
+    */
+   public function __construct(InPageExperienceStorageInterface $in_page_experience_storage) {
+diff --git a/modules/brightcove_gallery/src/Form/Settings.php b/modules/brightcove_gallery/src/Form/Settings.php
+index c62d5ae..dfda9ce 100644
+--- a/modules/brightcove_gallery/src/Form/Settings.php
++++ b/modules/brightcove_gallery/src/Form/Settings.php
+@@ -18,16 +18,16 @@ final class Settings extends ConfigFormBase {
+   /**
+    * Settings handler.
+    *
+-   * @var \Drupal\brightcove_gallery\Services\InPageExperienceSettingsInterface
++   * @var InPageExperienceSettingsInterface
+    */
+   private $settings;
+ 
+   /**
+    * Initializes a settings form builder.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\brightcove_gallery\Services\InPageExperienceSettingsInterface $settings
++   * @param InPageExperienceSettingsInterface $settings
+    *   Settings handler.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, InPageExperienceSettingsInterface $settings) {
+diff --git a/modules/brightcove_gallery/src/InPageExperienceListBuilder.php b/modules/brightcove_gallery/src/InPageExperienceListBuilder.php
+index 3e36e7b..ef1fce7 100644
+--- a/modules/brightcove_gallery/src/InPageExperienceListBuilder.php
++++ b/modules/brightcove_gallery/src/InPageExperienceListBuilder.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove_gallery;
+ 
++use Drupal\brightcove_gallery\Entity\InPageExperienceInterface;
+ use Drupal\brightcove_gallery\Entity\InPageExperience;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -22,38 +23,38 @@ final class InPageExperienceListBuilder extends EntityListBuilder {
+   /**
+    * API Client storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $apiClientStorage;
+ 
+   /**
+    * Link generator.
+    *
+-   * @var \Drupal\Core\Utility\LinkGeneratorInterface
++   * @var LinkGeneratorInterface
+    */
+   private $linkGenerator;
+ 
+   /**
+    * Date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   private $dateFormatter;
+ 
+   /**
+    * Initializes an In-Page Experience list builder.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   Entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   Entity storage.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $api_client_storage
++   * @param EntityStorageInterface $api_client_storage
+    *   API Client storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   Date formatter.
+-   * @param \Drupal\Core\Utility\LinkGeneratorInterface $link_generator
++   * @param LinkGeneratorInterface $link_generator
+    *   Link generator.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    */
+   public function __construct(
+@@ -146,8 +147,7 @@ final class InPageExperienceListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity): array {
+-    /** @var \Drupal\brightcove_gallery\Entity\InPageExperienceInterface $entity */
+-
++    /** @var InPageExperienceInterface $entity */
+     $api_client = $this->apiClientStorage->load($entity->getApiClientId());
+     if (!empty($api_client)) {
+       $api_client_column = $api_client->access('edit') ? $this->linkGenerator->generate($api_client->label(), $api_client->toUrl('edit-form')) : '';
+diff --git a/modules/brightcove_gallery/src/Query/Query.php b/modules/brightcove_gallery/src/Query/Query.php
+index d2c6ee6..bed2be2 100644
+--- a/modules/brightcove_gallery/src/Query/Query.php
++++ b/modules/brightcove_gallery/src/Query/Query.php
+@@ -21,29 +21,29 @@ final class Query extends QueryBase {
+   /**
+    * In-Page Experience cache.
+    *
+-   * @var \Drupal\brightcove_gallery\Services\InPageExperienceCacheInterface
++   * @var InPageExperienceCacheInterface
+    */
+   private $cache;
+ 
+   /**
+    * In-Page Experience API handler.
+    *
+-   * @var \Drupal\brightcove_gallery\Services\InPageExperienceApiInterface
++   * @var InPageExperienceApiInterface
+    */
+   private $inPageExperienceApi;
+ 
+   /**
+    * Initializes an In-Page Experience query handler.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   Entity type.
+    * @param string $conjunction
+    *   Conjunction.
+    * @param array $namespaces
+    *   Namespaces.
+-   * @param \Drupal\brightcove_gallery\Services\InPageExperienceCacheInterface $cache
++   * @param InPageExperienceCacheInterface $cache
+    *   Cache.
+-   * @param \Drupal\brightcove_gallery\Services\InPageExperienceApiInterface $in_page_experience_api
++   * @param InPageExperienceApiInterface $in_page_experience_api
+    *   In-Page Experience API.
+    */
+   public function __construct(
+diff --git a/modules/brightcove_gallery/src/Query/QueryFactory.php b/modules/brightcove_gallery/src/Query/QueryFactory.php
+index 1a7eef1..3923d63 100644
+--- a/modules/brightcove_gallery/src/Query/QueryFactory.php
++++ b/modules/brightcove_gallery/src/Query/QueryFactory.php
+@@ -20,14 +20,14 @@ final class QueryFactory implements QueryFactoryInterface {
+   /**
+    * In-Page Experience entity cache.
+    *
+-   * @var \Drupal\brightcove_gallery\Services\InPageExperienceCacheInterface
++   * @var InPageExperienceCacheInterface
+    */
+   private $cache;
+ 
+   /**
+    * In-Page Experience API.
+    *
+-   * @var \Drupal\brightcove_gallery\Services\InPageExperienceApiInterface
++   * @var InPageExperienceApiInterface
+    */
+   private $inPageExperienceApi;
+ 
+@@ -41,9 +41,9 @@ final class QueryFactory implements QueryFactoryInterface {
+   /**
+    * Initializes an In-Page Experience query factory.
+    *
+-   * @param \Drupal\brightcove_gallery\Services\InPageExperienceCacheInterface $cache
++   * @param InPageExperienceCacheInterface $cache
+    *   Cache.
+-   * @param \Drupal\brightcove_gallery\Services\InPageExperienceApiInterface $in_page_experience_api
++   * @param InPageExperienceApiInterface $in_page_experience_api
+    *   In-Page Experience API.
+    */
+   public function __construct(InPageExperienceCacheInterface $cache, InPageExperienceApiInterface $in_page_experience_api) {
+diff --git a/modules/brightcove_gallery/src/Services/InPageExperienceCache.php b/modules/brightcove_gallery/src/Services/InPageExperienceCache.php
+index 9ca0144..c8d97e0 100644
+--- a/modules/brightcove_gallery/src/Services/InPageExperienceCache.php
++++ b/modules/brightcove_gallery/src/Services/InPageExperienceCache.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove_gallery\Services;
+ 
++use Drupal\brightcove_gallery\Entity\InPageExperienceInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ 
+@@ -15,32 +16,32 @@ final class InPageExperienceCache implements InPageExperienceCacheInterface {
+   /**
+    * Cache backend.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   private $cache;
+ 
+   /**
+    * Settings.
+    *
+-   * @var \Drupal\brightcove_gallery\Services\InPageExperienceSettingsInterface
++   * @var InPageExperienceSettingsInterface
+    */
+   private $settings;
+ 
+   /**
+    * Time.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   private $time;
+ 
+   /**
+    * Initializes a cache service for In-Page Experience entities.
+    *
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
++   * @param CacheBackendInterface $cache
+    *   Cache backend.
+-   * @param \Drupal\brightcove_gallery\Services\InPageExperienceSettingsInterface $settings
++   * @param InPageExperienceSettingsInterface $settings
+    *   Settings.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   Time.
+    */
+   public function __construct(CacheBackendInterface $cache, InPageExperienceSettingsInterface $settings, TimeInterface $time) {
+@@ -97,7 +98,7 @@ final class InPageExperienceCache implements InPageExperienceCacheInterface {
+   /**
+    * Stores entities in the persistent cache backend.
+    *
+-   * @param \Drupal\brightcove_gallery\Entity\InPageExperienceInterface[] $in_page_experiences
++   * @param InPageExperienceInterface[] $in_page_experiences
+    *   In-Page Experiences to store in the cache.
+    */
+   public function set(array $in_page_experiences): void {
+diff --git a/modules/brightcove_gallery/src/Services/InPageExperienceCacheInterface.php b/modules/brightcove_gallery/src/Services/InPageExperienceCacheInterface.php
+index d35424b..cac2316 100644
+--- a/modules/brightcove_gallery/src/Services/InPageExperienceCacheInterface.php
++++ b/modules/brightcove_gallery/src/Services/InPageExperienceCacheInterface.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove_gallery\Services;
+ 
++use Drupal\brightcove_gallery\Entity\InPageExperienceInterface;
+ /**
+  * In-Page Experience cache interface.
+  */
+@@ -20,7 +21,7 @@ interface InPageExperienceCacheInterface {
+    *   List of IDs to get. If empty, an empty list will be returned.
+    *   The found IDs are being removed from the $ids array.
+    *
+-   * @return \Drupal\brightcove_gallery\Entity\InPageExperienceInterface[]
++   * @return InPageExperienceInterface[]
+    *   List of In-Page Experiences entities from the cache.
+    */
+   public function get(string $entity_type_id, string $api_client_id, array &$ids = NULL): array;
+@@ -28,7 +29,7 @@ interface InPageExperienceCacheInterface {
+   /**
+    * Stores entities in the persistent cache backend.
+    *
+-   * @param \Drupal\brightcove_gallery\Entity\InPageExperienceInterface[] $in_page_experiences
++   * @param InPageExperienceInterface[] $in_page_experiences
+    *   In-Page Experiences to store in the cache.
+    */
+   public function set(array $in_page_experiences): void;
+diff --git a/modules/brightcove_proxy/src/Controller/BrightcoveProxyTest.php b/modules/brightcove_proxy/src/Controller/BrightcoveProxyTest.php
+index e018fa0..d59495b 100644
+--- a/modules/brightcove_proxy/src/Controller/BrightcoveProxyTest.php
++++ b/modules/brightcove_proxy/src/Controller/BrightcoveProxyTest.php
+@@ -15,7 +15,7 @@ class BrightcoveProxyTest extends ControllerBase {
+   /**
+    * Returns an empty response for testing the proxy.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Empty response.
+    */
+   public function testPage(): Response {
+diff --git a/modules/brightcove_proxy/src/EventSubscriber/BrightcoveProxyInitSubscriber.php b/modules/brightcove_proxy/src/EventSubscriber/BrightcoveProxyInitSubscriber.php
+index 2a9ad94..9f42cb2 100644
+--- a/modules/brightcove_proxy/src/EventSubscriber/BrightcoveProxyInitSubscriber.php
++++ b/modules/brightcove_proxy/src/EventSubscriber/BrightcoveProxyInitSubscriber.php
+@@ -4,10 +4,12 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove_proxy\EventSubscriber;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Brightcove\API\Client;
+ use Drupal\Core\Config\ConfigFactory;
+ use Symfony\Component\HttpKernel\KernelEvents;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ 
+ /**
+@@ -18,14 +20,14 @@ class BrightcoveProxyInitSubscriber implements EventSubscriberInterface {
+   /**
+    * Brightcove proxy configuration.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * BrightcoveProxyInitSubscriber constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $config
++   * @param ConfigFactory $config
+    *   Configuration object factory.
+    */
+   public function __construct(ConfigFactory $config) {
+@@ -35,10 +37,10 @@ class BrightcoveProxyInitSubscriber implements EventSubscriberInterface {
+   /**
+    * Initialize Brightcove client proxy.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   GET response event.
+    */
+-  public function initializeBrightcoveClientProxy(GetResponseEvent $event): void {
++  public function initializeBrightcoveClientProxy(RequestEvent $event): void {
+     // Initialize proxy config for Brightcove client if enabled.
+     if ($this->config->get('use_proxy')) {
+       Client::$proxyUserPassword = "{$this->config->get('proxy_username')}:{$this->config->get('proxy_password')}";
+diff --git a/modules/media_brightcove/src/Plugin/Validation/Constraint/BrightcoveVideoConstraintValidator.php b/modules/media_brightcove/src/Plugin/Validation/Constraint/BrightcoveVideoConstraintValidator.php
+index 40a0092..a7f093e 100644
+--- a/modules/media_brightcove/src/Plugin/Validation/Constraint/BrightcoveVideoConstraintValidator.php
++++ b/modules/media_brightcove/src/Plugin/Validation/Constraint/BrightcoveVideoConstraintValidator.php
+@@ -20,7 +20,7 @@ class BrightcoveVideoConstraintValidator extends ConstraintValidator {
+     if (!($value instanceof EntityReferenceFieldItemList)) {
+       $this->context->addViolation($constraint->message);
+     }
+-    /** @var \Drupal\Core\Field\EntityReferenceFieldItemList $value */
++    /** @var EntityReferenceFieldItemList $value */
+     $target_type = $value->getFieldDefinition()
+       ->getFieldStorageDefinition()
+       ->getSetting('target_type');
+diff --git a/src/Access/BrightcovePlaylistAccessControlHandler.php b/src/Access/BrightcovePlaylistAccessControlHandler.php
+index ffa5ef9..06569cd 100644
+--- a/src/Access/BrightcovePlaylistAccessControlHandler.php
++++ b/src/Access/BrightcovePlaylistAccessControlHandler.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Access;
+ 
++use Drupal\brightcove\Entity\BrightcovePlaylist;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -21,7 +22,7 @@ class BrightcovePlaylistAccessControlHandler extends EntityAccessControlHandler
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account): AccessResultInterface {
+-    /** @var \Drupal\brightcove\Entity\BrightcovePlaylist $entity */
++    /** @var BrightcovePlaylist $entity */
+     switch ($operation) {
+       case 'view':
+         if (!$entity->isPublished()) {
+diff --git a/src/Access/BrightcoveTextTrackAccessControlHandler.php b/src/Access/BrightcoveTextTrackAccessControlHandler.php
+index b392991..5860dac 100644
+--- a/src/Access/BrightcoveTextTrackAccessControlHandler.php
++++ b/src/Access/BrightcoveTextTrackAccessControlHandler.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Access;
+ 
++use Drupal\brightcove\BrightcoveTextTrackInterface;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -21,7 +22,7 @@ class BrightcoveTextTrackAccessControlHandler extends EntityAccessControlHandler
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account): AccessResultInterface {
+-    /** @var \Drupal\brightcove\BrightcoveTextTrackInterface $entity */
++    /** @var BrightcoveTextTrackInterface $entity */
+     switch ($operation) {
+       case 'view':
+         if (!$entity->isPublished()) {
+diff --git a/src/Access/BrightcoveVideoAccessControlHandler.php b/src/Access/BrightcoveVideoAccessControlHandler.php
+index 51d5632..35d0ff5 100644
+--- a/src/Access/BrightcoveVideoAccessControlHandler.php
++++ b/src/Access/BrightcoveVideoAccessControlHandler.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Access;
+ 
++use Drupal\brightcove\BrightcoveVideoInterface;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -21,7 +22,7 @@ class BrightcoveVideoAccessControlHandler extends EntityAccessControlHandler {
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account): AccessResultInterface {
+-    /** @var \Drupal\brightcove\BrightcoveVideoInterface $entity */
++    /** @var BrightcoveVideoInterface $entity */
+     switch ($operation) {
+       case 'view':
+         if (!$entity->isPublished()) {
+diff --git a/src/Access/CSRFCallbackAccessCheck.php b/src/Access/CSRFCallbackAccessCheck.php
+index 2ae328b..323d094 100644
+--- a/src/Access/CSRFCallbackAccessCheck.php
++++ b/src/Access/CSRFCallbackAccessCheck.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Access;
+ 
++use Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface;
+@@ -18,14 +19,14 @@ class CSRFCallbackAccessCheck implements AccessInterface {
+   /**
+    * Callback token store.
+    *
+-   * @var \Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface
++   * @var KeyValueStoreExpirableInterface
+    */
+   private $callbackTokenStore;
+ 
+   /**
+    * Initializes a new CSRF callback access checker.
+    *
+-   * @param \Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface $keyValueExpirableFactory
++   * @param KeyValueExpirableFactoryInterface $keyValueExpirableFactory
+    *   Key-value expirable factory.
+    */
+   public function __construct(KeyValueExpirableFactoryInterface $keyValueExpirableFactory) {
+@@ -35,10 +36,10 @@ class CSRFCallbackAccessCheck implements AccessInterface {
+   /**
+    * Custom access callback.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   RouterMatch object.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    *   Access allowed only if the token is exists and did not expired.
+    */
+   public function access(RouteMatchInterface $route_match): AccessResultInterface {
+diff --git a/src/BrightcoveAPIClientInterface.php b/src/BrightcoveAPIClientInterface.php
+index c5126a3..e513099 100644
+--- a/src/BrightcoveAPIClientInterface.php
++++ b/src/BrightcoveAPIClientInterface.php
+@@ -75,7 +75,7 @@ interface BrightcoveAPIClientInterface extends ConfigEntityInterface {
+   /**
+    * Returns the loaded API client.
+    *
+-   * @return \Brightcove\API\Client
++   * @return Client
+    *   Loaded API client.
+    */
+   public function getClient(): Client;
+diff --git a/src/BrightcoveAPIClientListBuilder.php b/src/BrightcoveAPIClientListBuilder.php
+index 9b511b7..f1e9e35 100644
+--- a/src/BrightcoveAPIClientListBuilder.php
++++ b/src/BrightcoveAPIClientListBuilder.php
+@@ -27,22 +27,22 @@ class BrightcoveAPIClientListBuilder extends ConfigEntityListBuilder {
+   /**
+    * Player storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\PlayerStorageInterface
++   * @var PlayerStorageInterface
+    */
+   protected $playerStorage;
+ 
+   /**
+    * Initializes a new API Client list builder.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+    * @param string $default_api_client
+    *   The ID of the default API client.
+-   * @param \Drupal\brightcove\Entity\Storage\PlayerStorageInterface $player_storage
++   * @param PlayerStorageInterface $player_storage
+    *   Player storage.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, string $default_api_client, PlayerStorageInterface $player_storage, TranslationInterface $string_translation) {
+@@ -84,8 +84,7 @@ class BrightcoveAPIClientListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity): array {
+-    /** @var \Drupal\brightcove\BrightcoveAPIClientInterface $entity */
+-
++    /** @var BrightcoveAPIClientInterface $entity */
+     $row = [
+       'label' => $entity->label(),
+       'id' => $entity->id(),
+diff --git a/src/BrightcovePlaylistAccessControlHandler.php b/src/BrightcovePlaylistAccessControlHandler.php
+index 6f02ea5..b46bafc 100644
+--- a/src/BrightcovePlaylistAccessControlHandler.php
++++ b/src/BrightcovePlaylistAccessControlHandler.php
+@@ -21,7 +21,7 @@ class BrightcovePlaylistAccessControlHandler extends EntityAccessControlHandler
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account): AccessResultInterface {
+-    /** @var \Drupal\brightcove\BrightcovePlaylistInterface $entity */
++    /** @var BrightcovePlaylistInterface $entity */
+     switch ($operation) {
+       case 'view':
+         if (!$entity->isPublished()) {
+diff --git a/src/BrightcovePlaylistHtmlRouteProvider.php b/src/BrightcovePlaylistHtmlRouteProvider.php
+index 5f0815b..948dc68 100644
+--- a/src/BrightcovePlaylistHtmlRouteProvider.php
++++ b/src/BrightcovePlaylistHtmlRouteProvider.php
+@@ -43,10 +43,10 @@ class BrightcovePlaylistHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the collection route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getCollectionRoute(EntityTypeInterface $entity_type): ?Route {
+@@ -70,10 +70,10 @@ class BrightcovePlaylistHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the add-form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getAddFormRoute(EntityTypeInterface $entity_type): ?Route {
+@@ -109,10 +109,10 @@ class BrightcovePlaylistHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type): ?Route {
+diff --git a/src/BrightcovePlaylistListBuilder.php b/src/BrightcovePlaylistListBuilder.php
+index 7ea62a3..668670f 100644
+--- a/src/BrightcovePlaylistListBuilder.php
++++ b/src/BrightcovePlaylistListBuilder.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove;
+ 
++use Drupal\brightcove\Entity\BrightcovePlaylist;
+ use Drupal\Core\Link;
+ use Drupal\Core\Datetime\DateFormatter;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -23,29 +24,29 @@ class BrightcovePlaylistListBuilder extends EntityListBuilder {
+   /**
+    * Account proxy.
+    *
+-   * @var \Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $accountProxy;
+ 
+   /**
+    * Date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   Entity type.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   Entity Storage.
+-   * @param \Drupal\Core\Session\AccountProxy $account_proxy
++   * @param AccountProxy $account_proxy
+    *   Account proxy.
+-   * @param \Drupal\Core\Datetime\DateFormatter $date_formatter
++   * @param DateFormatter $date_formatter
+    *   Date formatter.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, AccountProxy $account_proxy, DateFormatter $date_formatter, TranslationInterface $string_translation) {
+@@ -105,7 +106,7 @@ class BrightcovePlaylistListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity): array {
+-    /** @var \Drupal\brightcove\Entity\BrightcovePlaylist $entity */
++    /** @var BrightcovePlaylist $entity */
+     if (($entity->isPublished() && $this->accountProxy->hasPermission('view published brightcove playlists')) || (!$entity->isPublished() && $this->accountProxy->hasPermission('view unpublished brightcove playlists'))) {
+       $name = Link::fromTextAndUrl($entity->label(), new Url(
+         'entity.brightcove_playlist.canonical', [
+diff --git a/src/BrightcoveUtil.php b/src/BrightcoveUtil.php
+index 8ae9774..bf366d5 100644
+--- a/src/BrightcoveUtil.php
++++ b/src/BrightcoveUtil.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove;
+ 
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\Core\Queue\QueueWorkerInterface;
++use Drupal\Core\Entity\EntityStorageException;
+ use Brightcove\API\Client;
+ use Brightcove\API\CMS;
+ use Brightcove\API\DI;
+@@ -29,28 +32,28 @@ class BrightcoveUtil {
+   /**
+    * Array of BrightcoveAPIClient objects.
+    *
+-   * @var \Drupal\brightcove\Entity\BrightcoveAPIClient[]
++   * @var BrightcoveAPIClient[]
+    */
+   protected static $apiClients = [];
+ 
+   /**
+    * Array of CMS objects.
+    *
+-   * @var \Brightcove\API\CMS[]
++   * @var CMS[]
+    */
+   protected static $cmsApis = [];
+ 
+   /**
+    * Array of DI objects.
+    *
+-   * @var \Brightcove\API\DI[]
++   * @var DI[]
+    */
+   protected static $diApis = [];
+ 
+   /**
+    * Array of PM objects.
+    *
+-   * @var \Brightcove\API\PM[]
++   * @var PM[]
+    */
+   protected static $pmApis = [];
+ 
+@@ -73,7 +76,7 @@ class BrightcoveUtil {
+    * @param string $entity_id
+    *   The entity ID of the BrightcoveAPIClient.
+    *
+-   * @return \Drupal\brightcove\Entity\BrightcoveAPIClient
++   * @return BrightcoveAPIClient
+    *   Loaded BrightcoveAPIClient object.
+    */
+   public static function getApiClient(string $entity_id): BrightcoveAPIClientInterface {
+@@ -91,7 +94,7 @@ class BrightcoveUtil {
+    * @param string $entity_id
+    *   BrightcoveAPIClient entity ID.
+    *
+-   * @return \Brightcove\API\Client
++   * @return Client
+    *   Loaded Brightcove client.
+    */
+   public static function getClient(string $entity_id): Client {
+@@ -105,7 +108,7 @@ class BrightcoveUtil {
+    * @param string $entity_id
+    *   BrightcoveAPIClient entity ID.
+    *
+-   * @return \Brightcove\API\CMS
++   * @return CMS
+    *   Initialized Brightcove CMS API.
+    */
+   public static function getCmsApi(string $entity_id): CMS {
+@@ -124,7 +127,7 @@ class BrightcoveUtil {
+    * @param string $entity_id
+    *   BrightcoveAPIClient entity ID.
+    *
+-   * @return \Brightcove\API\DI
++   * @return DI
+    *   Initialized Brightcove CMS API.
+    */
+   public static function getDiApi(string $entity_id): DI {
+@@ -143,7 +146,7 @@ class BrightcoveUtil {
+    * @param string $entity_id
+    *   BrightcoveAPIClient entity ID.
+    *
+-   * @return \Brightcove\API\PM
++   * @return PM
+    *   Initialized Brightcove PM API.
+    */
+   public static function getPmApi(string $entity_id): PM {
+@@ -163,7 +166,7 @@ class BrightcoveUtil {
+    * show a message about it with a link to be able to update the local
+    * version.
+    *
+-   * @param \Drupal\brightcove\BrightcoveCMSEntityInterface $entity
++   * @param BrightcoveCMSEntityInterface $entity
+    *   Brightcove CMS Entity, can be BrightcoveVideo or BrightcovePlaylist.
+    *   Player is currently not supported.
+    *
+@@ -269,10 +272,10 @@ class BrightcoveUtil {
+    *
+    * @param string $type
+    *   The queue's type to run, it can be either sync, run or clear.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   Queue factory.
+    *
+-   * @throws \Drupal\brightcove\Exception\BrightcoveUtilException
++   * @throws BrightcoveUtilException
+    *   Throws an exception if the queue type is invalid.
+    */
+   public static function runStatusQueues(string $type, QueueFactory $queue_factory): void {
+@@ -328,13 +331,13 @@ class BrightcoveUtil {
+    * @param mixed &$context
+    *   The Batch API context.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public static function runQueue(string $queue, &$context): void {
+     // This is a static function called by Batch API, so it's not possible to
+     // use dependency injection here.
+     $container = \Drupal::getContainer();
+-    /** @var \Drupal\Core\Queue\QueueWorkerInterface $queue_worker */
++    /** @var QueueWorkerInterface $queue_worker */
+     $queue_worker = $container->get('plugin.manager.queue_worker')->createInstance($queue);
+     $logger = $container->get('brightcove.logger');
+     $queue = $container->get('queue')->get($queue);
+@@ -403,7 +406,7 @@ class BrightcoveUtil {
+   /**
+    * Helper function to get default player for the given entity.
+    *
+-   * @param \Drupal\brightcove\BrightcoveVideoPlaylistCMSEntityInterface $entity
++   * @param BrightcoveVideoPlaylistCMSEntityInterface $entity
+    *   Video or playlist entity.
+    *
+    * @return string
+@@ -421,20 +424,20 @@ class BrightcoveUtil {
+   /**
+    * Helper function to save or update tags.
+    *
+-   * @param \Drupal\brightcove\BrightcoveVideoPlaylistCMSEntityInterface $entity
++   * @param BrightcoveVideoPlaylistCMSEntityInterface $entity
+    *   Video or playlist entity.
+    * @param string $api_client_id
+    *   API Client ID.
+    * @param array $tags
+    *   The list of tags from brightcove.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public static function saveOrUpdateTags(BrightcoveVideoPlaylistCMSEntityInterface $entity, string $api_client_id, array $tags = []): void {
+     $entity_tags = [];
+     $video_entity_tags = $entity->getTags();
+     foreach ($video_entity_tags as $index => $tag) {
+-      /** @var \Drupal\taxonomy\Entity\Term $term */
++      /** @var Term $term */
+       $term = Term::load($tag['target_id']);
+       if (!is_null($term)) {
+         $entity_tags[$term->id()] = $term->getName();
+@@ -498,7 +501,7 @@ class BrightcoveUtil {
+    *
+    * @param callable $function
+    *   Function that needs to be run in sync.
+-   * @param \Drupal\Core\Lock\LockBackendInterface|null $lock
++   * @param LockBackendInterface|null $lock
+    *   Lock backend.
+    *
+    * @return bool|mixed
+diff --git a/src/BrightcoveVideoAccessControlHandler.php b/src/BrightcoveVideoAccessControlHandler.php
+index a09fd49..7e673dd 100644
+--- a/src/BrightcoveVideoAccessControlHandler.php
++++ b/src/BrightcoveVideoAccessControlHandler.php
+@@ -21,7 +21,7 @@ class BrightcoveVideoAccessControlHandler extends EntityAccessControlHandler {
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account): AccessResultInterface {
+-    /** @var \Drupal\brightcove\BrightcoveVideoInterface $entity */
++    /** @var BrightcoveVideoInterface $entity */
+     switch ($operation) {
+       case 'view':
+         if (!$entity->isPublished()) {
+diff --git a/src/BrightcoveVideoInterface.php b/src/BrightcoveVideoInterface.php
+index 0fb7928..0348e1c 100644
+--- a/src/BrightcoveVideoInterface.php
++++ b/src/BrightcoveVideoInterface.php
+@@ -75,7 +75,7 @@ interface BrightcoveVideoInterface extends BrightcoveCMSEntityInterface {
+    *                             width of 640px.
+    *     - IMAGE_TYPE_POSTER: Recommended aspect ratio of 16:9 and a minimum
+    *                          width of 160px.
+-   * @param \Brightcove\Item\Video\Image $image
++   * @param Image $image
+    *   The image from Brightcove.
+    *
+    * @return \Drupal\brightcove\BrightcoveVideoInterface
+diff --git a/src/BrightcoveVideoListBuilder.php b/src/BrightcoveVideoListBuilder.php
+index 3a9869e..a511eed 100644
+--- a/src/BrightcoveVideoListBuilder.php
++++ b/src/BrightcoveVideoListBuilder.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove;
+ 
++use Drupal\brightcove\Entity\BrightcoveVideo;
++use Drupal\file\Entity\File;
++use Drupal\image\Entity\ImageStyle;
+ use Drupal\Core\Link;
+ use Drupal\Core\Datetime\DateFormatter;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -27,47 +30,47 @@ class BrightcoveVideoListBuilder extends EntityListBuilder {
+   /**
+    * Account proxy.
+    *
+-   * @var \Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $accountProxy;
+ 
+   /**
+    * Date formatter.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatter
++   * @var DateFormatter
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * File storage.
+    *
+-   * @var \Drupal\file\FileStorageInterface
++   * @var FileStorageInterface
+    */
+   protected $fileStorage;
+ 
+   /**
+    * Image style storage.
+    *
+-   * @var \Drupal\image\ImageStyleStorageInterface
++   * @var ImageStyleStorageInterface
+    */
+   protected $imageStyleStorage;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   Entity type.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   Entity storage.
+-   * @param \Drupal\Core\Session\AccountProxy $account_proxy
++   * @param AccountProxy $account_proxy
+    *   Account proxy.
+-   * @param \Drupal\Core\Datetime\DateFormatter $date_formatter
++   * @param DateFormatter $date_formatter
+    *   Date formatter.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+-   * @param \Drupal\file\FileStorageInterface $file_storage
++   * @param FileStorageInterface $file_storage
+    *   File storage.
+-   * @param \Drupal\image\ImageStyleStorageInterface $image_style_storage
++   * @param ImageStyleStorageInterface $image_style_storage
+    *   Image style storage.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, AccountProxy $account_proxy, DateFormatter $date_formatter, TranslationInterface $string_translation, FileStorageInterface $file_storage, ImageStyleStorageInterface $image_style_storage) {
+@@ -136,7 +139,7 @@ class BrightcoveVideoListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity): array {
+-    /** @var \Drupal\brightcove\Entity\BrightcoveVideo $entity */
++    /** @var BrightcoveVideo $entity */
+     if (($entity->isPublished() && $this->accountProxy->hasPermission('view published brightcove videos')) || (!$entity->isPublished() && $this->accountProxy->hasPermission('view unpublished brightcove videos'))) {
+       $name = Link::fromTextAndUrl($entity->label(), new Url(
+         'entity.brightcove_video.canonical', [
+@@ -152,9 +155,9 @@ class BrightcoveVideoListBuilder extends EntityListBuilder {
+     $thumbnail = $entity->getThumbnail();
+     $thumbnail_image = '';
+     if (!empty($thumbnail['target_id'])) {
+-      /** @var \Drupal\file\Entity\File $thumbnail_file */
++      /** @var File $thumbnail_file */
+       $thumbnail_file = $this->fileStorage->load($thumbnail['target_id']);
+-      /** @var \Drupal\image\Entity\ImageStyle $image_style */
++      /** @var ImageStyle $image_style */
+       $image_style = $this->imageStyleStorage->load('brightcove_videos_list_thumbnail');
+       if (!empty($thumbnail_file) && !is_null($image_style)) {
+         $image_uri = $image_style->buildUrl($thumbnail_file->getFileUri());
+diff --git a/src/Commands/BrightcoveCommands.php b/src/Commands/BrightcoveCommands.php
+index f54d15e..2aa9f20 100644
+--- a/src/Commands/BrightcoveCommands.php
++++ b/src/Commands/BrightcoveCommands.php
+@@ -18,23 +18,23 @@ class BrightcoveCommands extends DrushCommands {
+   /**
+    * Logger.
+    *
+-   * @var \Drupal\brightcove\Services\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The queue service.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * BrightcoveCommands constructor.
+    *
+-   * @param \Drupal\brightcove\Services\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\Core\Queue\QueueFactory $queueFactory
++   * @param QueueFactory $queueFactory
+    *   The queue service.
+    */
+   public function __construct(LoggerInterface $logger, QueueFactory $queueFactory) {
+diff --git a/src/Controller/BrightcovePlaylistController.php b/src/Controller/BrightcovePlaylistController.php
+index 88e2755..1ac96fa 100644
+--- a/src/Controller/BrightcovePlaylistController.php
++++ b/src/Controller/BrightcovePlaylistController.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Controller;
+ 
++use Symfony\Component\HttpFoundation\RedirectResponse;
+ use Drupal\brightcove\BrightcoveUtil;
+ use Drupal\brightcove\Entity\BrightcovePlaylist;
+ use Drupal\brightcove\Entity\Storage\PlaylistStorageInterface;
+@@ -20,23 +21,23 @@ class BrightcovePlaylistController extends ControllerBase {
+   /**
+    * The brightcove_playlist storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\PlaylistStorageInterface
++   * @var PlaylistStorageInterface
+    */
+   protected $playlistStorage;
+ 
+   /**
+    * The brightcove_video storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\VideoStorageInterface
++   * @var VideoStorageInterface
+    */
+   protected $videoStorage;
+ 
+   /**
+    * Controller constructor.
+    *
+-   * @param \Drupal\brightcove\Entity\Storage\PlaylistStorageInterface $playlist_storage
++   * @param PlaylistStorageInterface $playlist_storage
+    *   Playlist entity storage.
+-   * @param \Drupal\brightcove\Entity\Storage\VideoStorageInterface $video_storage
++   * @param VideoStorageInterface $video_storage
+    *   Video entity storage.
+    */
+   public function __construct(PlaylistStorageInterface $playlist_storage, VideoStorageInterface $video_storage) {
+@@ -61,14 +62,14 @@ class BrightcovePlaylistController extends ControllerBase {
+    * @param int $entity_id
+    *   The ID of the playlist in Drupal.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   Redirection response.
+    *
+    * @throws \Exception
+    *   If BrightcoveAPIClient ID is missing when a new entity is being created.
+    */
+   public function update(int $entity_id): Response {
+-    /** @var \Drupal\brightcove\Entity\BrightcovePlaylist $playlist */
++    /** @var BrightcovePlaylist $playlist */
+     $playlist = $this->playlistStorage->load($entity_id);
+     $cms = BrightcoveUtil::getCmsApi($playlist->getApiClient());
+ 
+diff --git a/src/Controller/BrightcoveSubscriptionController.php b/src/Controller/BrightcoveSubscriptionController.php
+index 6739402..0aa9cd2 100644
+--- a/src/Controller/BrightcoveSubscriptionController.php
++++ b/src/Controller/BrightcoveSubscriptionController.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Controller;
+ 
++use Drupal\brightcove\BrightcoveAPIClientInterface;
++use Drupal\brightcove\Entity\BrightcoveAPIClient;
++use Symfony\Component\HttpFoundation\RedirectResponse;
+ use Brightcove\API\Exception\APIException;
+ use Drupal\brightcove\BrightcoveUtil;
+ use Drupal\brightcove\Entity\BrightcoveSubscription;
+@@ -34,56 +37,56 @@ class BrightcoveSubscriptionController extends ControllerBase {
+   /**
+    * API Client storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $apiClientStorage;
+ 
+   /**
+    * Database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Ingestion.
+    *
+-   * @var \Drupal\brightcove\Services\IngestionInterface
++   * @var IngestionInterface
+    */
+   protected $ingestion;
+ 
+   /**
+    * Link generator.
+    *
+-   * @var \Drupal\Core\Utility\LinkGeneratorInterface
++   * @var LinkGeneratorInterface
+    */
+   protected $linkGenerator;
+ 
+   /**
+    * Lock backend.
+    *
+-   * @var \Drupal\Core\Lock\LockBackendInterface
++   * @var LockBackendInterface
+    */
+   protected $lock;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Drupal\brightcove\Services\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Text Track storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $textTrackStorage;
+ 
+   /**
+    * Video entity storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\VideoStorageInterface
++   * @var VideoStorageInterface
+    */
+   protected $videoStorage;
+ 
+@@ -110,25 +113,25 @@ class BrightcoveSubscriptionController extends ControllerBase {
+   /**
+    * Initializes a subscription controller.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   Database connection.
+-   * @param \Drupal\Core\Utility\LinkGeneratorInterface $link_generator
++   * @param LinkGeneratorInterface $link_generator
+    *   Link generator.
+-   * @param \Drupal\brightcove\Entity\Storage\VideoStorageInterface $video_storage
++   * @param VideoStorageInterface $video_storage
+    *   Video entity storage.
+-   * @param \Drupal\Core\Lock\LockBackendInterface $lock
++   * @param LockBackendInterface $lock
+    *   Lock backend.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $api_client_storage
++   * @param EntityStorageInterface $api_client_storage
+    *   API Client storage.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $text_track_storage
++   * @param EntityStorageInterface $text_track_storage
+    *   Text Track storage.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+-   * @param \Drupal\brightcove\Services\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\brightcove\Services\IngestionInterface $ingestion
++   * @param IngestionInterface $ingestion
+    *   Ingestion.
+    */
+   public function __construct(
+@@ -158,10 +161,10 @@ class BrightcoveSubscriptionController extends ControllerBase {
+   /**
+    * Menu callback to handle the Brightcove notification callback.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   Request object.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Redirection response.
+    *
+    * @throws \Exception
+@@ -175,7 +178,7 @@ class BrightcoveSubscriptionController extends ControllerBase {
+           // Try to update an existing video or create a new one if not exist.
+           try {
+             // Get CMS API.
+-            /** @var \Drupal\brightcove\BrightcoveAPIClientInterface[] $api_client */
++            /** @var BrightcoveAPIClientInterface[] $api_client */
+             $api_clients = $this->apiClientStorage->loadByProperties([
+               'account_id' => $content['account_id'],
+             ]);
+@@ -240,7 +243,7 @@ class BrightcoveSubscriptionController extends ControllerBase {
+    * @return array
+    *   Renderable page elements.
+    *
+-   * @throws \Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException
++   * @throws BrightcoveSubscriptionException
+    */
+   public function listSubscriptions(): array {
+     // Set headers.
+@@ -350,7 +353,7 @@ class BrightcoveSubscriptionController extends ControllerBase {
+ 
+     // Check default subscriptions for each api client.
+     $api_clients_without_default_subscription = [];
+-    /** @var \Drupal\brightcove\Entity\BrightcoveAPIClient $api_client */
++    /** @var BrightcoveAPIClient $api_client */
+     foreach ($this->apiClientStorage->loadMultiple() as $api_client) {
+       if (BrightcoveSubscription::loadDefault($api_client) === NULL) {
+         $api_clients_without_default_subscription[] = $api_client->getLabel();
+@@ -379,7 +382,7 @@ class BrightcoveSubscriptionController extends ControllerBase {
+    * @param int $id
+    *   BrightcoveSubscription entity ID.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   Redirect response to redirect user after creating a Drupal only
+    *   subscription.
+    */
+@@ -401,7 +404,7 @@ class BrightcoveSubscriptionController extends ControllerBase {
+    * @param int $id
+    *   The ID of the Brightcove Subscription.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   Redirect response to redirect user after enabling the default
+    *   subscription.
+    */
+@@ -423,7 +426,7 @@ class BrightcoveSubscriptionController extends ControllerBase {
+    * @param int $id
+    *   The ID of the Brightcove Subscription.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   Redirect response to redirect user after enabling the default
+    *   subscription.
+    */
+@@ -448,7 +451,7 @@ class BrightcoveSubscriptionController extends ControllerBase {
+   public function createDefaults(): Response {
+     try {
+       // Get all available API clients.
+-      /** @var \Drupal\brightcove\BrightcoveAPIClientInterface[] $api_clients */
++      /** @var BrightcoveAPIClientInterface[] $api_clients */
+       $api_clients = $this->apiClientStorage->loadMultiple();
+ 
+       foreach ($api_clients as $api_client) {
+diff --git a/src/Controller/BrightcoveVideoController.php b/src/Controller/BrightcoveVideoController.php
+index e347120..a02722d 100644
+--- a/src/Controller/BrightcoveVideoController.php
++++ b/src/Controller/BrightcoveVideoController.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Controller;
+ 
++use Drupal\brightcove\Entity\BrightcoveVideo;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\brightcove\BrightcoveTextTrackInterface;
+ use Brightcove\Item\Video\Image;
+ use Drupal\brightcove\BrightcoveUtil;
+ use Drupal\brightcove\BrightcoveVideoInterface;
+@@ -31,68 +34,68 @@ class BrightcoveVideoController extends ControllerBase {
+   /**
+    * Database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The brightcove_video storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\VideoStorageInterface
++   * @var VideoStorageInterface
+    */
+   protected $videoStorage;
+ 
+   /**
+    * The brightcove_text_track storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $textTrackStorage;
+ 
+   /**
+    * The video queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $videoQueue;
+ 
+   /**
+    * Key-value expirable store.
+    *
+-   * @var \Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface
++   * @var KeyValueExpirableFactoryInterface
+    */
+   protected $keyValueExpirable;
+ 
+   /**
+    * Lock backend.
+    *
+-   * @var \Drupal\Core\Lock\LockBackendInterface
++   * @var LockBackendInterface
+    */
+   protected $lock;
+ 
+   /**
+    * Ingestion.
+    *
+-   * @var \Drupal\brightcove\Services\IngestionInterface
++   * @var IngestionInterface
+    */
+   protected $ingestion;
+ 
+   /**
+    * Controller constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   Database connection.
+-   * @param \Drupal\brightcove\Entity\Storage\VideoStorageInterface $video_storage
++   * @param VideoStorageInterface $video_storage
+    *   Brightcove Video entity storage.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $text_track_storage
++   * @param EntityStorageInterface $text_track_storage
+    *   Brightcove Text Track entity storage.
+-   * @param \Drupal\Core\Queue\QueueInterface $video_queue
++   * @param QueueInterface $video_queue
+    *   The Video queue object.
+-   * @param \Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface $key_value_expirable
++   * @param KeyValueExpirableFactoryInterface $key_value_expirable
+    *   Key-value expirable store.
+-   * @param \Drupal\Core\Lock\LockBackendInterface $lock
++   * @param LockBackendInterface $lock
+    *   Lock backend.
+-   * @param \Drupal\brightcove\Services\IngestionInterface $ingestion
++   * @param IngestionInterface $ingestion
+    *   Ingestion.
+    */
+   public function __construct(
+@@ -136,11 +139,11 @@ class BrightcoveVideoController extends ControllerBase {
+    * @param int $entity_id
+    *   The ID of the video in Drupal.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse|null
++   * @return RedirectResponse|null
+    *   Redirection response.
+    */
+   public function update(int $entity_id): ?RedirectResponse {
+-    /** @var \Drupal\brightcove\Entity\BrightcoveVideo $video_entity */
++    /** @var BrightcoveVideo $video_entity */
+     $video_entity = $this->videoStorage->load($entity_id);
+     $cms = BrightcoveUtil::getCmsApi($video_entity->getApiClient());
+ 
+@@ -174,12 +177,12 @@ class BrightcoveVideoController extends ControllerBase {
+   /**
+    * Ingestion callback for Brightcove.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   Request object.
+    * @param string $token
+    *   The token that is based on the Video ID.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   An empty Response object.
+    */
+   public function ingestionCallback(Request $request, string $token): Response {
+@@ -193,7 +196,7 @@ class BrightcoveVideoController extends ControllerBase {
+         $video_id = $this->keyValueExpirable->get('brightcove_callback')->get($token);
+ 
+         if (!empty($video_id)) {
+-          /** @var \Drupal\brightcove\Entity\BrightcoveVideo $video_entity */
++          /** @var BrightcoveVideo $video_entity */
+           $video_entity = $this->videoStorage->load($video_id);
+ 
+           if ($video_entity !== NULL) {
+@@ -235,10 +238,10 @@ class BrightcoveVideoController extends ControllerBase {
+    *
+    * @param string $entity
+    *   The asset entity.
+-   * @param \Drupal\brightcove\BrightcoveVideoInterface $video
++   * @param BrightcoveVideoInterface $video
+    *   The video.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    * @throws \Exception
+    */
+   private function handleAsset(string $entity, BrightcoveVideoInterface $video): void {
+@@ -261,7 +264,7 @@ class BrightcoveVideoController extends ControllerBase {
+    *
+    * @param string $entity
+    *   The image entity name, currently either thumbnail or poster.
+-   * @param \Drupal\brightcove\BrightcoveVideoInterface $video
++   * @param BrightcoveVideoInterface $video
+    *   The video.
+    *
+    * @throws \Exception
+@@ -293,10 +296,10 @@ class BrightcoveVideoController extends ControllerBase {
+    *
+    * @param string $entity
+    *   Text Track entity name.
+-   * @param \Drupal\brightcove\BrightcoveVideoInterface $video
++   * @param BrightcoveVideoInterface $video
+    *   The video.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   private function handleTextTrack(string $entity, BrightcoveVideoInterface $video): void {
+     try {
+@@ -306,7 +309,7 @@ class BrightcoveVideoController extends ControllerBase {
+       foreach ($text_tracks as $text_track) {
+         $ids[] = $text_track['target_id'];
+       }
+-      /** @var \Drupal\brightcove\BrightcoveTextTrackInterface[] $text_tracks */
++      /** @var BrightcoveTextTrackInterface[] $text_tracks */
+       $text_tracks = $this->textTrackStorage->loadMultiple($ids);
+ 
+       $cms = BrightcoveUtil::getCmsApi($video->getApiClient());
+@@ -345,10 +348,10 @@ class BrightcoveVideoController extends ControllerBase {
+   /**
+    * Handles TITLE entity type notification.
+    *
+-   * @param \Drupal\brightcove\BrightcoveVideoInterface $video
++   * @param BrightcoveVideoInterface $video
+    *   The video.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   private function handleTitle(BrightcoveVideoInterface $video): void {
+     // Unset (delete) video from the entity.
+diff --git a/src/Entity/BrightcoveAPIClient.php b/src/Entity/BrightcoveAPIClient.php
+index 6055f37..52db0af 100644
+--- a/src/Entity/BrightcoveAPIClient.php
++++ b/src/Entity/BrightcoveAPIClient.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Entity;
+ 
++use Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface;
+ use Brightcove\API\CMS;
+ use Brightcove\API\Exception\APIException;
+ use Brightcove\API\Exception\AuthenticationException;
+@@ -99,7 +100,7 @@ class BrightcoveAPIClient extends ConfigEntityBase implements BrightcoveAPIClien
+   /**
+    * The loaded API client.
+    *
+-   * @var \Brightcove\API\Client
++   * @var Client
+    */
+   protected $client;
+ 
+@@ -136,7 +137,7 @@ class BrightcoveAPIClient extends ConfigEntityBase implements BrightcoveAPIClien
+   /**
+    * Expirable key/value store for the client.
+    *
+-   * @var \Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface
++   * @var KeyValueStoreExpirableInterface
+    */
+   protected $key_value_expirable_store;
+ 
+@@ -254,7 +255,7 @@ class BrightcoveAPIClient extends ConfigEntityBase implements BrightcoveAPIClien
+   /**
+    * Set Brightcove API client.
+    *
+-   * @param \Brightcove\API\Client $client
++   * @param Client $client
+    *   The initialized Brightcove API Client.
+    *
+    * @return $this
+@@ -296,7 +297,7 @@ class BrightcoveAPIClient extends ConfigEntityBase implements BrightcoveAPIClien
+    * @return $this
+    *   The current object.
+    *
+-   * @throws \Brightcove\API\Exception\AuthenticationException|\Exception
++   * @throws AuthenticationException|\Exception
+    *   Re-throw any exception to be able to handle them nicely.
+    */
+   public function authorizeClient(): BrightcoveAPIClientInterface {
+diff --git a/src/Entity/BrightcoveCmsEntity.php b/src/Entity/BrightcoveCmsEntity.php
+index a691600..1ca2876 100644
+--- a/src/Entity/BrightcoveCmsEntity.php
++++ b/src/Entity/BrightcoveCmsEntity.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Entity;
+ 
++use Drupal\Core\Entity\Exception\AmbiguousEntityClassException;
++use Drupal\Core\Entity\Exception\NoCorrespondingEntityClassException;
+ use Drupal\brightcove\BrightcoveCMSEntityInterface;
+ use Drupal\brightcove\EntityChangedFieldsTrait;
+ use Drupal\Core\Entity\ContentEntityBase;
+@@ -157,8 +159,8 @@ abstract class BrightcoveCmsEntity extends ContentEntityBase implements Brightco
+    * @return \Drupal\brightcove\Entity\BrightcoveCmsEntity[]
+    *   An array of BrightcoveCMSEntity objects.
+    *
+-   * @throws \Drupal\Core\Entity\Exception\AmbiguousEntityClassException
+-   * @throws \Drupal\Core\Entity\Exception\NoCorrespondingEntityClassException
++   * @throws AmbiguousEntityClassException
++   * @throws NoCorrespondingEntityClassException
+    *
+    * @deprecated in brightcove:3.0.0 and is removed from brightcove:4.0.0.
+    *   Please use the entity storage to load custom field entity via API Client.
+diff --git a/src/Entity/BrightcoveCustomField.php b/src/Entity/BrightcoveCustomField.php
+index 7595ed6..0f87ed7 100644
+--- a/src/Entity/BrightcoveCustomField.php
++++ b/src/Entity/BrightcoveCustomField.php
+@@ -183,9 +183,9 @@ class BrightcoveCustomField extends BrightcoveCmsEntity implements BrightcoveCus
+   /**
+    * Create or update an existing custom field.
+    *
+-   * @param \Brightcove\Item\CustomField $custom_field
++   * @param CustomField $custom_field
+    *   Brightcove Custom Field object.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   Custom Field Entity storage.
+    * @param string|null $api_client_id
+    *   The ID of the BrightcoveAPIClient entity.
+diff --git a/src/Entity/BrightcoveEntity.php b/src/Entity/BrightcoveEntity.php
+index ec446ac..07efbbe 100644
+--- a/src/Entity/BrightcoveEntity.php
++++ b/src/Entity/BrightcoveEntity.php
+@@ -18,7 +18,7 @@ abstract class BrightcoveEntity extends EntityBase implements BrightcoveEntityIn
+   /**
+    * Field item list.
+    *
+-   * @var \Drupal\Core\Field\FieldItemListInterface[]
++   * @var FieldItemListInterface[]
+    */
+   private $fields;
+ 
+diff --git a/src/Entity/BrightcovePlayer.php b/src/Entity/BrightcovePlayer.php
+index d5c68b1..100d031 100644
+--- a/src/Entity/BrightcovePlayer.php
++++ b/src/Entity/BrightcovePlayer.php
+@@ -153,7 +153,7 @@ class BrightcovePlayer extends BrightcoveCmsEntity implements BrightcovePlayerIn
+    * @param string $version
+    *   The version of the player.
+    *
+-   * @return \Drupal\brightcove\BrightcovePlayerInterface
++   * @return BrightcovePlayerInterface
+    *   The called Brightcove Player.
+    */
+   protected function setVersion(string $version): BrightcovePlayerInterface {
+@@ -247,9 +247,9 @@ class BrightcovePlayer extends BrightcoveCmsEntity implements BrightcovePlayerIn
+   /**
+    * Create or update an existing player from a Brightcove Player object.
+    *
+-   * @param \Brightcove\Item\Player\Player $player
++   * @param Player $player
+    *   Brightcove Player object.
+-   * @param \Drupal\brightcove\Entity\Storage\PlayerStorageInterface $player_storage
++   * @param PlayerStorageInterface $player_storage
+    *   Player entity storage.
+    * @param string|null $api_client_id
+    *   The ID of the Brightcove API Client entity.
+@@ -259,7 +259,7 @@ class BrightcovePlayer extends BrightcoveCmsEntity implements BrightcovePlayerIn
+    */
+   public static function createOrUpdate(Player $player, PlayerStorageInterface $player_storage, ?string $api_client_id = NULL): void {
+     // Try to get an existing player.
+-    /** @var \Drupal\brightcove\BrightcovePlayerInterface[] $existing_player */
++    /** @var BrightcovePlayerInterface[] $existing_player */
+     $existing_player = $player_storage->loadByProperties([
+       'player_id' => $player->getId(),
+     ]);
+@@ -367,7 +367,7 @@ class BrightcovePlayer extends BrightcoveCmsEntity implements BrightcovePlayerIn
+         }
+       }
+ 
+-      /** @var \Drupal\brightcove\BrightcovePlayerInterface $player_entity */
++      /** @var BrightcovePlayerInterface $player_entity */
+       $player_entity = $player_storage->create($values);
+       $needs_save = TRUE;
+     }
+diff --git a/src/Entity/BrightcovePlaylist.php b/src/Entity/BrightcovePlaylist.php
+index 0f693ab..d12af84 100644
+--- a/src/Entity/BrightcovePlaylist.php
++++ b/src/Entity/BrightcovePlaylist.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Entity;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Brightcove\Item\Playlist;
+ use Drupal\brightcove\BrightcoveUtil;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -139,9 +140,9 @@ class BrightcovePlaylist extends BrightcoveVideoPlaylistCmsEntity implements Bri
+   /**
+    * Implements callback_allowed_values_function().
+    *
+-   * @param \Drupal\Core\Field\FieldStorageDefinitionInterface $definition
++   * @param FieldStorageDefinitionInterface $definition
+    *   The field storage definition.
+-   * @param \Drupal\Core\Entity\FieldableEntityInterface|null $entity
++   * @param FieldableEntityInterface|null $entity
+    *   (optional) The entity context if known, or NULL if the allowed values
+    *   are being collected without the context of a specific entity.
+    * @param bool &$cacheable
+@@ -239,7 +240,7 @@ class BrightcovePlaylist extends BrightcoveVideoPlaylistCmsEntity implements Bri
+    *   SAVED_NEW or SAVED_UPDATED based on the operation performed.
+    *   FALSE is returned if the save operation failed.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of failures an exception is thrown.
+    */
+   public function save(bool $upload = FALSE) {
+@@ -682,9 +683,9 @@ class BrightcovePlaylist extends BrightcoveVideoPlaylistCmsEntity implements Bri
+   /**
+    * Converts videos from \Brightcove\Item\Playlist to Drupal Field API array.
+    *
+-   * @param \Brightcove\Item\Playlist $playlist
++   * @param Playlist $playlist
+    *   The playlist whose videos should be extracted.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $video_storage
++   * @param EntityStorageInterface $video_storage
+    *   Video entity storage.
+    *
+    * @return array|null
+@@ -724,11 +725,11 @@ class BrightcovePlaylist extends BrightcoveVideoPlaylistCmsEntity implements Bri
+   /**
+    * Create or update an existing playlist from a Brightcove Playlist object.
+    *
+-   * @param \Brightcove\Item\Playlist $playlist
++   * @param Playlist $playlist
+    *   Brightcove Playlist object.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $playlist_storage
++   * @param EntityStorageInterface $playlist_storage
+    *   Playlist EntityStorage.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $video_storage
++   * @param EntityStorageInterface $video_storage
+    *   Video EntityStorage.
+    * @param string|null $api_client_id
+    *   The ID of the BrightcoveAPIClient entity.
+diff --git a/src/Entity/BrightcoveSubscription.php b/src/Entity/BrightcoveSubscription.php
+index 8679e15..cce131b 100644
+--- a/src/Entity/BrightcoveSubscription.php
++++ b/src/Entity/BrightcoveSubscription.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Entity;
+ 
++use Drupal\core\Database\Connection;
+ use Brightcove\API\Request\SubscriptionRequest;
+ use Brightcove\Item\Subscription;
+ use Drupal\brightcove\BrightcoveAPIClientInterface;
+@@ -18,7 +19,7 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+   /**
+    * Static cache for subscriptions.
+    *
+-   * @var \Brightcove\Item\Subscription
++   * @var Subscription
+    */
+   protected static $subscriptionCache = NULL;
+ 
+@@ -53,7 +54,7 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+   /**
+    * The Brightcove API Client.
+    *
+-   * @var \Drupal\brightcove\Entity\BrightcoveAPIClient
++   * @var BrightcoveAPIClient
+    */
+   protected $apiClient;
+ 
+@@ -74,7 +75,7 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+   /**
+    * Drupal database connection.
+    *
+-   * @var \Drupal\core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+@@ -206,7 +207,7 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+    *   The default Brightcove Subscription for the given API client or NULL if
+    *   not found.
+    *
+-   * @throws \Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException
++   * @throws BrightcoveSubscriptionException
+    *   If the field is not valid.
+    */
+   protected static function loadByField(string $field, $value): ?BrightcoveSubscriptionInterface {
+@@ -258,14 +259,14 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+   /**
+    * Loads the default subscription by API Client ID.
+    *
+-   * @param \Drupal\brightcove\Entity\BrightcoveAPIClient $api_client
++   * @param BrightcoveAPIClient $api_client
+    *   Loaded API Client entity.
+    *
+    * @return \Drupal\brightcove\Entity\BrightcoveSubscription|null
+    *   The default Brightcove Subscription for the given API client or NULL if
+    *   not found.
+    *
+-   * @throws \Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException
++   * @throws BrightcoveSubscriptionException
+    */
+   public static function loadDefault(BrightcoveAPIClient $api_client): ?BrightcoveSubscription {
+     return self::loadByField('default', $api_client->id());
+@@ -280,7 +281,7 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+    * @return \Drupal\brightcove\Entity\BrightcoveSubscription|null
+    *   Loaded BrightcoveSubscription entity, or NULL if not found.
+    *
+-   * @throws \Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException
++   * @throws BrightcoveSubscriptionException
+    */
+   public static function load(int $id): ?BrightcoveSubscription {
+     return self::loadByField('id', $id);
+@@ -330,7 +331,7 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+   /**
+    * Load Subscriptions for a given API client.
+    *
+-   * @param \Drupal\brightcove\Entity\BrightcoveAPIClient $api_client
++   * @param BrightcoveAPIClient $api_client
+    *   Loaded API client.
+    *
+    * @return \Drupal\brightcove\Entity\BrightcoveSubscription[]
+@@ -367,7 +368,7 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+    * @return \Drupal\brightcove\Entity\BrightcoveSubscription|null
+    *   Loaded BrightcoveSubscription entity, or NULL if not found.
+    *
+-   * @throws \Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException
++   * @throws BrightcoveSubscriptionException
+    */
+   public static function loadByBcSid(string $bcsid): ?BrightcoveSubscription {
+     return self::loadByField('bcsid', $bcsid);
+@@ -382,7 +383,7 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+    * @return \Drupal\brightcove\Entity\BrightcoveSubscription|null
+    *   The Subscription with the given endpoint or NULL if not found.
+    *
+-   * @throws \Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException
++   * @throws BrightcoveSubscriptionException
+    */
+   public static function loadByEndpoint(string $endpoint): ?BrightcoveSubscription {
+     return self::loadByField('endpoint', $endpoint);
+@@ -578,12 +579,12 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+   /**
+    * Create or update a Subscription entity.
+    *
+-   * @param \Brightcove\Item\Subscription $subscription
++   * @param Subscription $subscription
+    *   Subscription object from Brightcove.
+-   * @param \Drupal\brightcove\Entity\BrightcoveAPIClient|null $api_client
++   * @param BrightcoveAPIClient|null $api_client
+    *   Loaded API client entity, or null.
+    *
+-   * @throws \Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException
++   * @throws BrightcoveSubscriptionException
+    * @throws \Exception
+    */
+   public static function createOrUpdate(Subscription $subscription, BrightcoveAPIClient $api_client = NULL): void {
+@@ -600,7 +601,7 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+       $brightcove_subscription = new BrightcoveSubscription();
+       $brightcove_subscription->bcsid = $subscription->getId();
+ 
+-      /** @var \Drupal\brightcove\Entity\BrightcoveAPIClient $api_client */
++      /** @var BrightcoveAPIClient $api_client */
+       if (!empty($api_client)) {
+         $brightcove_subscription->setApiClient($api_client);
+       }
+@@ -668,10 +669,10 @@ class BrightcoveSubscription implements BrightcoveSubscriptionInterface {
+   /**
+    * Get all available subscriptions from Brightcove.
+    *
+-   * @param \Drupal\brightcove\BrightcoveAPIClientInterface $api_client
++   * @param BrightcoveAPIClientInterface $api_client
+    *   API Client entity.
+    *
+-   * @return \Brightcove\Item\Subscription[]
++   * @return Subscription[]
+    *   List of subscriptions or null of there are none.
+    */
+   public static function listFromBrightcove(BrightcoveAPIClientInterface $api_client): array {
+diff --git a/src/Entity/BrightcoveSubscriptionInterface.php b/src/Entity/BrightcoveSubscriptionInterface.php
+index 9ca09d9..f50fce3 100644
+--- a/src/Entity/BrightcoveSubscriptionInterface.php
++++ b/src/Entity/BrightcoveSubscriptionInterface.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Entity;
+ 
++use Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException;
+ use Drupal\brightcove\BrightcoveAPIClientInterface;
+ 
+ /**
+@@ -40,7 +41,7 @@ interface BrightcoveSubscriptionInterface {
+   /**
+    * Returns the API Client ID.
+    *
+-   * @return \Drupal\brightcove\BrightcoveAPIClientInterface|null
++   * @return BrightcoveAPIClientInterface|null
+    *   The API Client for this Subscription.
+    */
+   public function getApiClient(): ?BrightcoveAPIClientInterface;
+@@ -80,7 +81,7 @@ interface BrightcoveSubscriptionInterface {
+   /**
+    * Sets the API Client ID.
+    *
+-   * @param \Drupal\brightcove\Entity\BrightcoveAPIClient|null $api_client
++   * @param BrightcoveAPIClient|null $api_client
+    *   The API Client.
+    *
+    * @return $this
+@@ -141,7 +142,7 @@ interface BrightcoveSubscriptionInterface {
+    * @param bool $upload
+    *   Whether to upload the new subscription to Brightcove or not.
+    *
+-   * @throws \Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException
++   * @throws BrightcoveSubscriptionException
+    *   If an error happens during saving the subscription.
+    */
+   public function save(bool $upload = FALSE): void;
+@@ -149,7 +150,7 @@ interface BrightcoveSubscriptionInterface {
+   /**
+    * Saves the subscription entity to Brightcove.
+    *
+-   * @throws \Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException
++   * @throws BrightcoveSubscriptionException
+    *   If the Subscription wasn't saved to Brightcove successfully.
+    */
+   public function saveToBrightcove(): void;
+@@ -161,7 +162,7 @@ interface BrightcoveSubscriptionInterface {
+    *   If TRUE delete the local Subscription entity only, otherwise delete the
+    *   subscription from Brightcove as well.
+    *
+-   * @throws \Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException
++   * @throws BrightcoveSubscriptionException
+    *   If the subscription failed to be deleted.
+    */
+   public function delete(bool $local_only = TRUE): void;
+@@ -169,7 +170,7 @@ interface BrightcoveSubscriptionInterface {
+   /**
+    * Delete the Subscription from Brightcove only.
+    *
+-   * @throws \Drupal\brightcove\Entity\Exception\BrightcoveSubscriptionException
++   * @throws BrightcoveSubscriptionException
+    * @throws \Exception
+    */
+   public function deleteFromBrightcove(): void;
+diff --git a/src/Entity/BrightcoveTextTrack.php b/src/Entity/BrightcoveTextTrack.php
+index 4e07539..a1f256a 100644
+--- a/src/Entity/BrightcoveTextTrack.php
++++ b/src/Entity/BrightcoveTextTrack.php
+@@ -545,9 +545,9 @@ class BrightcoveTextTrack extends ContentEntityBase implements BrightcoveTextTra
+   /**
+    * Create or update an existing text track from a Brightcove object.
+    *
+-   * @param \Brightcove\Item\Video\TextTrack $text_track
++   * @param TextTrack $text_track
+    *   Brightcove Text Track object.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $text_track_storage
++   * @param EntityStorageInterface $text_track_storage
+    *   Text Track storage.
+    * @param int $video_entity_id
+    *   The ID of the BrightcoveVideo entity.
+@@ -562,7 +562,7 @@ class BrightcoveTextTrack extends ContentEntityBase implements BrightcoveTextTra
+     ]);
+     $text_track_needs_save = FALSE;
+ 
+-    /** @var \Drupal\brightcove\Entity\BrightcoveVideo $video */
++    /** @var BrightcoveVideo $video */
+     $video = \Drupal::getContainer()
+       ->get('entity_type.manager')
+       ->getStorage('brightcove_video')
+@@ -708,7 +708,7 @@ class BrightcoveTextTrack extends ContentEntityBase implements BrightcoveTextTra
+    * @param string $id
+    *   The ID of the Text Track provided by Brightcove.
+    *
+-   * @return \Drupal\brightcove\BrightcoveTextTrackInterface|null
++   * @return BrightcoveTextTrackInterface|null
+    *   The loaded Text Track entity.
+    *
+    * @deprecated in brightcove:3.0.0 and is removed from brightcove:4.0.0.
+diff --git a/src/Entity/BrightcoveVideo.php b/src/Entity/BrightcoveVideo.php
+index b84ce14..9f56f96 100644
+--- a/src/Entity/BrightcoveVideo.php
++++ b/src/Entity/BrightcoveVideo.php
+@@ -4,6 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Entity;
+ 
++use Brightcove\API\Request\IngestRequest;
++use Drupal\file\FileInterface;
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Core\Entity\EntityStorageException;
+ use Brightcove\Item\Video\Image;
+ use Drupal\brightcove\Entity\Storage\VideoStorageInterface;
+ use Drupal\Core\File\FileSystemInterface;
+@@ -70,7 +74,7 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+   /**
+    * Ingestion request object.
+    *
+-   * @var \Brightcove\API\Request\IngestRequest
++   * @var IngestRequest
+    *
+    * @deprecated in brightcove:3.0.0 and is removed from brightcove:4.0.0.
+    *   No longer used as the logic is changed, please use the Ingestion service.
+@@ -81,7 +85,7 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+   /**
+    * Create or get an existing ingestion request object.
+    *
+-   * @return \Brightcove\API\Request\IngestRequest
++   * @return IngestRequest
+    *   Returns an ingestion request object.
+    *
+    * @deprecated in brightcove:3.0.0 and is removed from brightcove:4.0.0.
+@@ -114,7 +118,7 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+ 
+     // Add missing height and/or width if it wouldn't be set.
+     if (!empty($values[0]['target_id']) && (empty($values[0]['height']) || empty($values[0]['width']))) {
+-      /** @var \Drupal\file\FileInterface $file */
++      /** @var FileInterface $file */
+       $file = $container->get('entity_type.manager')->getStorage('file')->load($values[0]['target_id']);
+       if ($file !== NULL) {
+         $image = $container->get('image.factory')->get($file->getFileUri());
+@@ -182,7 +186,7 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+       $entity_image = $this->{"get{$function}"}();
+       // If the entity already has an image then load and delete it.
+       if (!empty($entity_image['target_id'])) {
+-        /** @var \Drupal\file\FileInterface $file */
++        /** @var FileInterface $file */
+         $file = $container->get('entity_type.manager')
+           ->getStorage('file')
+           ->load($entity_image['target_id']);
+@@ -206,7 +210,7 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+         // Prepare directory and if it was a success try to save the image.
+         if ($file_system->prepareDirectory($image_dir, FileSystemInterface::MODIFY_PERMISSIONS | FileSystemInterface::CREATE_DIRECTORY)) {
+           $image_name = $matches[1];
+-          $file = file_save_data($image_content, "{$image_dir}/{$image_name}");
++          $file = \Drupal::service('file.repository')->writeData($image_content, "{$image_dir}/{$image_name}");
+ 
+           // Set image if there was no error.
+           if ($file !== FALSE) {
+@@ -234,7 +238,7 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+    * @param int $target_id
+    *   The target ID of the saved file.
+    *
+-   * @return \Drupal\brightcove\BrightcoveVideoInterface
++   * @return BrightcoveVideoInterface
+    *   The called Brightcove Video.
+    *
+    * @throws \Exception
+@@ -249,7 +253,7 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+       ->get('entity_type.manager')
+       ->getStorage('file');
+ 
+-    /** @var \Drupal\file\FileInterface $file */
++    /** @var FileInterface $file */
+     $file = $file_storage->load($target_id);
+ 
+     // Delete image.
+@@ -634,7 +638,7 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+    * @param string $brightcove_video_id
+    *   The External ID of the Video.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null
++   * @return EntityInterface|null
+    *   The matching Brightcove Video or NULL if the video cannot be found.
+    *
+    * @deprecated in brightcove:3.0.0 and is removed from brightcove:4.0.0.
+@@ -669,11 +673,11 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+    *   Either SAVED_NEW or SAVED_UPDATED, depending on the operation performed.
+    *   FALSE returned if there was an error.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of a failure an exception is thrown.
+    */
+   public function save(bool $upload = FALSE) {
+-    /** @var \Drupal\brightcove\Entity\Storage\VideoStorageInterface $storage */
++    /** @var VideoStorageInterface $storage */
+     $storage = $this->entityTypeManager()->getStorage($this->entityTypeId);
+     return $storage->save($this, $upload);
+   }
+@@ -685,7 +689,7 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+    *   Whether to delete the local version only or both local and Brightcove
+    *   versions.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of failures an exception is thrown.
+    *
+    * @deprecated in brightcove:3.0.0 and is removed from brightcove:4.0.0.
+@@ -1457,7 +1461,7 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+       }
+       // Otherwise, download the profiles from brightcove and cache the results.
+       else {
+-        /** @var \Drupal\brightcove\Entity\BrightcoveAPIClient $api_client_entity */
++        /** @var BrightcoveAPIClient $api_client_entity */
+         $api_client_entity = BrightcoveAPIClient::load($api_client);
+ 
+         try {
+@@ -1492,9 +1496,9 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+   /**
+    * Implements callback_allowed_values_function().
+    *
+-   * @param \Drupal\Core\Field\FieldStorageDefinitionInterface $definition
++   * @param FieldStorageDefinitionInterface $definition
+    *   The field storage definition.
+-   * @param \Drupal\Core\Entity\FieldableEntityInterface|null $entity
++   * @param FieldableEntityInterface|null $entity
+    *   (optional) The entity context if known, or NULL if the allowed values
+    *   are being collected without the context of a specific entity.
+    * @param bool &$cacheable
+@@ -1535,9 +1539,9 @@ class BrightcoveVideo extends BrightcoveVideoPlaylistCmsEntity implements Bright
+   /**
+    * Create or update an existing video from a Brightcove Video object.
+    *
+-   * @param \Brightcove\Item\Video\Video $video
++   * @param Video $video
+    *   Brightcove Video object.
+-   * @param \Drupal\brightcove\Entity\Storage\VideoStorageInterface $video_storage
++   * @param VideoStorageInterface $video_storage
+    *   Video entity storage.
+    * @param string|null $api_client_id
+    *   The ID of the BrightcoveAPIClient entity.
+diff --git a/src/Entity/Storage/PlayerStorage.php b/src/Entity/Storage/PlayerStorage.php
+index ffa3d18..d066008 100644
+--- a/src/Entity/Storage/PlayerStorage.php
++++ b/src/Entity/Storage/PlayerStorage.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Entity\Storage;
+ 
++use Drupal\brightcove\Entity\BrightcovePlayer;
+ use Drupal\brightcove\BrightcoveAPIClientInterface;
+ use Drupal\Core\Entity\Sql\SqlContentEntityStorage;
+ 
+@@ -34,7 +35,7 @@ final class PlayerStorage extends SqlContentEntityStorage implements PlayerStora
+     }
+ 
+     // Collect Players referencing a given API Client.
+-    /** @var \Drupal\brightcove\Entity\BrightcovePlayer[] $player_entities */
++    /** @var BrightcovePlayer[] $player_entities */
+     $player_entities = $this->loadByProperties([
+       'api_client' => $api_client,
+     ]);
+diff --git a/src/Entity/Storage/PlaylistStorage.php b/src/Entity/Storage/PlaylistStorage.php
+index 1e6c766..566bf39 100644
+--- a/src/Entity/Storage/PlaylistStorage.php
++++ b/src/Entity/Storage/PlaylistStorage.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Entity\Storage;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Brightcove\API\Exception\APIException;
+ use Drupal\brightcove\BrightcovePlaylistInterface;
+ use Drupal\brightcove\BrightcoveUtil;
+@@ -27,12 +28,12 @@ final class PlaylistStorage extends SqlContentEntityStorage implements PlaylistS
+   /**
+    * Deletes remote playlists.
+    *
+-   * @param \Drupal\brightcove\BrightcovePlaylistInterface[] $playlists
++   * @param BrightcovePlaylistInterface[] $playlists
+    *   The list of playlists to delete.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of storage failure.
+-   * @throws \Brightcove\API\Exception\APIException
++   * @throws APIException
+    *   If the remote entity cannot be deleted.
+    */
+   private function deleteRemoteMultiple(array $playlists): void {
+@@ -44,12 +45,12 @@ final class PlaylistStorage extends SqlContentEntityStorage implements PlaylistS
+   /**
+    * Deletes a remote playlist.
+    *
+-   * @param \Drupal\brightcove\BrightcovePlaylistInterface $playlist
++   * @param BrightcovePlaylistInterface $playlist
+    *   The playlist to delete.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of storage failure.
+-   * @throws \Brightcove\API\Exception\APIException
++   * @throws APIException
+    *   If the remote entity cannot be deleted.
+    */
+   private function deleteRemote(BrightcovePlaylistInterface $playlist): void {
+diff --git a/src/Entity/Storage/PlaylistStorageInterface.php b/src/Entity/Storage/PlaylistStorageInterface.php
+index 3f76919..806d35b 100644
+--- a/src/Entity/Storage/PlaylistStorageInterface.php
++++ b/src/Entity/Storage/PlaylistStorageInterface.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\brightcove\Entity\Storage;
+ 
++use Drupal\brightcove\BrightcovePlaylistInterface;
++use Drupal\Core\Entity\EntityStorageException;
++use Brightcove\API\Exception\APIException;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ 
+ /**
+@@ -12,15 +15,15 @@ interface PlaylistStorageInterface extends EntityStorageInterface {
+   /**
+    * Deletes permanently saved entities.
+    *
+-   * @param \Drupal\brightcove\BrightcovePlaylistInterface[] $entities
++   * @param BrightcovePlaylistInterface[] $entities
+    *   An array of playlists to delete.
+    * @param bool $remote
+    *   TRUE to delete the remote and local playlists, FALSE to only local
+    *   versions.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of storage failure.
+-   * @throws \Brightcove\API\Exception\APIException
++   * @throws APIException
+    *   If the remote entity cannot be deleted.
+    */
+   public function delete(array $entities, bool $remote = TRUE): void;
+diff --git a/src/Entity/Storage/VideoStorage.php b/src/Entity/Storage/VideoStorage.php
+index c791905..6031cc7 100644
+--- a/src/Entity/Storage/VideoStorage.php
++++ b/src/Entity/Storage/VideoStorage.php
+@@ -4,6 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Entity\Storage;
+ 
++use Drupal\brightcove\Services\Ingestion;
++use Drupal\taxonomy\Entity\Term;
++use Drupal\brightcove\Entity\BrightcoveTextTrack;
++use Drupal\Core\Entity\EntityStorageException;
+ use Brightcove\API\Exception\APIException;
+ use Brightcove\Item\Video\Link;
+ use Brightcove\Item\Video\Schedule;
+@@ -37,57 +41,57 @@ final class VideoStorage extends SqlContentEntityStorage implements VideoStorage
+   /**
+    * Custom field storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $customFieldStorage;
+ 
+   /**
+    * Ingestion service.
+    *
+-   * @var \Drupal\brightcove\Services\Ingestion
++   * @var Ingestion
+    */
+   private $ingestion;
+ 
+   /**
+    * Taxonomy term storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $termStorage;
+ 
+   /**
+    * Text track storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $textTrackStorage;
+ 
+   /**
+    * Initializes a new Video storage.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database connection to be used.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
++   * @param CacheBackendInterface $cache
+    *   The cache backend to be used.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\Core\Cache\MemoryCache\MemoryCacheInterface $memory_cache
++   * @param MemoryCacheInterface $memory_cache
+    *   The memory cache backend to be used.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle info.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\brightcove\Services\IngestionInterface $ingestion
++   * @param IngestionInterface $ingestion
+    *   Ingestion.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $custom_field_storage
++   * @param EntityStorageInterface $custom_field_storage
+    *   Custom Field storage.
+-   * @param \Drupal\taxonomy\TermStorageInterface $term_storage
++   * @param TermStorageInterface $term_storage
+    *   Term storage.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $text_track_storage
++   * @param EntityStorageInterface $text_track_storage
+    *   Text Track storage.
+    */
+   public function __construct(
+@@ -138,8 +142,7 @@ final class VideoStorage extends SqlContentEntityStorage implements VideoStorage
+    * {@inheritdoc}
+    */
+   public function save(EntityInterface $entity, bool $upload = FALSE) {
+-    /** @var \Drupal\brightcove\BrightcoveVideoInterface $entity */
+-
++    /** @var BrightcoveVideoInterface $entity */
+     /* @noinspection PhpUndefinedFieldInspection */
+     $entity->_upload = $upload;
+     $status = parent::save($entity);
+@@ -161,7 +164,7 @@ final class VideoStorage extends SqlContentEntityStorage implements VideoStorage
+    * {@inheritdoc}
+    */
+   protected function doPreSave(EntityInterface $entity) {
+-    /** @var \Drupal\brightcove\BrightcoveVideoInterface $entity */
++    /** @var BrightcoveVideoInterface $entity */
+     $id = parent::doPreSave($entity);
+ 
+     // Upload data for Brightcove only if we saved the video from form.
+@@ -208,7 +211,7 @@ final class VideoStorage extends SqlContentEntityStorage implements VideoStorage
+         }
+ 
+         // Load terms.
+-        /** @var \Drupal\taxonomy\Entity\Term[] $terms */
++        /** @var Term[] $terms */
+         $terms = $this->termStorage->loadMultiple($term_ids);
+         $tags = [];
+         foreach ($terms as $term) {
+@@ -291,7 +294,7 @@ final class VideoStorage extends SqlContentEntityStorage implements VideoStorage
+         $video_text_tracks = [];
+         foreach ($entity->getTextTracks() as $text_track) {
+           if (!empty($text_track['target_id'])) {
+-            /** @var \Drupal\brightcove\Entity\BrightcoveTextTrack $text_track_entity */
++            /** @var BrightcoveTextTrack $text_track_entity */
+             $text_track_entity = $this->textTrackStorage->load($text_track['target_id']);
+ 
+             if ($text_track_entity !== NULL) {
+@@ -381,12 +384,12 @@ final class VideoStorage extends SqlContentEntityStorage implements VideoStorage
+   /**
+    * Deletes multiple remote videos.
+    *
+-   * @param \Drupal\brightcove\Entity\BrightcoveVideo[] $videos
++   * @param BrightcoveVideo[] $videos
+    *   The list of remote videos to delete.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of storage failure.
+-   * @throws \Brightcove\API\Exception\APIException
++   * @throws APIException
+    *   If the remote entity cannot be deleted.
+    */
+   private function deleteRemoteMultiple(array $videos): void {
+@@ -398,12 +401,12 @@ final class VideoStorage extends SqlContentEntityStorage implements VideoStorage
+   /**
+    * Deletes a remote video.
+    *
+-   * @param \Drupal\brightcove\Entity\BrightcoveVideo $video
++   * @param BrightcoveVideo $video
+    *   The remote video to delete.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of storage failure.
+-   * @throws \Brightcove\API\Exception\APIException
++   * @throws APIException
+    *   If the remote entity cannot be deleted.
+    */
+   private function deleteRemote(BrightcoveVideo $video): void {
+diff --git a/src/Entity/Storage/VideoStorageInterface.php b/src/Entity/Storage/VideoStorageInterface.php
+index 3f66afd..f91a20b 100644
+--- a/src/Entity/Storage/VideoStorageInterface.php
++++ b/src/Entity/Storage/VideoStorageInterface.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\brightcove\Entity\Storage;
+ 
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\brightcove\BrightcoveVideoInterface;
++use Brightcove\API\Exception\APIException;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ 
+@@ -13,7 +16,7 @@ interface VideoStorageInterface extends EntityStorageInterface {
+   /**
+    * Saves the Video entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Video entity.
+    * @param bool $upload
+    *   Whether to upload the video to Brightcove or not.
+@@ -22,7 +25,7 @@ interface VideoStorageInterface extends EntityStorageInterface {
+    *   Either SAVED_NEW or SAVED_UPDATED, depending on the operation performed.
+    *   FALSE returned if there was an error.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of a failure an exception is thrown.
+    */
+   public function save(EntityInterface $entity, bool $upload = FALSE);
+@@ -30,15 +33,15 @@ interface VideoStorageInterface extends EntityStorageInterface {
+   /**
+    * Deletes permanently saved Videos.
+    *
+-   * @param \Drupal\brightcove\BrightcoveVideoInterface[] $entities
++   * @param BrightcoveVideoInterface[] $entities
+    *   An array of Video to delete.
+    * @param bool $remote
+    *   TRUE to delete the remote and local Video, FALSE to only local
+    *   versions.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    *   In case of storage failure.
+-   * @throws \Brightcove\API\Exception\APIException
++   * @throws APIException
+    *   If the remote entity cannot be deleted.
+    */
+   public function delete(array $entities, bool $remote = TRUE): void;
+diff --git a/src/EntityChangedFieldsInterface.php b/src/EntityChangedFieldsInterface.php
+index 699e0b2..afe5b7c 100644
+--- a/src/EntityChangedFieldsInterface.php
++++ b/src/EntityChangedFieldsInterface.php
+@@ -36,7 +36,7 @@ interface EntityChangedFieldsInterface {
+    * Ideally it should be called from the entity's preSave() method before the
+    * parent's preSave() call.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   Entity storage.
+    */
+   public function checkUpdatedFields(EntityStorageInterface $storage): void;
+diff --git a/src/EntityChangedFieldsTrait.php b/src/EntityChangedFieldsTrait.php
+index a41adbe..f33583e 100644
+--- a/src/EntityChangedFieldsTrait.php
++++ b/src/EntityChangedFieldsTrait.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove;
+ 
++use Drupal\brightcove\Entity\BrightcoveVideo;
++use Drupal\Core\Field\FieldItemList;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ 
+ /**
+@@ -54,11 +56,11 @@ trait EntityChangedFieldsTrait {
+ 
+     // Check fields if they were updated and mark them if changed.
+     if (!empty($this->id())) {
+-      /** @var \Drupal\brightcove\Entity\BrightcoveVideo $original_entity */
++      /** @var BrightcoveVideo $original_entity */
+       $original_entity = $storage->loadUnchanged($this->id());
+ 
+       if ($original_entity->getChangedTime() !== $this->getChangedTime()) {
+-        /** @var \Drupal\Core\Field\FieldItemList $field */
++        /** @var FieldItemList $field */
+         foreach ($this->getFields() as $name => $field) {
+           $getter = $this->getGetterName($name, $methods);
+ 
+diff --git a/src/EventSubscriber/BrightcoveInitSubscriber.php b/src/EventSubscriber/BrightcoveInitSubscriber.php
+index 46959cb..8a71f14 100644
+--- a/src/EventSubscriber/BrightcoveInitSubscriber.php
++++ b/src/EventSubscriber/BrightcoveInitSubscriber.php
+@@ -4,10 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Brightcove\API\Client;
+ use Drupal\Core\Extension\ModuleExtensionList;
+ use Symfony\Component\HttpKernel\KernelEvents;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ 
+ /**
+@@ -18,14 +18,14 @@ class BrightcoveInitSubscriber implements EventSubscriberInterface {
+   /**
+    * Module extension list.
+    *
+-   * @var \Drupal\Core\Extension\ModuleExtensionList
++   * @var ModuleExtensionList
+    */
+   private $moduleExtensionList;
+ 
+   /**
+    * Initializes an init subscriber.
+    *
+-   * @param \Drupal\Core\Extension\ModuleExtensionList $module_extension_list
++   * @param ModuleExtensionList $module_extension_list
+    *   Module extension list.
+    */
+   public function __construct(ModuleExtensionList $module_extension_list) {
+@@ -35,10 +35,10 @@ class BrightcoveInitSubscriber implements EventSubscriberInterface {
+   /**
+    * Initialize Brightcove client proxy.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   GET response event.
+    */
+-  public function initializeBrightcoveClient(GetResponseEvent $event): void {
++  public function initializeBrightcoveClient(RequestEvent $event): void {
+     Client::$consumer = 'Drupal/' . \Drupal::VERSION . ' Brightcove/' . ($this->moduleExtensionList->getExtensionInfo('brightcove')['version'] ?: 'dev');
+   }
+ 
+diff --git a/src/EventSubscriber/RedirectResponseSubscriber.php b/src/EventSubscriber/RedirectResponseSubscriber.php
+index 8f06d86..6c08abc 100644
+--- a/src/EventSubscriber/RedirectResponseSubscriber.php
++++ b/src/EventSubscriber/RedirectResponseSubscriber.php
+@@ -4,10 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\ResponseEvent;
+ use Drupal\brightcove\Services\SessionManagerInterface;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+-use Symfony\Component\HttpKernel\Event\FilterResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -18,14 +18,14 @@ final class RedirectResponseSubscriber implements EventSubscriberInterface {
+   /**
+    * Module specific session manager.
+    *
+-   * @var \Drupal\brightcove\Services\SessionManagerInterface
++   * @var SessionManagerInterface
+    */
+   private $sessionManager;
+ 
+   /**
+    * Initializes a new redirect response event subscriber.
+    *
+-   * @param \Drupal\brightcove\Services\SessionManagerInterface $session_manager
++   * @param SessionManagerInterface $session_manager
+    *   Module specific session manager.
+    */
+   public function __construct(SessionManagerInterface $session_manager) {
+@@ -50,10 +50,10 @@ final class RedirectResponseSubscriber implements EventSubscriberInterface {
+   /**
+    * Handles ignore destination event.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\FilterResponseEvent $event
++   * @param ResponseEvent $event
+    *   The response event.
+    */
+-  public function checkIgnoreDestination(FilterResponseEvent $event): void {
++  public function checkIgnoreDestination(ResponseEvent $event): void {
+     if ($event->getResponse() instanceof RedirectResponse) {
+       $request = $event->getRequest();
+ 
+diff --git a/src/Form/BrightcoveAPIClientDeleteForm.php b/src/Form/BrightcoveAPIClientDeleteForm.php
+index fcf7dd1..8b2d603 100644
+--- a/src/Form/BrightcoveAPIClientDeleteForm.php
++++ b/src/Form/BrightcoveAPIClientDeleteForm.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Form;
+ 
++use Drupal\brightcove\Entity\BrightcoveAPIClient;
+ use Drupal\brightcove\BrightcoveUtil;
+ use Drupal\brightcove\Entity\BrightcoveSubscription;
+ use Drupal\Core\Database\Connection;
+@@ -23,77 +24,77 @@ class BrightcoveAPIClientDeleteForm extends EntityConfirmFormBase {
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The playlist local delete queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $playlistLocalDeleteQueue;
+ 
+   /**
+    * The video local delete queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $videoLocalDeleteQueue;
+ 
+   /**
+    * The player local delete queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $playerDeleteQueue;
+ 
+   /**
+    * The custom field local delete queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $customFieldDeleteQueue;
+ 
+   /**
+    * The playlist page queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $textTrackDeleteQueue;
+ 
+   /**
+    * The subscription delete queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $subscriptionDeleteQueue;
+ 
+   /**
+    * Constructs a new BrightcoveAPIClientDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   Database connection.
+-   * @param \Drupal\Core\Queue\QueueInterface $playlist_local_delete_queue
++   * @param QueueInterface $playlist_local_delete_queue
+    *   Playlist local delete queue worker.
+-   * @param \Drupal\Core\Queue\QueueInterface $video_local_delete_queue
++   * @param QueueInterface $video_local_delete_queue
+    *   Video local delete queue worker.
+-   * @param \Drupal\Core\Queue\QueueInterface $player_delete_queue
++   * @param QueueInterface $player_delete_queue
+    *   Player local delete queue worker.
+-   * @param \Drupal\Core\Queue\QueueInterface $custom_field_delete_queue
++   * @param QueueInterface $custom_field_delete_queue
+    *   Custom field local delete queue worker.
+-   * @param \Drupal\Core\Queue\QueueInterface $text_track_delete_queue
++   * @param QueueInterface $text_track_delete_queue
+    *   Text track delete queue object.
+-   * @param \Drupal\Core\Queue\QueueInterface $subscription_delete_queue
++   * @param QueueInterface $subscription_delete_queue
+    *   Subscription delete queue object.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, Connection $connection, QueueInterface $playlist_local_delete_queue, QueueInterface $video_local_delete_queue, QueueInterface $player_delete_queue, QueueInterface $custom_field_delete_queue, QueueInterface $text_track_delete_queue, QueueInterface $subscription_delete_queue) {
+@@ -155,7 +156,7 @@ class BrightcoveAPIClientDeleteForm extends EntityConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state): void {
+-    /** @var \Drupal\brightcove\Entity\BrightcoveAPIClient $entity */
++    /** @var BrightcoveAPIClient $entity */
+     $entity = $this->entity;
+ 
+     // Empty queues.
+diff --git a/src/Form/BrightcoveAPIClientForm.php b/src/Form/BrightcoveAPIClientForm.php
+index daf5337..060557e 100644
+--- a/src/Form/BrightcoveAPIClientForm.php
++++ b/src/Form/BrightcoveAPIClientForm.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Form;
+ 
++use Drupal\brightcove\Entity\Storage\PlayerStorageInterface;
++use Drupal\brightcove\Entity\BrightcoveAPIClient;
++use Brightcove\Item\CustomFields;
+ use Brightcove\API\Client;
+ use Brightcove\API\CMS;
+ use Brightcove\API\Exception\APIException;
+@@ -30,72 +33,72 @@ class BrightcoveAPIClientForm extends EntityForm {
+   /**
+    * API Client storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $apiClientStorage;
+ 
+   /**
+    * Module specific settings.
+    *
+-   * @var \Drupal\brightcove\Services\SettingsInterface
++   * @var SettingsInterface
+    */
+   protected $settings;
+ 
+   /**
+    * The brightcove_player storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\PlayerStorageInterface
++   * @var PlayerStorageInterface
+    */
+   protected $playerStorage;
+ 
+   /**
+    * The player queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $playerQueue;
+ 
+   /**
+    * The custom field queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $customFieldQueue;
+ 
+   /**
+    * The subscriptions queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $subscriptionsQueue;
+ 
+   /**
+    * Key/Value expirable store.
+    *
+-   * @var \Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface
++   * @var KeyValueStoreExpirableInterface
+    */
+   protected $keyValueExpirableStore;
+ 
+   /**
+    * Constructs a new BrightcoveAPIClientForm.
+    *
+-   * @param \Drupal\brightcove\Services\SettingsInterface $settings
++   * @param SettingsInterface $settings
+    *   Module specific settings.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $player_storage
++   * @param EntityStorageInterface $player_storage
+    *   Player entity storage.
+-   * @param \Drupal\Core\Queue\QueueInterface $player_queue
++   * @param QueueInterface $player_queue
+    *   Player queue.
+-   * @param \Drupal\Core\Queue\QueueInterface $custom_field_queue
++   * @param QueueInterface $custom_field_queue
+    *   Custom field queue.
+-   * @param \Drupal\Core\Queue\QueueInterface $subscriptions_queue
++   * @param QueueInterface $subscriptions_queue
+    *   Custom field queue.
+-   * @param \Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface $key_value_expirable_store
++   * @param KeyValueStoreExpirableInterface $key_value_expirable_store
+    *   Key/Value expirable store for "brightcove_access_token".
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $api_client_storage
++   * @param EntityStorageInterface $api_client_storage
+    *   API Client storage.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+    */
+   public function __construct(SettingsInterface $settings, EntityStorageInterface $player_storage, QueueInterface $player_queue, QueueInterface $custom_field_queue, QueueInterface $subscriptions_queue, KeyValueStoreExpirableInterface $key_value_expirable_store, EntityStorageInterface $api_client_storage, TranslationInterface $string_translation, MessengerInterface $messenger) {
+@@ -135,7 +138,7 @@ class BrightcoveAPIClientForm extends EntityForm {
+   public function form(array $form, FormStateInterface $form_state): array {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\brightcove\Entity\BrightcoveAPIClient $brightcove_api_client */
++    /** @var BrightcoveAPIClient $brightcove_api_client */
+     $brightcove_api_client = $this->entity;
+ 
+     // Don't even try reporting the status/error message of a new client.
+@@ -259,13 +262,13 @@ class BrightcoveAPIClientForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state): void {
+-    /** @var \Drupal\brightcove\Entity\BrightcoveAPIClient $entity */
++    /** @var BrightcoveAPIClient $entity */
+     $entity = $this->entity;
+ 
+     $client = new Client($this->keyValueExpirableStore->get($form_state->getValue('id')));
+     $cms = new CMS($client, $form_state->getValue('account_id'));
+ 
+-    /** @var \Brightcove\Item\CustomFields $video_fields */
++    /** @var CustomFields $video_fields */
+     $video_fields = $cms->getVideoFields();
+     $entity->setMaxCustomFields($video_fields->getMaxCustomFields());
+ 
+@@ -296,7 +299,7 @@ class BrightcoveAPIClientForm extends EntityForm {
+       }
+ 
+       // Get Custom fields the first time when the API client is being saved.
+-      /** @var \Brightcove\Item\CustomFields $video_fields */
++      /** @var CustomFields $video_fields */
+       $video_fields = $cms->getVideoFields();
+       foreach ($video_fields->getCustomFields() as $custom_field) {
+         // Create queue item.
+diff --git a/src/Form/BrightcoveCronSettingsForm.php b/src/Form/BrightcoveCronSettingsForm.php
+index 6f41509..5826c6d 100644
+--- a/src/Form/BrightcoveCronSettingsForm.php
++++ b/src/Form/BrightcoveCronSettingsForm.php
+@@ -19,18 +19,18 @@ class BrightcoveCronSettingsForm extends FormBase {
+   /**
+    * Module specific settings.
+    *
+-   * @var \Drupal\brightcove\Services\SettingsInterface
++   * @var SettingsInterface
+    */
+   private $settings;
+ 
+   /**
+    * Initializes a new cron settings form.
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+-   * @param \Drupal\brightcove\Services\SettingsInterface $settings
++   * @param SettingsInterface $settings
+    *   Module specific settings.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    */
+   public function __construct(MessengerInterface $messenger, SettingsInterface $settings, TranslationInterface $string_translation) {
+diff --git a/src/Form/BrightcoveEntityDeleteForm.php b/src/Form/BrightcoveEntityDeleteForm.php
+index 9ec48fe..39e2bfe 100644
+--- a/src/Form/BrightcoveEntityDeleteForm.php
++++ b/src/Form/BrightcoveEntityDeleteForm.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Form;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Brightcove\API\Exception\APIException;
+ use Drupal\brightcove\Services\LoggerInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+@@ -24,22 +25,22 @@ class BrightcoveEntityDeleteForm extends ContentEntityDeleteForm {
+   /**
+    * Logger.
+    *
+-   * @var \Drupal\brightcove\Services\LoggerInterface
++   * @var LoggerInterface
+    */
+   private $logger;
+ 
+   /**
+    * Initializes an entity delete form.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository service.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+-   * @param \Drupal\brightcove\Services\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+    */
+   public function __construct(EntityRepositoryInterface $entity_repository, EntityTypeBundleInfoInterface $entity_type_bundle_info, TimeInterface $time, MessengerInterface $messenger, LoggerInterface $logger) {
+@@ -66,7 +67,7 @@ class BrightcoveEntityDeleteForm extends ContentEntityDeleteForm {
+    * {@inheritdoc}
+    */
+   protected function getDeletionMessage(): TranslatableMarkup {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = $this->getEntity();
+ 
+     if (!$entity->isDefaultTranslation()) {
+@@ -87,7 +88,7 @@ class BrightcoveEntityDeleteForm extends ContentEntityDeleteForm {
+    * {@inheritdoc}
+    */
+   public function getQuestion(): TranslatableMarkup {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $entity = $this->getEntity();
+ 
+     if (!$entity->isDefaultTranslation()) {
+diff --git a/src/Form/BrightcoveInlineForm.php b/src/Form/BrightcoveInlineForm.php
+index 7b50786..0e92506 100644
+--- a/src/Form/BrightcoveInlineForm.php
++++ b/src/Form/BrightcoveInlineForm.php
+@@ -29,51 +29,51 @@ final class BrightcoveInlineForm extends EntityInlineForm {
+   /**
+    * Logger.
+    *
+-   * @var \Drupal\brightcove\Services\LoggerInterface
++   * @var LoggerInterface
+    */
+   private $logger;
+ 
+   /**
+    * Messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   private $messenger;
+ 
+   /**
+    * Session manager.
+    *
+-   * @var \Drupal\brightcove\Services\SessionManagerInterface
++   * @var SessionManagerInterface
+    */
+   private $sessionManager;
+ 
+   /**
+    * Time.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   private $time;
+ 
+   /**
+    * Initializes a Brightcove inline form.
+    *
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   Entity field manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   Module handler.
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   Entity type.
+-   * @param \Drupal\brightcove\Services\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+-   * @param \Drupal\brightcove\Services\SessionManagerInterface $session_manager
++   * @param SessionManagerInterface $session_manager
+    *   Session manager.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   Time.
+    */
+   public function __construct(
+@@ -182,7 +182,7 @@ final class BrightcoveInlineForm extends EntityInlineForm {
+    *   The thrown exception.
+    * @param string $subject
+    *   Subject for the exception.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The related entity.
+    */
+   private function handleException(\Throwable $e, string $subject, EntityInterface $entity): void {
+diff --git a/src/Form/BrightcovePlaylistForm.php b/src/Form/BrightcovePlaylistForm.php
+index 43cea2d..40e0396 100644
+--- a/src/Form/BrightcovePlaylistForm.php
++++ b/src/Form/BrightcovePlaylistForm.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Form;
+ 
++use Drupal\brightcove\BrightcovePlaylistInterface;
+ use Brightcove\API\Exception\APIException;
+ use Drupal\brightcove\Entity\BrightcovePlaylist;
+ use Drupal\Core\Ajax\AjaxResponse;
+@@ -31,7 +32,7 @@ class BrightcovePlaylistForm extends BrightcoveVideoPlaylistForm {
+   public function alterForm(array &$form, FormStateInterface $form_state): void {
+     parent::alterForm($form, $form_state);
+ 
+-    /** @var \Drupal\brightcove\BrightcovePlaylistInterface $entity */
++    /** @var BrightcovePlaylistInterface $entity */
+     $entity = $this->entity;
+ 
+     // Disable or unset playlist type if the playlist was already created.
+@@ -120,7 +121,7 @@ class BrightcovePlaylistForm extends BrightcoveVideoPlaylistForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state): void {
+-    /** @var \Drupal\brightcove\Entity\BrightcovePlaylist $entity */
++    /** @var BrightcovePlaylist $entity */
+     $entity = $this->entity;
+ 
+     try {
+diff --git a/src/Form/BrightcoveSubscriptionDeleteForm.php b/src/Form/BrightcoveSubscriptionDeleteForm.php
+index e6b26a7..fbdfdf4 100644
+--- a/src/Form/BrightcoveSubscriptionDeleteForm.php
++++ b/src/Form/BrightcoveSubscriptionDeleteForm.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Form;
+ 
++use Drupal\brightcove\Entity\BrightcoveSubscription;
+ use Brightcove\API\Exception\APIException;
+ use Drupal\Core\Form\ConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -21,16 +22,16 @@ class BrightcoveSubscriptionDeleteForm extends ConfirmFormBase {
+   /**
+    * Brightcove Subscription object.
+    *
+-   * @var \Drupal\brightcove\Entity\BrightcoveSubscription
++   * @var BrightcoveSubscription
+    */
+   protected $brightcoveSubscription;
+ 
+   /**
+    * Initializes a subscription deletion form.
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    */
+   public function __construct(MessengerInterface $messenger, TranslationInterface $string_translation) {
+diff --git a/src/Form/BrightcoveSubscriptionForm.php b/src/Form/BrightcoveSubscriptionForm.php
+index 2881b48..0093fc4 100644
+--- a/src/Form/BrightcoveSubscriptionForm.php
++++ b/src/Form/BrightcoveSubscriptionForm.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Form;
+ 
++use Drupal\brightcove\Entity\BrightcoveAPIClient;
+ use Drupal\brightcove\Entity\BrightcoveSubscription;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Form\FormBase;
+@@ -20,18 +21,18 @@ class BrightcoveSubscriptionForm extends FormBase {
+   /**
+    * API Client storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $apiClientStorage;
+ 
+   /**
+    * Initializes a subscription form.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $api_client_storage
++   * @param EntityStorageInterface $api_client_storage
+    *   API Client storage.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    */
+   public function __construct(EntityStorageInterface $api_client_storage, MessengerInterface $messenger, TranslationInterface $string_translation) {
+@@ -62,7 +63,7 @@ class BrightcoveSubscriptionForm extends FormBase {
+    * {@inheritdoc}
+    */
+   public function buildForm(array $form, FormStateInterface $form_state): array {
+-    /** @var \Drupal\brightcove\Entity\BrightcoveAPIClient[] $api_clients */
++    /** @var BrightcoveAPIClient[] $api_clients */
+     $api_clients = $this->apiClientStorage->loadMultiple();
+     $api_client_options = [];
+     foreach ($api_clients as $api_client) {
+diff --git a/src/Form/BrightcoveTextTrackForm.php b/src/Form/BrightcoveTextTrackForm.php
+index 80aeb9d..2656e21 100644
+--- a/src/Form/BrightcoveTextTrackForm.php
++++ b/src/Form/BrightcoveTextTrackForm.php
+@@ -21,15 +21,15 @@ class BrightcoveTextTrackForm extends ContentEntityForm {
+   /**
+    * Initializes a Text Track form.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   Entity repository.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   Entity type bundle info.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   Time.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    */
+   public function __construct(EntityRepositoryInterface $entity_repository, EntityTypeBundleInfoInterface $entity_type_bundle_info, TimeInterface $time, MessengerInterface $messenger, TranslationInterface $string_translation) {
+diff --git a/src/Form/BrightcoveTextTrackSettingsForm.php b/src/Form/BrightcoveTextTrackSettingsForm.php
+index 6b83584..cbd2dca 100644
+--- a/src/Form/BrightcoveTextTrackSettingsForm.php
++++ b/src/Form/BrightcoveTextTrackSettingsForm.php
+@@ -17,7 +17,7 @@ class BrightcoveTextTrackSettingsForm extends FormBase {
+   /**
+    * Initializes a text track settings form.
+    *
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    */
+   public function __construct(TranslationInterface $string_translation) {
+diff --git a/src/Form/BrightcoveVideoForm.php b/src/Form/BrightcoveVideoForm.php
+index f403db5..2509276 100644
+--- a/src/Form/BrightcoveVideoForm.php
++++ b/src/Form/BrightcoveVideoForm.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Form;
+ 
++use Drupal\brightcove\Entity\BrightcoveCustomField;
+ use Drupal\brightcove\BrightcoveCustomFieldInterface;
+ use Drupal\brightcove\Entity\BrightcoveVideo;
+ use Drupal\brightcove\Entity\Storage\PlayerStorageInterface;
+@@ -34,62 +35,62 @@ class BrightcoveVideoForm extends BrightcoveVideoPlaylistForm {
+   /**
+    * Custom field storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $customFieldStorage;
+ 
+   /**
+    * Video entity.
+    *
+-   * @var \Drupal\brightcove\Entity\BrightcoveVideo
++   * @var BrightcoveVideo
+    */
+   protected $entity;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Drupal\brightcove\Services\LoggerInterface
++   * @var LoggerInterface
+    */
+   private $logger;
+ 
+   /**
+    * Module specific session manager.
+    *
+-   * @var \Drupal\brightcove\Services\SessionManagerInterface
++   * @var SessionManagerInterface
+    */
+   private $sessionManager;
+ 
+   /**
+    * Video storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\VideoStorageInterface
++   * @var VideoStorageInterface
+    */
+   private $videoStorage;
+ 
+   /**
+    * Initializes a new Brightcove Video form builder.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   Entity repository.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\brightcove\Entity\Storage\PlayerStorageInterface $player_storage
++   * @param PlayerStorageInterface $player_storage
+    *   Player storage.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    * @param string $defaultAPIClient
+    *   The default API Client.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $custom_field_storage
++   * @param EntityStorageInterface $custom_field_storage
+    *   Custom field storage.
+-   * @param \Drupal\brightcove\Entity\Storage\VideoStorageInterface $video_storage
++   * @param VideoStorageInterface $video_storage
+    *   Video storage.
+-   * @param \Drupal\brightcove\Services\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\brightcove\Services\SessionManagerInterface $session_manager
++   * @param SessionManagerInterface $session_manager
+    *   Module specific session manager.
+    */
+   public function __construct(
+@@ -259,7 +260,7 @@ class BrightcoveVideoForm extends BrightcoveVideoPlaylistForm {
+     unset($form['schedule_starts_at']);
+     unset($form['schedule_ends_at']);
+ 
+-    /** @var \Drupal\brightcove\Entity\BrightcoveCustomField[] $custom_fields */
++    /** @var BrightcoveCustomField[] $custom_fields */
+     $custom_fields = $this->customFieldStorage->loadByProperties([
+       'api_client' => $api_client,
+       'status' => BrightcoveCustomFieldInterface::STATUS_ACTIVE,
+@@ -372,7 +373,7 @@ class BrightcoveVideoForm extends BrightcoveVideoPlaylistForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function setCustomFields(array $form, FormStateInterface $form_state): void {
+@@ -453,7 +454,7 @@ class BrightcoveVideoForm extends BrightcoveVideoPlaylistForm {
+    *   The thrown exception.
+    * @param string $subject
+    *   Subject for the exception.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    */
+   private function handleException(\Throwable $e, string $subject, FormStateInterface $form_state): void {
+diff --git a/src/Form/BrightcoveVideoPlaylistForm.php b/src/Form/BrightcoveVideoPlaylistForm.php
+index 358f8a4..ad32189 100644
+--- a/src/Form/BrightcoveVideoPlaylistForm.php
++++ b/src/Form/BrightcoveVideoPlaylistForm.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Form;
+ 
++use Drupal\brightcove\Entity\BrightcoveVideoPlaylistCmsEntity;
+ use Drupal\brightcove\BrightcoveUtil;
+ use Drupal\brightcove\Entity\Storage\PlayerStorageInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+@@ -32,24 +33,24 @@ abstract class BrightcoveVideoPlaylistForm extends ContentEntityForm {
+   /**
+    * Player storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\PlayerStorageInterface
++   * @var PlayerStorageInterface
+    */
+   protected $playerStorage;
+ 
+   /**
+    * Constructs a ContentEntityForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   Entity repository.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The time service.
+-   * @param \Drupal\brightcove\Entity\Storage\PlayerStorageInterface $player_storage
++   * @param PlayerStorageInterface $player_storage
+    *   Player storage.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    * @param string $defaultAPIClient
+    *   The default API Client.
+@@ -83,14 +84,14 @@ abstract class BrightcoveVideoPlaylistForm extends ContentEntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @throws \Exception
+    *   If the version for the given entity is cannot be checked.
+    */
+   public function alterForm(array &$form, FormStateInterface $form_state): void {
+-    /** @var \Drupal\brightcove\Entity\BrightcoveVideoPlaylistCmsEntity $entity */
++    /** @var BrightcoveVideoPlaylistCmsEntity $entity */
+     $entity = $this->entity;
+     $triggering_element = $form_state->getTriggeringElement();
+ 
+@@ -130,7 +131,7 @@ abstract class BrightcoveVideoPlaylistForm extends ContentEntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+@@ -154,10 +155,10 @@ abstract class BrightcoveVideoPlaylistForm extends ContentEntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\Core\Ajax\AjaxResponse
++   * @return AjaxResponse
+    *   Ajax command response.
+    */
+   public function apiClientUpdateForm(array $form, FormStateInterface $form_state): AjaxResponse {
+diff --git a/src/Form/BrightcoveVideoSettingsForm.php b/src/Form/BrightcoveVideoSettingsForm.php
+index e00c5af..ad6eb9e 100644
+--- a/src/Form/BrightcoveVideoSettingsForm.php
++++ b/src/Form/BrightcoveVideoSettingsForm.php
+@@ -17,7 +17,7 @@ class BrightcoveVideoSettingsForm extends FormBase {
+   /**
+    * Initializes a video settings form.
+    *
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    */
+   public function __construct(TranslationInterface $string_translation) {
+diff --git a/src/Form/StatusOverviewForm.php b/src/Form/StatusOverviewForm.php
+index 585399a..df897c5 100644
+--- a/src/Form/StatusOverviewForm.php
++++ b/src/Form/StatusOverviewForm.php
+@@ -21,25 +21,25 @@ class StatusOverviewForm extends FormBase {
+   /**
+    * The queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Initializes a status overview form.
+    *
+-   * @param \Drupal\Core\Queue\QueueFactory $queueFactory
++   * @param QueueFactory $queueFactory
+    *   The queue factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   Entity type manager.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    */
+   public function __construct(QueueFactory $queueFactory, EntityTypeManagerInterface $entityTypeManager, TranslationInterface $string_translation) {
+diff --git a/src/Plugin/QueueWorker/BrightcoveClientQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveClientQueueWorker.php
+index b62b8ae..942cf3d 100644
+--- a/src/Plugin/QueueWorker/BrightcoveClientQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveClientQueueWorker.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\QueueWorker;
+ 
++use Brightcove\Item\CustomFields;
+ use Drupal\brightcove\BrightcoveCustomFieldInterface;
+ use Drupal\brightcove\BrightcoveUtil;
+ use Drupal\brightcove\Entity\Storage\PlayerStorageInterface;
+@@ -29,56 +30,56 @@ class BrightcoveClientQueueWorker extends QueueWorkerBase implements ContainerFa
+   /**
+    * The video page queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $videoPageQueue;
+ 
+   /**
+    * The playlist page queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $playlistPageQueue;
+ 
+   /**
+    * The player queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $playerQueue;
+ 
+   /**
+    * Player storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\PlayerStorageInterface
++   * @var PlayerStorageInterface
+    */
+   protected $playerStorage;
+ 
+   /**
+    * The player delete queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $playerDeleteQueue;
+ 
+   /**
+    * The custom field queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $customFieldQueue;
+ 
+   /**
+    * The custom field delete queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $customFieldDeleteQueue;
+ 
+   /**
+    * Custom field storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $customFieldStorage;
+ 
+@@ -91,21 +92,21 @@ class BrightcoveClientQueueWorker extends QueueWorkerBase implements ContainerFa
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Queue\QueueInterface $video_page_queue
++   * @param QueueInterface $video_page_queue
+    *   The video page queue object.
+-   * @param \Drupal\Core\Queue\QueueInterface $playlist_page_queue
++   * @param QueueInterface $playlist_page_queue
+    *   The playlist page queue object.
+-   * @param \Drupal\Core\Queue\QueueInterface $player_queue
++   * @param QueueInterface $player_queue
+    *   The player queue object.
+-   * @param \Drupal\Core\Queue\QueueInterface $player_delete_queue
++   * @param QueueInterface $player_delete_queue
+    *   The player delete queue object.
+-   * @param \Drupal\Core\Queue\QueueInterface $custom_field_queue
++   * @param QueueInterface $custom_field_queue
+    *   The custom field queue object.
+-   * @param \Drupal\Core\Queue\QueueInterface $custom_field_delete_queue
++   * @param QueueInterface $custom_field_delete_queue
+    *   The custom field queue object.
+-   * @param \Drupal\brightcove\Entity\Storage\PlayerStorageInterface $playerStorage
++   * @param PlayerStorageInterface $playerStorage
+    *   Player storage.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $custom_field_storage
++   * @param EntityStorageInterface $custom_field_storage
+    *   Custom field storage.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, QueueInterface $video_page_queue, QueueInterface $playlist_page_queue, QueueInterface $player_queue, QueueInterface $player_delete_queue, QueueInterface $custom_field_queue, QueueInterface $custom_field_delete_queue, PlayerStorageInterface $playerStorage, EntityStorageInterface $custom_field_storage) {
+@@ -173,7 +174,7 @@ class BrightcoveClientQueueWorker extends QueueWorkerBase implements ContainerFa
+       $this->playerDeleteQueue->createItem(['player_id' => $player_id]);
+     }
+ 
+-    /** @var \Brightcove\Item\CustomFields $video_fields */
++    /** @var CustomFields $video_fields */
+     // Create queue item for each custom field.
+     $video_fields = $cms->getVideoFields();
+     $custom_fields = [];
+@@ -186,7 +187,7 @@ class BrightcoveClientQueueWorker extends QueueWorkerBase implements ContainerFa
+       ]);
+     }
+     // Collect non-existing custom fields and delete them.
+-    /** @var \Drupal\brightcove\BrightcoveCustomFieldInterface[] $custom_field_entities */
++    /** @var BrightcoveCustomFieldInterface[] $custom_field_entities */
+     $custom_field_entities = $this->customFieldStorage->loadByProperties([
+       'api_client' => $data,
+       'status' => BrightcoveCustomFieldInterface::STATUS_ACTIVE,
+diff --git a/src/Plugin/QueueWorker/BrightcoveCustomFieldDeleteQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveCustomFieldDeleteQueueWorker.php
+index eed0171..069bd1a 100644
+--- a/src/Plugin/QueueWorker/BrightcoveCustomFieldDeleteQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveCustomFieldDeleteQueueWorker.php
+@@ -26,7 +26,7 @@ class BrightcoveCustomFieldDeleteQueueWorker extends QueueWorkerBase implements
+   /**
+    * Custom field storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $customFieldStorage;
+ 
+@@ -39,7 +39,7 @@ class BrightcoveCustomFieldDeleteQueueWorker extends QueueWorkerBase implements
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $custom_field_storage
++   * @param EntityStorageInterface $custom_field_storage
+    *   Custom field storage.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityStorageInterface $custom_field_storage) {
+@@ -69,7 +69,7 @@ class BrightcoveCustomFieldDeleteQueueWorker extends QueueWorkerBase implements
+       $this->customFieldStorage->delete([$data]);
+     }
+     else {
+-      /** @var \Drupal\brightcove\Entity\BrightcoveCustomField $custom_field_entity */
++      /** @var BrightcoveCustomField $custom_field_entity */
+       $custom_field_entity = $this->customFieldStorage->load($data);
+ 
+       if (!is_null($custom_field_entity)) {
+diff --git a/src/Plugin/QueueWorker/BrightcoveCustomFieldQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveCustomFieldQueueWorker.php
+index 60dbe22..77bfec7 100644
+--- a/src/Plugin/QueueWorker/BrightcoveCustomFieldQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveCustomFieldQueueWorker.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\QueueWorker;
+ 
++use Brightcove\Item\CustomField;
+ use Drupal\brightcove\Entity\BrightcoveCustomField;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -26,7 +27,7 @@ class BrightcoveCustomFieldQueueWorker extends QueueWorkerBase implements Contai
+   /**
+    * The brightcove_custom_field storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $customFieldStorage;
+ 
+@@ -39,7 +40,7 @@ class BrightcoveCustomFieldQueueWorker extends QueueWorkerBase implements Contai
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $custom_field_storage
++   * @param EntityStorageInterface $custom_field_storage
+    *   Custom field storage.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, EntityStorageInterface $custom_field_storage) {
+@@ -64,7 +65,7 @@ class BrightcoveCustomFieldQueueWorker extends QueueWorkerBase implements Contai
+    * {@inheritdoc}
+    */
+   public function processItem($data) {
+-    /** @var \Brightcove\Item\CustomField $custom_field */
++    /** @var CustomField $custom_field */
+     $custom_field = $data['custom_field'];
+ 
+     BrightcoveCustomField::createOrUpdate($custom_field, $this->customFieldStorage, $data['api_client_id']);
+diff --git a/src/Plugin/QueueWorker/BrightcovePlayerDeleteQueueWorker.php b/src/Plugin/QueueWorker/BrightcovePlayerDeleteQueueWorker.php
+index 30fd2b3..373c523 100644
+--- a/src/Plugin/QueueWorker/BrightcovePlayerDeleteQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcovePlayerDeleteQueueWorker.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\QueueWorker;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\brightcove\BrightcovePlayerInterface;
++use Drupal\brightcove\Entity\BrightcovePlayer;
+ use Drupal\brightcove\Entity\Storage\PlayerStorageInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+@@ -25,7 +28,7 @@ class BrightcovePlayerDeleteQueueWorker extends QueueWorkerBase implements Conta
+   /**
+    * The brightcove_player storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $playerStorage;
+ 
+@@ -38,7 +41,7 @@ class BrightcovePlayerDeleteQueueWorker extends QueueWorkerBase implements Conta
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\brightcove\Entity\Storage\PlayerStorageInterface $player_storage
++   * @param PlayerStorageInterface $player_storage
+    *   The player storage.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, PlayerStorageInterface $player_storage) {
+@@ -64,7 +67,7 @@ class BrightcovePlayerDeleteQueueWorker extends QueueWorkerBase implements Conta
+    */
+   public function processItem($data): void {
+     if (isset($data['player_id'])) {
+-      /** @var \Drupal\brightcove\BrightcovePlayerInterface[] $players */
++      /** @var BrightcovePlayerInterface[] $players */
+       $players = $this->playerStorage->loadByProperties([
+         'player_id' => $data['player_id'],
+       ]);
+@@ -75,7 +78,7 @@ class BrightcovePlayerDeleteQueueWorker extends QueueWorkerBase implements Conta
+       }
+     }
+     elseif (isset($data['player_entity_id'])) {
+-      /** @var \Drupal\brightcove\Entity\BrightcovePlayer $player */
++      /** @var BrightcovePlayer $player */
+       $player = $this->playerStorage->load($data['player_entity_id']);
+ 
+       if (!is_null($player)) {
+diff --git a/src/Plugin/QueueWorker/BrightcovePlayerQueueWorker.php b/src/Plugin/QueueWorker/BrightcovePlayerQueueWorker.php
+index c0430b8..cb689f8 100644
+--- a/src/Plugin/QueueWorker/BrightcovePlayerQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcovePlayerQueueWorker.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\QueueWorker;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Brightcove\Item\Player\Player;
+ use Drupal\brightcove\Entity\BrightcovePlayer;
+ use Drupal\brightcove\Entity\Storage\PlayerStorageInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -26,7 +28,7 @@ class BrightcovePlayerQueueWorker extends QueueWorkerBase implements ContainerFa
+   /**
+    * The brightcove_player storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $playerStorage;
+ 
+@@ -39,7 +41,7 @@ class BrightcovePlayerQueueWorker extends QueueWorkerBase implements ContainerFa
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\brightcove\Entity\Storage\PlayerStorageInterface $player_storage
++   * @param PlayerStorageInterface $player_storage
+    *   Player storage.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, PlayerStorageInterface $player_storage) {
+@@ -64,7 +66,7 @@ class BrightcovePlayerQueueWorker extends QueueWorkerBase implements ContainerFa
+    * {@inheritdoc}
+    */
+   public function processItem($data): void {
+-    /** @var \Brightcove\Item\Player\Player $player */
++    /** @var Player $player */
+     $player = $data['player'];
+ 
+     BrightcovePlayer::createOrUpdate($player, $this->playerStorage, $data['api_client_id']);
+diff --git a/src/Plugin/QueueWorker/BrightcovePlaylistDeleteQueueWorker.php b/src/Plugin/QueueWorker/BrightcovePlaylistDeleteQueueWorker.php
+index d16fe60..38eb1ca 100644
+--- a/src/Plugin/QueueWorker/BrightcovePlaylistDeleteQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcovePlaylistDeleteQueueWorker.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\QueueWorker;
+ 
++use Drupal\brightcove\Entity\BrightcovePlaylist;
+ use Brightcove\API\Exception\APIException;
+ use Drupal\brightcove\BrightcoveUtil;
+ use Drupal\brightcove\Entity\Storage\PlaylistStorageInterface;
+@@ -27,7 +28,7 @@ class BrightcovePlaylistDeleteQueueWorker extends QueueWorkerBase implements Con
+   /**
+    * Playlist storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\PlaylistStorageInterface
++   * @var PlaylistStorageInterface
+    */
+   protected $playlistStorage;
+ 
+@@ -40,7 +41,7 @@ class BrightcovePlaylistDeleteQueueWorker extends QueueWorkerBase implements Con
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\brightcove\Entity\Storage\PlaylistStorageInterface $playlist_storage
++   * @param PlaylistStorageInterface $playlist_storage
+    *   Playlist storage.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, PlaylistStorageInterface $playlist_storage) {
+@@ -73,7 +74,7 @@ class BrightcovePlaylistDeleteQueueWorker extends QueueWorkerBase implements Con
+       // If we got a not found response, delete the local version of the
+       // playlist.
+       if ($e->getCode() === 404) {
+-        /** @var \Drupal\brightcove\Entity\BrightcovePlaylist $playlist */
++        /** @var BrightcovePlaylist $playlist */
+         $playlist = $this->playlistStorage->load($data->bcplid);
+         $this->playlistStorage->delete([$playlist], FALSE);
+       }
+diff --git a/src/Plugin/QueueWorker/BrightcovePlaylistLocalDeleteQueueWorker.php b/src/Plugin/QueueWorker/BrightcovePlaylistLocalDeleteQueueWorker.php
+index bed5302..92d2067 100644
+--- a/src/Plugin/QueueWorker/BrightcovePlaylistLocalDeleteQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcovePlaylistLocalDeleteQueueWorker.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\QueueWorker;
+ 
++use Drupal\brightcove\Entity\BrightcovePlaylist;
+ use Drupal\brightcove\Entity\Storage\PlaylistStorageInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+@@ -25,7 +26,7 @@ class BrightcovePlaylistLocalDeleteQueueWorker extends QueueWorkerBase implement
+   /**
+    * Playlist storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\PlaylistStorageInterface
++   * @var PlaylistStorageInterface
+    */
+   protected $playlistStorage;
+ 
+@@ -38,7 +39,7 @@ class BrightcovePlaylistLocalDeleteQueueWorker extends QueueWorkerBase implement
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\brightcove\Entity\Storage\PlaylistStorageInterface $playlist_storage
++   * @param PlaylistStorageInterface $playlist_storage
+    *   Brightcove Playlist Entity storage.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, PlaylistStorageInterface $playlist_storage) {
+@@ -62,7 +63,7 @@ class BrightcovePlaylistLocalDeleteQueueWorker extends QueueWorkerBase implement
+    * {@inheritdoc}
+    */
+   public function processItem($data): void {
+-    /** @var \Drupal\brightcove\Entity\BrightcovePlaylist $playlist */
++    /** @var BrightcovePlaylist $playlist */
+     $playlist = $this->playlistStorage->load($data);
+ 
+     if (!is_null($playlist)) {
+diff --git a/src/Plugin/QueueWorker/BrightcovePlaylistPageQueueWorker.php b/src/Plugin/QueueWorker/BrightcovePlaylistPageQueueWorker.php
+index 65fbb9c..962a1c6 100644
+--- a/src/Plugin/QueueWorker/BrightcovePlaylistPageQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcovePlaylistPageQueueWorker.php
+@@ -26,7 +26,7 @@ class BrightcovePlaylistPageQueueWorker extends QueueWorkerBase implements Conta
+   /**
+    * The playlist queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $playlistQueue;
+ 
+@@ -39,7 +39,7 @@ class BrightcovePlaylistPageQueueWorker extends QueueWorkerBase implements Conta
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Queue\QueueInterface $playlist_queue
++   * @param QueueInterface $playlist_queue
+    *   The queue object.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, QueueInterface $playlist_queue) {
+diff --git a/src/Plugin/QueueWorker/BrightcovePlaylistQueueWorker.php b/src/Plugin/QueueWorker/BrightcovePlaylistQueueWorker.php
+index 41e7827..2f60598 100644
+--- a/src/Plugin/QueueWorker/BrightcovePlaylistQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcovePlaylistQueueWorker.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\QueueWorker;
+ 
++use Brightcove\Item\Playlist;
+ use Drupal\brightcove\Entity\BrightcovePlaylist;
+ use Drupal\brightcove\Entity\Storage\PlaylistStorageInterface;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -28,14 +29,14 @@ class BrightcovePlaylistQueueWorker extends QueueWorkerBase implements Container
+   /**
+    * Playlist storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $playlistStorage;
+ 
+   /**
+    * Video storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $videoStorage;
+ 
+@@ -48,9 +49,9 @@ class BrightcovePlaylistQueueWorker extends QueueWorkerBase implements Container
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\brightcove\Entity\Storage\PlaylistStorageInterface $playlist_storage
++   * @param PlaylistStorageInterface $playlist_storage
+    *   Playlist storage.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $video_storage
++   * @param EntityStorageInterface $video_storage
+    *   Video storage.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, PlaylistStorageInterface $playlist_storage, EntityStorageInterface $video_storage) {
+@@ -76,7 +77,7 @@ class BrightcovePlaylistQueueWorker extends QueueWorkerBase implements Container
+    * {@inheritdoc}
+    */
+   public function processItem($data): void {
+-    /** @var \Brightcove\Item\Playlist $playlist */
++    /** @var Playlist $playlist */
+     $playlist = $data['playlist'];
+ 
+     try {
+diff --git a/src/Plugin/QueueWorker/BrightcoveSubscriptionDeleteQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveSubscriptionDeleteQueueWorker.php
+index 1d18ced..01d4993 100644
+--- a/src/Plugin/QueueWorker/BrightcoveSubscriptionDeleteQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveSubscriptionDeleteQueueWorker.php
+@@ -29,7 +29,7 @@ class BrightcoveSubscriptionDeleteQueueWorker extends QueueWorkerBase implements
+   /**
+    * Logger.
+    *
+-   * @var \Drupal\brightcove\Services\LoggerInterface
++   * @var LoggerInterface
+    */
+   private $logger;
+ 
+@@ -42,7 +42,7 @@ class BrightcoveSubscriptionDeleteQueueWorker extends QueueWorkerBase implements
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\brightcove\Services\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+    */
+   public function __construct(array $configuration, string $plugin_id, $plugin_definition, LoggerInterface $logger) {
+@@ -84,7 +84,7 @@ class BrightcoveSubscriptionDeleteQueueWorker extends QueueWorkerBase implements
+         // If we got a not found response, delete the local version of the
+         // subscription.
+         if ($e->getCode() === 404) {
+-          /** @var \Drupal\brightcove\Entity\BrightcoveSubscription $subscription */
++          /** @var BrightcoveSubscription $subscription */
+           $brightcove_subscription = BrightcoveSubscription::loadByBcSid($data['subscription_id']);
+ 
+           if (!empty($brightcove_subscription)) {
+diff --git a/src/Plugin/QueueWorker/BrightcoveSubscriptionQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveSubscriptionQueueWorker.php
+index d627d3d..f264a81 100644
+--- a/src/Plugin/QueueWorker/BrightcoveSubscriptionQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveSubscriptionQueueWorker.php
+@@ -26,7 +26,7 @@ class BrightcoveSubscriptionQueueWorker extends QueueWorkerBase implements Conta
+   /**
+    * The brightcove_subscription storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $apiClientStorage;
+ 
+@@ -39,7 +39,7 @@ class BrightcoveSubscriptionQueueWorker extends QueueWorkerBase implements Conta
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $api_client_storage
++   * @param EntityStorageInterface $api_client_storage
+    *   The brightcove_api_client storage.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, EntityStorageInterface $api_client_storage) {
+diff --git a/src/Plugin/QueueWorker/BrightcoveSubscriptionsQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveSubscriptionsQueueWorker.php
+index 48690c5..0d7a8ba 100644
+--- a/src/Plugin/QueueWorker/BrightcoveSubscriptionsQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveSubscriptionsQueueWorker.php
+@@ -30,21 +30,21 @@ class BrightcoveSubscriptionsQueueWorker extends QueueWorkerBase implements Cont
+   /**
+    * Logger.
+    *
+-   * @var \Drupal\brightcove\Services\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The brightcove_subscription create queue.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $subscriptionQueue;
+ 
+   /**
+    * The brightcove_delete_subscription queue.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $subscriptionDeleteQueue;
+ 
+@@ -57,11 +57,11 @@ class BrightcoveSubscriptionsQueueWorker extends QueueWorkerBase implements Cont
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Queue\QueueInterface $subscription_queue
++   * @param QueueInterface $subscription_queue
+    *   The brightcove_subscription queue.
+-   * @param \Drupal\Core\Queue\QueueInterface $subscription_delete_queue
++   * @param QueueInterface $subscription_delete_queue
+    *   The brightcove_delete_subscription queue.
+-   * @param \Drupal\brightcove\Services\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+    */
+   public function __construct(
+diff --git a/src/Plugin/QueueWorker/BrightcoveTextTrackDeleteQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveTextTrackDeleteQueueWorker.php
+index a73fe95..9ac0aa4 100644
+--- a/src/Plugin/QueueWorker/BrightcoveTextTrackDeleteQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveTextTrackDeleteQueueWorker.php
+@@ -25,7 +25,7 @@ class BrightcoveTextTrackDeleteQueueWorker extends QueueWorkerBase implements Co
+   /**
+    * Text track storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $textTrackStorage;
+ 
+@@ -38,7 +38,7 @@ class BrightcoveTextTrackDeleteQueueWorker extends QueueWorkerBase implements Co
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $text_track_storage
++   * @param EntityStorageInterface $text_track_storage
+    *   Text Track storage.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityStorageInterface $text_track_storage) {
+diff --git a/src/Plugin/QueueWorker/BrightcoveTextTrackQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveTextTrackQueueWorker.php
+index 0f70ce6..a6227d0 100644
+--- a/src/Plugin/QueueWorker/BrightcoveTextTrackQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveTextTrackQueueWorker.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\QueueWorker;
+ 
++use Brightcove\Item\Video\TextTrack;
+ use Drupal\brightcove\Entity\BrightcoveTextTrack;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -26,7 +27,7 @@ class BrightcoveTextTrackQueueWorker extends QueueWorkerBase implements Containe
+   /**
+    * Text Track storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $textTrackStorage;
+ 
+@@ -39,7 +40,7 @@ class BrightcoveTextTrackQueueWorker extends QueueWorkerBase implements Containe
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $text_track_storage
++   * @param EntityStorageInterface $text_track_storage
+    *   Text Track storage.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, EntityStorageInterface $text_track_storage) {
+@@ -63,7 +64,7 @@ class BrightcoveTextTrackQueueWorker extends QueueWorkerBase implements Containe
+    * {@inheritdoc}
+    */
+   public function processItem($data): void {
+-    /** @var \Brightcove\Item\Video\TextTrack $text_track */
++    /** @var TextTrack $text_track */
+     $text_track = $data['text_track'];
+ 
+     BrightcoveTextTrack::createOrUpdate($text_track, $this->textTrackStorage, (int) $data['video_entity_id']);
+diff --git a/src/Plugin/QueueWorker/BrightcoveVideoDeleteQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveVideoDeleteQueueWorker.php
+index d03de02..5db109c 100644
+--- a/src/Plugin/QueueWorker/BrightcoveVideoDeleteQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveVideoDeleteQueueWorker.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\QueueWorker;
+ 
++use Drupal\brightcove\BrightcoveVideoInterface;
+ use Brightcove\API\Exception\APIException;
+ use Drupal\brightcove\BrightcoveUtil;
+ use Drupal\brightcove\Entity\Storage\VideoStorageInterface;
+@@ -27,7 +28,7 @@ class BrightcoveVideoDeleteQueueWorker extends QueueWorkerBase implements Contai
+   /**
+    * Video storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\VideoStorageInterface
++   * @var VideoStorageInterface
+    */
+   protected $videoStorage;
+ 
+@@ -40,7 +41,7 @@ class BrightcoveVideoDeleteQueueWorker extends QueueWorkerBase implements Contai
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\brightcove\Entity\Storage\VideoStorageInterface $video_storage
++   * @param VideoStorageInterface $video_storage
+    *   Video storage.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, VideoStorageInterface $video_storage) {
+@@ -73,7 +74,7 @@ class BrightcoveVideoDeleteQueueWorker extends QueueWorkerBase implements Contai
+     catch (APIException $e) {
+       // If we got a not found response, delete the local version of the video.
+       if ($e->getCode() === 404) {
+-        /** @var \Drupal\brightcove\BrightcoveVideoInterface $video */
++        /** @var BrightcoveVideoInterface $video */
+         $video = $this->videoStorage->load($data->bcvid);
+         if (!empty($video)) {
+           $this->videoStorage->delete([$video], FALSE);
+diff --git a/src/Plugin/QueueWorker/BrightcoveVideoLocalDeleteQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveVideoLocalDeleteQueueWorker.php
+index 0b653fc..52fd4ad 100644
+--- a/src/Plugin/QueueWorker/BrightcoveVideoLocalDeleteQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveVideoLocalDeleteQueueWorker.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\QueueWorker;
+ 
++use Drupal\brightcove\Entity\BrightcoveVideo;
+ use Drupal\brightcove\Entity\Storage\VideoStorageInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+@@ -25,7 +26,7 @@ class BrightcoveVideoLocalDeleteQueueWorker extends QueueWorkerBase implements C
+   /**
+    * Video storage.
+    *
+-   * @var \Drupal\brightcove\Entity\Storage\VideoStorageInterface
++   * @var VideoStorageInterface
+    */
+   protected $videoStorage;
+ 
+@@ -38,7 +39,7 @@ class BrightcoveVideoLocalDeleteQueueWorker extends QueueWorkerBase implements C
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\brightcove\Entity\Storage\VideoStorageInterface $video_storage
++   * @param VideoStorageInterface $video_storage
+    *   Video storage.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, VideoStorageInterface $video_storage) {
+@@ -63,7 +64,7 @@ class BrightcoveVideoLocalDeleteQueueWorker extends QueueWorkerBase implements C
+    * {@inheritdoc}
+    */
+   public function processItem($data): void {
+-    /** @var \Drupal\brightcove\Entity\BrightcoveVideo $video */
++    /** @var BrightcoveVideo $video */
+     $video = $this->videoStorage->load($data);
+ 
+     if (!is_null($video)) {
+diff --git a/src/Plugin/QueueWorker/BrightcoveVideoPageQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveVideoPageQueueWorker.php
+index 4e626d7..549820a 100644
+--- a/src/Plugin/QueueWorker/BrightcoveVideoPageQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveVideoPageQueueWorker.php
+@@ -26,7 +26,7 @@ class BrightcoveVideoPageQueueWorker extends QueueWorkerBase implements Containe
+   /**
+    * The video queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $videoQueue;
+ 
+@@ -39,7 +39,7 @@ class BrightcoveVideoPageQueueWorker extends QueueWorkerBase implements Containe
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Queue\QueueInterface $video_queue
++   * @param QueueInterface $video_queue
+    *   The queue object.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, QueueInterface $video_queue) {
+diff --git a/src/Plugin/QueueWorker/BrightcoveVideoQueueWorker.php b/src/Plugin/QueueWorker/BrightcoveVideoQueueWorker.php
+index 360bea8..e4cbafe 100644
+--- a/src/Plugin/QueueWorker/BrightcoveVideoQueueWorker.php
++++ b/src/Plugin/QueueWorker/BrightcoveVideoQueueWorker.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\QueueWorker;
+ 
++use Brightcove\Item\Video\Video;
++use Drupal\brightcove\Entity\BrightcoveTextTrack;
+ use Drupal\brightcove\Entity\Storage\VideoStorageInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -29,35 +31,35 @@ class BrightcoveVideoQueueWorker extends QueueWorkerBase implements ContainerFac
+   /**
+    * Video entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $videoStorage;
+ 
+   /**
+    * Entity query factory.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * The playlist page queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $textTrackQueue;
+ 
+   /**
+    * The playlist page queue object.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $textTrackDeleteQueue;
+ 
+   /**
+    * Text Track entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $textTrackStorage;
+ 
+@@ -70,15 +72,15 @@ class BrightcoveVideoQueueWorker extends QueueWorkerBase implements ContainerFac
+    *   The plugin_id for the plugin instance.
+    * @param array $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\brightcove\Entity\Storage\VideoStorageInterface $video_storage
++   * @param VideoStorageInterface $video_storage
+    *   Video entity storage.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $text_track_storage
++   * @param EntityStorageInterface $text_track_storage
+    *   Text Track entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   Database connection.
+-   * @param \Drupal\Core\Queue\QueueInterface $text_track_queue
++   * @param QueueInterface $text_track_queue
+    *   Text track queue object.
+-   * @param \Drupal\Core\Queue\QueueInterface $text_track_delete_queue
++   * @param QueueInterface $text_track_delete_queue
+    *   Text track delete queue object.
+    */
+   public function __construct(array $configuration, $plugin_id, array $plugin_definition, VideoStorageInterface $video_storage, EntityStorageInterface $text_track_storage, Connection $connection, QueueInterface $text_track_queue, QueueInterface $text_track_delete_queue) {
+@@ -113,17 +115,17 @@ class BrightcoveVideoQueueWorker extends QueueWorkerBase implements ContainerFac
+    * {@inheritdoc}
+    */
+   public function processItem($data): void {
+-    /** @var \Brightcove\Item\Video\Video $video */
++    /** @var Video $video */
+     $video = $data['video'];
+ 
+-    /** @var \Drupal\brightcove\Entity\BrightcoveVideo $video_entity */
++    /** @var BrightcoveVideo $video_entity */
+     $video_entity = BrightcoveVideo::createOrUpdate($video, $this->videoStorage, $data['api_client_id']);
+ 
+     if (!empty($video_entity)) {
+       // Get existing text tracks.
+       $existing_text_tracks = [];
+       foreach ($video_entity->getTextTracks() as $text_track) {
+-        /** @var \Drupal\brightcove\Entity\BrightcoveTextTrack $text_track_entity */
++        /** @var BrightcoveTextTrack $text_track_entity */
+         $text_track_entity = $this->textTrackStorage->load($text_track['target_id']);
+ 
+         if (!is_null($text_track_entity)) {
+diff --git a/src/Plugin/Search/BrightcoveVideoSearch.php b/src/Plugin/Search/BrightcoveVideoSearch.php
+index 37bc311..6073afe 100644
+--- a/src/Plugin/Search/BrightcoveVideoSearch.php
++++ b/src/Plugin/Search/BrightcoveVideoSearch.php
+@@ -4,6 +4,11 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\Search;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\brightcove\BrightcoveVideoInterface;
+ use Drupal\Core\Access\AccessibleInterface;
+ use Drupal\Core\Access\AccessResult;
+@@ -33,21 +38,21 @@ class BrightcoveVideoSearch extends SearchPluginBase implements AccessibleInterf
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * Brightcove Video entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $brightcoveVideoStorage;
+ 
+@@ -60,17 +65,17 @@ class BrightcoveVideoSearch extends SearchPluginBase implements AccessibleInterf
+    *   The plugin_id for the plugin instance.
+    * @param array $definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Session\AccountInterface $currentUser
++   * @param AccountInterface $currentUser
+    *   The current user.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database connection.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   String translation.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(array $configuration, string $pluginId, array $definition, AccountInterface $currentUser, Connection $database, EntityTypeManagerInterface $entity_type_manager, TranslationInterface $string_translation) {
+     parent::__construct($configuration, $pluginId, $definition);
+@@ -116,7 +121,7 @@ class BrightcoveVideoSearch extends SearchPluginBase implements AccessibleInterf
+    * @return array
+    *   A structured list of search results.
+    *
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws EntityMalformedException
+    */
+   public function execute(): array {
+     $results = [];
+@@ -152,11 +157,11 @@ class BrightcoveVideoSearch extends SearchPluginBase implements AccessibleInterf
+    * @return array
+    *   The combined results.
+    *
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws EntityMalformedException
+    *   May happen if the video has no URL available. Should not happen.
+    */
+   protected function prepareResults(array $entities, array $results): array {
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $video */
++    /** @var ContentEntityInterface $video */
+     foreach ($entities as $video) {
+       $url = $video->toUrl()->toString();
+       $result = [
+diff --git a/src/Plugin/Validation/Constraint/BrightcoveVideoByApiClientConstraintValidator.php b/src/Plugin/Validation/Constraint/BrightcoveVideoByApiClientConstraintValidator.php
+index f30fb2a..562d321 100644
+--- a/src/Plugin/Validation/Constraint/BrightcoveVideoByApiClientConstraintValidator.php
++++ b/src/Plugin/Validation/Constraint/BrightcoveVideoByApiClientConstraintValidator.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Plugin\Validation\Constraint;
+ 
++use Drupal\Core\Field\TypedData\FieldItemDataDefinition;
+ use Symfony\Component\Validator\Constraint;
+ use Symfony\Component\Validator\ConstraintValidator;
+ 
+@@ -17,14 +18,13 @@ class BrightcoveVideoByApiClientConstraintValidator extends ConstraintValidator
+    */
+   public function validate($value, Constraint $constraint): void {
+     /** @var \Drupal\Core\Field\EntityReferenceFieldItemList $videos */
+-    /** @var \Drupal\brightcove\Plugin\Validation\Constraint\BrightcoveVideoByApiClientConstraint $constraint */
+-
++    /** @var BrightcoveVideoByApiClientConstraint $constraint */
+     // Get API client.
+     $api_client = $value->get('api_client')->getValue();
+     if (!empty($api_client[0]['target_id'])) {
+       // Get the videos field settings.
+       $videos = $value->get('videos');
+-      /** @var \Drupal\Core\Field\TypedData\FieldItemDataDefinition $item_definitions */
++      /** @var FieldItemDataDefinition $item_definitions */
+       $item_definitions = $videos->getItemDefinition();
+       $settings = $item_definitions->getSettings();
+ 
+diff --git a/src/Services/Ingestion.php b/src/Services/Ingestion.php
+index 37bf2cb..05b9602 100644
+--- a/src/Services/Ingestion.php
++++ b/src/Services/Ingestion.php
+@@ -4,6 +4,12 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Services;
+ 
++use Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\brightcove\BrightcoveTextTrackInterface;
++use Drupal\file\Entity\File;
+ use Brightcove\API\Request\IngestImage;
+ use Brightcove\API\Request\IngestRequest;
+ use Brightcove\API\Request\IngestRequestMaster;
+@@ -31,70 +37,70 @@ final class Ingestion implements IngestionInterface {
+   /**
+    * Callback token storage.
+    *
+-   * @var \Drupal\Core\KeyValueStore\KeyValueStoreExpirableInterface
++   * @var KeyValueStoreExpirableInterface
+    */
+   private $callbackTokenStorage;
+ 
+   /**
+    * File storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $fileStorage;
+ 
+   /**
+    * Image factory.
+    *
+-   * @var \Drupal\Core\Image\ImageFactory
++   * @var ImageFactory
+    */
+   private $imageFactory;
+ 
+   /**
+    * Module logger.
+    *
+-   * @var \Drupal\brightcove\Services\LoggerInterface
++   * @var LoggerInterface
+    */
+   private $logger;
+ 
+   /**
+    * Module settings.
+    *
+-   * @var \Drupal\brightcove\Services\SettingsInterface
++   * @var SettingsInterface
+    */
+   private $settings;
+ 
+   /**
+    * Text Track storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $textTrackStorage;
+ 
+   /**
+    * Time.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   private $time;
+ 
+   /**
+    * Initializes an ingestion helper.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Image\ImageFactory $image_factory
++   * @param ImageFactory $image_factory
+    *   Image factory.
+-   * @param \Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface $key_value_expirable_factory
++   * @param KeyValueExpirableFactoryInterface $key_value_expirable_factory
+    *   Key-value expirable factory.
+-   * @param \Drupal\brightcove\Services\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\brightcove\Services\SettingsInterface $settings
++   * @param SettingsInterface $settings
+    *   Module settings.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   Time.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, ImageFactory $image_factory, KeyValueExpirableFactoryInterface $key_value_expirable_factory, LoggerInterface $logger, SettingsInterface $settings, TimeInterface $time) {
+     $this->fileStorage = $entity_type_manager->getStorage('file');
+@@ -116,10 +122,10 @@ final class Ingestion implements IngestionInterface {
+   /**
+    * Create an ingestion request for an image.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   File entity.
+    *
+-   * @return \Brightcove\API\Request\IngestImage
++   * @return IngestImage
+    *   Image ingestion object.
+    */
+   private function createIngestImage(FileInterface $file): ?IngestImage {
+@@ -165,7 +171,7 @@ final class Ingestion implements IngestionInterface {
+   public function getImageIngestion(?array $image): ?IngestImage {
+     $file_id = $image['target_id'] ?? NULL;
+     if ($file_id !== NULL) {
+-      /** @var \Drupal\file\FileInterface $file */
++      /** @var FileInterface $file */
+       $file = $this->fileStorage->load($file_id);
+       if (!empty($file)) {
+         return $this->createIngestImage($file);
+@@ -178,7 +184,7 @@ final class Ingestion implements IngestionInterface {
+    * {@inheritdoc}
+    */
+   public function sendIngestVideo(BrightcoveVideoInterface $video): ?IngestResponse {
+-    /** @var \Brightcove\API\Request\IngestRequest|null $ingest_request */
++    /** @var IngestRequest|null $ingest_request */
+     $ingest_request = NULL;
+ 
+     if ($video->isFieldChanged('text_tracks')) {
+@@ -190,14 +196,14 @@ final class Ingestion implements IngestionInterface {
+           $text_track_ids[] = $text_track['target_id'];
+         }
+       }
+-      /** @var \Drupal\brightcove\BrightcoveTextTrackInterface $text_tracks */
++      /** @var BrightcoveTextTrackInterface $text_tracks */
+       $text_tracks = $this->textTrackStorage->loadMultiple($text_track_ids);
+ 
+       foreach ($text_tracks as $text_track) {
+         // Setup ingestion request if there was a text track uploaded.
+         $web_vtt_file = $text_track->getWebVttFile();
+         if (!empty($web_vtt_file[0]['target_id'])) {
+-          /** @var \Drupal\file\Entity\File $file */
++          /** @var File $file */
+           $file = $this->fileStorage->load($web_vtt_file[0]['target_id']);
+ 
+           if ($file !== NULL) {
+@@ -239,7 +245,7 @@ final class Ingestion implements IngestionInterface {
+     // Set ingestion for video.
+     $video_file = $video->getVideoFile();
+     if (($video->isFieldChanged('profile') || $video->isFieldChanged('video_file')) && !empty($video_file['target_id'])) {
+-      /** @var \Drupal\file\Entity\File $file */
++      /** @var File $file */
+       $file = $this->fileStorage->load($video_file['target_id']);
+ 
+       $ingest_request = $ingest_request ?? $this->createIngestRequest();
+@@ -294,7 +300,7 @@ final class Ingestion implements IngestionInterface {
+         }
+         if (!empty($text_tracks)) {
+           $text_tracks_to_keep = [];
+-          /** @var \Drupal\brightcove\BrightcoveTextTrackInterface $text_track */
++          /** @var BrightcoveTextTrackInterface $text_track */
+           foreach ($text_tracks as $text_track) {
+             if (!empty($text_track->getTextTrackId())) {
+               $text_tracks_to_keep[] = [
+diff --git a/src/Services/IngestionInterface.php b/src/Services/IngestionInterface.php
+index b1abbf2..db3ec7a 100644
+--- a/src/Services/IngestionInterface.php
++++ b/src/Services/IngestionInterface.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Services;
+ 
++use Drupal\brightcove\Services\Exception\IngestionException;
+ use Brightcove\API\Request\IngestImage;
+ use Brightcove\API\Request\IngestRequest;
+ use Brightcove\API\Response\IngestResponse;
+@@ -22,7 +23,7 @@ interface IngestionInterface {
+   /**
+    * Creates an ingestion request object.
+    *
+-   * @return \Brightcove\API\Request\IngestRequest
++   * @return IngestRequest
+    *   Returns a new ingestion request object.
+    */
+   public function createIngestRequest(): IngestRequest;
+@@ -33,7 +34,7 @@ interface IngestionInterface {
+    * @param array|null $image
+    *   The image that needs to be ingested.
+    *
+-   * @return \Brightcove\API\Request\IngestImage|null
++   * @return IngestImage|null
+    *   Ingest image object or NULL if the file cannot be found.
+    */
+   public function getImageIngestion(?array $image): ?IngestImage;
+@@ -52,13 +53,13 @@ interface IngestionInterface {
+    * Ingestion request will be sent only if there is an ingestible field changed
+    * or if the entity is new and has such fields set.
+    *
+-   * @param \Drupal\brightcove\BrightcoveVideoInterface $video
++   * @param BrightcoveVideoInterface $video
+    *   The Video for which the ingestion should be created and sent.
+    *
+-   * @return \Brightcove\API\Response\IngestResponse|null
++   * @return IngestResponse|null
+    *   The ingestion response or NULL if there was no ingestion.
+    *
+-   * @throws \Drupal\brightcove\Services\Exception\IngestionException
++   * @throws IngestionException
+    *   In case if the ingestion was failed.
+    */
+   public function sendIngestVideo(BrightcoveVideoInterface $video): ?IngestResponse;
+@@ -66,7 +67,7 @@ interface IngestionInterface {
+   /**
+    * Gets whether the Video is marked for ingestion or not.
+    *
+-   * @param \Drupal\brightcove\BrightcoveVideoInterface $video
++   * @param BrightcoveVideoInterface $video
+    *   Video entity.
+    * @param string $field
+    *   Name of the field that should be checked if marked for ingestion.
+@@ -79,14 +80,14 @@ interface IngestionInterface {
+   /**
+    * Sets mark for ingestion.
+    *
+-   * @param \Drupal\brightcove\BrightcoveVideoInterface $video
++   * @param BrightcoveVideoInterface $video
+    *   Video entity.
+    * @param string $field
+    *   Name of the field to mark for ingestion.
+    * @param bool $mark_for_ingestion
+    *   TRUE to mark the field for ingestion, FALSE otherwise.
+    *
+-   * @return \Drupal\brightcove\BrightcoveVideoInterface
++   * @return BrightcoveVideoInterface
+    *   The called Brightcove Video.
+    */
+   public function setFieldMarkedForIngestion(BrightcoveVideoInterface $video, string $field, bool $mark_for_ingestion): BrightcoveVideoInterface;
+diff --git a/src/Services/Logger.php b/src/Services/Logger.php
+index e5fb2e8..397a5fd 100644
+--- a/src/Services/Logger.php
++++ b/src/Services/Logger.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\brightcove\Services;
+ 
++use Drupal\Core\Logger\LoggerChannelInterface;
+ use Drupal\brightcove\Module;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+ use Drupal\Core\Logger\RfcLoggerTrait;
+@@ -21,14 +22,14 @@ final class Logger implements LoggerInterface {
+   /**
+    * Logger channel.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   private $logger;
+ 
+   /**
+    * Initializes a module logger.
+    *
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_channel_factory
++   * @param LoggerChannelFactoryInterface $logger_channel_factory
+    *   Logger channel factory.
+    */
+   public function __construct(LoggerChannelFactoryInterface $logger_channel_factory) {
+diff --git a/src/Services/LoggerInterface.php b/src/Services/LoggerInterface.php
+index a5a6186..d84e993 100644
+--- a/src/Services/LoggerInterface.php
++++ b/src/Services/LoggerInterface.php
+@@ -26,7 +26,7 @@ interface LoggerInterface extends PsrLoggerInterface {
+    * @param int $severity
+    *   The severity of the message, as per RFC 3164, defaults to
+    *   RfcLogLevel::ERROR.
+-   * @param \Drupal\Core\Url|null $url
++   * @param Url|null $url
+    *   A URL to associate with the message.
+    */
+   public function logException(\Throwable $exception, string $subject, array $variables = [], int $severity = RfcLogLevel::ERROR, ?Url $url = NULL): void;
+diff --git a/src/Services/SessionManager.php b/src/Services/SessionManager.php
+index 7b96ec9..1567599 100644
+--- a/src/Services/SessionManager.php
++++ b/src/Services/SessionManager.php
+@@ -14,14 +14,14 @@ final class SessionManager implements SessionManagerInterface {
+   /**
+    * Attribute bag.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Session\Attribute\AttributeBagInterface
++   * @var AttributeBagInterface
+    */
+   private $attributeBag;
+ 
+   /**
+    * Initializes a new module specific session handler.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Session\Attribute\AttributeBagInterface $attribute_bag
++   * @param AttributeBagInterface $attribute_bag
+    *   Attribute bag.
+    */
+   public function __construct(AttributeBagInterface $attribute_bag) {
+diff --git a/src/Services/SettingsBase.php b/src/Services/SettingsBase.php
+index 81b1837..b4a3c71 100644
+--- a/src/Services/SettingsBase.php
++++ b/src/Services/SettingsBase.php
+@@ -20,14 +20,14 @@ abstract class SettingsBase {
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Initializes settings base.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory) {

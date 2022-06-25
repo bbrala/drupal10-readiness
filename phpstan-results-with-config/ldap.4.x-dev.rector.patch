@@ -1,0 +1,4200 @@
+diff --git a/ldap_authentication/ldap_authentication.api.php b/ldap_authentication/ldap_authentication.api.php
+index d45aeb3d..709c7de6 100644
+--- a/ldap_authentication/ldap_authentication.api.php
++++ b/ldap_authentication/ldap_authentication.api.php
+@@ -16,7 +16,7 @@ use Symfony\Component\Ldap\Entry;
+  * authentication. The actual $hook_result is passed by reference. See also:
+  * http://drupal.org/node/1634930
+  *
+- * @param \Symfony\Component\Ldap\Entry $ldap_user
++ * @param Entry $ldap_user
+  *   An LDAP entry.
+  * @param string $name
+  *   The Drupal account name or proposed Drupal account name if none exists yet.
+diff --git a/ldap_authentication/ldap_authentication.module b/ldap_authentication/ldap_authentication.module
+index e6e3a032..f1966e95 100644
+--- a/ldap_authentication/ldap_authentication.module
++++ b/ldap_authentication/ldap_authentication.module
+@@ -6,6 +6,10 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\externalauth\Authmap;
++use Drupal\user\UserInterface;
++use Drupal\Core\Session\AccountProxyInterface;
++use Drupal\ldap_authentication\AuthenticationServers;
+ 
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Link;
+@@ -43,7 +47,7 @@ function ldap_authentication_form_user_pass_alter(&$form, FormStateInterface $fo
+  *
+  * @param array $form
+  *   The form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state.
+  */
+ function ldap_authentication_core_override_user_login_authenticate_validate(array $form, FormStateInterface $form_state) {
+@@ -65,7 +69,7 @@ function ldap_authentication_core_override_user_login_authenticate_validate(arra
+  *
+  * @param array $form
+  *   The form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state.
+  */
+ function ldap_authentication_user_pass_validate(array &$form, FormStateInterface $form_state) {
+@@ -91,7 +95,7 @@ function ldap_authentication_user_pass_validate(array &$form, FormStateInterface
+     return;
+   }
+ 
+-  /** @var \Drupal\externalauth\Authmap $authmap */
++  /** @var Authmap $authmap */
+   $authmap = \Drupal::service('externalauth.authmap');
+   $authname = $authmap->get($account->id(), 'ldap_user');
+   if ($authname) {
+@@ -124,7 +128,7 @@ function ldap_authentication_form_user_form_alter(&$form, FormStateInterface $fo
+ 
+   $user = $form_state->getBuildInfo()['callback_object']->getEntity();
+   $config = \Drupal::config('ldap_authentication.settings');
+-  /** @var \Drupal\externalauth\Authmap $authmap */
++  /** @var Authmap $authmap */
+   $authmap = \Drupal::service('externalauth.authmap');
+   $authname = $authmap->get($user->id(), 'ldap_user');
+   if ($authname) {
+@@ -160,7 +164,7 @@ function ldap_authentication_form_user_form_alter(&$form, FormStateInterface $fo
+ /**
+  * Should the password field be shown?
+  *
+- * @param \Drupal\user\UserInterface|\Drupal\Core\Session\AccountProxyInterface $user
++ * @param UserInterface|AccountProxyInterface $user
+  *   User account.
+  *
+  * @return bool
+@@ -177,7 +181,7 @@ function ldap_authentication_show_password_field($user = NULL): bool {
+   }
+ 
+   // Hide only if LDAP authenticated and updating password is not allowed.
+-  /** @var \Drupal\externalauth\Authmap $authmap */
++  /** @var Authmap $authmap */
+   $authmap = \Drupal::service('externalauth.authmap');
+   $authname = $authmap->get($user->id(), 'ldap_user');
+   if ($authname) {
+@@ -215,7 +219,7 @@ function ldap_authentication_form_user_login_block_alter(&$form, FormStateInterf
+  *
+  * @param array $form
+  *   The form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state.
+  */
+ function ldap_authentication_user_login_authenticate_validate(array $form, FormStateInterface $form_state) {
+@@ -233,13 +237,13 @@ function ldap_authentication_user_login_authenticate_validate(array $form, FormS
+  *
+  * @param array $form
+  *   The form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state.
+  * @param string $form_id
+  *   The form ID.
+  */
+ function _ldap_authentication_login_form_alter(array &$form, FormStateInterface $form_state, string $form_id) {
+-  /** @var \Drupal\ldap_authentication\AuthenticationServers $authentication_servers */
++  /** @var AuthenticationServers $authentication_servers */
+   $authentication_servers = \Drupal::service('ldap_authentication.servers');
+   if (!$authentication_servers->authenticationServersAvailable()) {
+     return;
+diff --git a/ldap_authentication/src/Access/UserHelpTabAccess.php b/ldap_authentication/src/Access/UserHelpTabAccess.php
+index a8c69ece..3bd83932 100644
+--- a/ldap_authentication/src/Access/UserHelpTabAccess.php
++++ b/ldap_authentication/src/Access/UserHelpTabAccess.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_authentication\Access;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Access\AccessResultAllowed;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Routing\Access\AccessInterface;
+@@ -18,32 +19,32 @@ class UserHelpTabAccess implements AccessInterface {
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * Externalauth.
+    *
+-   * @var \Drupal\externalauth\Authmap
++   * @var Authmap
+    */
+   protected $externalAuth;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config Factory.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   Current user.
+-   * @param \Drupal\externalauth\Authmap $external_auth
++   * @param Authmap $external_auth
+    *   External auth.
+    */
+   public function __construct(
+diff --git a/ldap_authentication/src/AuthenticationServers.php b/ldap_authentication/src/AuthenticationServers.php
+index 3191842d..2629f1b0 100644
+--- a/ldap_authentication/src/AuthenticationServers.php
++++ b/ldap_authentication/src/AuthenticationServers.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_authentication;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ 
+@@ -15,23 +17,23 @@ class AuthenticationServers {
+   /**
+    * Entity Storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $storage;
+ 
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Constructs a new AuthenticationServers object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, ConfigFactoryInterface $config_factory) {
+diff --git a/ldap_authentication/src/Controller/LdapHelpRedirect.php b/ldap_authentication/src/Controller/LdapHelpRedirect.php
+index 09c3d0d5..bc0257b2 100644
+--- a/ldap_authentication/src/Controller/LdapHelpRedirect.php
++++ b/ldap_authentication/src/Controller/LdapHelpRedirect.php
+@@ -16,7 +16,7 @@ class LdapHelpRedirect extends ControllerBase {
+   /**
+    * Redirect.
+    *
+-   * @return \Drupal\Core\Routing\TrustedRedirectResponse
++   * @return TrustedRedirectResponse
+    *   Redirect response.
+    */
+   public function redirectUrl(): TrustedRedirectResponse {
+diff --git a/ldap_authentication/src/Controller/LoginValidatorBase.php b/ldap_authentication/src/Controller/LoginValidatorBase.php
+index cb1f88c6..07d66e2c 100644
+--- a/ldap_authentication/src/Controller/LoginValidatorBase.php
++++ b/ldap_authentication/src/Controller/LoginValidatorBase.php
+@@ -4,6 +4,12 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_authentication\Controller;
+ 
++use Drupal\ldap_servers\Entity\Server;
++use Drupal\user\Entity\User;
++use Drupal\Core\Form\FormState;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\ldap_servers\LdapBridge;
++use Drupal\authorization\AuthorizationController;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -96,21 +102,21 @@ abstract class LoginValidatorBase implements LdapUserAttributesInterface, LoginV
+   /**
+    * The Server for the Drupal user.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   protected $serverDrupalUser;
+ 
+   /**
+    * The Drupal user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $drupalUser;
+ 
+   /**
+    * LDAP Entry.
+    *
+-   * @var \Symfony\Component\Ldap\Entry
++   * @var Entry
+    */
+   protected $ldapEntry;
+ 
+@@ -131,7 +137,7 @@ abstract class LoginValidatorBase implements LdapUserAttributesInterface, LoginV
+   /**
+    * Form State.
+    *
+-   * @var \Drupal\Core\Form\FormState
++   * @var FormState
+    *
+    * @todo Try to push this up into LoginValidatorLoginForm
+    */
+@@ -140,111 +146,111 @@ abstract class LoginValidatorBase implements LdapUserAttributesInterface, LoginV
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Detail log.
+    *
+-   * @var \Drupal\ldap_servers\Logger\LdapDetailLog
++   * @var LdapDetailLog
+    */
+   protected $detailLog;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelInterface
++   * @var LoggerChannelInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Entity type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * LDAP bridge.
+    *
+-   * @var \Drupal\ldap_servers\LdapBridge
++   * @var LdapBridge
+    */
+   protected $ldapBridge;
+ 
+   /**
+    * External authentication mapper.
+    *
+-   * @var \Drupal\externalauth\Authmap
++   * @var Authmap
+    */
+   protected $externalAuth;
+ 
+   /**
+    * Authentication servers.
+    *
+-   * @var \Drupal\ldap_authentication\AuthenticationServers
++   * @var AuthenticationServers
+    */
+   protected $authenticationServers;
+ 
+   /**
+    * LDAP User Manager.
+    *
+-   * @var \Drupal\ldap_servers\LdapUserManager
++   * @var LdapUserManager
+    */
+   protected $ldapUserManager;
+ 
+   /**
+    * Messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Drupal User Processor.
+    *
+-   * @var \Drupal\ldap_user\Processor\DrupalUserProcessor
++   * @var DrupalUserProcessor
+    */
+   protected $drupalUserProcessor;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   Config factory.
+-   * @param \Drupal\ldap_servers\Logger\LdapDetailLog $detailLog
++   * @param LdapDetailLog $detailLog
+    *   Detail log.
+-   * @param \Drupal\Core\Logger\LoggerChannelInterface $logger
++   * @param LoggerChannelInterface $logger
+    *   Logger channel.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Extension\ModuleHandler $module_handler
++   * @param ModuleHandler $module_handler
+    *   Module handler.
+-   * @param \Drupal\ldap_servers\LdapBridgeInterface $ldap_bridge
++   * @param LdapBridgeInterface $ldap_bridge
+    *   LDAP bridge.
+-   * @param \Drupal\externalauth\Authmap $external_auth
++   * @param Authmap $external_auth
+    *   External auth.
+-   * @param \Drupal\ldap_authentication\AuthenticationServers $authentication_servers
++   * @param AuthenticationServers $authentication_servers
+    *   Authentication servers.
+-   * @param \Drupal\ldap_servers\LdapUserManager $ldap_user_manager
++   * @param LdapUserManager $ldap_user_manager
+    *   Ldap user manager.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+-   * @param \Drupal\ldap_user\Processor\DrupalUserProcessor $drupal_user_processor
++   * @param DrupalUserProcessor $drupal_user_processor
+    *   Drupal User Processor.
+    */
+   public function __construct(
+@@ -406,7 +412,7 @@ abstract class LoginValidatorBase implements LdapUserAttributesInterface, LoginV
+    * @param int $authenticationResult
+    *   Case.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   Response text.
+    */
+   protected function additionalDebuggingResponse(int $authenticationResult): TranslatableMarkup {
+@@ -464,7 +470,7 @@ abstract class LoginValidatorBase implements LdapUserAttributesInterface, LoginV
+    * @param int $error
+    *   Error code.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   Human readable error text.
+    */
+   protected function authenticationHelpText(int $error): TranslatableMarkup {
+@@ -540,7 +546,7 @@ abstract class LoginValidatorBase implements LdapUserAttributesInterface, LoginV
+       // We are not injecting this service properly to avoid forcing this
+       // dependency on authorization.
+       /** @var \Drupal\user\Entity\User $user */
+-      /** @var \Drupal\authorization\AuthorizationController $controller */
++      /** @var AuthorizationController $controller */
+       // @codingStandardsIgnoreLine
+       $controller = \Drupal::service('authorization.manager');
+       $controller->setUser($user);
+@@ -634,7 +640,7 @@ abstract class LoginValidatorBase implements LdapUserAttributesInterface, LoginV
+     $puid = $this->serverDrupalUser->derivePuidFromLdapResponse($this->ldapEntry);
+     if (!empty($puid)) {
+       $this->drupalUser = $this->ldapUserManager->getUserAccountFromPuid($puid);
+-      /** @var \Drupal\user\Entity\User $userMatchingPuid */
++      /** @var User $userMatchingPuid */
+       if ($this->drupalUser) {
+         $oldName = $this->drupalUser->getAccountName();
+         $this->drupalUser->setUsername($this->drupalUserName);
+@@ -744,7 +750,7 @@ abstract class LoginValidatorBase implements LdapUserAttributesInterface, LoginV
+         ->loadByProperties(['mail' => $this->serverDrupalUser->deriveEmailFromLdapResponse($this->ldapEntry)]);
+ 
+       if (count($users) > 0) {
+-        /** @var \Drupal\user\UserInterface $account_with_same_email */
++        /** @var UserInterface $account_with_same_email */
+         $account_with_same_email = reset($users);
+         $this->logger
+           ->error('LDAP user with DN %dn has a naming conflict with a local Drupal user %conflict_name',
+diff --git a/ldap_authentication/src/Controller/LoginValidatorInterface.php b/ldap_authentication/src/Controller/LoginValidatorInterface.php
+index b3aa030b..66276964 100644
+--- a/ldap_authentication/src/Controller/LoginValidatorInterface.php
++++ b/ldap_authentication/src/Controller/LoginValidatorInterface.php
+@@ -22,7 +22,7 @@ interface LoginValidatorInterface {
+    *
+    * @param string $authName
+    *   Authname.
+-   * @param \Symfony\Component\Ldap\Entry $ldap_user
++   * @param Entry $ldap_user
+    *   LDAP Entry.
+    *
+    * @return bool
+@@ -33,7 +33,7 @@ interface LoginValidatorInterface {
+   /**
+    * Returns the derived user account.
+    *
+-   * @return \Drupal\user\UserInterface|null
++   * @return UserInterface|null
+    *   User account.
+    */
+   public function getDrupalUser(): ?UserInterface;
+diff --git a/ldap_authentication/src/Controller/LoginValidatorLoginForm.php b/ldap_authentication/src/Controller/LoginValidatorLoginForm.php
+index 2f362211..d2c55bb6 100644
+--- a/ldap_authentication/src/Controller/LoginValidatorLoginForm.php
++++ b/ldap_authentication/src/Controller/LoginValidatorLoginForm.php
+@@ -15,10 +15,10 @@ class LoginValidatorLoginForm extends LoginValidatorBase {
+   /**
+    * Starts login process.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+-   * @return \Drupal\Core\Form\FormStateInterface
++   * @return FormStateInterface
+    *   The form state.
+    */
+   public function validateLogin(FormStateInterface $form_state): FormStateInterface {
+@@ -190,7 +190,7 @@ class LoginValidatorLoginForm extends LoginValidatorBase {
+    * This helper function is intended for the user edit form to allow
+    * the constraint validator to check against LDAP for the current password.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   User account.
+    *
+    * @return int
+diff --git a/ldap_authentication/src/Form/LdapAuthenticationAdminForm.php b/ldap_authentication/src/Form/LdapAuthenticationAdminForm.php
+index 9323861c..e768c136 100644
+--- a/ldap_authentication/src/Form/LdapAuthenticationAdminForm.php
++++ b/ldap_authentication/src/Form/LdapAuthenticationAdminForm.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_authentication\Form;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\ldap_servers\Entity\Server;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Extension\ModuleHandler;
+@@ -21,21 +23,21 @@ class LdapAuthenticationAdminForm extends ConfigFormBase {
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $storage;
+ 
+   /**
+    * Entity Type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -85,7 +87,7 @@ class LdapAuthenticationAdminForm extends ConfigFormBase {
+     $config = $this->config('ldap_authentication.settings');
+ 
+     $query_result = $this->storage->getQuery()->execute();
+-    /** @var \Drupal\ldap_servers\Entity\Server[] $servers */
++    /** @var Server[] $servers */
+     $servers = $this->storage->loadMultiple($query_result);
+     $authenticationServers = [];
+     foreach ($servers as $sid => $ldap_server) {
+diff --git a/ldap_authentication/src/Form/LdapAuthenticationProfileUpdateForm.php b/ldap_authentication/src/Form/LdapAuthenticationProfileUpdateForm.php
+index c51fecce..a35e7cf4 100644
+--- a/ldap_authentication/src/Form/LdapAuthenticationProfileUpdateForm.php
++++ b/ldap_authentication/src/Form/LdapAuthenticationProfileUpdateForm.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_authentication\Form;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Form\FormBase;
+@@ -23,14 +24,14 @@ class LdapAuthenticationProfileUpdateForm extends FormBase {
+   /**
+    * Current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -44,9 +45,9 @@ class LdapAuthenticationProfileUpdateForm extends FormBase {
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   Current user.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+    */
+   public function __construct(AccountInterface $current_user, EntityTypeManagerInterface $entity_type_manager) {
+@@ -109,7 +110,7 @@ class LdapAuthenticationProfileUpdateForm extends FormBase {
+    * {@inheritdoc}
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state): void {
+-    /** @var \Drupal\user\Entity\User $user */
++    /** @var User $user */
+     $user = $this->entityTypeManager->getStorage('user')->load($this->currentUser->id());
+     $user->set('mail', $form_state->getValue('mail'));
+     $user->save();
+diff --git a/ldap_authentication/src/Plugin/Derivative/DynamicUserHelpLink.php b/ldap_authentication/src/Plugin/Derivative/DynamicUserHelpLink.php
+index bc2a6b4f..d42a6d22 100644
+--- a/ldap_authentication/src/Plugin/Derivative/DynamicUserHelpLink.php
++++ b/ldap_authentication/src/Plugin/Derivative/DynamicUserHelpLink.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_authentication\Plugin\Derivative;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Component\Plugin\Derivative\DeriverBase;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Plugin\Discovery\ContainerDeriverInterface;
+@@ -17,14 +19,14 @@ class DynamicUserHelpLink extends DeriverBase implements ContainerDeriverInterfa
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   private $config;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   Config Factory.
+    */
+   public function __construct(ConfigFactory $config_factory) {
+diff --git a/ldap_authentication/src/Routing/EmailTemplateService.php b/ldap_authentication/src/Routing/EmailTemplateService.php
+index d9195873..32cc40f1 100644
+--- a/ldap_authentication/src/Routing/EmailTemplateService.php
++++ b/ldap_authentication/src/Routing/EmailTemplateService.php
+@@ -4,12 +4,14 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_authentication\Routing;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Url;
+ use Drupal\user\Entity\User;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -22,7 +24,7 @@ class EmailTemplateService implements EventSubscriberInterface {
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   private $config;
+ 
+@@ -36,10 +38,10 @@ class EmailTemplateService implements EventSubscriberInterface {
+   /**
+    * Check for template if enabled.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   Response event.
+    */
+-  public function checkTemplate(GetResponseEvent $event): void {
++  public function checkTemplate(RequestEvent $event): void {
+     if ($this->config->get('emailTemplateUsagePromptUser') === TRUE) {
+       $this->checkForEmailTemplate();
+     }
+diff --git a/ldap_authentication/src/Routing/RouteSubscriber.php b/ldap_authentication/src/Routing/RouteSubscriber.php
+index 647e2b0a..589bd3d1 100644
+--- a/ldap_authentication/src/Routing/RouteSubscriber.php
++++ b/ldap_authentication/src/Routing/RouteSubscriber.php
+@@ -28,7 +28,7 @@ class RouteSubscriber extends RouteSubscriberBase {
+   /**
+    * Checks whether password reset is allowed.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   Show password or not.
+    */
+   public static function validateResetPasswordAllowed(): AccessResultInterface {
+diff --git a/ldap_authentication/tests/src/Functional/LdapAuthenticationAdminFormTest.php b/ldap_authentication/tests/src/Functional/LdapAuthenticationAdminFormTest.php
+index a19d3cbf..7fc77695 100644
+--- a/ldap_authentication/tests/src/Functional/LdapAuthenticationAdminFormTest.php
++++ b/ldap_authentication/tests/src/Functional/LdapAuthenticationAdminFormTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\ldap_authentication\Functional;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -93,7 +94,7 @@ class LdapAuthenticationAdminFormTest extends BrowserTestBase {
+     $this->submitForm($edit, 'op');
+     $this->assertSession()->statusCodeEquals(200);
+ 
+-    /** @var \Drupal\Core\Config\ImmutableConfig $config */
++    /** @var ImmutableConfig $config */
+     $config = $this->container->get('config.factory')
+       ->get('ldap_authentication.settings');
+     self::assertEquals('exclusive', $config->get('authenticationMode'));
+diff --git a/ldap_authentication/tests/src/Kernel/LoginTest.php b/ldap_authentication/tests/src/Kernel/LoginTest.php
+index c168431b..be656295 100644
+--- a/ldap_authentication/tests/src/Kernel/LoginTest.php
++++ b/ldap_authentication/tests/src/Kernel/LoginTest.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\ldap_authentication\Kernel;
+ 
++use Drupal\Core\Entity\EntityTypeManager;
++use Drupal\ldap_servers\Entity\Server;
+ use Drupal\Core\Form\FormState;
+ use Drupal\Core\Messenger\MessengerInterface;
+ use Drupal\ldap_authentication\Controller\LoginValidatorLoginForm;
+@@ -37,7 +39,7 @@ class LoginTest extends KernelTestBase {
+   /**
+    * Validator.
+    *
+-   * @var \Drupal\ldap_authentication\Controller\LoginValidatorLoginForm
++   * @var LoginValidatorLoginForm
+    */
+   private $validator;
+ 
+@@ -52,9 +54,9 @@ class LoginTest extends KernelTestBase {
+     $this->installSchema('externalauth', ['authmap']);
+     $this->installSchema('system', 'sequences');
+ 
+-    /** @var \Drupal\Core\Entity\EntityTypeManager $manager */
++    /** @var EntityTypeManager $manager */
+     $manager = $this->container->get('entity_type.manager');
+-    /** @var \Drupal\ldap_servers\Entity\Server $server */
++    /** @var Server $server */
+     $server = $manager->getStorage('ldap_server')->create([
+       'id' => 'test',
+       'timeout' => 30,
+@@ -134,7 +136,7 @@ class LoginTest extends KernelTestBase {
+     $form_state->setValues(['name' => 'hpotter', 'pass' => 'pass']);
+     $state = $this->validator->validateLogin($form_state);
+     self::assertCount(0, $state->getErrors());
+-    /** @var \Drupal\Core\Messenger\MessengerInterface $messenger */
++    /** @var MessengerInterface $messenger */
+     $messenger = $this->container->get('messenger');
+     $messenger_errors = $messenger->messagesByType(MessengerInterface::TYPE_ERROR);
+     self::assertEmpty($messenger_errors, json_encode($messenger_errors));
+@@ -178,7 +180,7 @@ class LoginTest extends KernelTestBase {
+     $form_state = new FormState();
+     $form_state->setValues(['name' => 'hpotter', 'pass' => 'pass']);
+     $this->validator->validateLogin($form_state);
+-    /** @var \Drupal\Core\Messenger\MessengerInterface $messenger */
++    /** @var MessengerInterface $messenger */
+     $messenger = $this->container->get('messenger');
+     $messenger_errors = $messenger->messagesByType(MessengerInterface::TYPE_ERROR);
+     self::assertCount(1, $messenger_errors);
+@@ -206,7 +208,7 @@ class LoginTest extends KernelTestBase {
+     $form_state = new FormState();
+     $form_state->setValues(['name' => 'hpotter', 'pass' => 'pass']);
+     $this->validator->validateLogin($form_state);
+-    /** @var \Drupal\Core\Messenger\MessengerInterface $messenger */
++    /** @var MessengerInterface $messenger */
+     $messenger = $this->container->get('messenger');
+     $messenger_errors = $messenger->messagesByType(MessengerInterface::TYPE_ERROR);
+     self::assertCount(1, $messenger_errors);
+diff --git a/ldap_authorization/src/Plugin/authorization/Provider/LDAPAuthorizationProvider.php b/ldap_authorization/src/Plugin/authorization/Provider/LDAPAuthorizationProvider.php
+index 4ff1c47f..e1315854 100644
+--- a/ldap_authorization/src/Plugin/authorization/Provider/LDAPAuthorizationProvider.php
++++ b/ldap_authorization/src/Plugin/authorization/Provider/LDAPAuthorizationProvider.php
+@@ -4,6 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_authorization\Plugin\authorization\Provider;
+ 
++use Drupal\authorization\Entity\AuthorizationProfile;
++use Drupal\ldap_servers\Entity\Server;
++use Drupal\ldap_servers\LdapUserManager;
++use Drupal\ldap_servers\LdapGroupManager;
+ use Drupal\authorization\AuthorizationSkipAuthorization;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -45,7 +49,7 @@ class LDAPAuthorizationProvider extends ProviderPluginBase {
+   /**
+    * Entity Type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -53,7 +57,7 @@ class LDAPAuthorizationProvider extends ProviderPluginBase {
+   /**
+    * Drupal User Processor.
+    *
+-   * @var \Drupal\ldap_user\Processor\DrupalUserProcessor
++   * @var DrupalUserProcessor
+    */
+   protected $drupalUserProcessor;
+ 
+@@ -66,9 +70,9 @@ class LDAPAuthorizationProvider extends ProviderPluginBase {
+    *   Plugin ID.
+    * @param array $plugin_definition
+    *   Plugin definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\ldap_user\Processor\DrupalUserProcessor $drupal_user_processor
++   * @param DrupalUserProcessor $drupal_user_processor
+    *   Drupal user processor.
+    */
+   public function __construct(
+@@ -105,7 +109,7 @@ class LDAPAuthorizationProvider extends ProviderPluginBase {
+    * {@inheritdoc}
+    */
+   public function buildConfigurationForm(array $form, FormStateInterface $form_state): array {
+-    /** @var \Drupal\authorization\Entity\AuthorizationProfile $profile */
++    /** @var AuthorizationProfile $profile */
+     $profile = $this->configuration['profile'];
+     $tokens = $this->getTokens();
+     $tokens += $profile->getTokens();
+@@ -115,7 +119,7 @@ class LDAPAuthorizationProvider extends ProviderPluginBase {
+ 
+     $storage = $this->entityTypeManager->getStorage('ldap_server');
+     $query_results = $storage->getQuery()->execute();
+-    /** @var \Drupal\ldap_servers\Entity\Server[] $servers */
++    /** @var Server[] $servers */
+     $servers = $storage->loadMultiple($query_results);
+ 
+     $form['status'] = [
+@@ -135,7 +139,7 @@ class LDAPAuthorizationProvider extends ProviderPluginBase {
+     else {
+       $server_options = [];
+       foreach ($servers as $id => $server) {
+-        /** @var \Drupal\ldap_servers\Entity\Server $server */
++        /** @var Server $server */
+         $server_options[$id] = $server->label() . ' (' . $server->get('address') . ')';
+       }
+     }
+@@ -196,7 +200,7 @@ class LDAPAuthorizationProvider extends ProviderPluginBase {
+    */
+   public function buildRowForm(array $form, FormStateInterface $form_state, $index = 0): array {
+     $row = [];
+-    /** @var \Drupal\authorization\Entity\AuthorizationProfile $profile */
++    /** @var AuthorizationProfile $profile */
+     $profile = $this->configuration['profile'];
+     $mappings = $profile->getProviderMappings();
+     $row['query'] = [
+@@ -229,13 +233,13 @@ class LDAPAuthorizationProvider extends ProviderPluginBase {
+     if ($this->drupalUserProcessor->excludeUser($user)) {
+       throw new AuthorizationSkipAuthorization('User in list of excluded users');
+     }
+-    /** @var \Drupal\authorization\Entity\AuthorizationProfile $profile */
++    /** @var AuthorizationProfile $profile */
+     $profile = $this->configuration['profile'];
+     $config = $profile->getProviderConfig();
+ 
+     // Load the correct server.
+     $server_id = $config['status']['server'];
+-    /** @var \Drupal\ldap_servers\Entity\Server $server */
++    /** @var Server $server */
+     $server = \Drupal::service('entity_type.manager')
+       ->getStorage('ldap_server')
+       ->load($server_id);
+@@ -243,7 +247,7 @@ class LDAPAuthorizationProvider extends ProviderPluginBase {
+       return [];
+     }
+ 
+-    /** @var \Drupal\ldap_servers\LdapUserManager $ldap_user_manager */
++    /** @var LdapUserManager $ldap_user_manager */
+     $ldap_user_manager = \Drupal::service('ldap.user_manager');
+     $ldap_user_manager->setServer($server);
+ 
+@@ -258,7 +262,7 @@ class LDAPAuthorizationProvider extends ProviderPluginBase {
+       throw new AuthorizationSkipAuthorization('Not LDAP authenticated');
+     }
+ 
+-    /** @var \Drupal\ldap_servers\LdapGroupManager $group_manager */
++    /** @var LdapGroupManager $group_manager */
+     $group_manager = \Drupal::service('ldap.group_manager');
+     $group_manager->setServerById($server_id);
+ 
+@@ -331,7 +335,7 @@ class LDAPAuthorizationProvider extends ProviderPluginBase {
+    */
+   public function sanitizeProposals(array $proposals): array {
+     // Configure this provider.
+-    /** @var \Drupal\authorization\Entity\AuthorizationProfile $profile */
++    /** @var AuthorizationProfile $profile */
+     $profile = $this->configuration['profile'];
+     $config = $profile->getProviderConfig();
+     foreach ($proposals as $key => $authorization_id) {
+diff --git a/ldap_authorization/tests/src/Kernel/LdapAuthorizationProviderIntegrationTest.php b/ldap_authorization/tests/src/Kernel/LdapAuthorizationProviderIntegrationTest.php
+index aeb78e16..efa55b34 100644
+--- a/ldap_authorization/tests/src/Kernel/LdapAuthorizationProviderIntegrationTest.php
++++ b/ldap_authorization/tests/src/Kernel/LdapAuthorizationProviderIntegrationTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\ldap_authorization\Kernel;
+ 
++use Drupal\ldap_authorization\Plugin\authorization\Provider\LDAPAuthorizationProvider;
+ use Drupal\authorization\AuthorizationSkipAuthorization;
+ use Drupal\authorization\Entity\AuthorizationProfile;
+ use Drupal\Core\Form\FormState;
+@@ -107,7 +108,7 @@ class LdapAuthorizationProviderIntegrationTest extends EntityKernelTestBase {
+       'query' => 'example',
+     ]);
+     $profile->setConsumerMappings([['role' => 'student']]);
+-    /** @var \Drupal\ldap_authorization\Plugin\authorization\Provider\LDAPAuthorizationProvider $provider */
++    /** @var LDAPAuthorizationProvider $provider */
+     $provider = $profile->getProvider();
+ 
+     $user = User::create(['name' => 'hpotter', 'mail' => 'hpotter@hogwarts.edu']);
+@@ -162,7 +163,7 @@ class LdapAuthorizationProviderIntegrationTest extends EntityKernelTestBase {
+       'query' => 'example',
+     ]);
+     $profile->setConsumerMappings([['role' => 'student']]);
+-    /** @var \Drupal\ldap_authorization\Plugin\authorization\Provider\LDAPAuthorizationProvider $provider */
++    /** @var LDAPAuthorizationProvider $provider */
+     $provider = $profile->getProvider();
+ 
+     $user = User::create(['name' => 'hpotter', 'mail' => 'hpotter@hogwarts.edu']);
+@@ -174,7 +175,7 @@ class LdapAuthorizationProviderIntegrationTest extends EntityKernelTestBase {
+     ], $provider->sanitizeProposals($provider->getProposals($user)));
+ 
+     // Alternative structure with DN in attribute.
+-    /** @var \Drupal\ldap_servers_dummy\FakeBridge $bridge */
++    /** @var FakeBridge $bridge */
+     $bridge = $this->container->get('ldap.bridge');
+     $collection = [
+       '(cn=hpotter)' => new FakeCollection([
+diff --git a/ldap_authorization/tests/src/Unit/LdapAuthorizationProviderTest.php b/ldap_authorization/tests/src/Unit/LdapAuthorizationProviderTest.php
+index 185cbbf0..fbff68a6 100644
+--- a/ldap_authorization/tests/src/Unit/LdapAuthorizationProviderTest.php
++++ b/ldap_authorization/tests/src/Unit/LdapAuthorizationProviderTest.php
+@@ -19,7 +19,7 @@ class LdapAuthorizationProviderTest extends UnitTestCase {
+   /**
+    * Provider plugin.
+    *
+-   * @var \Drupal\ldap_authorization\Plugin\authorization\Provider\LDAPAuthorizationProvider
++   * @var LDAPAuthorizationProvider
+    */
+   protected $providerPlugin;
+ 
+diff --git a/ldap_query/ldap_query.install b/ldap_query/ldap_query.install
+index 31a479ba..8d4362b2 100644
+--- a/ldap_query/ldap_query.install
++++ b/ldap_query/ldap_query.install
+@@ -16,7 +16,7 @@ function ldap_query_update_8301() {
+   $query = \Drupal::entityQuery('ldap_query_entity');
+   $ids = $query->execute();
+   $entities = QueryEntity::loadMultiple($ids);
+-  /** @var \Drupal\ldap_query\Entity\QueryEntity $entity */
++  /** @var QueryEntity $entity */
+   foreach ($entities as $entity) {
+     switch ($entity->get('scope')) {
+       case 1:
+diff --git a/ldap_query/src/Controller/QueryController.php b/ldap_query/src/Controller/QueryController.php
+index e9c241ba..944d27da 100644
+--- a/ldap_query/src/Controller/QueryController.php
++++ b/ldap_query/src/Controller/QueryController.php
+@@ -4,6 +4,12 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_query\Controller;
+ 
++use Symfony\Component\Ldap\Entry;
++use Drupal\ldap_query\Entity\QueryEntity;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\ldap_servers\LdapBridge;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\ldap_servers\LdapBridgeInterface;
+ use Psr\Log\LoggerInterface;
+@@ -17,7 +23,7 @@ class QueryController {
+   /**
+    * LDAP Entry.
+    *
+-   * @var \Symfony\Component\Ldap\Entry[]
++   * @var Entry[]
+    */
+   private $results = [];
+ 
+@@ -31,43 +37,43 @@ class QueryController {
+   /**
+    * Query.
+    *
+-   * @var \Drupal\ldap_query\Entity\QueryEntity
++   * @var QueryEntity
+    */
+   private $query;
+ 
+   /**
+    * Entity Storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $storage;
+ 
+   /**
+    * LDAP Bridge.
+    *
+-   * @var \Drupal\ldap_servers\LdapBridge
++   * @var LdapBridge
+    */
+   protected $ldapBridge;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * QueryController constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity Type Manager.
+-   * @param \Drupal\ldap_servers\LdapBridgeInterface $ldap_bridge
++   * @param LdapBridgeInterface $ldap_bridge
+    *   LDAP bridge.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(
+     EntityTypeManagerInterface $entity_type_manager,
+@@ -157,7 +163,7 @@ class QueryController {
+   /**
+    * Return raw results.
+    *
+-   * @return \Symfony\Component\Ldap\Entry[]
++   * @return Entry[]
+    *   Raw results.
+    */
+   public function getRawResults(): array {
+diff --git a/ldap_query/src/Form/QueryEntityForm.php b/ldap_query/src/Form/QueryEntityForm.php
+index a587c325..1bb2c60d 100644
+--- a/ldap_query/src/Form/QueryEntityForm.php
++++ b/ldap_query/src/Form/QueryEntityForm.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_query\Form;
+ 
++use Drupal\ldap_query\Entity\QueryEntity;
++use Drupal\ldap_servers\Entity\Server;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -17,7 +19,7 @@ class QueryEntityForm extends EntityForm {
+   /**
+    * Query Entity.
+    *
+-   * @var \Drupal\ldap_query\Entity\QueryEntity
++   * @var QueryEntity
+    */
+   protected $entity;
+ 
+@@ -51,7 +53,7 @@ class QueryEntityForm extends EntityForm {
+     $servers = $storage->getQuery()->execute();
+ 
+     $options = [];
+-    /** @var \Drupal\ldap_servers\Entity\Server $server */
++    /** @var Server $server */
+     foreach ($storage->loadMultiple($servers) as $server) {
+       $options[$server->id()] = $server->label();
+     }
+diff --git a/ldap_query/src/Form/QueryTestForm.php b/ldap_query/src/Form/QueryTestForm.php
+index e826dbc8..244c5578 100644
+--- a/ldap_query/src/Form/QueryTestForm.php
++++ b/ldap_query/src/Form/QueryTestForm.php
+@@ -18,7 +18,7 @@ class QueryTestForm extends FormBase {
+   /**
+    * LDAP Query.
+    *
+-   * @var \Drupal\ldap_query\Controller\QueryController
++   * @var QueryController
+    */
+   protected $ldapQuery;
+ 
+diff --git a/ldap_query/src/Plugin/views/VariableAttributeCustomization.php b/ldap_query/src/Plugin/views/VariableAttributeCustomization.php
+index 9913b43d..9e8451d1 100644
+--- a/ldap_query/src/Plugin/views/VariableAttributeCustomization.php
++++ b/ldap_query/src/Plugin/views/VariableAttributeCustomization.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_query\Plugin\views;
+ 
++use Drupal\ldap_query\Controller\QueryController;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+ /**
+@@ -34,7 +35,7 @@ trait VariableAttributeCustomization {
+       return;
+     }
+     // FIXME: DI.
+-    /** @var \Drupal\ldap_query\Controller\QueryController $controller */
++    /** @var QueryController $controller */
+     $controller = \Drupal::service('ldap.query');
+     $controller->load($queryOptions['query_id']);
+     $controller->execute();
+diff --git a/ldap_query/src/Plugin/views/field/LdapAttribute.php b/ldap_query/src/Plugin/views/field/LdapAttribute.php
+index f3075c15..a408ece8 100644
+--- a/ldap_query/src/Plugin/views/field/LdapAttribute.php
++++ b/ldap_query/src/Plugin/views/field/LdapAttribute.php
+@@ -20,7 +20,7 @@ class LdapAttribute extends FieldPluginBase {
+   /**
+    * Renders the content.
+    *
+-   * @param \Drupal\views\ResultRow $values
++   * @param ResultRow $values
+    *   The result row.
+    *
+    * @return array
+diff --git a/ldap_query/src/Plugin/views/field/LdapVariableImageAttribute.php b/ldap_query/src/Plugin/views/field/LdapVariableImageAttribute.php
+index 70c6515f..68df9192 100644
+--- a/ldap_query/src/Plugin/views/field/LdapVariableImageAttribute.php
++++ b/ldap_query/src/Plugin/views/field/LdapVariableImageAttribute.php
+@@ -20,7 +20,7 @@ class LdapVariableImageAttribute extends LdapVariableAttribute {
+   /**
+    * Encodes a binary image for display directly in Views.
+    *
+-   * @param \Drupal\views\ResultRow $values
++   * @param ResultRow $values
+    *   Result row.
+    *
+    * @return array|null
+diff --git a/ldap_query/src/Plugin/views/query/LdapQuery.php b/ldap_query/src/Plugin/views/query/LdapQuery.php
+index 2e766132..91582fbb 100644
+--- a/ldap_query/src/Plugin/views/query/LdapQuery.php
++++ b/ldap_query/src/Plugin/views/query/LdapQuery.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_query\Plugin\views\query;
+ 
++use Drupal\ldap_query\Controller\QueryController;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\views\Plugin\views\query\QueryPluginBase;
+@@ -69,7 +70,7 @@ class LdapQuery extends QueryPluginBase {
+   /**
+    * Execute the query.
+    *
+-   * @param \Drupal\views\ViewExecutable $view
++   * @param ViewExecutable $view
+    *   The view.
+    *
+    * @return bool|void
+@@ -83,7 +84,7 @@ class LdapQuery extends QueryPluginBase {
+     $start = microtime(TRUE);
+ 
+     // @todo Dependency Injection.
+-    /** @var \Drupal\ldap_query\Controller\QueryController $controller */
++    /** @var QueryController $controller */
+     $controller = \Drupal::service('ldap.query');
+     $controller->load($this->options['query_id']);
+     $filter = $this->buildLdapFilter($controller->getFilter());
+@@ -337,7 +338,7 @@ class LdapQuery extends QueryPluginBase {
+   /**
+    * Let modules modify the query just prior to finalizing it.
+    *
+-   * @param \Drupal\views\ViewExecutable $view
++   * @param ViewExecutable $view
+    *   View.
+    */
+   public function alter(ViewExecutable $view): void {
+diff --git a/ldap_query/src/QueryEntityHtmlRouteProvider.php b/ldap_query/src/QueryEntityHtmlRouteProvider.php
+index 86446054..7d6b2e11 100644
+--- a/ldap_query/src/QueryEntityHtmlRouteProvider.php
++++ b/ldap_query/src/QueryEntityHtmlRouteProvider.php
+@@ -35,10 +35,10 @@ class QueryEntityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the collection route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getCollectionRoute(EntityTypeInterface $entity_type): ?Route {
+@@ -63,10 +63,10 @@ class QueryEntityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the add-form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getAddFormRoute(EntityTypeInterface $entity_type): ?Route {
+diff --git a/ldap_query/src/QueryEntityListBuilder.php b/ldap_query/src/QueryEntityListBuilder.php
+index b0311b50..d4ee0d7e 100644
+--- a/ldap_query/src/QueryEntityListBuilder.php
++++ b/ldap_query/src/QueryEntityListBuilder.php
+@@ -27,7 +27,7 @@ class QueryEntityListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity): array {
+-    /** @var \Drupal\ldap_query\QueryEntityInterface $entity */
++    /** @var QueryEntityInterface $entity */
+     $row['label'] = $entity->label();
+     $server = Server::load($entity->get('server_id'));
+     $row['server_id'] = $server->label();
+diff --git a/ldap_query/tests/src/Functional/QueryEntityFormTest.php b/ldap_query/tests/src/Functional/QueryEntityFormTest.php
+index e712a0b7..75c6206a 100644
+--- a/ldap_query/tests/src/Functional/QueryEntityFormTest.php
++++ b/ldap_query/tests/src/Functional/QueryEntityFormTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\ldap_query\Functional;
+ 
++use Drupal\ldap_query\Entity\QueryEntity;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -87,7 +88,7 @@ class QueryEntityFormTest extends BrowserTestBase {
+     $this->assertSession()->pageTextContains('Created the My Query LDAP query.');
+ 
+     $manager = $this->container->get('entity_type.manager');
+-    /** @var \Drupal\ldap_query\Entity\QueryEntity $query */
++    /** @var QueryEntity $query */
+     $query = $manager->getStorage('ldap_query_entity')->load('my_query');
+     self::assertEquals('My Query', $query->label());
+     self::assertEquals(TRUE, $query->status());
+diff --git a/ldap_query/tests/src/Unit/ViewsSortTest.php b/ldap_query/tests/src/Unit/ViewsSortTest.php
+index dd42a760..871b13b9 100644
+--- a/ldap_query/tests/src/Unit/ViewsSortTest.php
++++ b/ldap_query/tests/src/Unit/ViewsSortTest.php
+@@ -17,7 +17,7 @@ class ViewsSortTest extends UnitTestCase {
+   /**
+    * View.
+    *
+-   * @var \Drupal\ldap_query\Plugin\views\query\LdapQuery
++   * @var LdapQuery
+    */
+   protected $view;
+ 
+diff --git a/ldap_servers/ldap_servers.api.php b/ldap_servers/ldap_servers.api.php
+index 9818fff5..a6959e21 100644
+--- a/ldap_servers/ldap_servers.api.php
++++ b/ldap_servers/ldap_servers.api.php
+@@ -51,7 +51,7 @@ function hook_ldap_servers_user_cron_needed(): bool {
+  *    "attribute1" => array("value"),
+  *    "attribute2" => array("value1", "value2"),
+  *   ];.
+- * @param \Drupal\ldap_servers\Entity\Server $ldap_server
++ * @param Server $ldap_server
+  *   Server entity that is performing provisioning.
+  * @param array $context
+  *   Context ith the following key/values:
+@@ -84,7 +84,7 @@ function hook_ldap_entry_pre_provision_alter(array &$ldap_entries, Server $ldap_
+  *
+  * @param array $ldap_entries
+  *   LDAP entries.
+- * @param \Drupal\ldap_servers\Entity\Server $ldap_server
++ * @param Server $ldap_server
+  *   Server entity that is performing provisioning.
+  * @param array $context
+  *   Submission context.
+diff --git a/ldap_servers/ldap_servers.install b/ldap_servers/ldap_servers.install
+index b33a4547..42ce8696 100644
+--- a/ldap_servers/ldap_servers.install
++++ b/ldap_servers/ldap_servers.install
+@@ -6,6 +6,8 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\ldap_servers\Entity\Server;
+ 
+ use Drupal\Core\StringTranslation\TranslatableMarkup;
+ 
+@@ -56,10 +58,10 @@ function ldap_servers_requirements($phase): array {
+  * Updates bind method to new value.
+  */
+ function ldap_servers_update_8301() {
+-  /** @var \Drupal\Core\Entity\EntityStorageInterface $storage */
++  /** @var EntityStorageInterface $storage */
+   $storage = \Drupal::service('entity_type.manager')->getStorage('ldap_server');
+   $servers = $storage->getQuery()->execute();
+-  /** @var \Drupal\ldap_servers\Entity\Server $server */
++  /** @var Server $server */
+   foreach ($storage->loadMultiple($servers) as $server) {
+     $currentMethod = $server->get('bind_method');
+     if ($currentMethod == 1) {
+@@ -93,10 +95,10 @@ function ldap_servers_update_8302(): TranslatableMarkup {
+  * Adds default timeout to all servers.
+  */
+ function ldap_servers_update_8303(): TranslatableMarkup {
+-  /** @var \Drupal\Core\Entity\EntityStorageInterface $storage */
++  /** @var EntityStorageInterface $storage */
+   $storage = \Drupal::service('entity_type.manager')->getStorage('ldap_server');
+   $servers = $storage->getQuery()->execute();
+-  /** @var \Drupal\ldap_servers\Entity\Server $server */
++  /** @var Server $server */
+   foreach ($storage->loadMultiple($servers) as $server) {
+     $server->set('timeout', 10);
+     $server->save();
+@@ -145,7 +147,7 @@ function ldap_servers_update_8402() {
+ function ldap_servers_update_8403() {
+   $storage = \Drupal::service('entity_type.manager')->getStorage('ldap_server');
+   $servers = $storage->getQuery()->execute();
+-  /** @var \Drupal\ldap_servers\Entity\Server $server */
++  /** @var Server $server */
+   foreach ($storage->loadMultiple($servers) as $server) {
+     if (is_string($server->get('basedn')))  {
+       $split = preg_split('/\r\n|\r|\n/', $server->get('basedn'));
+@@ -161,7 +163,7 @@ function ldap_servers_update_8403() {
+  */
+ function ldap_servers_update_8404() {
+   $storage = \Drupal::service('entity_type.manager')->getStorage('ldap_server');
+-  /** @var \Drupal\ldap_servers\Entity\Server $server */
++  /** @var Server $server */
+   foreach ($storage->loadMultiple() as $server) {
+     $server->set('encryption', 'none');
+     if ($server->get('tls')) {
+diff --git a/ldap_servers/ldap_servers.module b/ldap_servers/ldap_servers.module
+index ac25cf25..dcb2ff1e 100644
+--- a/ldap_servers/ldap_servers.module
++++ b/ldap_servers/ldap_servers.module
+@@ -6,6 +6,7 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\Core\Session\AccountInterface;
+ 
+ use Drupal\Core\Routing\RouteMatchInterface;
+ 
+@@ -30,7 +31,7 @@ function ldap_servers_help($route_name, RouteMatchInterface $route_match) {
+  */
+ function ldap_servers_user_logout($account) {
+   // When the user logs out clear the LDAP cached data.
+-  /** @var \Drupal\Core\Session\AccountInterface $account */
++  /** @var AccountInterface $account */
+   $cache_key = 'ldap_servers:user_data:' . $account->getAccountName();
+   if (\Drupal::cache()->get($cache_key)) {
+     \Drupal::cache()->delete($cache_key);
+diff --git a/ldap_servers/src/Entity/Server.php b/ldap_servers/src/Entity/Server.php
+index 4fc4c4b6..17529174 100644
+--- a/ldap_servers/src/Entity/Server.php
++++ b/ldap_servers/src/Entity/Server.php
+@@ -4,6 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_servers\Entity;
+ 
++use Psr\Log\LoggerInterface;
++use Drupal\ldap_servers\Logger\LdapDetailLog;
++use Drupal\ldap_servers\Processor\TokenProcessor;
++use Drupal\Core\Extension\ModuleHandler;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Drupal\Core\StringTranslation\TranslatableMarkup;
+@@ -86,28 +90,28 @@ class Server extends ConfigEntityBase implements ServerInterface {
+   /**
+    * Logger channel.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * LDAP Details logger.
+    *
+-   * @var \Drupal\ldap_servers\Logger\LdapDetailLog
++   * @var LdapDetailLog
+    */
+   protected $detailLog;
+ 
+   /**
+    * Token processor.
+    *
+-   * @var \Drupal\ldap_servers\Processor\TokenProcessor
++   * @var TokenProcessor
+    */
+   protected $tokenProcessor;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+diff --git a/ldap_servers/src/Form/DebuggingReviewForm.php b/ldap_servers/src/Form/DebuggingReviewForm.php
+index c9ebed99..0baf4d20 100644
+--- a/ldap_servers/src/Form/DebuggingReviewForm.php
++++ b/ldap_servers/src/Form/DebuggingReviewForm.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_servers\Form;
+ 
++use Drupal\ldap_servers\Entity\Server;
++use Drupal\ldap_query\Entity\QueryEntity;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Extension\ModuleHandler;
+@@ -21,21 +23,21 @@ class DebuggingReviewForm extends FormBase {
+   /**
+    * Config Factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $config;
+ 
+   /**
+    * Module Handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -49,11 +51,11 @@ class DebuggingReviewForm extends FormBase {
+   /**
+    * Class constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config factory.
+-   * @param \Drupal\Core\Extension\ModuleHandler $module_handler
++   * @param ModuleHandler $module_handler
+    *   Module handler.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+    */
+   public function __construct(
+@@ -149,7 +151,7 @@ class DebuggingReviewForm extends FormBase {
+     $storage = $this->entityTypeManager->getStorage('ldap_server');
+     $servers = $storage->getQuery()->execute();
+     foreach ($storage->loadMultiple($servers) as $sid => $server) {
+-      /** @var \Drupal\ldap_servers\Entity\Server $server */
++      /** @var Server $server */
+       $form['config_server_' . $sid] = [
+         '#markup' =>
+         '<h3>' . $this->t('Server @name:', ['@name' => $server->label()]) . '</h3>' .
+@@ -179,7 +181,7 @@ class DebuggingReviewForm extends FormBase {
+ 
+       $queries_found = $this->entityTypeManager->getStorage('ldap_query_entity')->getQuery()->execute();
+       foreach ($this->entityTypeManager->getStorage('ldap_query_entity')->loadMultiple($queries_found) as $query) {
+-        /** @var \Drupal\ldap_query\Entity\QueryEntity $query */
++        /** @var QueryEntity $query */
+         $form['query_' . $query->id()] = [
+           '#markup' =>
+           '<h3>' . $this->t('Query @name:', ['@name' => $query->label()]) . '</h3>' .
+diff --git a/ldap_servers/src/Form/ServerEnableDisableForm.php b/ldap_servers/src/Form/ServerEnableDisableForm.php
+index 42989be1..f0471199 100644
+--- a/ldap_servers/src/Form/ServerEnableDisableForm.php
++++ b/ldap_servers/src/Form/ServerEnableDisableForm.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_servers\Form;
+ 
++use Drupal\ldap_servers\Entity\Server;
+ use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Core\Entity\EntityConfirmFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -17,7 +18,7 @@ class ServerEnableDisableForm extends EntityConfirmFormBase {
+   /**
+    * The server entity.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   protected $entity;
+ 
+diff --git a/ldap_servers/src/Form/ServerForm.php b/ldap_servers/src/Form/ServerForm.php
+index 2a3fa30d..883e02ca 100644
+--- a/ldap_servers/src/Form/ServerForm.php
++++ b/ldap_servers/src/Form/ServerForm.php
+@@ -18,7 +18,7 @@ class ServerForm extends EntityForm {
+   /**
+    * The server entity.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   protected $entity;
+ 
+@@ -28,7 +28,7 @@ class ServerForm extends EntityForm {
+   public function form(array $form, FormStateInterface $form_state): array {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\ldap_servers\Entity\Server $server */
++    /** @var Server $server */
+     $server = $this->entity;
+ 
+     $form['server'] = [
+diff --git a/ldap_servers/src/Form/ServerTestForm.php b/ldap_servers/src/Form/ServerTestForm.php
+index c7b78f03..02638d5d 100644
+--- a/ldap_servers/src/Form/ServerTestForm.php
++++ b/ldap_servers/src/Form/ServerTestForm.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_servers\Form;
+ 
++use Drupal\ldap_servers\LdapBridge;
+ use Drupal\Component\Utility\Unicode;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Extension\ModuleHandler;
+@@ -28,7 +29,7 @@ class ServerTestForm extends EntityForm {
+   /**
+    * The main server to work with.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   protected $ldapServer;
+ 
+@@ -49,35 +50,35 @@ class ServerTestForm extends EntityForm {
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $config;
+ 
+   /**
+    * Token processor.
+    *
+-   * @var \Drupal\ldap_servers\Processor\TokenProcessor
++   * @var TokenProcessor
+    */
+   protected $tokenProcessor;
+ 
+   /**
+    * Renderer.
+    *
+-   * @var \Drupal\Core\Render\Renderer
++   * @var Renderer
+    */
+   protected $renderer;
+ 
+   /**
+    * LDAP bridge.
+    *
+-   * @var \Drupal\ldap_servers\LdapBridge
++   * @var LdapBridge
+    */
+   protected $ldapBridge;
+ 
+   /**
+    * LDAP Group Manager.
+    *
+-   * @var \Drupal\ldap_servers\LdapGroupManager
++   * @var LdapGroupManager
+    */
+   protected $ldapGroupManager;
+ 
+@@ -91,17 +92,17 @@ class ServerTestForm extends EntityForm {
+   /**
+    * Class constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config Factory.
+-   * @param \Drupal\Core\Extension\ModuleHandler $module_handler
++   * @param ModuleHandler $module_handler
+    *   Module handler.
+-   * @param \Drupal\ldap_servers\Processor\TokenProcessor $token_processor
++   * @param TokenProcessor $token_processor
+    *   Token Processor.
+-   * @param \Drupal\Core\Render\Renderer $renderer
++   * @param Renderer $renderer
+    *   Renderer.
+-   * @param \Drupal\ldap_servers\LdapBridgeInterface $ldap_bridge
++   * @param LdapBridgeInterface $ldap_bridge
+    *   LDAP Bridge.
+-   * @param \Drupal\ldap_servers\LdapGroupManager $ldap_group_manager
++   * @param LdapGroupManager $ldap_group_manager
+    *   LDAP Group Manager.
+    */
+   public function __construct(
+@@ -553,7 +554,7 @@ class ServerTestForm extends EntityForm {
+    * @param string $drupal_username
+    *   The Drupal username.
+    *
+-   * @return \Symfony\Component\Ldap\Entry|false
++   * @return Entry|false
+    *   Entry.
+    */
+   public function testUserMapping(string $drupal_username) {
+@@ -596,7 +597,7 @@ class ServerTestForm extends EntityForm {
+    * @param bool $input
+    *   State.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   Output message.
+    */
+   private function booleanResult(bool $input): TranslatableMarkup {
+@@ -724,7 +725,7 @@ class ServerTestForm extends EntityForm {
+   /**
+    * Compute user data.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $ldap_entry
++   * @param Entry $ldap_entry
+    *   Data to test on.
+    *
+    * @return array
+diff --git a/ldap_servers/src/LdapBaseManager.php b/ldap_servers/src/LdapBaseManager.php
+index 2f7ac63b..9c06b644 100644
+--- a/ldap_servers/src/LdapBaseManager.php
++++ b/ldap_servers/src/LdapBaseManager.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_servers;
+ 
++use Symfony\Component\Ldap\Ldap;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Extension\ModuleHandler;
+ use Drupal\ldap_servers\Entity\Server;
+@@ -21,55 +22,55 @@ abstract class LdapBaseManager {
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Entity Type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * LDAP Bridge.
+    *
+-   * @var \Drupal\ldap_servers\LdapBridge
++   * @var LdapBridge
+    */
+   protected $ldapBridge;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Symfony Ldap.
+    *
+-   * @var \Symfony\Component\Ldap\Ldap
++   * @var Ldap
+    */
+   protected $ldap;
+ 
+   /**
+    * Server.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   protected $server;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\ldap_servers\LdapBridgeInterface $ldap_bridge
++   * @param LdapBridgeInterface $ldap_bridge
+    *   LDAP Bridge.
+-   * @param \Drupal\Core\Extension\ModuleHandler $module_handler
++   * @param ModuleHandler $module_handler
+    *   Module handler.
+    */
+   public function __construct(
+@@ -94,7 +95,7 @@ abstract class LdapBaseManager {
+    *   Binding successful.
+    */
+   public function setServerById(string $sid): bool {
+-    /** @var \Drupal\ldap_servers\Entity\Server $server */
++    /** @var Server $server */
+     $server = $this->entityTypeManager
+       ->getStorage('ldap_server')
+       ->load($sid);
+@@ -104,7 +105,7 @@ abstract class LdapBaseManager {
+   /**
+    * Set server by ID.
+    *
+-   * @param \Drupal\ldap_servers\Entity\Server $server
++   * @param Server $server
+    *   LDAP Server.
+    *
+    * @return bool
+@@ -207,7 +208,7 @@ abstract class LdapBaseManager {
+    * @param array $attributes
+    *   List of desired attributes. If omitted, we only return "dn".
+    *
+-   * @return \Symfony\Component\Ldap\Entry[]
++   * @return Entry[]
+    *   An array of matching entries combined from all DN.
+    */
+   public function searchAllBaseDns(string $filter, array $attributes = []): array {
+@@ -249,7 +250,7 @@ abstract class LdapBaseManager {
+   /**
+    * Create LDAP entry.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $entry
++   * @param Entry $entry
+    *   Entry.
+    *
+    * @return bool
+@@ -277,7 +278,7 @@ abstract class LdapBaseManager {
+   /**
+    * Modify attributes of LDAP entry.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $entry
++   * @param Entry $entry
+    *   LDAP entry.
+    *
+    * @return bool
+@@ -341,9 +342,9 @@ abstract class LdapBaseManager {
+   /**
+    * Apply modifications to entry.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $entry
++   * @param Entry $entry
+    *   Entry.
+-   * @param \Symfony\Component\Ldap\Entry $current
++   * @param Entry $current
+    *   Current.
+    */
+   protected function applyModificationsToEntry(Entry $entry, Entry $current): void {
+@@ -362,7 +363,7 @@ abstract class LdapBaseManager {
+    * @param string $drupal_username
+    *   Drupal username.
+    *
+-   * @return false|null|\Symfony\Component\Ldap\Entry
++   * @return false|null|Entry
+    *   LDAP Entry.
+    *
+    * @see \Drupal\ldap_servers\LdapUserManager::getUserDataByIdentifier
+@@ -381,7 +382,7 @@ abstract class LdapBaseManager {
+    * @param string $drupal_username
+    *   Drupal user name.
+    *
+-   * @return \Symfony\Component\Ldap\Entry|false
++   * @return Entry|false
+    *   LDAP Entry.
+    *
+    * @todo This function does return data and check for validity of response.
+@@ -404,12 +405,12 @@ abstract class LdapBaseManager {
+   /**
+    * Sanitize user data response.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $entry
++   * @param Entry $entry
+    *   LDAP entry.
+    * @param string $drupal_username
+    *   Drupal username.
+    *
+-   * @return \Symfony\Component\Ldap\Entry|null
++   * @return Entry|null
+    *   LDAP Entry.
+    */
+   public function sanitizeUserDataResponse(Entry $entry, string $drupal_username): ?Entry {
+@@ -439,7 +440,7 @@ abstract class LdapBaseManager {
+    * @param string $drupal_username
+    *   Drupal user name.
+    *
+-   * @return \Symfony\Component\Ldap\Entry|false|null
++   * @return Entry|false|null
+    *   LDAP entry.
+    *
+    * @todo This function does return data and check for validity of response.
+diff --git a/ldap_servers/src/LdapBridge.php b/ldap_servers/src/LdapBridge.php
+index dc2b7d36..7c0fc946 100644
+--- a/ldap_servers/src/LdapBridge.php
++++ b/ldap_servers/src/LdapBridge.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_servers;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\ldap_servers\Entity\Server;
+ use Drupal\ldap_servers\Helper\CredentialsStorage;
+@@ -42,30 +43,30 @@ class LdapBridge implements LdapBridgeInterface {
+   /**
+    * LDAP.
+    *
+-   * @var \Symfony\Component\Ldap\Ldap
++   * @var Ldap
+    */
+   protected $ldap;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Entity Storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $entityManager;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+    */
+   public function __construct(
+@@ -82,7 +83,7 @@ class LdapBridge implements LdapBridgeInterface {
+    */
+   public function setServerById(string $sid): void {
+     $server = $this->entityManager->load($sid);
+-    /** @var \Drupal\ldap_servers\Entity\Server $server */
++    /** @var Server $server */
+     if ($server) {
+       $this->setServer($server);
+     }
+@@ -160,7 +161,7 @@ class LdapBridge implements LdapBridgeInterface {
+   /**
+    * Get LDAP service.
+    *
+-   * @return \Symfony\Component\Ldap\LdapInterface
++   * @return LdapInterface
+    *   LDAP service.
+    */
+   public function get(): LdapInterface {
+diff --git a/ldap_servers/src/LdapBridgeInterface.php b/ldap_servers/src/LdapBridgeInterface.php
+index 99352c98..86eb2b4d 100644
+--- a/ldap_servers/src/LdapBridgeInterface.php
++++ b/ldap_servers/src/LdapBridgeInterface.php
+@@ -23,7 +23,7 @@ interface LdapBridgeInterface {
+   /**
+    * Set Server.
+    *
+-   * @param \Drupal\ldap_servers\Entity\Server $server
++   * @param Server $server
+    *   Server object.
+    */
+   public function setServer(Server $server): void;
+@@ -39,7 +39,7 @@ interface LdapBridgeInterface {
+   /**
+    * Get LDAP service.
+    *
+-   * @return \Symfony\Component\Ldap\LdapInterface
++   * @return LdapInterface
+    *   LDAP.
+    */
+   public function get(): LdapInterface;
+diff --git a/ldap_servers/src/LdapGroupManager.php b/ldap_servers/src/LdapGroupManager.php
+index 0ffd4dfa..ef0b7a32 100644
+--- a/ldap_servers/src/LdapGroupManager.php
++++ b/ldap_servers/src/LdapGroupManager.php
+@@ -362,7 +362,7 @@ class LdapGroupManager extends LdapBaseManager {
+   /**
+    * Recurse through all child groups and add members.
+    *
+-   * @param \Symfony\Component\Ldap\Entry[] $entries
++   * @param Entry[] $entries
+    *   Entries of LDAP group entries that are starting point. Should include at
+    *   least 1 entry and must include 'objectclass'.
+    * @param array $all_member_dns
+@@ -497,7 +497,7 @@ class LdapGroupManager extends LdapBaseManager {
+   /**
+    * Get list of groups that a user is a member of using the memberOf attribute.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $ldap_entry
++   * @param Entry $ldap_entry
+    *   A Drupal user entity, an LDAP entry array of a user  or a username.
+    *
+    * @return array
+@@ -543,7 +543,7 @@ class LdapGroupManager extends LdapBaseManager {
+   /**
+    * Get list of all groups that a user is a member of by querying groups.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $ldap_entry
++   * @param Entry $ldap_entry
+    *   LDAP entry.
+    *
+    * @return array
+@@ -597,7 +597,7 @@ class LdapGroupManager extends LdapBaseManager {
+   /**
+    * Recurse through all groups, adding parent groups to $all_group_dns array.
+    *
+-   * @param \Symfony\Component\Ldap\Adapter\CollectionInterface|Entry[] $current_group_entries
++   * @param CollectionInterface|Entry[] $current_group_entries
+    *   Entries of LDAP groups, which are that are starting point. Should include
+    *   at least one entry.
+    * @param array $all_group_dns
+@@ -631,7 +631,7 @@ class LdapGroupManager extends LdapBaseManager {
+     }
+ 
+     $or_filters = [];
+-    /** @var \Symfony\Component\Ldap\Entry $group_entry */
++    /** @var Entry $group_entry */
+     foreach ($current_group_entries->toArray() as $group_entry) {
+       if ($this->server->get('grp_memb_attr_match_user_attr') === 'dn') {
+         $member_id = $group_entry->getDn();
+diff --git a/ldap_servers/src/LdapUserManager.php b/ldap_servers/src/LdapUserManager.php
+index e02b018b..197d7f3f 100644
+--- a/ldap_servers/src/LdapUserManager.php
++++ b/ldap_servers/src/LdapUserManager.php
+@@ -23,31 +23,31 @@ class LdapUserManager extends LdapBaseManager {
+   /**
+    * Cache.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cache;
+ 
+   /**
+    * Externalauth.
+    *
+-   * @var \Drupal\externalauth\Authmap
++   * @var Authmap
+    */
+   protected $externalAuth;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity Type Manager.
+-   * @param \Drupal\ldap_servers\LdapBridgeInterface $ldap_bridge
++   * @param LdapBridgeInterface $ldap_bridge
+    *   LDAP bridge.
+-   * @param \Drupal\Core\Extension\ModuleHandler $module_handler
++   * @param ModuleHandler $module_handler
+    *   Module handler.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
++   * @param CacheBackendInterface $cache
+    *   Cache.
+-   * @param \Drupal\externalauth\Authmap $external_auth
++   * @param Authmap $external_auth
+    *   External auth.
+    */
+   public function __construct(
+@@ -67,7 +67,7 @@ class LdapUserManager extends LdapBaseManager {
+    *
+    * Adds AD-specific password handling.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $entry
++   * @param Entry $entry
+    *   LDAP Entry.
+    *
+    * @return bool
+@@ -101,9 +101,9 @@ class LdapUserManager extends LdapBaseManager {
+   /**
+    * Apply modifications to entry.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $entry
++   * @param Entry $entry
+    *   LDAP Entry.
+-   * @param \Symfony\Component\Ldap\Entry $current
++   * @param Entry $current
+    *   LDAP Entry.
+    *
+    * @todo / @FIXME: This is not called.
+@@ -148,7 +148,7 @@ class LdapUserManager extends LdapBaseManager {
+    * @param string $puid
+    *   As returned from ldap_read or other LDAP function (can be binary).
+    *
+-   * @return \Drupal\user\UserInterface|null
++   * @return UserInterface|null
+    *   The updated user or error.
+    */
+   public function getUserAccountFromPuid(string $puid): ?UserInterface {
+@@ -164,7 +164,7 @@ class LdapUserManager extends LdapBaseManager {
+       $queryResult = $query->execute();
+ 
+       if (count($queryResult) === 1) {
+-        /** @var \Drupal\user\UserInterface $result */
++        /** @var UserInterface $result */
+         $result = $storage->load(array_values($queryResult)[0]);
+       }
+ 
+@@ -191,7 +191,7 @@ class LdapUserManager extends LdapBaseManager {
+    * @param string $identifier
+    *   User identifier.
+    *
+-   * @return \Symfony\Component\Ldap\Entry|false
++   * @return Entry|false
+    *
+    *   This should go into LdapUserProcessor or LdapUserManager, leaning toward
+    *   the former.
+@@ -221,10 +221,10 @@ class LdapUserManager extends LdapBaseManager {
+   /**
+    * Fetch user data from server by user account.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   Drupal user account.
+    *
+-   * @return \Symfony\Component\Ldap\Entry|false
++   * @return Entry|false
+    *   Returns entry or FALSE.
+    *
+    *   @todo This should go into LdapUserProcessor or LdapUserManager,
+diff --git a/ldap_servers/src/Logger/LdapDetailLog.php b/ldap_servers/src/Logger/LdapDetailLog.php
+index 8d023bbc..2cc781fc 100644
+--- a/ldap_servers/src/Logger/LdapDetailLog.php
++++ b/ldap_servers/src/Logger/LdapDetailLog.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_servers\Logger;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+ 
+@@ -18,23 +19,23 @@ class LdapDetailLog {
+   /**
+    * Logger.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * LdapDetailLog constructor.
+    *
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $factory
++   * @param LoggerChannelFactoryInterface $factory
+    *   Logger factory.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config
++   * @param ConfigFactoryInterface $config
+    *   Config factory.
+    */
+   public function __construct(LoggerChannelFactoryInterface $factory, ConfigFactoryInterface $config) {
+diff --git a/ldap_servers/src/Processor/TokenProcessor.php b/ldap_servers/src/Processor/TokenProcessor.php
+index a9ff5d24..4f0dae03 100644
+--- a/ldap_servers/src/Processor/TokenProcessor.php
++++ b/ldap_servers/src/Processor/TokenProcessor.php
+@@ -20,7 +20,7 @@ class TokenProcessor {
+   /**
+    * Detail log.
+    *
+-   * @var \Drupal\ldap_servers\Logger\LdapDetailLog
++   * @var LdapDetailLog
+    */
+   protected $detailLog;
+ 
+@@ -72,7 +72,7 @@ class TokenProcessor {
+   /**
+    * Replace a single token.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $resource
++   * @param Entry $resource
+    *   The resource to act upon.
+    * @param string $text
+    *   The text such as "[dn]", "[cn]@my.org", "[displayName] [sn]",
+@@ -108,7 +108,7 @@ class TokenProcessor {
+   /**
+    * Turn an LDAP entry into a token array suitable for the t() function.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $ldap_entry
++   * @param Entry $ldap_entry
+    *   The LDAP entry.
+    * @param array $required_tokens
+    *   Tokens requested.
+@@ -193,7 +193,7 @@ class TokenProcessor {
+   /**
+    * Process a single LDAP Token key.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $entry
++   * @param Entry $entry
+    *   Entry.
+    * @param string $required_token
+    *   What was given as replacement pattern. For example 'dn', 'mail:0',
+diff --git a/ldap_servers/src/ServerInterface.php b/ldap_servers/src/ServerInterface.php
+index 70406342..595ab774 100644
+--- a/ldap_servers/src/ServerInterface.php
++++ b/ldap_servers/src/ServerInterface.php
+@@ -32,7 +32,7 @@ interface ServerInterface extends ConfigEntityInterface {
+   /**
+    * Returns the username from the LDAP entry.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $ldap_entry
++   * @param Entry $ldap_entry
+    *   The LDAP entry.
+    *
+    * @return string
+@@ -43,7 +43,7 @@ interface ServerInterface extends ConfigEntityInterface {
+   /**
+    * Returns the user's email from the LDAP entry.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $ldap_entry
++   * @param Entry $ldap_entry
+    *   The LDAP entry.
+    *
+    * @return string
+@@ -54,7 +54,7 @@ interface ServerInterface extends ConfigEntityInterface {
+   /**
+    * Fetches the persistent UID from the LDAP entry.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $ldapEntry
++   * @param Entry $ldapEntry
+    *   The LDAP entry.
+    *
+    * @return string|false
+diff --git a/ldap_servers/src/ServerListBuilder.php b/ldap_servers/src/ServerListBuilder.php
+index 13f0abf8..f89f8ea3 100644
+--- a/ldap_servers/src/ServerListBuilder.php
++++ b/ldap_servers/src/ServerListBuilder.php
+@@ -38,9 +38,9 @@ class ServerListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity): array {
+-    /** @var \Drupal\ldap_servers\Entity\Server $entity */
++    /** @var Server $entity */
+     $entityWithoutOverrides = $entity;
+-    /** @var \Drupal\ldap_servers\Entity\Server $entity_with_overrides */
++    /** @var Server $entity_with_overrides */
+     $entity = $this->storage->load($entity->id());
+ 
+     $row = [];
+@@ -77,14 +77,14 @@ class ServerListBuilder extends ConfigEntityListBuilder {
+   /**
+    * Format a server status response.
+    *
+-   * @param \Drupal\ldap_servers\Entity\Server $server
++   * @param Server $server
+    *   Server.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The status string.
+    */
+   private function checkStatus(Server $server): TranslatableMarkup {
+-    /** @var \Drupal\ldap_servers\LdapBridge $bridge */
++    /** @var LdapBridge $bridge */
+     $bridge = \Drupal::service('ldap.bridge');
+     $bridge->setServer($server);
+ 
+@@ -106,7 +106,7 @@ class ServerListBuilder extends ConfigEntityListBuilder {
+   /**
+    * Get Operations.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface|\Drupal\ldap_servers\ServerInterface $entity
++   * @param EntityInterface|ServerInterface $entity
+    *   Entity interface.
+    *
+    * @return array
+diff --git a/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeBridge.php b/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeBridge.php
+index 6de65625..bbf195cd 100644
+--- a/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeBridge.php
++++ b/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeBridge.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_servers_dummy;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\ldap_servers\Entity\Server;
+ use Drupal\ldap_servers\LdapBridgeInterface;
+@@ -18,21 +19,21 @@ class FakeBridge implements LdapBridgeInterface {
+   /**
+    * LDAP.
+    *
+-   * @var \Drupal\ldap_servers_dummy\FakeLdap
++   * @var FakeLdap
+    */
+   protected $ldap;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Entity Storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $entityManager;
+ 
+@@ -46,9 +47,9 @@ class FakeBridge implements LdapBridgeInterface {
+   /**
+    * Constructor.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+    */
+   public function __construct(LoggerInterface $logger, EntityTypeManagerInterface $entity_type_manager) {
+@@ -61,7 +62,7 @@ class FakeBridge implements LdapBridgeInterface {
+    */
+   public function setServerById(string $sid): void {
+     $server = $this->entityManager->load($sid);
+-    /** @var \Drupal\ldap_servers\Entity\Server $server */
++    /** @var Server $server */
+     if ($server) {
+       $this->setServer($server);
+     }
+diff --git a/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeCollection.php b/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeCollection.php
+index d6825caa..18c894fd 100644
+--- a/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeCollection.php
++++ b/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeCollection.php
+@@ -5,6 +5,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_servers_dummy;
+ 
++use Symfony\Component\Ldap\Entry;
+ use Symfony\Component\Ldap\Adapter\CollectionInterface;
+ 
+ /**
+@@ -22,7 +23,7 @@ class FakeCollection implements CollectionInterface {
+   /**
+    * New FakeCollection.
+    *
+-   * @param \Symfony\Component\Ldap\Entry[] $result
++   * @param Entry[] $result
+    *   Entries.
+    */
+   public function __construct(array $result) {
+diff --git a/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeLdap.php b/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeLdap.php
+index 6ca1808d..ad6d6830 100644
+--- a/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeLdap.php
++++ b/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeLdap.php
+@@ -39,7 +39,7 @@ class FakeLdap implements LdapInterface {
+   /**
+    * Entry Manager.
+    *
+-   * @var \Symfony\Component\Ldap\Adapter\EntryManagerInterface
++   * @var EntryManagerInterface
+    */
+   protected $entryManagerResponse;
+ 
+@@ -108,7 +108,7 @@ class FakeLdap implements LdapInterface {
+   /**
+    * Set the entry manager response.
+    *
+-   * @param \Symfony\Component\Ldap\Adapter\EntryManagerInterface $entryManagerResponse
++   * @param EntryManagerInterface $entryManagerResponse
+    *   Entry Manager.
+    */
+   public function setEntryManagerResponse(EntryManagerInterface $entryManagerResponse): void {
+diff --git a/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeQuery.php b/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeQuery.php
+index afd79846..ff5d0c14 100644
+--- a/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeQuery.php
++++ b/ldap_servers/tests/modules/ldap_servers_dummy/src/FakeQuery.php
+@@ -5,6 +5,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_servers_dummy;
+ 
++use Symfony\Component\Ldap\Adapter\CollectionInterface;
++use Symfony\Component\Ldap\Entry;
++use Symfony\Component\Ldap\Exception\NotBoundException;
++use Symfony\Component\Ldap\Exception\LdapException;
+ use Symfony\Component\Ldap\Adapter\QueryInterface;
+ 
+ /**
+@@ -22,11 +26,11 @@ class FakeQuery implements QueryInterface {
+   /**
+    * Executes a query and returns the list of Ldap entries.
+    *
+-   * @return \Symfony\Component\Ldap\Adapter\CollectionInterface|\Symfony\Component\Ldap\Entry[]
++   * @return CollectionInterface|Entry[]
+    *   Record.
+    *
+-   * @throws \Symfony\Component\Ldap\Exception\NotBoundException
+-   * @throws \Symfony\Component\Ldap\Exception\LdapException
++   * @throws NotBoundException
++   * @throws LdapException
+    */
+   public function execute() {
+     return $this->result;
+diff --git a/ldap_servers/tests/src/Kernel/GroupManagerTest.php b/ldap_servers/tests/src/Kernel/GroupManagerTest.php
+index f1d7aed0..0a4f835b 100644
+--- a/ldap_servers/tests/src/Kernel/GroupManagerTest.php
++++ b/ldap_servers/tests/src/Kernel/GroupManagerTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\ldap_servers\Kernel;
+ 
++use Drupal\ldap_servers\LdapGroupManager;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\ldap_servers\Entity\Server;
+ use Drupal\ldap_servers_dummy\FakeBridge;
+@@ -28,7 +29,7 @@ class GroupManagerTest extends KernelTestBase {
+   /**
+    * Server.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   protected $server;
+ 
+@@ -55,7 +56,7 @@ class GroupManagerTest extends KernelTestBase {
+    * Test group users membership from user attribute.
+    */
+   public function testGroupUserMembershipsFromUserAttr(): void {
+-    /** @var \Drupal\ldap_servers\LdapGroupManager $group_manager */
++    /** @var LdapGroupManager $group_manager */
+     $group_manager = $this->container->get('ldap.group_manager');
+     $memberships = [
+       'cn=group1,ou=people,dc=hogwarts,dc=edu',
+diff --git a/ldap_servers/tests/src/Kernel/ServerTest.php b/ldap_servers/tests/src/Kernel/ServerTest.php
+index a59aeca7..1e8ac7d9 100644
+--- a/ldap_servers/tests/src/Kernel/ServerTest.php
++++ b/ldap_servers/tests/src/Kernel/ServerTest.php
+@@ -23,7 +23,7 @@ class ServerTest extends KernelTestBase {
+   /**
+    * Server.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   protected $server;
+ 
+diff --git a/ldap_servers/tests/src/Unit/TokenTest.php b/ldap_servers/tests/src/Unit/TokenTest.php
+index c91ba776..d06e37e0 100644
+--- a/ldap_servers/tests/src/Unit/TokenTest.php
++++ b/ldap_servers/tests/src/Unit/TokenTest.php
+@@ -19,14 +19,14 @@ class TokenTest extends UnitTestCase {
+   /**
+    * LDAP Entry.
+    *
+-   * @var \Symfony\Component\Ldap\Entry
++   * @var Entry
+    */
+   private $ldapEntry;
+ 
+   /**
+    * TokenProcessor.
+    *
+-   * @var \Drupal\ldap_servers\Processor\TokenProcessor
++   * @var TokenProcessor
+    */
+   private $processor;
+ 
+diff --git a/ldap_user/ldap_user.api.php b/ldap_user/ldap_user.api.php
+index f3421f31..2c1d4c09 100644
+--- a/ldap_user/ldap_user.api.php
++++ b/ldap_user/ldap_user.api.php
+@@ -6,6 +6,7 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\ldap_servers\Processor\TokenProcessor;
+ 
+ use Drupal\user\UserInterface;
+ use Symfony\Component\Ldap\Entry;
+@@ -50,10 +51,10 @@ function hook_ldap_user_attributes_alter(array &$available_user_attrs, array &$p
+ /**
+  * Alter the user object in the context of an LDAP entry during synchronization.
+  *
+- * @param \Drupal\user\UserInterface $account
++ * @param UserInterface $account
+  *   The edit array (see hook_user_insert). Make changes to this object as
+  *   required.
+- * @param \Symfony\Component\Ldap\Entry $entry
++ * @param Entry $entry
+  *   The LDAP entry for the Drupal user.
+  * @param array $context
+  *   Contains ldap_server and provisioning events.
+@@ -62,7 +63,7 @@ function hook_ldap_user_attributes_alter(array &$available_user_attrs, array &$p
+  * @see \Drupal\ldap_user\Processor\DrupalUserProcessor::applyAttributesToAccountOnCreate()
+  */
+ function hook_ldap_user_edit_user_alter(UserInterface $account, Entry $entry, array $context) {
+-  /** @var \Drupal\ldap_servers\Processor\TokenProcessor $tokenProcessor */
++  /** @var TokenProcessor $tokenProcessor */
+   $tokenProcessor = \Drupal::service('ldap.token_processor');
+ 
+   $value = $tokenProcessor->ldapEntryReplacementsForDrupalAccount($entry, '[sn]');
+diff --git a/ldap_user/ldap_user.module b/ldap_user/ldap_user.module
+index c7bac801..d1a8596c 100644
+--- a/ldap_user/ldap_user.module
++++ b/ldap_user/ldap_user.module
+@@ -6,6 +6,11 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\ldap_user\Processor\OrphanProcessor;
++use Drupal\ldap_user\Processor\GroupUserUpdateProcessor;
++use Drupal\ldap_user\Processor\DrupalUserProcessor;
++use Symfony\Component\EventDispatcher\EventDispatcher;
++use Drupal\ldap_servers\LdapUserManager;
+ 
+ use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Routing\RouteMatchInterface;
+@@ -25,7 +30,7 @@ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ function ldap_user_cron() {
+   $check_orphans = \Drupal::config('ldap_user.settings')->get('orphanedDrupalAcctBehavior');
+   if ($check_orphans !== 'ldap_user_orphan_do_not_check') {
+-    /** @var \Drupal\ldap_user\Processor\OrphanProcessor $processor */
++    /** @var OrphanProcessor $processor */
+     $processor = \Drupal::service('ldap.orphan_processor');
+     $processor->checkOrphans();
+   }
+@@ -36,7 +41,7 @@ function ldap_user_cron() {
+     $ldapUpdateQuery != NULL &&
+     $ldapUpdateQuery !== 'none'
+   ) {
+-    /** @var \Drupal\ldap_user\Processor\GroupUserUpdateProcessor $processor */
++    /** @var GroupUserUpdateProcessor $processor */
+     $processor = \Drupal::service('ldap.group_user_update_processor');
+     if ($processor->updateDue()) {
+       $processor->runQuery($ldapUpdateQuery);
+@@ -91,7 +96,7 @@ function ldap_user_module_implements_alter(&$implementations, $hook) {
+  * Implements hook_user_login().
+  */
+ function ldap_user_user_login($account) {
+-  /** @var \Drupal\ldap_user\Processor\DrupalUserProcessor $processor */
++  /** @var DrupalUserProcessor $processor */
+   $processor = \Drupal::service('ldap.drupal_user_processor');
+   $processor->drupalUserLogsIn($account);
+ }
+@@ -101,13 +106,13 @@ function ldap_user_user_login($account) {
+  */
+ function ldap_user_user_insert($account) {
+   $event = new LdapNewUserCreatedEvent($account);
+-  /** @var \Symfony\Component\EventDispatcher\EventDispatcher $dispatcher */
++  /** @var EventDispatcher $dispatcher */
+   $dispatcher = \Drupal::service('event_dispatcher');
+   if (version_compare(\Drupal::VERSION, '9.1', '>=')) {
+     $dispatcher->dispatch($event, LdapNewUserCreatedEvent::EVENT_NAME);
+   }
+   else {
+-    $dispatcher->dispatch(LdapNewUserCreatedEvent::EVENT_NAME, $event);
++    $dispatcher->dispatch($event, LdapNewUserCreatedEvent::EVENT_NAME);
+   }
+ }
+ 
+@@ -115,7 +120,7 @@ function ldap_user_user_insert($account) {
+  * Implements hook_ENTITY_TYPE_presave().
+  */
+ function ldap_user_user_presave($account) {
+-  /** @var \Drupal\ldap_user\Processor\DrupalUserProcessor $processor */
++  /** @var DrupalUserProcessor $processor */
+   $processor = \Drupal::service('ldap.drupal_user_processor');
+ 
+   if (!$account->isNew()) {
+@@ -132,13 +137,13 @@ function ldap_user_user_presave($account) {
+  */
+ function ldap_user_user_update($account) {
+   $event = new LdapUserUpdatedEvent($account);
+-  /** @var \Symfony\Component\EventDispatcher\EventDispatcher $dispatcher */
++  /** @var EventDispatcher $dispatcher */
+   $dispatcher = \Drupal::service('event_dispatcher');
+   if (version_compare(\Drupal::VERSION, '9.1', '>=')) {
+     $dispatcher->dispatch($event, LdapUserUpdatedEvent::EVENT_NAME);
+   }
+   else {
+-    $dispatcher->dispatch(LdapUserUpdatedEvent::EVENT_NAME, $event);
++    $dispatcher->dispatch($event, LdapUserUpdatedEvent::EVENT_NAME);
+   }
+ }
+ 
+@@ -147,13 +152,13 @@ function ldap_user_user_update($account) {
+  */
+ function ldap_user_user_delete($account) {
+   $event = new LdapUserDeletedEvent($account);
+-  /** @var \Symfony\Component\EventDispatcher\EventDispatcher $dispatcher */
++  /** @var EventDispatcher $dispatcher */
+   $dispatcher = \Drupal::service('event_dispatcher');
+   if (version_compare(\Drupal::VERSION, '9.1', '>=')) {
+     $dispatcher->dispatch($event, LdapUserDeletedEvent::EVENT_NAME);
+   }
+   else {
+-    $dispatcher->dispatch(LdapUserDeletedEvent::EVENT_NAME, $event);
++    $dispatcher->dispatch($event, LdapUserDeletedEvent::EVENT_NAME);
+   }
+ }
+ 
+@@ -287,7 +292,7 @@ function ldap_user_form_user_register_form_alter(&$form, $form_state) {
+       $form['account']['pass']['#value'] = \Drupal::service('password_generator')->generate(40);
+     }
+     else {
+-      $form['account']['pass']['#value'] = user_password(40);
++      $form['account']['pass']['#value'] = \Drupal::service('password_generator')->generate(40);
+     }
+     $form['account']['pass_disabled']['#type'] = 'fieldset';
+     $form['account']['pass_disabled']['#title'] = t('Password');
+@@ -349,7 +354,7 @@ function ldap_user_form_user_register_form_alter(&$form, $form_state) {
+  */
+ function ldap_user_form_register_form_validate($form, FormStateInterface $form_state) {
+   $config = \Drupal::config('ldap_user.settings');
+-  /** @var \Drupal\ldap_servers\LdapUserManager $ldap_user_manager */
++  /** @var LdapUserManager $ldap_user_manager */
+   $ldap_user_manager = \Drupal::service('ldap.user_manager');
+ 
+   if (empty($form_state->getValue('ldap_user_association'))) {
+@@ -429,7 +434,7 @@ function ldap_user_form_register_form_submit2(&$form, FormState $form_state) {
+   // register form.
+   $values = $form_state->getValues();
+ 
+-  /** @var \Drupal\ldap_user\Processor\DrupalUserProcessor $userProcessor */
++  /** @var DrupalUserProcessor $userProcessor */
+   $userProcessor = \Drupal::service('ldap.drupal_user_processor');
+   if ($values['ldap_user_association'] === LdapUserAttributesInterface::MANUAL_ACCOUNT_CONFLICT_NO_LDAP_ASSOCIATE) {
+     $userProcessor->ldapExcludeDrupalAccount($values['name']);
+@@ -464,7 +469,7 @@ function ldap_user_entity_base_field_info_alter(&$fields, EntityTypeInterface $e
+ 
+   $field_names = ['pass', 'mail'];
+   foreach ($field_names as $field_name) {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition $field */
++    /** @var BaseFieldDefinition $field */
+     $field = $fields[$field_name];
+     $constraints = $field->getConstraints();
+     $new_constraints = [];
+diff --git a/ldap_user/src/Event/LdapNewUserCreatedEvent.php b/ldap_user/src/Event/LdapNewUserCreatedEvent.php
+index 897eac7c..957a5e99 100644
+--- a/ldap_user/src/Event/LdapNewUserCreatedEvent.php
++++ b/ldap_user/src/Event/LdapNewUserCreatedEvent.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\Event;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\user\UserInterface;
+ if (!class_exists('Drupal\Component\EventDispatcher\Event')) {
+   class_alias('Symfony\Component\EventDispatcher\Event', 'Drupal\Component\EventDispatcher\Event');
+@@ -25,14 +26,14 @@ class LdapNewUserCreatedEvent extends Event {
+   /**
+    * Account.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   public $account;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   Account.
+    */
+   public function __construct(UserInterface $account) {
+diff --git a/ldap_user/src/Event/LdapUserDeletedEvent.php b/ldap_user/src/Event/LdapUserDeletedEvent.php
+index da52a823..ee875ce3 100644
+--- a/ldap_user/src/Event/LdapUserDeletedEvent.php
++++ b/ldap_user/src/Event/LdapUserDeletedEvent.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\Event;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\user\UserInterface;
+ if (!class_exists('Drupal\Component\EventDispatcher\Event')) {
+   class_alias('Symfony\Component\EventDispatcher\Event', 'Drupal\Component\EventDispatcher\Event');
+@@ -25,14 +26,14 @@ class LdapUserDeletedEvent extends Event {
+   /**
+    * Account.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   public $account;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   Account.
+    */
+   public function __construct(UserInterface $account) {
+diff --git a/ldap_user/src/Event/LdapUserLoginEvent.php b/ldap_user/src/Event/LdapUserLoginEvent.php
+index 74dc47a1..cb96b7e8 100644
+--- a/ldap_user/src/Event/LdapUserLoginEvent.php
++++ b/ldap_user/src/Event/LdapUserLoginEvent.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\Event;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\user\UserInterface;
+ if (!class_exists('Drupal\Component\EventDispatcher\Event')) {
+   class_alias('Symfony\Component\EventDispatcher\Event', 'Drupal\Component\EventDispatcher\Event');
+@@ -25,14 +26,14 @@ class LdapUserLoginEvent extends Event {
+   /**
+    * Account.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   public $account;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   Account.
+    */
+   public function __construct(UserInterface $account) {
+diff --git a/ldap_user/src/Event/LdapUserUpdatedEvent.php b/ldap_user/src/Event/LdapUserUpdatedEvent.php
+index dd7377cd..b7d3b5eb 100644
+--- a/ldap_user/src/Event/LdapUserUpdatedEvent.php
++++ b/ldap_user/src/Event/LdapUserUpdatedEvent.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\Event;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\user\UserInterface;
+ if (!class_exists('Drupal\Component\EventDispatcher\Event')) {
+   class_alias('Symfony\Component\EventDispatcher\Event', 'Drupal\Component\EventDispatcher\Event');
+@@ -25,14 +26,14 @@ class LdapUserUpdatedEvent extends Event {
+   /**
+    * Account.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   public $account;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   Account.
+    */
+   public function __construct(UserInterface $account) {
+diff --git a/ldap_user/src/EventSubscriber/LdapEntryDeletionSubscriber.php b/ldap_user/src/EventSubscriber/LdapEntryDeletionSubscriber.php
+index 865b117c..d4ae3c46 100644
+--- a/ldap_user/src/EventSubscriber/LdapEntryDeletionSubscriber.php
++++ b/ldap_user/src/EventSubscriber/LdapEntryDeletionSubscriber.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\EventSubscriber;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\user\Entity\User;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\ldap_servers\LdapUserAttributesInterface;
+ use Drupal\ldap_servers\LdapUserManager;
+@@ -19,32 +22,32 @@ class LdapEntryDeletionSubscriber implements EventSubscriberInterface, LdapUserA
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * LDAP User Manager.
+    *
+-   * @var \Drupal\ldap_servers\LdapUserManager
++   * @var LdapUserManager
+    */
+   protected $ldapUserManager;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   Config factory.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\ldap_servers\LdapUserManager $ldap_user_manager
++   * @param LdapUserManager $ldap_user_manager
+    *   LDAP user manager.
+    */
+   public function __construct(
+@@ -74,7 +77,7 @@ class LdapEntryDeletionSubscriber implements EventSubscriberInterface, LdapUserA
+    * This is usually none or one entry but the ldap_user_prov_entries field
+    * supports multiple, and thus we are looping through them.
+    *
+-   * @param \Drupal\ldap_user\Event\LdapUserDeletedEvent $event
++   * @param LdapUserDeletedEvent $event
+    *   Event.
+    */
+   public function deleteProvisionedLdapEntry(LdapUserDeletedEvent $event): void {
+@@ -82,7 +85,7 @@ class LdapEntryDeletionSubscriber implements EventSubscriberInterface, LdapUserA
+       $this->config->get('ldapEntryProvisionServer') &&
+       \in_array(self::PROVISION_LDAP_ENTRY_ON_USER_ON_USER_DELETE, $this->config->get('ldapEntryProvisionTriggers'), TRUE)
+     ) {
+-      /** @var \Drupal\user\Entity\User $account */
++      /** @var User $account */
+       $account = $event->account;
+       // Determine server that is associated with user.
+       $entries = $account->get('ldap_user_prov_entries')->getValue();
+diff --git a/ldap_user/src/EventSubscriber/LdapEntryProvisionSubscriber.php b/ldap_user/src/EventSubscriber/LdapEntryProvisionSubscriber.php
+index 3e52c214..5bb21bfb 100644
+--- a/ldap_user/src/EventSubscriber/LdapEntryProvisionSubscriber.php
++++ b/ldap_user/src/EventSubscriber/LdapEntryProvisionSubscriber.php
+@@ -4,6 +4,12 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\EventSubscriber;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\ldap_servers\Entity\Server;
++use Drupal\user\Entity\User;
++use Drupal\user\UserInterface;
++use Drupal\file\Entity\File;
+ use Drupal\ldap_servers\LdapTransformationTraits;
+ use Drupal\ldap_user\Event\LdapNewUserCreatedEvent;
+ use Drupal\ldap_user\Event\LdapUserLoginEvent;
+@@ -33,42 +39,42 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   private $config;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   private $logger;
+ 
+   /**
+    * Detail log.
+    *
+-   * @var \Drupal\ldap_servers\Logger\LdapDetailLog
++   * @var LdapDetailLog
+    */
+   private $detailLog;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   private $moduleHandler;
+ 
+   /**
+    * Ldap User Manager.
+    *
+-   * @var \Drupal\ldap_servers\LdapUserManager
++   * @var LdapUserManager
+    */
+   private $ldapUserManager;
+ 
+@@ -76,21 +82,21 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+   /**
+    * Field provider.
+    *
+-   * @var \Drupal\ldap_user\FieldProvider
++   * @var FieldProvider
+    */
+   private $fieldProvider;
+ 
+   /**
+    * File system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   private $fileSystem;
+ 
+   /**
+    * Server.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   private $ldapServer;
+ 
+@@ -109,28 +115,28 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+   /**
+    * User.
+    *
+-   * @var \Drupal\user\Entity\User|\Drupal\user\UserInterface
++   * @var User|UserInterface
+    */
+   private $account;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   Config factory.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\ldap_servers\Logger\LdapDetailLog $detail_log
++   * @param LdapDetailLog $detail_log
+    *   Detail log.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   Module handler.
+-   * @param \Drupal\ldap_servers\LdapUserManager $ldap_user_manager
++   * @param LdapUserManager $ldap_user_manager
+    *   LDAP user manager.
+-   * @param \Drupal\ldap_user\FieldProvider $field_provider
++   * @param FieldProvider $field_provider
+    *   Field Provider.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   File system.
+    */
+   public function __construct(
+@@ -165,7 +171,7 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+   /**
+    * Handle account login with LDAP entry provisioning.
+    *
+-   * @param \Drupal\ldap_user\Event\LdapUserLoginEvent $event
++   * @param LdapUserLoginEvent $event
+    *   Event.
+    */
+   public function login(LdapUserLoginEvent $event): void {
+@@ -191,7 +197,7 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+   /**
+    * Create or update LDAP entries on user update.
+    *
+-   * @param \Drupal\ldap_user\Event\LdapUserUpdatedEvent $event
++   * @param LdapUserUpdatedEvent $event
+    *   Event.
+    */
+   public function userUpdated(LdapUserUpdatedEvent $event): void {
+@@ -216,7 +222,7 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+   /**
+    * Create or update LDAP entries on user creation.
+    *
+-   * @param \Drupal\ldap_user\Event\LdapNewUserCreatedEvent $event
++   * @param LdapNewUserCreatedEvent $event
+    *   Event.
+    */
+   public function userCreated(LdapNewUserCreatedEvent $event): void {
+@@ -253,7 +259,7 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+    * @param string $prov_event
+    *   Provisioning event.
+    *
+-   * @return \Symfony\Component\Ldap\Entry
++   * @return Entry
+    *   Entry to send *to* LDAP.
+    */
+   private function buildLdapEntry(string $prov_event): Entry {
+@@ -352,7 +358,7 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+     elseif (!empty($this->account->get($attribute_name)->getValue())) {
+       $file_reference = $this->account->get($attribute_name)->getValue();
+       if (isset($file_reference[0]['target_id'])) {
+-        /** @var \Drupal\file\Entity\File $file */
++        /** @var File $file */
+         $file = $this->entityTypeManager
+           ->getStorage('file')
+           ->load($file_reference[0]['target_id']);
+@@ -388,7 +394,7 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+           $generated = \Drupal::service('password_generator')->generate();
+         }
+         else {
+-          $generated = user_password();
++          $generated = \Drupal::service('password_generator')->generate();
+         }
+         $value = $pwd ?: $generated;
+         break;
+@@ -398,7 +404,7 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+           $value = \Drupal::service('password_generator')->generate();
+         }
+         else {
+-          $value = user_password();
++          $value = \Drupal::service('password_generator')->generate();
+         }
+         break;
+ 
+@@ -553,7 +559,7 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+    * Need to store <sid>|<dn> in ldap_user_prov_entries field, which may
+    *  contain more than one.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $entry
++   * @param Entry $entry
+    *   LDAP Entry.
+    */
+   private function updateUserProvisioningReferences(Entry $entry): void {
+@@ -625,7 +631,7 @@ class LdapEntryProvisionSubscriber implements EventSubscriberInterface, LdapUser
+   /**
+    * Check existing LDAP entry.
+    *
+-   * @return bool|\Symfony\Component\Ldap\Entry|null
++   * @return bool|Entry|null
+    *   Entry, false or null.
+    */
+   private function checkExistingLdapEntry() {
+diff --git a/ldap_user/src/FieldProvider.php b/ldap_user/src/FieldProvider.php
+index 074dc27d..6ddfdc59 100644
+--- a/ldap_user/src/FieldProvider.php
++++ b/ldap_user/src/FieldProvider.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\ldap_servers\ServerInterface;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Entity\EntityFieldManager;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -26,35 +29,35 @@ class FieldProvider implements LdapUserAttributesInterface {
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Entity Field Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManager
++   * @var EntityFieldManager
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * Server.
+    *
+-   * @var \Drupal\ldap_servers\ServerInterface
++   * @var ServerInterface
+    */
+   private $server;
+ 
+@@ -68,20 +71,20 @@ class FieldProvider implements LdapUserAttributesInterface {
+   /**
+    * Attributes.
+    *
+-   * @var \Drupal\ldap_servers\Mapping[]
++   * @var Mapping[]
+    */
+   private $attributes = [];
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   Config factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Extension\ModuleHandler $module_handler
++   * @param ModuleHandler $module_handler
+    *   Module handler.
+-   * @param \Drupal\Core\Entity\EntityFieldManager $entity_field_manager
++   * @param EntityFieldManager $entity_field_manager
+    *   Entity field manager.
+    */
+   public function __construct(
+@@ -101,7 +104,7 @@ class FieldProvider implements LdapUserAttributesInterface {
+    *
+    * @param string $direction
+    *   Direction.
+-   * @param \Drupal\ldap_servers\Entity\Server $server
++   * @param Server $server
+    *   Server.
+    *
+    * @return array
+@@ -199,7 +202,7 @@ class FieldProvider implements LdapUserAttributesInterface {
+    * @param string $event
+    *   Event.
+    *
+-   * @return \Drupal\ldap_servers\Mapping[]
++   * @return Mapping[]
+    *   Mapping.
+    */
+   public function getAttributesSyncedOnEvent(string $event): array {
+@@ -219,7 +222,7 @@ class FieldProvider implements LdapUserAttributesInterface {
+    * @param string $event
+    *   Event.
+    *
+-   * @return \Drupal\ldap_servers\Mapping[]
++   * @return Mapping[]
+    *   Mapping.
+    */
+   public function getConfigurableAttributesSyncedOnEvent(string $event): array {
+@@ -393,7 +396,7 @@ class FieldProvider implements LdapUserAttributesInterface {
+     $this->server = $this->config->get('drupalAcctProvisionServer');
+     $triggers = $this->config->get('drupalAcctProvisionTriggers');
+     if ($this->server && !empty($triggers)) {
+-      /** @var \Drupal\ldap_servers\Mapping availableUserAttributes<> */
++      /** @var Mapping availableUserAttributes<> */
+       $fields = [
+         '[property.mail]',
+         '[property.name]',
+diff --git a/ldap_user/src/Form/LdapUserAdminForm.php b/ldap_user/src/Form/LdapUserAdminForm.php
+index c306df56..aac3c2c1 100644
+--- a/ldap_user/src/Form/LdapUserAdminForm.php
++++ b/ldap_user/src/Form/LdapUserAdminForm.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\Form;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\ldap_servers\Entity\Server;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Extension\ModuleHandler;
+@@ -29,14 +31,14 @@ class LdapUserAdminForm extends ConfigFormBase implements LdapUserAttributesInte
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -57,7 +59,7 @@ class LdapUserAdminForm extends ConfigFormBase implements LdapUserAttributesInte
+   /**
+    * Current config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $currentConfig;
+ 
+@@ -79,7 +81,7 @@ class LdapUserAdminForm extends ConfigFormBase implements LdapUserAttributesInte
+       ->condition('status', 1)
+       ->execute();
+     foreach ($storage->loadMultiple($ids) as $sid => $server) {
+-      /** @var \Drupal\ldap_servers\Entity\Server $server */
++      /** @var Server $server */
+       $enabled = ($server->get('status')) ? 'Enabled' : 'Disabled';
+       $this->drupalAcctProvisionServerOptions[$sid] = $server->label() . ' (' . $server->get('address') . ') Status: ' . $enabled;
+       $this->ldapEntryProvisionServerOptions[$sid] = $server->label() . ' (' . $server->get('address') . ') Status: ' . $enabled;
+diff --git a/ldap_user/src/Form/LdapUserMappingBaseForm.php b/ldap_user/src/Form/LdapUserMappingBaseForm.php
+index 80b70096..1086699d 100644
+--- a/ldap_user/src/Form/LdapUserMappingBaseForm.php
++++ b/ldap_user/src/Form/LdapUserMappingBaseForm.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\Form;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\ldap_servers\Entity\Server;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Extension\ModuleHandler;
+@@ -22,28 +24,28 @@ abstract class LdapUserMappingBaseForm extends ConfigFormBase implements LdapUse
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Field provider.
+    *
+-   * @var \Drupal\ldap_user\FieldProvider
++   * @var FieldProvider
+    */
+   protected $fieldProvider;
+ 
+   /**
+    * Current config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $currentConfig;
+ 
+@@ -157,7 +159,7 @@ abstract class LdapUserMappingBaseForm extends ConfigFormBase implements LdapUse
+     $attributes = [];
+     if ($sid) {
+       try {
+-        /** @var \Drupal\ldap_servers\Entity\Server $ldap_server */
++        /** @var Server $ldap_server */
+         $ldap_server = $this->entityTypeManager
+           ->getStorage('ldap_server')
+           ->load($sid);
+@@ -259,7 +261,7 @@ abstract class LdapUserMappingBaseForm extends ConfigFormBase implements LdapUse
+   /**
+    * Set specific mapping.
+    *
+-   * @param \Drupal\ldap_servers\Mapping $mapping
++   * @param Mapping $mapping
+    *   Mapping.
+    * @param array $row
+    *   Row.
+@@ -271,7 +273,7 @@ abstract class LdapUserMappingBaseForm extends ConfigFormBase implements LdapUse
+   /**
+    * Get mapping form row to LDAP user provisioning mapping admin form table.
+    *
+-   * @param \Drupal\ldap_servers\Mapping $mapping
++   * @param Mapping $mapping
+    *   Is current setting for updates or non-configurable items.
+    * @param array $target_fields
+    *   Attributes of Drupal user target options.
+@@ -289,7 +291,7 @@ abstract class LdapUserMappingBaseForm extends ConfigFormBase implements LdapUse
+   /**
+    * Return the server mappings for the fields.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   Form State.
+    *
+    * @return array
+@@ -310,7 +312,7 @@ abstract class LdapUserMappingBaseForm extends ConfigFormBase implements LdapUse
+     // The difference being that these available mappings are not *enabled*.
+     // Ideally, those would be split into something like a MappingProposal and
+     // a MappingRule.
+-    /** @var \Drupal\ldap_servers\Mapping $mapping */
++    /** @var Mapping $mapping */
+     foreach ($available_mappings as $target_id => $mapping) {
+       if (!empty($mapping->getId()) && $mapping->isConfigurable()) {
+         $user_attribute_options[$target_id] = $mapping->getLabel();
+@@ -354,7 +356,7 @@ abstract class LdapUserMappingBaseForm extends ConfigFormBase implements LdapUse
+    *
+    * @param array $form
+    *   The form being passed in.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state.
+    *
+    * @return array
+@@ -369,7 +371,7 @@ abstract class LdapUserMappingBaseForm extends ConfigFormBase implements LdapUse
+    *
+    * @param array $form
+    *   The form being passed in.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state, passed by reference so that we can modify.
+    */
+   public function mappingsAddAnother(array &$form, FormStateInterface $form_state): void {
+diff --git a/ldap_user/src/Form/LdapUserMappingToDrupalForm.php b/ldap_user/src/Form/LdapUserMappingToDrupalForm.php
+index 4a1a897c..ce2d7ce9 100644
+--- a/ldap_user/src/Form/LdapUserMappingToDrupalForm.php
++++ b/ldap_user/src/Form/LdapUserMappingToDrupalForm.php
+@@ -234,7 +234,7 @@ class LdapUserMappingToDrupalForm extends LdapUserMappingBaseForm {
+   /**
+    * Set specific mapping.
+    *
+-   * @param \Drupal\ldap_servers\Mapping $mapping
++   * @param Mapping $mapping
+    *   Mapping.
+    * @param array $row
+    *   Row.
+diff --git a/ldap_user/src/Form/LdapUserMappingToLdapForm.php b/ldap_user/src/Form/LdapUserMappingToLdapForm.php
+index 6162412f..d7d039a4 100644
+--- a/ldap_user/src/Form/LdapUserMappingToLdapForm.php
++++ b/ldap_user/src/Form/LdapUserMappingToLdapForm.php
+@@ -253,7 +253,7 @@ class LdapUserMappingToLdapForm extends LdapUserMappingBaseForm {
+   /**
+    * Set specific mapping.
+    *
+-   * @param \Drupal\ldap_servers\Mapping $mapping
++   * @param Mapping $mapping
+    *   Mapping.
+    * @param array $row
+    *   Row.
+diff --git a/ldap_user/src/Form/LdapUserTestForm.php b/ldap_user/src/Form/LdapUserTestForm.php
+index cadf9b04..cfa4ba0d 100644
+--- a/ldap_user/src/Form/LdapUserTestForm.php
++++ b/ldap_user/src/Form/LdapUserTestForm.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\Form;
+ 
++use Symfony\Component\HttpFoundation\Request;
++use Drupal\user\Entity\User;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Form\FormBase;
+@@ -30,35 +32,35 @@ class LdapUserTestForm extends FormBase implements LdapUserAttributesInterface {
+   /**
+    * Request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request|null
++   * @var Request|null
+    */
+   protected $request;
+ 
+   /**
+    * LDAP User Manager.
+    *
+-   * @var \Drupal\ldap_servers\LdapUserManager
++   * @var LdapUserManager
+    */
+   protected $ldapUserManager;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Externalauth.
+    *
+-   * @var \Drupal\externalauth\Authmap
++   * @var Authmap
+    */
+   protected $externalAuth;
+ 
+   /**
+    * Drupal User Processor.
+    *
+-   * @var \Drupal\ldap_user\Processor\DrupalUserProcessor
++   * @var DrupalUserProcessor
+    */
+   protected $drupalUserProcessor;
+ 
+@@ -72,15 +74,15 @@ class LdapUserTestForm extends FormBase implements LdapUserAttributesInterface {
+   /**
+    * LdapUserTestForm constructor.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   Request stack.
+-   * @param \Drupal\ldap_servers\LdapUserManager $ldap_user_manager
++   * @param LdapUserManager $ldap_user_manager
+    *   LDAP user manager.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\externalauth\Authmap $external_auth
++   * @param Authmap $external_auth
+    *   External auth.
+-   * @param \Drupal\ldap_user\Processor\DrupalUserProcessor $drupal_user_processor
++   * @param DrupalUserProcessor $drupal_user_processor
+    *   Drupal user processor.
+    */
+   public function __construct(
+@@ -184,7 +186,7 @@ class LdapUserTestForm extends FormBase implements LdapUserAttributesInterface {
+     $results['username'] = $username;
+     $results['related LDAP entry (before provisioning or syncing)'] = $user_ldap_entry;
+ 
+-    /** @var \Drupal\user\Entity\User $account */
++    /** @var User $account */
+     $existingAccount = $this->entityTypeManager->getStorage('user')
+       ->loadByProperties(['name' => $username]);
+     $existingAccount = $existingAccount ? reset($existingAccount) : FALSE;
+diff --git a/ldap_user/src/Plugin/Validation/Constraint/LdapProtectedUserFieldConstraintValidator.php b/ldap_user/src/Plugin/Validation/Constraint/LdapProtectedUserFieldConstraintValidator.php
+index e1022422..7d49908f 100644
+--- a/ldap_user/src/Plugin/Validation/Constraint/LdapProtectedUserFieldConstraintValidator.php
++++ b/ldap_user/src/Plugin/Validation/Constraint/LdapProtectedUserFieldConstraintValidator.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\Plugin\Validation\Constraint;
+ 
++use Drupal\Core\Field\FieldItemListInterface;
++use Drupal\user\UserInterface;
+ use Drupal\ldap_authentication\Controller\LoginValidatorLoginForm;
+ use Drupal\ldap_servers\Helper\CredentialsStorage;
+ use Drupal\user\Plugin\Validation\Constraint\ProtectedUserFieldConstraintValidator;
+@@ -18,14 +20,14 @@ class LdapProtectedUserFieldConstraintValidator extends ProtectedUserFieldConstr
+   /**
+    * Login validator.
+    *
+-   * @var \Drupal\ldap_authentication\Controller\LoginValidatorLoginForm
++   * @var LoginValidatorLoginForm
+    */
+   protected $loginValidator;
+ 
+   /**
+    * Set the login validator.
+    *
+-   * @param \Drupal\ldap_authentication\Controller\LoginValidatorLoginForm $loginValidator
++   * @param LoginValidatorLoginForm $loginValidator
+    *   Login validator.
+    */
+   public function setLoginValidator(LoginValidatorLoginForm $loginValidator): void {
+@@ -48,10 +50,10 @@ class LdapProtectedUserFieldConstraintValidator extends ProtectedUserFieldConstr
+     if (!isset($items)) {
+       return;
+     }
+-    /** @var \Drupal\Core\Field\FieldItemListInterface $items */
++    /** @var FieldItemListInterface $items */
+     $field = $items->getFieldDefinition();
+ 
+-    /** @var \Drupal\user\UserInterface $account */
++    /** @var UserInterface $account */
+     $account = $items->getEntity();
+     if (!isset($account) || !empty($account->_skipProtectedUserFieldConstraint)) {
+       // Looks like we are validating a field not being part of a user, or the
+@@ -71,7 +73,7 @@ class LdapProtectedUserFieldConstraintValidator extends ProtectedUserFieldConstr
+       return;
+     }
+ 
+-    /** @var \Drupal\user\UserInterface $account_unchanged */
++    /** @var UserInterface $account_unchanged */
+     $account_unchanged = $this->userStorage->loadUnchanged($account->id());
+ 
+     if ($items->getValue() === $account_unchanged->get($field->getName())->getValue()) {
+diff --git a/ldap_user/src/Processor/DrupalUserProcessor.php b/ldap_user/src/Processor/DrupalUserProcessor.php
+index f0766c65..f74c3103 100644
+--- a/ldap_user/src/Processor/DrupalUserProcessor.php
++++ b/ldap_user/src/Processor/DrupalUserProcessor.php
+@@ -4,6 +4,11 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\Processor;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Symfony\Component\Ldap\Entry;
++use Drupal\ldap_servers\Entity\Server;
++use Drupal\file\Entity\File;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Extension\ModuleHandler;
+@@ -37,126 +42,126 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Authentication config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $configAuthentication;
+ 
+   /**
+    * Detail log.
+    *
+-   * @var \Drupal\ldap_servers\Logger\LdapDetailLog
++   * @var LdapDetailLog
+    */
+   protected $detailLog;
+ 
+   /**
+    * Token Processor.
+    *
+-   * @var \Drupal\ldap_servers\Processor\TokenProcessor
++   * @var TokenProcessor
+    */
+   protected $tokenProcessor;
+ 
+   /**
+    * Externalauth.
+    *
+-   * @var \Drupal\externalauth\Authmap
++   * @var Authmap
+    */
+   protected $externalAuth;
+ 
+   /**
+    * Entity Type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Filesystem.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+   /**
+    * Token.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $token;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * Field provider.
+    *
+-   * @var \Drupal\ldap_user\FieldProvider
++   * @var FieldProvider
+    */
+   protected $fieldProvider;
+ 
+   /**
+    * The Drupal user account.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   private $account;
+ 
+   /**
+    * LDAP entry.
+    *
+-   * @var \Symfony\Component\Ldap\Entry
++   * @var Entry
+    */
+   private $ldapEntry;
+ 
+   /**
+    * The server interacting with.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   private $server;
+ 
+   /**
+    * LDAP User Manager.
+    *
+-   * @var \Drupal\ldap_servers\LdapUserManager
++   * @var LdapUserManager
+    */
+   protected $ldapUserManager;
+ 
+   /**
+    * Event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+@@ -166,33 +171,33 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+    * @todo Make this service smaller.
+    * (The number of dependencies alone makes this clear.)
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   Config factory.
+-   * @param \Drupal\ldap_servers\Logger\LdapDetailLog $detail_log
++   * @param LdapDetailLog $detail_log
+    *   Detail log.
+-   * @param \Drupal\ldap_servers\Processor\TokenProcessor $token_processor
++   * @param TokenProcessor $token_processor
+    *   Token processor.
+-   * @param \Drupal\externalauth\Authmap $authmap
++   * @param Authmap $authmap
+    *   Authmap.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\File\FileSystemInterface $file_system
++   * @param FileSystemInterface $file_system
+    *   File system.
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   Token.
+-   * @param \Drupal\Core\Extension\ModuleHandler $module_handler
++   * @param ModuleHandler $module_handler
+    *   Module handler.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   Current user.
+-   * @param \Drupal\ldap_servers\LdapUserManager $ldap_user_manager
++   * @param LdapUserManager $ldap_user_manager
+    *   LDAP user manager.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   Event dispatcher.
+-   * @param \Drupal\ldap_user\FieldProvider $field_provider
++   * @param FieldProvider $field_provider
+    *   Field Provider.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger.
+    */
+   public function __construct(
+@@ -231,7 +236,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+   /**
+    * Check if user is excluded.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   A Drupal user object.
+    *
+    * @return bool
+@@ -257,7 +262,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+   /**
+    * Get the user account.
+    *
+-   * @return \Drupal\user\Entity\User|null
++   * @return User|null
+    *   User account.
+    */
+   public function getUserAccount(): ?User {
+@@ -278,7 +283,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+       return FALSE;
+     }
+ 
+-    /** @var \Drupal\ldap_servers\Entity\Server $ldap_server */
++    /** @var Server $ldap_server */
+     $ldap_server = $this->entityTypeManager
+       ->getStorage('ldap_server')
+       ->load($this->config->get('drupalAcctProvisionServer'));
+@@ -391,7 +396,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+    *   TRUE on success, FALSE on error or failure because of invalid user.
+    */
+   public function ldapExcludeDrupalAccount(string $drupalUsername): bool {
+-    /** @var \Drupal\user\Entity\User $account */
++    /** @var User $account */
+     $accounts = $this->entityTypeManager
+       ->getStorage('user')
+       ->loadByProperties(['name' => $drupalUsername]);
+@@ -407,7 +412,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+   /**
+    * Callback for hook_ENTITY_TYPE_update().
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The Drupal user.
+    */
+   public function drupalUserUpdate(UserInterface $account): void {
+@@ -425,7 +430,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+   /**
+    * Handle Drupal user login.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The Drupal user.
+    */
+   public function drupalUserLogsIn(UserInterface $account): void {
+@@ -445,7 +450,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+       $this->eventDispatcher->dispatch($event, LdapUserLoginEvent::EVENT_NAME);
+     }
+     else {
+-      $this->eventDispatcher->dispatch(LdapUserLoginEvent::EVENT_NAME, $event);
++      $this->eventDispatcher->dispatch($event, LdapUserLoginEvent::EVENT_NAME);
+     }
+   }
+ 
+@@ -491,7 +496,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+   /**
+    * Update Drupal user from PUID.
+    *
+-   * @param \Drupal\user\UserInterface $accountFromPuid
++   * @param UserInterface $accountFromPuid
+    *   The account from the PUID.
+    */
+   private function updateExistingAccountByPersistentUid(UserInterface $accountFromPuid): void {
+@@ -521,7 +526,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+       return $this->saveUserPicture($this->account->get('user_picture'), $ldapUserPicture);
+     }
+ 
+-    /** @var \Drupal\file\Entity\File $file */
++    /** @var File $file */
+     $file = $this->entityTypeManager
+       ->getStorage('file')
+       ->load($currentUserPicture[0]['target_id']);
+@@ -539,7 +544,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+   /**
+    * Save the user's picture.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $field
++   * @param FieldItemListInterface $field
+    *   The field attached to the user.
+    * @param string $ldapUserPicture
+    *   The picture itself.
+@@ -566,7 +571,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+       $this->fileSystem->mkdir($fullDirectoryPath, NULL, TRUE);
+     }
+ 
+-    $managed_file = file_save_data($ldapUserPicture, $fullDirectoryPath . '/' . $fileName . '.' . $extension);
++    $managed_file = \Drupal::service('file.repository')->writeData($ldapUserPicture, $fullDirectoryPath . '/' . $fileName . '.' . $extension);
+ 
+     $validators = [
+       'file_validate_is_image' => [],
+@@ -697,7 +702,7 @@ class DrupalUserProcessor implements LdapUserAttributesInterface {
+         $this->account->set('pass', \Drupal::service('password_generator')->generate(20));
+       }
+       else {
+-        $this->account->set('pass', user_password(20));
++        $this->account->set('pass', \Drupal::service('password_generator')->generate(20));
+       }
+     }
+     if (!$this->account->getInitialEmail()) {
+diff --git a/ldap_user/src/Processor/GroupUserUpdateProcessor.php b/ldap_user/src/Processor/GroupUserUpdateProcessor.php
+index f05d2bbf..3d085a07 100644
+--- a/ldap_user/src/Processor/GroupUserUpdateProcessor.php
++++ b/ldap_user/src/Processor/GroupUserUpdateProcessor.php
+@@ -4,6 +4,13 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\Processor;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\ldap_servers\Entity\Server;
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\authorization\AuthorizationController;
++use Drupal\user\Entity\User;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Extension\ModuleHandler;
+@@ -23,100 +30,100 @@ class GroupUserUpdateProcessor {
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Detail log.
+    *
+-   * @var \Drupal\ldap_servers\Logger\LdapDetailLog
++   * @var LdapDetailLog
+    */
+   protected $detailLog;
+ 
+   /**
+    * Config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * State.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandler
++   * @var ModuleHandler
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Entity Type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Externalauth.
+    *
+-   * @var \Drupal\externalauth\Authmap
++   * @var Authmap
+    */
+   protected $externalAuth;
+ 
+   /**
+    * Query controller.
+    *
+-   * @var \Drupal\ldap_query\Controller\QueryController
++   * @var QueryController
+    */
+   protected $queryController;
+ 
+   /**
+    * Drupal user processor.
+    *
+-   * @var \Drupal\ldap_user\Processor\DrupalUserProcessor
++   * @var DrupalUserProcessor
+    */
+   protected $drupalUserProcessor;
+ 
+   /**
+    * LDAP Server.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server|null
++   * @var Server|null
+    */
+   protected $ldapServer;
+ 
+   /**
+    * User storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * Constructor for update process.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\ldap_servers\Logger\LdapDetailLog $detail_log
++   * @param LdapDetailLog $detail_log
+    *   Detail log.
+-   * @param \Drupal\Core\Config\ConfigFactory $config
++   * @param ConfigFactory $config
+    *   Config factory.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   State.
+-   * @param \Drupal\Core\Extension\ModuleHandler $module_handler
++   * @param ModuleHandler $module_handler
+    *   Module handler.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\externalauth\Authmap $external_auth
++   * @param Authmap $external_auth
+    *   Externalauth.
+-   * @param \Drupal\ldap_query\Controller\QueryController $query_controller
++   * @param QueryController $query_controller
+    *   Query controller.
+-   * @param \Drupal\ldap_user\Processor\DrupalUserProcessor $drupal_user_processor
++   * @param DrupalUserProcessor $drupal_user_processor
+    *   Drupal user processor.
+    */
+   public function __construct(
+@@ -192,16 +199,16 @@ class GroupUserUpdateProcessor {
+   /**
+    * Update authorizations.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   Drupal user to update.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   private function updateAuthorizations(UserInterface $user): void {
+     if ($this->moduleHandler->moduleExists('ldap_authorization')) {
+       // We are not injecting this service properly to avoid forcing this
+       // dependency on authorization.
+-      /** @var \Drupal\authorization\AuthorizationController $authorization_manager */
++      /** @var AuthorizationController $authorization_manager */
+       // phpcs:ignore
+       $authorization_manager = \Drupal::service('authorization.manager');
+       $authorization_manager->setUser($user);
+@@ -251,7 +258,7 @@ class GroupUserUpdateProcessor {
+   /**
+    * Create or update an entry in Drupal.
+    *
+-   * @param \Symfony\Component\Ldap\Entry $entry
++   * @param Entry $entry
+    *   LDAP entry.
+    * @param string $attribute
+    *   Authname attribute.
+@@ -297,11 +304,11 @@ class GroupUserUpdateProcessor {
+     }
+ 
+     // User exists and is mapped in authmap.
+-    /** @var \Drupal\user\Entity\User $drupal_account */
++    /** @var User $drupal_account */
+     $drupal_account = $this->userStorage->load($uid);
+     $this->drupalUserProcessor->drupalUserLogsIn($drupal_account);
+     // Reload since data has changed.
+-    /** @var \Drupal\user\UserInterface $user */
++    /** @var UserInterface $user */
+     $user = $this->userStorage->load($drupal_account->id());
+     $this->updateAuthorizations($user);
+     $this->detailLog->log(
+diff --git a/ldap_user/src/Processor/OrphanProcessor.php b/ldap_user/src/Processor/OrphanProcessor.php
+index f91dd7ce..9b6a5bd7 100644
+--- a/ldap_user/src/Processor/OrphanProcessor.php
++++ b/ldap_user/src/Processor/OrphanProcessor.php
+@@ -4,6 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\ldap_user\Processor;
+ 
++use Drupal\ldap_servers\ServerInterface;
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\user\Entity\User;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Language\LanguageManagerInterface;
+@@ -36,82 +40,82 @@ class OrphanProcessor {
+   /**
+    * Enabled servers.
+    *
+-   * @var \Drupal\ldap_servers\ServerInterface[]
++   * @var ServerInterface[]
+    */
+   private $enabledServers;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactory
++   * @var ConfigFactory
+    */
+   protected $configFactory;
+ 
+   /**
+    * LDAP User config.
+    *
+-   * @var \Drupal\Core\Config\Config|\Drupal\Core\Config\ImmutableConfig
++   * @var Config|ImmutableConfig
+    */
+   protected $configLdapUser;
+ 
+   /**
+    * Mail manager.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+   protected $mailManager;
+ 
+   /**
+    * Language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * State.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * Entity Type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * LDAP User Manager.
+    *
+-   * @var \Drupal\ldap_servers\LdapUserManager
++   * @var LdapUserManager
+    */
+   protected $ldapUserManager;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger.
+-   * @param \Drupal\Core\Config\ConfigFactory $config
++   * @param ConfigFactory $config
+    *   Config.
+-   * @param \Drupal\Core\Mail\MailManagerInterface $mail_manager
++   * @param MailManagerInterface $mail_manager
+    *   Mail manager.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   Language manager.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   State.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\ldap_servers\LdapUserManager $ldap_user_manager
++   * @param LdapUserManager $ldap_user_manager
+    *   LDAP user manager.
+    */
+   public function __construct(
+@@ -240,7 +244,7 @@ class OrphanProcessor {
+ 
+     $users = [];
+     foreach ($accounts as $uid => $user) {
+-      /** @var \Drupal\user\Entity\User $user */
++      /** @var User $user */
+       $users[] = $this->ldapQueryEligibleUser(
+         $uid,
+         $user->get('ldap_user_puid_sid')->value,
+@@ -320,7 +324,7 @@ class OrphanProcessor {
+   private function processOrphanedAccounts(array $users): void {
+     foreach ($users as $user) {
+       if (isset($user['uid']) && $user['exists'] === FALSE) {
+-        /** @var \Drupal\user\Entity\User $account */
++        /** @var User $account */
+         $account = $this->entityTypeManager
+           ->getStorage('user')
+           ->load($user['uid']);
+@@ -347,7 +351,7 @@ class OrphanProcessor {
+   /**
+    * Cancel the user.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   Account.
+    * @param string $method
+    *   Method.
+diff --git a/ldap_user/tests/src/Kernel/DrupalUserProcessorTest.php b/ldap_user/tests/src/Kernel/DrupalUserProcessorTest.php
+index 64fdbea7..8fa2a2f3 100644
+--- a/ldap_user/tests/src/Kernel/DrupalUserProcessorTest.php
++++ b/ldap_user/tests/src/Kernel/DrupalUserProcessorTest.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\ldap_user\Kernel;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Drupal\ldap_user\Processor\DrupalUserProcessor;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+ use Drupal\file\Entity\File;
+@@ -22,6 +24,7 @@ use Symfony\Component\Ldap\Entry;
+  */
+ class DrupalUserProcessorTest extends EntityKernelTestBase implements LdapUserAttributesInterface {
+ 
++  use ProphecyTrait;
+   /**
+    * {@inheritdoc}
+    */
+@@ -39,14 +42,14 @@ class DrupalUserProcessorTest extends EntityKernelTestBase implements LdapUserAt
+   /**
+    * Drupal User Processor.
+    *
+-   * @var \Drupal\ldap_user\Processor\DrupalUserProcessor
++   * @var DrupalUserProcessor
+    */
+   private $drupalUserProcessor;
+ 
+   /**
+    * Server.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   private $server;
+ 
+@@ -123,7 +126,7 @@ class DrupalUserProcessorTest extends EntityKernelTestBase implements LdapUserAt
+    */
+   public function testUserExclusion(): void {
+     // Skip administrators, if so configured.
+-    /** @var \Drupal\user\Entity\User $account */
++    /** @var User $account */
+     $account = $this->prophesize(User::class);
+     $account->getRoles()->willReturn(['administrator']);
+     $account->id()->willReturn(1);
+@@ -178,7 +181,7 @@ class DrupalUserProcessorTest extends EntityKernelTestBase implements LdapUserAt
+     self::assertEquals('hpotter@example.com', $user->getEmail());
+ 
+     // Check picture file.
+-    /** @var \Drupal\file\Entity\File $picture */
++    /** @var File $picture */
+     $picture = $user->get('user_picture')->referencedEntities()[0];
+     self::assertInstanceOf(File::class, $picture);
+     self::assertStringContainsString('.png', $picture->getFilename());
+diff --git a/ldap_user/tests/src/Kernel/FieldProviderTest.php b/ldap_user/tests/src/Kernel/FieldProviderTest.php
+index e62dfdb2..645ab268 100644
+--- a/ldap_user/tests/src/Kernel/FieldProviderTest.php
++++ b/ldap_user/tests/src/Kernel/FieldProviderTest.php
+@@ -30,7 +30,7 @@ class FieldProviderTest extends KernelTestBase implements LdapUserAttributesInte
+   /**
+    * Server.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   protected $server;
+ 
+diff --git a/ldap_user/tests/src/Kernel/IntegrationTest.php b/ldap_user/tests/src/Kernel/IntegrationTest.php
+index c5faacab..e0c66c17 100644
+--- a/ldap_user/tests/src/Kernel/IntegrationTest.php
++++ b/ldap_user/tests/src/Kernel/IntegrationTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\ldap_user\Kernel;
+ 
++use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\user\Entity\User;
+ 
+@@ -29,7 +30,7 @@ class IntegrationTest extends KernelTestBase {
+   /**
+    * Config Factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+diff --git a/ldap_user/tests/src/Kernel/LdapEntryProvisionTest.php b/ldap_user/tests/src/Kernel/LdapEntryProvisionTest.php
+index 1366f08d..69c44001 100644
+--- a/ldap_user/tests/src/Kernel/LdapEntryProvisionTest.php
++++ b/ldap_user/tests/src/Kernel/LdapEntryProvisionTest.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\ldap_user\Kernel;
+ 
++use Drupal\user\Entity\User;
++use Drupal\ldap_servers_dummy\FakeLdap;
+ use Drupal\KernelTests\KernelTestBase;
+ use Drupal\ldap_servers\Entity\Server;
+ use Drupal\ldap_servers_dummy\FakeBridge;
+@@ -47,12 +49,12 @@ class LdapEntryProvisionTest extends KernelTestBase {
+   /**
+    * EventSubscriber.
+    *
+-   * @var \Drupal\ldap_user\EventSubscriber\LdapEntryProvisionSubscriber
++   * @var LdapEntryProvisionSubscriber
+    */
+   private $subscriber;
+ 
+   /**
+-   * @var \Drupal\user\Entity\User|false
++   * @var User|false
+    */
+   private $user;
+ 
+@@ -131,11 +133,9 @@ class LdapEntryProvisionTest extends KernelTestBase {
+    * Test building the entry.
+    */
+   public function testLoginCreate(): void {
+-    /** @var \Drupal\ldap_servers_dummy\FakeLdap $ldap */
++    /** @var FakeLdap $ldap */
+     $ldap = $this->container->get('ldap.bridge')->get();
+-    $response = $this->getMockBuilder(EntryManager::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $response = $this->createMock(EntryManager::class);
+     $response
+       ->expects(self::once())
+       ->method('add')
+diff --git a/ldap_user/tests/src/Kernel/OrphanProcessorTest.php b/ldap_user/tests/src/Kernel/OrphanProcessorTest.php
+index 86252263..7840fb47 100644
+--- a/ldap_user/tests/src/Kernel/OrphanProcessorTest.php
++++ b/ldap_user/tests/src/Kernel/OrphanProcessorTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\ldap_user\Kernel;
+ 
++use Drupal\ldap_user\Processor\OrphanProcessor;
+ use Drupal\KernelTests\Core\Entity\EntityKernelTestBase;
+ use Drupal\ldap_servers\Entity\Server;
+ use Drupal\ldap_servers_dummy\FakeBridge;
+@@ -28,7 +29,7 @@ class OrphanProcessorTest extends EntityKernelTestBase {
+   /**
+    * LDAP server.
+    *
+-   * @var \Drupal\ldap_servers\Entity\Server
++   * @var Server
+    */
+   private $server;
+ 
+@@ -90,7 +91,7 @@ class OrphanProcessorTest extends EntityKernelTestBase {
+    */
+   public function testCheckOrphans(): void {
+     $this->server->setStatus(TRUE)->save();
+-    /** @var \Drupal\ldap_user\Processor\OrphanProcessor $processor */
++    /** @var OrphanProcessor $processor */
+     $processor = $this->container->get('ldap.orphan_processor');
+ 
+     // Add a user 1 which we are skipping before our regular user.
+diff --git a/ldap_user/tests/src/Unit/ProtectedUserFieldConstraintValidatorTest.php b/ldap_user/tests/src/Unit/ProtectedUserFieldConstraintValidatorTest.php
+index 85ca676a..49d1c624 100644
+--- a/ldap_user/tests/src/Unit/ProtectedUserFieldConstraintValidatorTest.php
++++ b/ldap_user/tests/src/Unit/ProtectedUserFieldConstraintValidatorTest.php
+@@ -26,7 +26,7 @@ class ProtectedUserFieldConstraintValidatorTest extends UnitTestCase {
+   /**
+    * Creates a validator.
+    *
+-   * @return \Drupal\ldap_user\Plugin\Validation\Constraint\LdapProtectedUserFieldConstraintValidator
++   * @return LdapProtectedUserFieldConstraintValidator
+    *   Validator.
+    */
+   protected function createValidator(): LdapProtectedUserFieldConstraintValidator {

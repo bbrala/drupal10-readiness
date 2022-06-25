@@ -1,0 +1,4466 @@
+diff --git a/gtfs.info.yml b/gtfs.info.yml
+index ff829bd..a13bf9f 100755
+--- a/gtfs.info.yml
++++ b/gtfs.info.yml
+@@ -1,7 +1,7 @@
+ name: 'GTFS'
+ type: module
+ description: 'GTFS core. Provides entities, endpoints, and a feed importer'
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ package: 'GTFS'
+ dependencies:
+   - drupal:options
+diff --git a/gtfs.module b/gtfs.module
+index 27ed090..e42c591 100755
+--- a/gtfs.module
++++ b/gtfs.module
+@@ -1,4 +1,9 @@
+-<?php /** @noinspection PhpUnused */
++<?php use Drupal\Core\Entity\EntityStorageException;
++use Drupal\gtfs\Entity\GTFSObjectInterface;
++use Drupal\Core\Entity\ContentEntityBase;
++use Drupal\gtfs\Entity\Stop;
++use Drupal\gtfs\Entity\FeedInterface;
++/** @noinspection PhpUnused */
+ 
+ use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -58,7 +63,7 @@ function gtfs_gtfs_yasumi_provider_alter(&$provider) {
+  */
+ function gtfs_gtfs_import_entities_alter(&$map) {
+   // Get and parse the .yml file.
+-  $file_entity_yaml = file_get_contents(drupal_get_path('module', 'gtfs') . '/file_entity_map.yml');
++  $file_entity_yaml = file_get_contents(\Drupal::service('extension.list.module')->getPath('gtfs') . '/file_entity_map.yml');
+   $file_entity_map = Yaml::parse($file_entity_yaml);
+   // Merge with the map being altered
+   $map = array_merge($map, $file_entity_map);
+@@ -92,7 +97,7 @@ function gtfs_page_attachments(array &$page) {
+  *
+  * @param $element
+  *  A render array
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  * @param $context
+  */
+ function gtfs_field_widget_form_alter(&$element, FormStateInterface &$form_state, $context) {
+@@ -116,7 +121,7 @@ function gtfs_field_widget_form_alter(&$element, FormStateInterface &$form_state
+  * entity_reference_revisions doesn't account for by default, so we do it here.
+  *
+  * @param $form
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  */
+ function gtfs_form_alter(&$form, FormStateInterface $form_state) {
+   // If we're updating a form where the feed_reference has already been set.
+@@ -142,12 +147,12 @@ function gtfs_form_alter(&$form, FormStateInterface $form_state) {
+  * an entity sticks to the proper feed revision.
+  *
+  * @param $form
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *
+- * @throws \Drupal\Core\Entity\EntityStorageException
++ * @throws EntityStorageException
+  */
+ function gtfs_feed_reference_revision_set($form, FormStateInterface &$form_state) {
+-  /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $entity */
++  /** @var GTFSObjectInterface $entity */
+   $entity = $form_state->getFormObject()->getEntity();
+   $feed_reference = $form_state->getValue('feed_reference')[0];
+   $entity->set('feed_reference', $feed_reference);
+@@ -164,11 +169,11 @@ function gtfs_feed_reference_revision_set($form, FormStateInterface &$form_state
+  * @param string $class
+  *   The class of ids.
+  *
+- * @throws \Drupal\Core\Entity\EntityStorageException
++ * @throws EntityStorageException
+  */
+ function gtfs_save_chunk_of_ids(array $chunk, string $class) {
+   foreach ($chunk as $id) {
+-    /** @var \Drupal\Core\Entity\ContentEntityBase $entity */
++    /** @var ContentEntityBase $entity */
+     $entity = $class::load($id);
+     if (!$entity) {
+       Drupal::logger('gtfs')->notice("Unable to load {$class} with id {$id}");
+@@ -185,8 +190,8 @@ function gtfs_save_chunk_of_ids(array $chunk, string $class) {
+  * Implements hook_entitytype_view.
+  *
+  * @param array $build
+- * @param \Drupal\Core\Entity\EntityInterface $entity
+- * @param \Drupal\Core\Entity\Display\EntityViewDisplayInterface $display
++ * @param EntityInterface $entity
++ * @param EntityViewDisplayInterface $display
+  * @param $view_mode
+  *
+  * @throws \ReflectionException
+@@ -206,7 +211,7 @@ function gtfs_gtfs_feed_view(array &$build, EntityInterface $entity, EntityViewD
+   $entity_types = gtfs_get_entity_types();
+ 
+   foreach ($entity_types  as $type => $class) {
+-    /** @var \Drupal\Core\Entity\ContentEntityBase $class */
++    /** @var ContentEntityBase $class */
+     $count = Drupal::database()->query(
+       "SELECT count(*)
+       FROM {{$type}_field_data}
+@@ -241,7 +246,7 @@ function gtfs_gtfs_feed_view(array &$build, EntityInterface $entity, EntityViewD
+ function gtfs_get_entity_types() {
+   $all_entity_types = Drupal::service('entity_type.manager')->getDefinitions();
+   $entity_types = [];
+-    /** @var \Drupal\Core\Entity\ContentEntityBase $class */
++    /** @var ContentEntityBase $class */
+   foreach ($all_entity_types  as $type => $definition) {
+     $class = $definition->getClass();
+     $reflect = new ReflectionClass($class);
+@@ -278,7 +283,7 @@ function gtfs_repair_missing_agency_for_feed($feedId) {
+     throw new \Error('No agency found for feed ' . $feedId);
+   }
+   $entity_types = gtfs_get_entity_types();
+-    /** @var \Drupal\Core\Entity\ContentEntityBase $class */
++    /** @var ContentEntityBase $class */
+   foreach ($entity_types as $type => $class) {
+     if ($type === 'gtfs_agency') continue;
+     $instance = $class::create();
+@@ -334,8 +339,8 @@ function gtfs_gtfs_post_import_batch_stop_alter(&$operations, $feed_id) {
+ 
+ function gtfs_add_parent_station_to_stop($stop_id, $parent_station_id, $feed_id) {
+   try {
+-    $station_entity = \Drupal\gtfs\Entity\Stop::getById($stop_id, $feed_id);
+-    $parent_station = \Drupal\gtfs\Entity\Stop::getById($parent_station_id, $feed_id);
++    $station_entity = Stop::getById($stop_id, $feed_id);
++    $parent_station = Stop::getById($parent_station_id, $feed_id);
+   } catch (\Throwable $e) {
+     \Drupal::logger('Invalid import')->notice($e->getMessage());
+   }
+@@ -382,9 +387,9 @@ function gtfs_repair_source_table_routes($feed_id) {
+     ->execute();
+ }
+ 
+-function gtfs_gtfs_prepare_post_source_table_alter(&$batch, \Drupal\gtfs\Entity\FeedInterface $feed) {
++function gtfs_gtfs_prepare_post_source_table_alter(&$batch, FeedInterface $feed) {
+   $batch['operations'] = [
+     'gtfs_repair_source_table_routes',
+     [$feed->id()]
+   ];
+-}
+\ No newline at end of file
++}
+diff --git a/src/Commands/DeleteCommands.php b/src/Commands/DeleteCommands.php
+index bd57939..0ed79f4 100644
+--- a/src/Commands/DeleteCommands.php
++++ b/src/Commands/DeleteCommands.php
+@@ -9,12 +9,12 @@ use Drush\Commands\DrushCommands;
+ class DeleteCommands extends DrushCommands {
+ 
+   /**
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   private $loggerChannelFactory;
+ 
+   /**
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $loggerChannelFactory
++   * @param LoggerChannelFactoryInterface $loggerChannelFactory
+    */
+   public function __construct(LoggerChannelFactoryInterface $loggerChannelFactory) {
+     $this->loggerChannelFactory = $loggerChannelFactory;
+diff --git a/src/Commands/ImportCommands.php b/src/Commands/ImportCommands.php
+index 17111b1..ef484eb 100644
+--- a/src/Commands/ImportCommands.php
++++ b/src/Commands/ImportCommands.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Commands;
+ 
++use Drupal\gtfs\Entity\Feed\Downloader;
+ use Drupal\Core\Database\Database;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Entity\EntityTypeRepositoryInterface;
+@@ -14,35 +15,35 @@ use Drush\Commands\DrushCommands;
+ class ImportCommands extends DrushCommands {
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeRepositoryInterface
++   * @var EntityTypeRepositoryInterface
+    */
+   private $entityTypeRepository;
+ 
+   /**
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   private $fileSystem;
+ 
+   /**
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   private $loggerChannelFactory;
+ 
+   /**
+-   * @var \Drupal\gtfs\Entity\Feed\Importer
++   * @var Importer
+    */
+   private $importer;
+ 
+   /**
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
+-   * @param \Drupal\Core\Entity\EntityTypeRepositoryInterface $entityTypeRepository
+-   * @param \Drupal\Core\File\FileSystemInterface $fileSystem
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $loggerChannelFactory
++   * @param EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeRepositoryInterface $entityTypeRepository
++   * @param FileSystemInterface $fileSystem
++   * @param LoggerChannelFactoryInterface $loggerChannelFactory
+    */
+   public function __construct(EntityTypeManagerInterface $entityTypeManager, EntityTypeRepositoryInterface $entityTypeRepository, FileSystemInterface $fileSystem, LoggerChannelFactoryInterface $loggerChannelFactory) {
+     $this->entityTypeManager = $entityTypeManager;
+@@ -69,7 +70,7 @@ class ImportCommands extends DrushCommands {
+   public function importFeed($feedId, $options = ['entities' => 'all']) {
+     $this->logger()->notice("Beginning to import feed {$feedId}");
+     $feed = Feed::load($feedId);
+-    $downloader = new Feed\Downloader($feed);
++    $downloader = new Downloader($feed);
+     $this->logger()->notice("Downloading feed");
+     $batch = $downloader->batch();
+     $batch['sets'] = [];
+diff --git a/src/Controller/AgencyController.php b/src/Controller/AgencyController.php
+index 94a7451..09fd710 100755
+--- a/src/Controller/AgencyController.php
++++ b/src/Controller/AgencyController.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal\gtfs\Entity\Agency;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+@@ -25,8 +29,8 @@ class AgencyController extends ControllerBase implements ContainerInjectionInter
+    * @return array
+    *   An array suitable for drupal_render().
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($gtfs_agency_revision) {
+     $agency = $this->entityTypeManager()->getStorage('gtfs_agency')->loadRevision($gtfs_agency_revision);
+@@ -44,8 +48,8 @@ class AgencyController extends ControllerBase implements ContainerInjectionInter
+    * @return string
+    *   The page title.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($gtfs_agency_revision) {
+     $agency = $this->entityTypeManager()->getStorage('gtfs_agency')->loadRevision($gtfs_agency_revision);
+@@ -59,15 +63,15 @@ class AgencyController extends ControllerBase implements ContainerInjectionInter
+   /**
+    * Generates an overview table of older revisions of a GTFS Agency .
+    *
+-   * @param \Drupal\gtfs\Entity\Agency $gtfs_agency
++   * @param Agency $gtfs_agency
+    *   A GTFS Agency object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(Agency $gtfs_agency) {
+     $account = $this->currentUser();
+@@ -90,7 +94,7 @@ class AgencyController extends ControllerBase implements ContainerInjectionInter
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $revision */
++      /** @var GTFSObjectInterface $revision */
+       $revision = $gtfs_agency_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+diff --git a/src/Controller/CalendarDateController.php b/src/Controller/CalendarDateController.php
+index d961da5..0e23f72 100755
+--- a/src/Controller/CalendarDateController.php
++++ b/src/Controller/CalendarDateController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -25,8 +28,8 @@ class CalendarDateController extends ControllerBase implements ContainerInjectio
+    * @return array
+    *   An array suitable for drupal_render().
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($calendar_date_revision) {
+     $calendar_date = $this->entityTypeManager()->getStorage('gtfs_calendar_date')->loadRevision($calendar_date_revision);
+@@ -44,8 +47,8 @@ class CalendarDateController extends ControllerBase implements ContainerInjectio
+    * @return string
+    *   The page title.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($calendar_date_revision) {
+     $calendar_date = $this->entityTypeManager()->getStorage('gtfs_calendar_date')->loadRevision($calendar_date_revision);
+@@ -59,15 +62,15 @@ class CalendarDateController extends ControllerBase implements ContainerInjectio
+   /**
+    * Generates an overview table of older revisions of a GTFS Calendar Date .
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $gtfs_calendar_date
++   * @param GTFSObjectInterface $gtfs_calendar_date
+    *   A GTFS Calendar Date object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(GTFSObjectInterface $gtfs_calendar_date) {
+     $account = $this->currentUser();
+@@ -90,7 +93,7 @@ class CalendarDateController extends ControllerBase implements ContainerInjectio
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $revision */
++      /** @var GTFSObjectInterface $revision */
+       $revision = $calendar_date_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+diff --git a/src/Controller/DirectionController.php b/src/Controller/DirectionController.php
+index 3a09950..69f73c1 100755
+--- a/src/Controller/DirectionController.php
++++ b/src/Controller/DirectionController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -24,8 +27,8 @@ class DirectionController extends ControllerBase implements ContainerInjectionIn
+    *
+    * @return array
+    *   An array suitable for drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($gtfs_direction_revision) {
+     $direction = $this->entityTypeManager()->getStorage('gtfs_direction')->loadRevision($gtfs_direction_revision);
+@@ -42,8 +45,8 @@ class DirectionController extends ControllerBase implements ContainerInjectionIn
+    *
+    * @return string
+    *   The page title.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($gtfs_direction_revision) {
+     $direction = $this->entityTypeManager()->getStorage('gtfs_direction')->loadRevision($gtfs_direction_revision);
+@@ -57,14 +60,14 @@ class DirectionController extends ControllerBase implements ContainerInjectionIn
+   /**
+    * Generates an overview table of older revisions of a GTFS Direction.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $gtfs_direction
++   * @param GTFSObjectInterface $gtfs_direction
+    *   A GTFS Direction object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(GTFSObjectInterface $gtfs_direction) {
+     $account = $this->currentUser();
+@@ -87,7 +90,7 @@ class DirectionController extends ControllerBase implements ContainerInjectionIn
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $revision */
++      /** @var GTFSObjectInterface $revision */
+       $revision = $direction_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+diff --git a/src/Controller/FareAttributeController.php b/src/Controller/FareAttributeController.php
+index 88b886d..fe9734a 100755
+--- a/src/Controller/FareAttributeController.php
++++ b/src/Controller/FareAttributeController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -25,8 +28,8 @@ class FareAttributeController extends ControllerBase implements ContainerInjecti
+    * @return array
+    *   An array suitable for drupal_render().
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($gtfs_fare_attribute_revision) {
+     $fare_attribute = $this->entityTypeManager()->getStorage('gtfs_fare_attribute')->loadRevision($gtfs_fare_attribute_revision);
+@@ -44,8 +47,8 @@ class FareAttributeController extends ControllerBase implements ContainerInjecti
+    * @return string
+    *   The page title.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($gtfs_fare_attribute_revision) {
+     $fare_attribute = $this->entityTypeManager()->getStorage('gtfs_fare_attribute')->loadRevision($gtfs_fare_attribute_revision);
+@@ -59,15 +62,15 @@ class FareAttributeController extends ControllerBase implements ContainerInjecti
+   /**
+    * Generates an overview table of older revisions of a GTFS Fare Attribute .
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $gtfs_fare_attribute
++   * @param GTFSObjectInterface $gtfs_fare_attribute
+    *   A GTFS FareAttribute  object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(GTFSObjectInterface $gtfs_fare_attribute) {
+     $account = $this->currentUser();
+@@ -90,7 +93,7 @@ class FareAttributeController extends ControllerBase implements ContainerInjecti
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $revision */
++      /** @var GTFSObjectInterface $revision */
+       $revision = $fare_attribute_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+diff --git a/src/Controller/FeedController.php b/src/Controller/FeedController.php
+index 9a55f90..085c557 100755
+--- a/src/Controller/FeedController.php
++++ b/src/Controller/FeedController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -27,8 +30,8 @@ class FeedController extends ControllerBase implements ContainerInjectionInterfa
+    *
+    * @return array
+    *   An array suitable for drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($gtfs_feed_revision) {
+     $feed = $this->entityTypeManager()->getStorage('gtfs_feed')->loadRevision($gtfs_feed_revision);
+@@ -45,8 +48,8 @@ class FeedController extends ControllerBase implements ContainerInjectionInterfa
+    *
+    * @return string
+    *   The page title.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($gtfs_feed_revision) {
+     $feed = $this->entityTypeManager()->getStorage('gtfs_feed')->loadRevision($gtfs_feed_revision);
+@@ -60,14 +63,14 @@ class FeedController extends ControllerBase implements ContainerInjectionInterfa
+   /**
+    * Generates an overview table of older revisions of a GTFS Feed.
+    *
+-   * @param \Drupal\gtfs\Entity\FeedInterface $gtfs_feed
++   * @param FeedInterface $gtfs_feed
+    *   A GTFS Feed object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(FeedInterface $gtfs_feed) {
+     $account = $this->currentUser();
+@@ -90,7 +93,7 @@ class FeedController extends ControllerBase implements ContainerInjectionInterfa
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\FeedInterface $revision */
++      /** @var FeedInterface $revision */
+       $revision = $feed_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+@@ -204,7 +207,7 @@ class FeedController extends ControllerBase implements ContainerInjectionInterfa
+     ];
+     // Get all the feeds
+     $feeds = Feed::loadMultiple();
+-    /** @var \Drupal\gtfs\Entity\FeedInterface $feed */
++    /** @var FeedInterface $feed */
+     foreach($feeds as $feed) {
+       $downloader = new Downloader($feed);
+       $context = []; // Fake context object. The downloader usually operates in batch
+diff --git a/src/Controller/FrequencyController.php b/src/Controller/FrequencyController.php
+index f99b513..04f6100 100755
+--- a/src/Controller/FrequencyController.php
++++ b/src/Controller/FrequencyController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -25,8 +28,8 @@ class FrequencyController extends ControllerBase implements ContainerInjectionIn
+    * @return array
+    *   An array suitable for drupal_render().
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($gtfs_frequency_revision) {
+     $frequency = $this->entityTypeManager()->getStorage('gtfs_frequency')->loadRevision($gtfs_frequency_revision);
+@@ -44,8 +47,8 @@ class FrequencyController extends ControllerBase implements ContainerInjectionIn
+    * @return string
+    *   The page title.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($gtfs_frequency_revision) {
+     $frequency = $this->entityTypeManager()->getStorage('gtfs_frequency')->loadRevision($gtfs_frequency_revision);
+@@ -59,15 +62,15 @@ class FrequencyController extends ControllerBase implements ContainerInjectionIn
+   /**
+    * Generates an overview table of older revisions of a GTFS Frequency.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $gtfs_frequency
++   * @param GTFSObjectInterface $gtfs_frequency
+    *   A GTFS Frequency object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(GTFSObjectInterface $gtfs_frequency) {
+     $account = $this->currentUser();
+@@ -90,7 +93,7 @@ class FrequencyController extends ControllerBase implements ContainerInjectionIn
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $revision */
++      /** @var GTFSObjectInterface $revision */
+       $revision = $frequency_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+diff --git a/src/Controller/RouteController.php b/src/Controller/RouteController.php
+index 63bc749..7f80bd1 100755
+--- a/src/Controller/RouteController.php
++++ b/src/Controller/RouteController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -24,8 +27,8 @@ class RouteController extends ControllerBase implements ContainerInjectionInterf
+    *
+    * @return array
+    *   An array suitable for drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($gtfs_route_revision) {
+     $route = $this->entityTypeManager()->getStorage('gtfs_route')->loadRevision($gtfs_route_revision);
+@@ -42,8 +45,8 @@ class RouteController extends ControllerBase implements ContainerInjectionInterf
+    *
+    * @return string
+    *   The page title.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($gtfs_route_revision) {
+     $route = $this->entityTypeManager()->getStorage('gtfs_route')->loadRevision($gtfs_route_revision);
+@@ -57,14 +60,14 @@ class RouteController extends ControllerBase implements ContainerInjectionInterf
+   /**
+    * Generates an overview table of older revisions of a GTFS Route.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $gtfs_route
++   * @param GTFSObjectInterface $gtfs_route
+    *   A GTFS Route object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(GTFSObjectInterface $gtfs_route) {
+     $account = $this->currentUser();
+@@ -87,7 +90,7 @@ class RouteController extends ControllerBase implements ContainerInjectionInterf
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $revision */
++      /** @var GTFSObjectInterface $revision */
+       $revision = $route_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+diff --git a/src/Controller/ServiceController.php b/src/Controller/ServiceController.php
+index 498193b..96dfded 100755
+--- a/src/Controller/ServiceController.php
++++ b/src/Controller/ServiceController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -24,8 +27,8 @@ class ServiceController extends ControllerBase implements ContainerInjectionInte
+    *
+    * @return array
+    *   An array suitable for drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($gtfs_service_revision) {
+     $service = $this->entityTypeManager()->getStorage('gtfs_service')->loadRevision($gtfs_service_revision);
+@@ -42,8 +45,8 @@ class ServiceController extends ControllerBase implements ContainerInjectionInte
+    *
+    * @return string
+    *   The page title.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($gtfs_service_revision) {
+     $service = $this->entityTypeManager()->getStorage('gtfs_service')->loadRevision($gtfs_service_revision);
+@@ -57,14 +60,14 @@ class ServiceController extends ControllerBase implements ContainerInjectionInte
+   /**
+    * Generates an overview table of older revisions of a GTFS Service.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $gtfs_service
++   * @param GTFSObjectInterface $gtfs_service
+    *   A GTFS Service object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(GTFSObjectInterface $gtfs_service) {
+     $account = $this->currentUser();
+@@ -87,7 +90,7 @@ class ServiceController extends ControllerBase implements ContainerInjectionInte
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $revision */
++      /** @var GTFSObjectInterface $revision */
+       $revision = $service_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+diff --git a/src/Controller/ShapeController.php b/src/Controller/ShapeController.php
+index 2690113..293b955 100755
+--- a/src/Controller/ShapeController.php
++++ b/src/Controller/ShapeController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -24,8 +27,8 @@ class ShapeController extends ControllerBase implements ContainerInjectionInterf
+    *
+    * @return array
+    *   An array suitable for drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($gtfs_shape_revision) {
+     $shape = $this->entityTypeManager()->getStorage('gtfs_shape')->loadRevision($gtfs_shape_revision);
+@@ -42,8 +45,8 @@ class ShapeController extends ControllerBase implements ContainerInjectionInterf
+    *
+    * @return string
+    *   The page title.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($gtfs_shape_revision) {
+     $shape = $this->entityTypeManager()->getStorage('gtfs_shape')->loadRevision($gtfs_shape_revision);
+@@ -57,14 +60,14 @@ class ShapeController extends ControllerBase implements ContainerInjectionInterf
+   /**
+    * Generates an overview table of older revisions of a GTFS Shape.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $gtfs_shape
++   * @param GTFSObjectInterface $gtfs_shape
+    *   A GTFS Shape object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(GTFSObjectInterface $gtfs_shape) {
+     $account = $this->currentUser();
+@@ -87,7 +90,7 @@ class ShapeController extends ControllerBase implements ContainerInjectionInterf
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $revision */
++      /** @var GTFSObjectInterface $revision */
+       $revision = $shape_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+diff --git a/src/Controller/StopController.php b/src/Controller/StopController.php
+index b52ccf4..3601621 100755
+--- a/src/Controller/StopController.php
++++ b/src/Controller/StopController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -24,8 +27,8 @@ class StopController extends ControllerBase implements ContainerInjectionInterfa
+    *
+    * @return array
+    *   An array suitable for drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($gtfs_stop_revision) {
+     $stop = $this->entityTypeManager()->getStorage('gtfs_stop')->loadRevision($gtfs_stop_revision);
+@@ -42,8 +45,8 @@ class StopController extends ControllerBase implements ContainerInjectionInterfa
+    *
+    * @return string
+    *   The page title.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($gtfs_stop_revision) {
+     $stop = $this->entityTypeManager()->getStorage('gtfs_stop')->loadRevision($gtfs_stop_revision);
+@@ -57,14 +60,14 @@ class StopController extends ControllerBase implements ContainerInjectionInterfa
+   /**
+    * Generates an overview table of older revisions of a GTFS Stop.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $gtfs_stop
++   * @param GTFSObjectInterface $gtfs_stop
+    *   A GTFS Stop object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(GTFSObjectInterface $gtfs_stop) {
+     $account = $this->currentUser();
+@@ -87,7 +90,7 @@ class StopController extends ControllerBase implements ContainerInjectionInterfa
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $revision */
++      /** @var GTFSObjectInterface $revision */
+       $revision = $stop_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+diff --git a/src/Controller/StopTimeController.php b/src/Controller/StopTimeController.php
+index 5ee845f..a7d04d6 100755
+--- a/src/Controller/StopTimeController.php
++++ b/src/Controller/StopTimeController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -24,8 +27,8 @@ class StopTimeController extends ControllerBase implements ContainerInjectionInt
+    *
+    * @return array
+    *   An array suitable for drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($gtfs_stop_time_revision) {
+     $stop_time = $this->entityTypeManager()->getStorage('gtfs_stop_time')->loadRevision($gtfs_stop_time_revision);
+@@ -42,8 +45,8 @@ class StopTimeController extends ControllerBase implements ContainerInjectionInt
+    *
+    * @return string
+    *   The page title.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($gtfs_stop_time_revision) {
+     $stop_time = $this->entityTypeManager()->getStorage('gtfs_stop_time')->loadRevision($gtfs_stop_time_revision);
+@@ -57,14 +60,14 @@ class StopTimeController extends ControllerBase implements ContainerInjectionInt
+   /**
+    * Generates an overview table of older revisions of a GTFS Stop Time.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $gtfs_stop_time
++   * @param GTFSObjectInterface $gtfs_stop_time
+    *   A GTFS Stop Time object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(GTFSObjectInterface $gtfs_stop_time) {
+     $account = $this->currentUser();
+@@ -87,7 +90,7 @@ class StopTimeController extends ControllerBase implements ContainerInjectionInt
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $revision */
++      /** @var GTFSObjectInterface $revision */
+       $revision = $stop_time_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+diff --git a/src/Controller/TripController.php b/src/Controller/TripController.php
+index 9e8a3bc..c9b2d6a 100755
+--- a/src/Controller/TripController.php
++++ b/src/Controller/TripController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Controller;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal;
+ use Drupal\Component\Utility\Xss;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -24,8 +27,8 @@ class TripController extends ControllerBase implements ContainerInjectionInterfa
+    *
+    * @return array
+    *   An array suitable for drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionShow($gtfs_trip_revision) {
+     $trip = $this->entityTypeManager()->getStorage('gtfs_trip')->loadRevision($gtfs_trip_revision);
+@@ -42,8 +45,8 @@ class TripController extends ControllerBase implements ContainerInjectionInterfa
+    *
+    * @return string
+    *   The page title.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function revisionPageTitle($gtfs_trip_revision) {
+     $trip = $this->entityTypeManager()->getStorage('gtfs_trip')->loadRevision($gtfs_trip_revision);
+@@ -57,14 +60,14 @@ class TripController extends ControllerBase implements ContainerInjectionInterfa
+   /**
+    * Generates an overview table of older revisions of a GTFS Trip.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $gtfs_trip
++   * @param GTFSObjectInterface $gtfs_trip
+    *   A GTFS Trip object.
+    *
+    * @return array
+    *   An array as expected by drupal_render().
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
++   * @throws EntityMalformedException
+    */
+   public function revisionOverview(GTFSObjectInterface $gtfs_trip) {
+     $account = $this->currentUser();
+@@ -87,7 +90,7 @@ class TripController extends ControllerBase implements ContainerInjectionInterfa
+     $latest_revision = TRUE;
+ 
+     foreach (array_reverse($vids) as $vid) {
+-      /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $revision */
++      /** @var GTFSObjectInterface $revision */
+       $revision = $trip_storage->loadRevision($vid);
+       // Only show revisions that are affected by the language that is being
+       // displayed.
+diff --git a/src/Entity/Agency.php b/src/Entity/Agency.php
+index 8205365..189fd3c 100755
+--- a/src/Entity/Agency.php
++++ b/src/Entity/Agency.php
+@@ -135,7 +135,7 @@ class Agency extends GTFSEntityBase {
+   /**
+    * Gets all route ids associated with the agency.
+    *
+-   * @return \Drupal\Core\Entity\Query\QueryInterface
++   * @return QueryInterface
+    *  A query for routes matching this agency.
+    */
+   public function routeIds(): QueryInterface {
+diff --git a/src/Entity/CalendarDate.php b/src/Entity/CalendarDate.php
+index ef04a61..9b2b841 100755
+--- a/src/Entity/CalendarDate.php
++++ b/src/Entity/CalendarDate.php
+@@ -111,7 +111,7 @@ class CalendarDate extends GTFSEntityBase {
+   /**
+    * Returns the associated {@see \Drupal\gtfs\Entity\Service}.
+    *
+-   * @return \Drupal\gtfs\Entity\Service
++   * @return Service
+    */
+   public function service(): Service {
+     $service_id = $this->get('service_id')->target_id;
+diff --git a/src/Entity/Feed.php b/src/Entity/Feed.php
+index 6e9ca74..4b395ec 100755
+--- a/src/Entity/Feed.php
++++ b/src/Entity/Feed.php
+@@ -123,7 +123,7 @@ class Feed extends RevisionableContentEntityBase implements FeedInterface {
+    * @param array $filesToImport
+    *  The files within the GTFS zip to import
+    *
+-   * @return \Drupal\gtfs\Entity\Feed\Importer
++   * @return Importer
+    * @throws \Exception
+    */
+   public function newImport(array $filesToImport = [], $full_import = TRUE) {
+diff --git a/src/Entity/Feed/Downloader.php b/src/Entity/Feed/Downloader.php
+index 0766c05..36bbbea 100755
+--- a/src/Entity/Feed/Downloader.php
++++ b/src/Entity/Feed/Downloader.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Entity\Feed;
+ 
++use Drupal\Core\Archiver\ArchiverException;
+ use Drupal;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\gtfs\Entity\FeedInterface;
+@@ -22,7 +23,7 @@ class Downloader {
+   /**
+    * The feed which is being downloaded.
+    *
+-   * @var \Drupal\gtfs\Entity\FeedInterface
++   * @var FeedInterface
+    */
+   private $feed;
+ 
+@@ -43,7 +44,7 @@ class Downloader {
+   /**
+    * Constructs a new importer instance.
+    *
+-   * @param \Drupal\gtfs\Entity\FeedInterface $feed
++   * @param FeedInterface $feed
+    *   A Feed object.
+    */
+   public function __construct(FeedInterface $feed) {
+@@ -101,7 +102,7 @@ class Downloader {
+ 
+     try {
+       $parsed_url = parse_url($url);
+-      /** @var \Drupal\Core\File\FileSystemInterface $file_system */
++      /** @var FileSystemInterface $file_system */
+       $file_system = \Drupal::service('file_system');
+       if (is_dir($file_system->realpath($destination))) {
+         // Prevent URIs with triple slashes when glueing parts together.
+@@ -140,7 +141,7 @@ class Downloader {
+    * @return null
+    *
+    * @throws \Exception
+-   * @throws \Drupal\Core\Archiver\ArchiverException
++   * @throws ArchiverException
+    */
+   public function extract(&$context) {
+     if (!$this->downloadedFile) {
+diff --git a/src/Entity/Feed/Importer.php b/src/Entity/Feed/Importer.php
+index 7f99ef0..573d79e 100755
+--- a/src/Entity/Feed/Importer.php
++++ b/src/Entity/Feed/Importer.php
+@@ -105,7 +105,7 @@ class Importer {
+   /**
+    * Returns the feed from which entities are being imported.
+    *
+-   * @return \Drupal\gtfs\Entity\FeedInterface
++   * @return FeedInterface
+    *   The feed associated with the import.
+    */
+   public function getFeed(): FeedInterface {
+diff --git a/src/Entity/FeedInterface.php b/src/Entity/FeedInterface.php
+index 294162a..3ecf09f 100755
+--- a/src/Entity/FeedInterface.php
++++ b/src/Entity/FeedInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Entity;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\RevisionLogInterface;
+ use Drupal\Core\Entity\EntityChangedInterface;
+@@ -97,7 +98,7 @@ interface FeedInterface extends ContentEntityInterface, RevisionLogInterface, En
+   /**
+    * Gets the GTFS Feed revision author.
+    *
+-   * @return \Drupal\user\UserInterface
++   * @return UserInterface
+    *   The user entity for the revision author.
+    */
+   public function getRevisionUser();
+diff --git a/src/Entity/Frequency.php b/src/Entity/Frequency.php
+index 330302c..a5731b2 100755
+--- a/src/Entity/Frequency.php
++++ b/src/Entity/Frequency.php
+@@ -96,7 +96,7 @@ class Frequency extends GTFSEntityBase {
+   /**
+    * Returns the trip associated with this stoptime.
+    *
+-   * @return \Drupal\gtfs\Entity\Trip
++   * @return Trip
+    *   The associated trip
+    */
+   public function trip() {
+diff --git a/src/Entity/GTFSEntityBase.php b/src/Entity/GTFSEntityBase.php
+index 5205488..361396e 100755
+--- a/src/Entity/GTFSEntityBase.php
++++ b/src/Entity/GTFSEntityBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Entity;
+ 
++use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal;
+ use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Entity\RevisionableContentEntityBase;
+@@ -107,7 +108,7 @@ abstract class GTFSEntityBase extends RevisionableContentEntityBase implements G
+         case 'file':
+         case 'image':
+           $obj = $this->get($name)->get(0);
+-          $value = $obj ? file_create_url(File::load($obj->target_id)->getFileUri()) : '';
++          $value = $obj ? \Drupal::service('file_url_generator')->generateAbsoluteString(File::load($obj->target_id)->getFileUri()) : '';
+           break;
+         default:
+           $value = $this->get($name)->value;
+@@ -294,9 +295,9 @@ abstract class GTFSEntityBase extends RevisionableContentEntityBase implements G
+   /**
+    * Set up some fields common to all our GTFS entities.
+    *
+-   * @param Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *
+-   * @return array|\Drupal\Core\Field\FieldDefinitionInterface[]
++   * @return array|FieldDefinitionInterface[]
+    */
+   public static function baseFieldDefinitions(EntityTypeInterface $entity_type) {
+     $fields = parent::baseFieldDefinitions($entity_type);
+diff --git a/src/Entity/GTFSObjectInterface.php b/src/Entity/GTFSObjectInterface.php
+index f78bdf7..76e2bf0 100755
+--- a/src/Entity/GTFSObjectInterface.php
++++ b/src/Entity/GTFSObjectInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Entity;
+ 
++use Drupal\user\UserInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\RevisionLogInterface;
+ use Drupal\Core\Entity\EntityChangedInterface;
+@@ -151,7 +152,7 @@ interface GTFSObjectInterface extends ContentEntityInterface, RevisionLogInterfa
+    /**
+     * Gets the GTFS Entity revision author.
+     *
+-    * @return \Drupal\user\UserInterface
++    * @return UserInterface
+     *   The user entity for the revision author.
+     */
+    public function getRevisionUser();
+diff --git a/src/Entity/Route.php b/src/Entity/Route.php
+index 6395426..ccb5ed2 100755
+--- a/src/Entity/Route.php
++++ b/src/Entity/Route.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Entity;
+ 
++use Drupal\Core\Entity\EntityInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ use Drupal\Core\Field\BaseFieldDefinition;
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -146,11 +149,11 @@ class Route extends GTFSEntityBase implements GeodataInterface {
+   /**
+    * Gets the agency associated with this route.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return EntityInterface
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+-  public function agency(): \Drupal\Core\Entity\EntityInterface {
++  public function agency(): EntityInterface {
+     return Drupal::entityTypeManager()->getStorage('gtfs_agency')->load($this->get('agency_id')->target_id);
+   }
+ 
+diff --git a/src/Entity/StopTime.php b/src/Entity/StopTime.php
+index 66eabe5..492dc1e 100755
+--- a/src/Entity/StopTime.php
++++ b/src/Entity/StopTime.php
+@@ -120,7 +120,7 @@ class StopTime extends GTFSEntityBase {
+   /**
+    * Returns the stop associated with this stoptime.
+    *
+-   * @return \Drupal\gtfs\Entity\Stop
++   * @return Stop
+    *   The associated stop
+    */
+   public function stop() {
+@@ -131,7 +131,7 @@ class StopTime extends GTFSEntityBase {
+   /**
+    * Returns the trip associated with this stoptime.
+    *
+-   * @return \Drupal\gtfs\Entity\Trip
++   * @return Trip
+    *   The associated trip
+    */
+   public function trip() {
+diff --git a/src/FeedAccessControlHandler.php b/src/FeedAccessControlHandler.php
+index 61257ca..af50886 100755
+--- a/src/FeedAccessControlHandler.php
++++ b/src/FeedAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs;
+ 
++use Drupal\gtfs\Entity\FeedInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,7 +19,7 @@ class FeedAccessControlHandler extends EntityAccessControlHandler {
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\gtfs\Entity\FeedInterface $entity */
++    /** @var FeedInterface $entity */
+     switch ($operation) {
+       case 'view':
+         if (!$entity->isPublished()) {
+diff --git a/src/FeedHtmlRouteProvider.php b/src/FeedHtmlRouteProvider.php
+index 22b0f09..c62170a 100755
+--- a/src/FeedHtmlRouteProvider.php
++++ b/src/FeedHtmlRouteProvider.php
+@@ -52,10 +52,10 @@ class FeedHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the version history route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getHistoryRoute(EntityTypeInterface $entity_type) {
+@@ -76,10 +76,10 @@ class FeedHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionRoute(EntityTypeInterface $entity_type) {
+@@ -100,10 +100,10 @@ class FeedHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision revert route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionRevertRoute(EntityTypeInterface $entity_type) {
+@@ -124,10 +124,10 @@ class FeedHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision delete route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionDeleteRoute(EntityTypeInterface $entity_type) {
+@@ -148,10 +148,10 @@ class FeedHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision translation revert route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionTranslationRevertRoute(EntityTypeInterface $entity_type) {
+@@ -172,10 +172,10 @@ class FeedHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/FeedListBuilder.php b/src/FeedListBuilder.php
+index e6f793d..b412e4d 100755
+--- a/src/FeedListBuilder.php
++++ b/src/FeedListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs;
+ 
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ use Drupal\Core\Link;
+@@ -25,7 +26,7 @@ class FeedListBuilder extends EntityListBuilder {
+ 
+   /**
+    * {@inheritdoc}
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws EntityMalformedException
+    */
+   public function getOperations(EntityInterface $entity) {
+     $operations = parent::getOperations($entity);
+diff --git a/src/Form/AgencyRevisionDeleteForm.php b/src/Form/AgencyRevisionDeleteForm.php
+index e100f28..6e29824 100755
+--- a/src/Form/AgencyRevisionDeleteForm.php
++++ b/src/Form/AgencyRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -21,30 +22,30 @@ class AgencyRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The GTFS Agency revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Agency storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $AgencyStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new AgencyRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+diff --git a/src/Form/AgencyRevisionRevertForm.php b/src/Form/AgencyRevisionRevertForm.php
+index 18bfe10..34704e2 100755
+--- a/src/Form/AgencyRevisionRevertForm.php
++++ b/src/Form/AgencyRevisionRevertForm.php
+@@ -23,30 +23,30 @@ class AgencyRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS Agency revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Agency storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $AgencyStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new AgencyRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Agency storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -136,18 +136,18 @@ class AgencyRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $revision
++   * @param GTFSObjectInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @return GTFSObjectInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/AgencyRevisionRevertTranslationForm.php b/src/Form/AgencyRevisionRevertTranslationForm.php
+index 957f0d3..44d982d 100755
+--- a/src/Form/AgencyRevisionRevertTranslationForm.php
++++ b/src/Form/AgencyRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class AgencyRevisionRevertTranslationForm extends AgencyRevisionRevertForm {
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new AgencyRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Agency storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class AgencyRevisionRevertTranslationForm extends AgencyRevisionRevertForm {
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $default_revision */
++    /** @var GTFSObjectInterface $default_revision */
+     $latest_revision = $this->AgencyStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class AgencyRevisionRevertTranslationForm extends AgencyRevisionRevertForm {
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/AgencySettingsForm.php b/src/Form/AgencySettingsForm.php
+index 7ede180..7887554 100755
+--- a/src/Form/AgencySettingsForm.php
++++ b/src/Form/AgencySettingsForm.php
+@@ -27,7 +27,7 @@ class AgencySettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class AgencySettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/CalendarDateRevisionDeleteForm.php b/src/Form/CalendarDateRevisionDeleteForm.php
+index 62a9d9b..692f31d 100755
+--- a/src/Form/CalendarDateRevisionDeleteForm.php
++++ b/src/Form/CalendarDateRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -21,30 +22,30 @@ class CalendarDateRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The GTFS CalendarDate revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS CalendarDate storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $CalendarDateStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new CalendarDateRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+diff --git a/src/Form/CalendarDateRevisionRevertForm.php b/src/Form/CalendarDateRevisionRevertForm.php
+index 02a1030..f2d64d6 100755
+--- a/src/Form/CalendarDateRevisionRevertForm.php
++++ b/src/Form/CalendarDateRevisionRevertForm.php
+@@ -24,30 +24,30 @@ class CalendarDateRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS CalendarDate revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS CalendarDate storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $CalendarDateStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new CalendarDateRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS CalendarDate storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -140,18 +140,18 @@ class CalendarDateRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $revision
++   * @param GTFSObjectInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @return GTFSObjectInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/CalendarDateRevisionRevertTranslationForm.php b/src/Form/CalendarDateRevisionRevertTranslationForm.php
+index 9193e72..e48c03e 100755
+--- a/src/Form/CalendarDateRevisionRevertTranslationForm.php
++++ b/src/Form/CalendarDateRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class CalendarDateRevisionRevertTranslationForm extends CalendarDateRevisionReve
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new CalendarDateRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS CalendarDate storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class CalendarDateRevisionRevertTranslationForm extends CalendarDateRevisionReve
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $default_revision */
++    /** @var GTFSObjectInterface $default_revision */
+     $latest_revision = $this->CalendarDateStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class CalendarDateRevisionRevertTranslationForm extends CalendarDateRevisionReve
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/CalendarDateSettingsForm.php b/src/Form/CalendarDateSettingsForm.php
+index 4bd2d9d..7dcdac0 100755
+--- a/src/Form/CalendarDateSettingsForm.php
++++ b/src/Form/CalendarDateSettingsForm.php
+@@ -27,7 +27,7 @@ class CalendarDateSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class CalendarDateSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/DirectionRevisionDeleteForm.php b/src/Form/DirectionRevisionDeleteForm.php
+index b4d6a8f..0cd03ac 100755
+--- a/src/Form/DirectionRevisionDeleteForm.php
++++ b/src/Form/DirectionRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+@@ -20,30 +21,30 @@ class DirectionRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The GTFS Direction revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Direction storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $DirectionStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new DirectionRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+@@ -73,7 +74,7 @@ class DirectionRevisionDeleteForm extends ConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function getQuestion() {
+-    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => format_date($this->revision->getRevisionCreationTime())]);
++    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime())]);
+   }
+ 
+   /**
+@@ -107,7 +108,7 @@ class DirectionRevisionDeleteForm extends ConfirmFormBase {
+     $this->DirectionStorage->deleteRevision($this->revision->getRevisionId());
+ 
+     $this->logger('content')->notice('Direction: deleted %title revision %revision.', ['%title' => $this->revision->label(), '%revision' => $this->revision->getRevisionId()]);
+-    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Direction %title has been deleted.', ['%revision-date' => format_date($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
++    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Direction %title has been deleted.', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
+     $form_state->setRedirect(
+       'entity.gtfs_direction.canonical',
+        ['gtfs_direction' => $this->revision->id()]
+diff --git a/src/Form/DirectionRevisionRevertForm.php b/src/Form/DirectionRevisionRevertForm.php
+index 44355b8..1c91458 100755
+--- a/src/Form/DirectionRevisionRevertForm.php
++++ b/src/Form/DirectionRevisionRevertForm.php
+@@ -21,30 +21,30 @@ class DirectionRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS Direction revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Direction storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $DirectionStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new DirectionRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Direction storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -130,18 +130,18 @@ class DirectionRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $revision
++   * @param GTFSObjectInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @return GTFSObjectInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/DirectionRevisionRevertTranslationForm.php b/src/Form/DirectionRevisionRevertTranslationForm.php
+index 4763221..51633cc 100755
+--- a/src/Form/DirectionRevisionRevertTranslationForm.php
++++ b/src/Form/DirectionRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class DirectionRevisionRevertTranslationForm extends DirectionRevisionRevertForm
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new DirectionRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Direction storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class DirectionRevisionRevertTranslationForm extends DirectionRevisionRevertForm
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $default_revision */
++    /** @var GTFSObjectInterface $default_revision */
+     $latest_revision = $this->DirectionStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class DirectionRevisionRevertTranslationForm extends DirectionRevisionRevertForm
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/DirectionSettingsForm.php b/src/Form/DirectionSettingsForm.php
+index 7d03d11..299fc85 100755
+--- a/src/Form/DirectionSettingsForm.php
++++ b/src/Form/DirectionSettingsForm.php
+@@ -27,7 +27,7 @@ class DirectionSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class DirectionSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/FareAttributeRevisionDeleteForm.php b/src/Form/FareAttributeRevisionDeleteForm.php
+index e5b1474..6d7cbc3 100755
+--- a/src/Form/FareAttributeRevisionDeleteForm.php
++++ b/src/Form/FareAttributeRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -21,30 +22,30 @@ class FareAttributeRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The GTFS FareAttribute revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS FareAttribute storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $FareAttributeStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new FareAttributeRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+diff --git a/src/Form/FareAttributeRevisionRevertForm.php b/src/Form/FareAttributeRevisionRevertForm.php
+index 015d7ca..b6c62d8 100755
+--- a/src/Form/FareAttributeRevisionRevertForm.php
++++ b/src/Form/FareAttributeRevisionRevertForm.php
+@@ -23,30 +23,30 @@ class FareAttributeRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS FareAttribute revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS FareAttribute storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $FareAttributeStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new FareAttributeRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS FareAttribute storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -137,18 +137,18 @@ class FareAttributeRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $revision
++   * @param GTFSObjectInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @return GTFSObjectInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/FareAttributeRevisionRevertTranslationForm.php b/src/Form/FareAttributeRevisionRevertTranslationForm.php
+index be679cd..4682bbb 100755
+--- a/src/Form/FareAttributeRevisionRevertTranslationForm.php
++++ b/src/Form/FareAttributeRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class FareAttributeRevisionRevertTranslationForm extends FareAttributeRevisionRe
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new FareAttributeRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS FareAttribute storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class FareAttributeRevisionRevertTranslationForm extends FareAttributeRevisionRe
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $default_revision */
++    /** @var GTFSObjectInterface $default_revision */
+     $latest_revision = $this->FareAttributeStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class FareAttributeRevisionRevertTranslationForm extends FareAttributeRevisionRe
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/FareAttributeSettingsForm.php b/src/Form/FareAttributeSettingsForm.php
+index 30b33b4..87877a5 100755
+--- a/src/Form/FareAttributeSettingsForm.php
++++ b/src/Form/FareAttributeSettingsForm.php
+@@ -27,7 +27,7 @@ class FareAttributeSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class FareAttributeSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/FeedDeleteForm.php b/src/Form/FeedDeleteForm.php
+index 44459be..4b91b3e 100755
+--- a/src/Form/FeedDeleteForm.php
++++ b/src/Form/FeedDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\Feed;
+ use Drupal\Core\Entity\ContentEntityDeleteForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -33,7 +34,7 @@ class FeedDeleteForm extends ContentEntityDeleteForm {
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $delete_attached = $form_state->getValue('delete_attached');
+     $delete_feed = $form_state->getValue('delete_feed');
+-    /** @var \Drupal\gtfs\Entity\Feed $entity */
++    /** @var Feed $entity */
+     $feed = $this->getEntity();
+     if ($delete_feed) {
+       $message = sprintf('The feed %s has been deleted', $feed->getName());
+diff --git a/src/Form/FeedForm.php b/src/Form/FeedForm.php
+index c29ec1c..7906f34 100755
+--- a/src/Form/FeedForm.php
++++ b/src/Form/FeedForm.php
+@@ -43,7 +43,7 @@ class FeedForm extends ContentEntityForm {
+       $entity->setNewRevision();
+ 
+       // If a new revision is created, save the current user as revision author.
+-      $entity->setRevisionCreationTime(REQUEST_TIME);
++      $entity->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+       $entity->setRevisionUserId(Drupal::currentUser()->id());
+     }
+     else {
+diff --git a/src/Form/FeedImportForm.php b/src/Form/FeedImportForm.php
+index 11d2cad..7bedae3 100755
+--- a/src/Form/FeedImportForm.php
++++ b/src/Form/FeedImportForm.php
+@@ -17,8 +17,8 @@ class FeedImportForm extends ContentEntityForm {
+ 
+   /**
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
+-   * @param \Drupal\gtfs\Entity\Feed|null $gtfs_feed
++   * @param FormStateInterface $form_state
++   * @param Feed|null $gtfs_feed
+    * @param string $step
+    * @param string $class
+    *
+@@ -41,8 +41,8 @@ class FeedImportForm extends ContentEntityForm {
+ 
+   /**
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
+-   * @param \Drupal\gtfs\Entity\Feed|null $feed
++   * @param FormStateInterface $form_state
++   * @param Feed|null $feed
+    *
+    * @return array
+    */
+@@ -61,8 +61,8 @@ class FeedImportForm extends ContentEntityForm {
+ 
+   /**
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
+-   * @param \Drupal\gtfs\Entity\Feed|null $feed
++   * @param FormStateInterface $form_state
++   * @param Feed|null $feed
+    *
+    * @return array
+    */
+@@ -108,8 +108,8 @@ class FeedImportForm extends ContentEntityForm {
+ 
+   /**
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
+-   * @param \Drupal\gtfs\Entity\Feed|null $feed
++   * @param FormStateInterface $form_state
++   * @param Feed|null $feed
+    * @param string $classname
+    *
+    * @return array
+@@ -135,8 +135,8 @@ class FeedImportForm extends ContentEntityForm {
+ 
+   /**
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
+-   * @param \Drupal\gtfs\Entity\Feed|null $feed
++   * @param FormStateInterface $form_state
++   * @param Feed|null $feed
+    *
+    * @return array
+    */
+@@ -157,7 +157,7 @@ class FeedImportForm extends ContentEntityForm {
+    * {@inheritDoc}
+    *
+    * @param array $form
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $step = $form_state->get('step');
+diff --git a/src/Form/FeedRevisionDeleteForm.php b/src/Form/FeedRevisionDeleteForm.php
+index 9067d54..34a6a11 100755
+--- a/src/Form/FeedRevisionDeleteForm.php
++++ b/src/Form/FeedRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\FeedInterface;
+ use Drupal;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -21,30 +22,30 @@ class FeedRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The Feed revision.
+    *
+-   * @var \Drupal\gtfs\Entity\FeedInterface
++   * @var FeedInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The Feed storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $FeedStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new FeedRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+diff --git a/src/Form/FeedRevisionRevertForm.php b/src/Form/FeedRevisionRevertForm.php
+index d746bed..98d4dc5 100755
+--- a/src/Form/FeedRevisionRevertForm.php
++++ b/src/Form/FeedRevisionRevertForm.php
+@@ -23,30 +23,30 @@ class FeedRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS Feed revision.
+    *
+-   * @var \Drupal\gtfs\Entity\FeedInterface
++   * @var FeedInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Feed storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $FeedStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new FeedRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Feed storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -136,18 +136,18 @@ class FeedRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\FeedInterface $revision
++   * @param FeedInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\FeedInterface
++   * @return FeedInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(FeedInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/FeedRevisionRevertTranslationForm.php b/src/Form/FeedRevisionRevertTranslationForm.php
+index adee9ea..56fff93 100755
+--- a/src/Form/FeedRevisionRevertTranslationForm.php
++++ b/src/Form/FeedRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class FeedRevisionRevertTranslationForm extends FeedRevisionRevertForm {
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new FeedRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Feed storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class FeedRevisionRevertTranslationForm extends FeedRevisionRevertForm {
+   protected function prepareRevertedRevision(FeedInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\FeedInterface $default_revision */
++    /** @var FeedInterface $default_revision */
+     $latest_revision = $this->FeedStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class FeedRevisionRevertTranslationForm extends FeedRevisionRevertForm {
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/FeedSettingsForm.php b/src/Form/FeedSettingsForm.php
+index 0d18d31..c258f9b 100755
+--- a/src/Form/FeedSettingsForm.php
++++ b/src/Form/FeedSettingsForm.php
+@@ -27,7 +27,7 @@ class FeedSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class FeedSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/FrequencyRevisionDeleteForm.php b/src/Form/FrequencyRevisionDeleteForm.php
+index e7d3420..86289d0 100755
+--- a/src/Form/FrequencyRevisionDeleteForm.php
++++ b/src/Form/FrequencyRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+@@ -20,30 +21,30 @@ class FrequencyRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The GTFS Frequency revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Frequency storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $FrequencyStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new FrequencyRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+@@ -73,7 +74,7 @@ class FrequencyRevisionDeleteForm extends ConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function getQuestion() {
+-    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => format_date($this->revision->getRevisionCreationTime())]);
++    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime())]);
+   }
+ 
+   /**
+@@ -107,7 +108,7 @@ class FrequencyRevisionDeleteForm extends ConfirmFormBase {
+     $this->FrequencyStorage->deleteRevision($this->revision->getRevisionId());
+ 
+     $this->logger('content')->notice('Frequency: deleted %title revision %revision.', ['%title' => $this->revision->label(), '%revision' => $this->revision->getRevisionId()]);
+-    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Frequency %title has been deleted.', ['%revision-date' => format_date($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
++    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Frequency %title has been deleted.', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
+     $form_state->setRedirect(
+       'entity.gtfs_frequency.canonical',
+        ['gtfs_frequency' => $this->revision->id()]
+diff --git a/src/Form/FrequencyRevisionRevertForm.php b/src/Form/FrequencyRevisionRevertForm.php
+index 1a96522..7711a92 100755
+--- a/src/Form/FrequencyRevisionRevertForm.php
++++ b/src/Form/FrequencyRevisionRevertForm.php
+@@ -23,30 +23,30 @@ class FrequencyRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS Frequency revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Frequency storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $FrequencyStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new FrequencyRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Frequency storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -136,18 +136,18 @@ class FrequencyRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $revision
++   * @param GTFSObjectInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @return GTFSObjectInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/FrequencyRevisionRevertTranslationForm.php b/src/Form/FrequencyRevisionRevertTranslationForm.php
+index 677b232..18cc4b3 100755
+--- a/src/Form/FrequencyRevisionRevertTranslationForm.php
++++ b/src/Form/FrequencyRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class FrequencyRevisionRevertTranslationForm extends FrequencyRevisionRevertForm
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new FrequencyRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Frequency storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class FrequencyRevisionRevertTranslationForm extends FrequencyRevisionRevertForm
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $default_revision */
++    /** @var GTFSObjectInterface $default_revision */
+     $latest_revision = $this->FrequencyStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class FrequencyRevisionRevertTranslationForm extends FrequencyRevisionRevertForm
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/FrequencySettingsForm.php b/src/Form/FrequencySettingsForm.php
+index c50695b..dc27b7f 100755
+--- a/src/Form/FrequencySettingsForm.php
++++ b/src/Form/FrequencySettingsForm.php
+@@ -27,7 +27,7 @@ class FrequencySettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class FrequencySettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/GTFSObjectForm.php b/src/Form/GTFSObjectForm.php
+index 54ea785..7c4941e 100755
+--- a/src/Form/GTFSObjectForm.php
++++ b/src/Form/GTFSObjectForm.php
+@@ -44,7 +44,7 @@ class GTFSObjectForm extends ContentEntityForm {
+       $entity->setNewRevision();
+ 
+       // If a new revision is created, save the current user as revision author.
+-      $entity->setRevisionCreationTime(REQUEST_TIME);
++      $entity->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+       $entity->setRevisionUserId(Drupal::currentUser()->id());
+     }
+     else {
+diff --git a/src/Form/RouteRevisionDeleteForm.php b/src/Form/RouteRevisionDeleteForm.php
+index 5ada749..8a4d92f 100755
+--- a/src/Form/RouteRevisionDeleteForm.php
++++ b/src/Form/RouteRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+@@ -20,30 +21,30 @@ class RouteRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The GTFS Route revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Route storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $RouteStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new RouteRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+@@ -73,7 +74,7 @@ class RouteRevisionDeleteForm extends ConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function getQuestion() {
+-    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => format_date($this->revision->getRevisionCreationTime())]);
++    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime())]);
+   }
+ 
+   /**
+@@ -107,7 +108,7 @@ class RouteRevisionDeleteForm extends ConfirmFormBase {
+     $this->RouteStorage->deleteRevision($this->revision->getRevisionId());
+ 
+     $this->logger('content')->notice('Route: deleted %title revision %revision.', ['%title' => $this->revision->label(), '%revision' => $this->revision->getRevisionId()]);
+-    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Route %title has been deleted.', ['%revision-date' => format_date($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
++    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Route %title has been deleted.', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
+     $form_state->setRedirect(
+       'entity.gtfs_route.canonical',
+        ['gtfs_route' => $this->revision->id()]
+diff --git a/src/Form/RouteRevisionRevertForm.php b/src/Form/RouteRevisionRevertForm.php
+index c42fc04..c3410ce 100755
+--- a/src/Form/RouteRevisionRevertForm.php
++++ b/src/Form/RouteRevisionRevertForm.php
+@@ -21,30 +21,30 @@ class RouteRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS Route revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Route storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $RouteStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new RouteRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Route storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -130,18 +130,18 @@ class RouteRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $revision
++   * @param GTFSObjectInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @return GTFSObjectInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/RouteRevisionRevertTranslationForm.php b/src/Form/RouteRevisionRevertTranslationForm.php
+index e8c3dd2..3b7c234 100755
+--- a/src/Form/RouteRevisionRevertTranslationForm.php
++++ b/src/Form/RouteRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class RouteRevisionRevertTranslationForm extends RouteRevisionRevertForm {
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new RouteRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Route storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class RouteRevisionRevertTranslationForm extends RouteRevisionRevertForm {
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $default_revision */
++    /** @var GTFSObjectInterface $default_revision */
+     $latest_revision = $this->RouteStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class RouteRevisionRevertTranslationForm extends RouteRevisionRevertForm {
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/RouteSettingsForm.php b/src/Form/RouteSettingsForm.php
+index a5e3996..f3f1fe9 100755
+--- a/src/Form/RouteSettingsForm.php
++++ b/src/Form/RouteSettingsForm.php
+@@ -27,7 +27,7 @@ class RouteSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class RouteSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/ServiceRevisionDeleteForm.php b/src/Form/ServiceRevisionDeleteForm.php
+index cfab77c..bb2ef5b 100755
+--- a/src/Form/ServiceRevisionDeleteForm.php
++++ b/src/Form/ServiceRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+@@ -20,30 +21,30 @@ class ServiceRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The GTFS Service revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Service storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $ServiceStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new ServiceRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+@@ -73,7 +74,7 @@ class ServiceRevisionDeleteForm extends ConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function getQuestion() {
+-    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => format_date($this->revision->getRevisionCreationTime())]);
++    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime())]);
+   }
+ 
+   /**
+@@ -107,7 +108,7 @@ class ServiceRevisionDeleteForm extends ConfirmFormBase {
+     $this->ServiceStorage->deleteRevision($this->revision->getRevisionId());
+ 
+     $this->logger('content')->notice('Service: deleted %title revision %revision.', ['%title' => $this->revision->label(), '%revision' => $this->revision->getRevisionId()]);
+-    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Service %title has been deleted.', ['%revision-date' => format_date($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
++    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Service %title has been deleted.', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
+     $form_state->setRedirect(
+       'entity.gtfs_service.canonical',
+        ['gtfs_service' => $this->revision->id()]
+diff --git a/src/Form/ServiceRevisionRevertForm.php b/src/Form/ServiceRevisionRevertForm.php
+index 0d18d65..ee44c5f 100755
+--- a/src/Form/ServiceRevisionRevertForm.php
++++ b/src/Form/ServiceRevisionRevertForm.php
+@@ -21,30 +21,30 @@ class ServiceRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS Service revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Service storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $ServiceStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new ServiceRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Service storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -130,18 +130,18 @@ class ServiceRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $revision
++   * @param GTFSObjectInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @return GTFSObjectInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/ServiceRevisionRevertTranslationForm.php b/src/Form/ServiceRevisionRevertTranslationForm.php
+index 1aa535d..c7ba0e3 100755
+--- a/src/Form/ServiceRevisionRevertTranslationForm.php
++++ b/src/Form/ServiceRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class ServiceRevisionRevertTranslationForm extends ServiceRevisionRevertForm {
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new ServiceRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Service storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class ServiceRevisionRevertTranslationForm extends ServiceRevisionRevertForm {
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $default_revision */
++    /** @var GTFSObjectInterface $default_revision */
+     $latest_revision = $this->ServiceStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class ServiceRevisionRevertTranslationForm extends ServiceRevisionRevertForm {
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/ServiceSettingsForm.php b/src/Form/ServiceSettingsForm.php
+index fa10a2f..ba2f300 100755
+--- a/src/Form/ServiceSettingsForm.php
++++ b/src/Form/ServiceSettingsForm.php
+@@ -27,7 +27,7 @@ class ServiceSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class ServiceSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/ShapeRevisionDeleteForm.php b/src/Form/ShapeRevisionDeleteForm.php
+index 69f2033..19b77b0 100755
+--- a/src/Form/ShapeRevisionDeleteForm.php
++++ b/src/Form/ShapeRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+@@ -20,30 +21,30 @@ class ShapeRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The GTFS Shape revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Shape storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $ShapeStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new ShapeRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+@@ -73,7 +74,7 @@ class ShapeRevisionDeleteForm extends ConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function getQuestion() {
+-    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => format_date($this->revision->getRevisionCreationTime())]);
++    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime())]);
+   }
+ 
+   /**
+@@ -107,7 +108,7 @@ class ShapeRevisionDeleteForm extends ConfirmFormBase {
+     $this->ShapeStorage->deleteRevision($this->revision->getRevisionId());
+ 
+     $this->logger('content')->notice('Shape: deleted %title revision %revision.', ['%title' => $this->revision->label(), '%revision' => $this->revision->getRevisionId()]);
+-    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Shape %title has been deleted.', ['%revision-date' => format_date($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
++    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Shape %title has been deleted.', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
+     $form_state->setRedirect(
+       'entity.gtfs_shape.canonical',
+        ['gtfs_shape' => $this->revision->id()]
+diff --git a/src/Form/ShapeRevisionRevertForm.php b/src/Form/ShapeRevisionRevertForm.php
+index 71f8f50..be133d6 100755
+--- a/src/Form/ShapeRevisionRevertForm.php
++++ b/src/Form/ShapeRevisionRevertForm.php
+@@ -21,30 +21,30 @@ class ShapeRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS Shape revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Shape storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $ShapeStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new ShapeRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Shape storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -130,18 +130,18 @@ class ShapeRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $revision
++   * @param GTFSObjectInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @return GTFSObjectInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/ShapeRevisionRevertTranslationForm.php b/src/Form/ShapeRevisionRevertTranslationForm.php
+index 8884734..97393bf 100755
+--- a/src/Form/ShapeRevisionRevertTranslationForm.php
++++ b/src/Form/ShapeRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class ShapeRevisionRevertTranslationForm extends ShapeRevisionRevertForm {
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new ShapeRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Shape storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class ShapeRevisionRevertTranslationForm extends ShapeRevisionRevertForm {
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $default_revision */
++    /** @var GTFSObjectInterface $default_revision */
+     $latest_revision = $this->ShapeStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class ShapeRevisionRevertTranslationForm extends ShapeRevisionRevertForm {
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/ShapeSettingsForm.php b/src/Form/ShapeSettingsForm.php
+index f07f714..9e54daf 100755
+--- a/src/Form/ShapeSettingsForm.php
++++ b/src/Form/ShapeSettingsForm.php
+@@ -27,7 +27,7 @@ class ShapeSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class ShapeSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/StopRevisionDeleteForm.php b/src/Form/StopRevisionDeleteForm.php
+index 25a5ae1..58715fb 100755
+--- a/src/Form/StopRevisionDeleteForm.php
++++ b/src/Form/StopRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+@@ -20,30 +21,30 @@ class StopRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The GTFS Stop revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Stop storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $StopStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new StopRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+@@ -73,7 +74,7 @@ class StopRevisionDeleteForm extends ConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function getQuestion() {
+-    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => format_date($this->revision->getRevisionCreationTime())]);
++    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime())]);
+   }
+ 
+   /**
+@@ -107,7 +108,7 @@ class StopRevisionDeleteForm extends ConfirmFormBase {
+     $this->StopStorage->deleteRevision($this->revision->getRevisionId());
+ 
+     $this->logger('content')->notice('Stop: deleted %title revision %revision.', ['%title' => $this->revision->label(), '%revision' => $this->revision->getRevisionId()]);
+-    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Stop %title has been deleted.', ['%revision-date' => format_date($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
++    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Stop %title has been deleted.', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
+     $form_state->setRedirect(
+       'entity.gtfs_stop.canonical',
+        ['gtfs_stop' => $this->revision->id()]
+diff --git a/src/Form/StopRevisionRevertForm.php b/src/Form/StopRevisionRevertForm.php
+index 17dbfeb..da28128 100755
+--- a/src/Form/StopRevisionRevertForm.php
++++ b/src/Form/StopRevisionRevertForm.php
+@@ -21,30 +21,30 @@ class StopRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS Stop revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Stop storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $StopStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new StopRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Stop storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -130,18 +130,18 @@ class StopRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $revision
++   * @param GTFSObjectInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @return GTFSObjectInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/StopRevisionRevertTranslationForm.php b/src/Form/StopRevisionRevertTranslationForm.php
+index 83f017f..a953c8e 100755
+--- a/src/Form/StopRevisionRevertTranslationForm.php
++++ b/src/Form/StopRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class StopRevisionRevertTranslationForm extends StopRevisionRevertForm {
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new StopRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Stop storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class StopRevisionRevertTranslationForm extends StopRevisionRevertForm {
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $default_revision */
++    /** @var GTFSObjectInterface $default_revision */
+     $latest_revision = $this->StopStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class StopRevisionRevertTranslationForm extends StopRevisionRevertForm {
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/StopSettingsForm.php b/src/Form/StopSettingsForm.php
+index b933e4e..ef5d694 100755
+--- a/src/Form/StopSettingsForm.php
++++ b/src/Form/StopSettingsForm.php
+@@ -27,7 +27,7 @@ class StopSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class StopSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/StopTimeRevisionDeleteForm.php b/src/Form/StopTimeRevisionDeleteForm.php
+index 3b29c4c..8d4b46d 100755
+--- a/src/Form/StopTimeRevisionDeleteForm.php
++++ b/src/Form/StopTimeRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+@@ -20,30 +21,30 @@ class StopTimeRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The GTFS Stop Time revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Stop Time storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $StopTimeStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new StopTimeRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+@@ -73,7 +74,7 @@ class StopTimeRevisionDeleteForm extends ConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function getQuestion() {
+-    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => format_date($this->revision->getRevisionCreationTime())]);
++    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime())]);
+   }
+ 
+   /**
+@@ -107,7 +108,7 @@ class StopTimeRevisionDeleteForm extends ConfirmFormBase {
+     $this->StopTimeStorage->deleteRevision($this->revision->getRevisionId());
+ 
+     $this->logger('content')->notice('Stop Time: deleted %title revision %revision.', ['%title' => $this->revision->label(), '%revision' => $this->revision->getRevisionId()]);
+-    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Stop Time %title has been deleted.', ['%revision-date' => format_date($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
++    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Stop Time %title has been deleted.', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
+     $form_state->setRedirect(
+       'entity.gtfs_stop_time.canonical',
+        ['gtfs_stop_time' => $this->revision->id()]
+diff --git a/src/Form/StopTimeRevisionRevertForm.php b/src/Form/StopTimeRevisionRevertForm.php
+index d45978f..0463de0 100755
+--- a/src/Form/StopTimeRevisionRevertForm.php
++++ b/src/Form/StopTimeRevisionRevertForm.php
+@@ -21,30 +21,30 @@ class StopTimeRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS Stop Time revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Stop Time storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $StopTimeStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new StopTimeRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS StopTime storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -130,18 +130,18 @@ class StopTimeRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $revision
++   * @param GTFSObjectInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @return GTFSObjectInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/StopTimeRevisionRevertTranslationForm.php b/src/Form/StopTimeRevisionRevertTranslationForm.php
+index 5de30d2..f4b36be 100755
+--- a/src/Form/StopTimeRevisionRevertTranslationForm.php
++++ b/src/Form/StopTimeRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class StopTimeRevisionRevertTranslationForm extends StopTimeRevisionRevertForm {
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new StopTimeRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS StopTime storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class StopTimeRevisionRevertTranslationForm extends StopTimeRevisionRevertForm {
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $default_revision */
++    /** @var GTFSObjectInterface $default_revision */
+     $latest_revision = $this->StopTimeStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class StopTimeRevisionRevertTranslationForm extends StopTimeRevisionRevertForm {
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/StopTimeSettingsForm.php b/src/Form/StopTimeSettingsForm.php
+index 571411c..3960e8a 100755
+--- a/src/Form/StopTimeSettingsForm.php
++++ b/src/Form/StopTimeSettingsForm.php
+@@ -27,7 +27,7 @@ class StopTimeSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class StopTimeSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/TripRevisionDeleteForm.php b/src/Form/TripRevisionDeleteForm.php
+index 932614d..2d0d4c2 100755
+--- a/src/Form/TripRevisionDeleteForm.php
++++ b/src/Form/TripRevisionDeleteForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Form;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Form\ConfirmFormBase;
+@@ -20,30 +21,30 @@ class TripRevisionDeleteForm extends ConfirmFormBase {
+   /**
+    * The GTFS Trip revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Trip storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $TripStorage;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+   /**
+    * Constructs a new TripRevisionDeleteForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The entity storage.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, Connection $connection) {
+@@ -73,7 +74,7 @@ class TripRevisionDeleteForm extends ConfirmFormBase {
+    * {@inheritdoc}
+    */
+   public function getQuestion() {
+-    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => format_date($this->revision->getRevisionCreationTime())]);
++    return t('Are you sure you want to delete the revision from %revision-date?', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime())]);
+   }
+ 
+   /**
+@@ -107,7 +108,7 @@ class TripRevisionDeleteForm extends ConfirmFormBase {
+     $this->TripStorage->deleteRevision($this->revision->getRevisionId());
+ 
+     $this->logger('content')->notice('Trip: deleted %title revision %revision.', ['%title' => $this->revision->label(), '%revision' => $this->revision->getRevisionId()]);
+-    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Trip %title has been deleted.', ['%revision-date' => format_date($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
++    \Drupal::messenger()->addMessage(t('Revision from %revision-date of Trip %title has been deleted.', ['%revision-date' => \Drupal::service('date.formatter')->format($this->revision->getRevisionCreationTime()), '%title' => $this->revision->label()]));
+     $form_state->setRedirect(
+       'entity.gtfs_trip.canonical',
+        ['gtfs_trip' => $this->revision->id()]
+diff --git a/src/Form/TripRevisionRevertForm.php b/src/Form/TripRevisionRevertForm.php
+index 1e22935..7aee07d 100755
+--- a/src/Form/TripRevisionRevertForm.php
++++ b/src/Form/TripRevisionRevertForm.php
+@@ -21,30 +21,30 @@ class TripRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * The GTFS Trip revision.
+    *
+-   * @var \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @var GTFSObjectInterface
+    */
+   protected $revision;
+ 
+   /**
+    * The GTFS Trip storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $TripStorage;
+ 
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a new TripRevisionRevertForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Trip storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter) {
+@@ -130,18 +130,18 @@ class TripRevisionRevertForm extends ConfirmFormBase {
+   /**
+    * Prepares a revision to be reverted.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $revision
++   * @param GTFSObjectInterface $revision
+    *   The revision to be reverted.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+-   * @return \Drupal\gtfs\Entity\GTFSObjectInterface
++   * @return GTFSObjectInterface
+    *   The prepared revision ready to be stored.
+    */
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revision->setNewRevision();
+     $revision->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $revision;
+   }
+diff --git a/src/Form/TripRevisionRevertTranslationForm.php b/src/Form/TripRevisionRevertTranslationForm.php
+index 85d7dce..ce612e5 100755
+--- a/src/Form/TripRevisionRevertTranslationForm.php
++++ b/src/Form/TripRevisionRevertTranslationForm.php
+@@ -27,18 +27,18 @@ class TripRevisionRevertTranslationForm extends TripRevisionRevertForm {
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new TripRevisionRevertTranslationForm.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $entity_storage
++   * @param EntityStorageInterface $entity_storage
+    *   The GTFS Trip storage.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+    */
+   public function __construct(EntityStorageInterface $entity_storage, DateFormatterInterface $date_formatter, LanguageManagerInterface $language_manager) {
+@@ -93,7 +93,7 @@ class TripRevisionRevertTranslationForm extends TripRevisionRevertForm {
+   protected function prepareRevertedRevision(GTFSObjectInterface $revision, FormStateInterface $form_state) {
+     $revert_untranslated_fields = $form_state->getValue('revert_untranslated_fields');
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $default_revision */
++    /** @var GTFSObjectInterface $default_revision */
+     $latest_revision = $this->TripStorage->load($revision->id());
+     $latest_revision_translation = $latest_revision->getTranslation($this->langcode);
+ 
+@@ -107,7 +107,7 @@ class TripRevisionRevertTranslationForm extends TripRevisionRevertForm {
+ 
+     $latest_revision_translation->setNewRevision();
+     $latest_revision_translation->isDefaultRevision(TRUE);
+-    $revision->setRevisionCreationTime(REQUEST_TIME);
++    $revision->setRevisionCreationTime(\Drupal::time()->getRequestTime());
+ 
+     return $latest_revision_translation;
+   }
+diff --git a/src/Form/TripSettingsForm.php b/src/Form/TripSettingsForm.php
+index 25885b2..0769bc4 100755
+--- a/src/Form/TripSettingsForm.php
++++ b/src/Form/TripSettingsForm.php
+@@ -27,7 +27,7 @@ class TripSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+@@ -39,7 +39,7 @@ class TripSettingsForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/GTFSEntityHtmlRouteProvider.php b/src/GTFSEntityHtmlRouteProvider.php
+index eee69f3..e279e2e 100755
+--- a/src/GTFSEntityHtmlRouteProvider.php
++++ b/src/GTFSEntityHtmlRouteProvider.php
+@@ -52,10 +52,10 @@ class GTFSEntityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the version history route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getHistoryRoute(EntityTypeInterface $entity_type) {
+@@ -77,10 +77,10 @@ class GTFSEntityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionRoute(EntityTypeInterface $entity_type) {
+@@ -102,10 +102,10 @@ class GTFSEntityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision revert route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionRevertRoute(EntityTypeInterface $entity_type) {
+@@ -127,10 +127,10 @@ class GTFSEntityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision delete route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionDeleteRoute(EntityTypeInterface $entity_type) {
+@@ -152,10 +152,10 @@ class GTFSEntityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the revision translation revert route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getRevisionTranslationRevertRoute(EntityTypeInterface $entity_type) {
+@@ -177,10 +177,10 @@ class GTFSEntityHtmlRouteProvider extends AdminHtmlRouteProvider {
+   /**
+    * Gets the settings form route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getSettingsFormRoute(EntityTypeInterface $entity_type) {
+diff --git a/src/GTFSObjectAccessControlHandler.php b/src/GTFSObjectAccessControlHandler.php
+index c269e91..13fa81c 100755
+--- a/src/GTFSObjectAccessControlHandler.php
++++ b/src/GTFSObjectAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs;
+ 
++use Drupal\gtfs\Entity\GTFSObjectInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -20,7 +21,7 @@ class GTFSObjectAccessControlHandler extends EntityAccessControlHandler {
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+     $type = coerceEntityTypeId($entity->getEntityTypeId());
+ 
+-    /** @var \Drupal\gtfs\Entity\GTFSObjectInterface $entity */
++    /** @var GTFSObjectInterface $entity */
+     switch ($operation) {
+       case 'view':
+         if (!$entity->isPublished()) {
+diff --git a/src/GTFSPermissions.php b/src/GTFSPermissions.php
+index b046552..e783c81 100755
+--- a/src/GTFSPermissions.php
++++ b/src/GTFSPermissions.php
+@@ -29,7 +29,7 @@ class GTFSPermissions implements ContainerInjectionInterface {
+   /**
+    * Constructs a GTFSPermissions instance.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Plugin/rest/resource/AgencyListResource.php b/src/Plugin/rest/resource/AgencyListResource.php
+index 0eb8335..52f4774 100755
+--- a/src/Plugin/rest/resource/AgencyListResource.php
++++ b/src/Plugin/rest/resource/AgencyListResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ use PDO;
+ 
+@@ -26,11 +28,11 @@ class AgencyListResource extends GTFSResourceBase {
+   /**
+    * Responds to agency GET requests.
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    *   The API response
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function get($version = 'v1') {
+ 
+diff --git a/src/Plugin/rest/resource/AgencyResource.php b/src/Plugin/rest/resource/AgencyResource.php
+index d2e95ae..63372e3 100755
+--- a/src/Plugin/rest/resource/AgencyResource.php
++++ b/src/Plugin/rest/resource/AgencyResource.php
+@@ -29,7 +29,7 @@ class AgencyResource extends GTFSResourceBase {
+    * @param null $agency_id
+    *  GTFS ID of the agency to retrieve
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    * @throws \Exception
+    */
+   public function get($version = 'v1', $agency_id = NULL) {
+diff --git a/src/Plugin/rest/resource/DirectionListResource.php b/src/Plugin/rest/resource/DirectionListResource.php
+index a7fd09f..701be9c 100755
+--- a/src/Plugin/rest/resource/DirectionListResource.php
++++ b/src/Plugin/rest/resource/DirectionListResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ use Drupal\gtfs\Entity\Agency;
+ use Drupal\gtfs\Entity\Route;
+@@ -27,9 +29,9 @@ class DirectionListResource extends GTFSResourceBase {
+    * @param null $agency_id
+    * @param null $route_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return ResourceResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function get($version = 'v1', $agency_id = NULL, $route_id = NULL) {
+     if (!method_exists($this, $version)) {
+diff --git a/src/Plugin/rest/resource/DirectionResource.php b/src/Plugin/rest/resource/DirectionResource.php
+index c8e5606..6fe9fac 100755
+--- a/src/Plugin/rest/resource/DirectionResource.php
++++ b/src/Plugin/rest/resource/DirectionResource.php
+@@ -71,7 +71,7 @@ class DirectionResource extends GTFSResourceBase {
+    * @param string|null $route_id
+    * @param string|null $direction_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    * @throws \Exception
+    */
+   public function v1($agency_id = NULL, $route_id = NULL, $direction_id = NULL) {
+diff --git a/src/Plugin/rest/resource/GTFSResourceBase.php b/src/Plugin/rest/resource/GTFSResourceBase.php
+index 467c242..14901c8 100755
+--- a/src/Plugin/rest/resource/GTFSResourceBase.php
++++ b/src/Plugin/rest/resource/GTFSResourceBase.php
+@@ -30,7 +30,7 @@ abstract class GTFSResourceBase extends ResourceBase {
+ 
+   /**
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $currentRequest;
+ 
+@@ -45,9 +45,9 @@ abstract class GTFSResourceBase extends ResourceBase {
+    *   The plugin implementation definition.
+    * @param array $serializer_formats
+    *   The available serialization formats.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   A logger instance.
+-   * @param \Symfony\Component\HttpFoundation\Request $current_request
++   * @param Request $current_request
+    *   The current request
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, array $serializer_formats, LoggerInterface $logger, Request $current_request) {
+diff --git a/src/Plugin/rest/resource/RouteGeojsonResource.php b/src/Plugin/rest/resource/RouteGeojsonResource.php
+index 52f700a..2cc01d7 100755
+--- a/src/Plugin/rest/resource/RouteGeojsonResource.php
++++ b/src/Plugin/rest/resource/RouteGeojsonResource.php
+@@ -103,7 +103,7 @@ class RouteGeojsonResource extends GTFSResourceBase {
+    * @param string|null $agency_id
+    * @param string|null $route_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    * @throws \Exception
+    */
+   public function v1($agency_id = NULL, $route_id = NULL) {
+diff --git a/src/Plugin/rest/resource/RouteListResource.php b/src/Plugin/rest/resource/RouteListResource.php
+index a5b20c6..5920c5b 100755
+--- a/src/Plugin/rest/resource/RouteListResource.php
++++ b/src/Plugin/rest/resource/RouteListResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ use Drupal\gtfs\Entity\Agency;
+ 
+@@ -61,10 +63,10 @@ class RouteListResource extends GTFSResourceBase {
+    *
+    * @param null $agency_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    *   The response.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    * @throws \Exception
+    */
+   public function v1($agency_id = NULL) {
+diff --git a/src/Plugin/rest/resource/RouteResource.php b/src/Plugin/rest/resource/RouteResource.php
+index f35f2f8..7babd43 100755
+--- a/src/Plugin/rest/resource/RouteResource.php
++++ b/src/Plugin/rest/resource/RouteResource.php
+@@ -49,7 +49,7 @@ class RouteResource extends GTFSResourceBase {
+    * @param string|null $agency_id
+    * @param string|null $route_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    * @throws \Exception
+    */
+   public function v1($agency_id = NULL, $route_id = NULL) {
+diff --git a/src/Plugin/rest/resource/RouteStopListResource.php b/src/Plugin/rest/resource/RouteStopListResource.php
+index 84c0513..f1a38b7 100755
+--- a/src/Plugin/rest/resource/RouteStopListResource.php
++++ b/src/Plugin/rest/resource/RouteStopListResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ use Drupal\gtfs\Entity\Agency;
+ use Drupal\gtfs\Entity\Route;
+@@ -74,9 +76,9 @@ class RouteStopListResource extends GTFSResourceBase {
+    * @param null $agency_id
+    * @param null $route_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return ResourceResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function v1($agency_id = NULL, $route_id = NULL, $direction_ids = null) {
+ 
+diff --git a/src/Plugin/rest/resource/RouteWKTResource.php b/src/Plugin/rest/resource/RouteWKTResource.php
+index a9b4811..8d8f7d5 100644
+--- a/src/Plugin/rest/resource/RouteWKTResource.php
++++ b/src/Plugin/rest/resource/RouteWKTResource.php
+@@ -106,7 +106,7 @@ class RouteWKTResource extends GTFSResourceBase {
+    * @param string|null $agency_id
+    * @param string|null $route_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    * @throws \Exception
+    */
+   public function v1($agency_id = NULL, $route_id = NULL) {
+diff --git a/src/Plugin/rest/resource/ServiceListResource.php b/src/Plugin/rest/resource/ServiceListResource.php
+index 544c642..2652576 100755
+--- a/src/Plugin/rest/resource/ServiceListResource.php
++++ b/src/Plugin/rest/resource/ServiceListResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ 
+ /**
+@@ -50,9 +52,9 @@ class ServiceListResource extends GTFSResourceBase {
+   /**
+    * Responds to service GET requests.
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return ResourceResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function v1() {
+ 
+diff --git a/src/Plugin/rest/resource/ServiceResource.php b/src/Plugin/rest/resource/ServiceResource.php
+index 34f513d..c901e94 100755
+--- a/src/Plugin/rest/resource/ServiceResource.php
++++ b/src/Plugin/rest/resource/ServiceResource.php
+@@ -47,7 +47,7 @@ class ServiceResource extends GTFSResourceBase {
+    *
+    * @param string|null $service_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    * @throws \Exception
+    */
+   public function v1($service_id = NULL) {
+diff --git a/src/Plugin/rest/resource/ShapeGeojsonResource.php b/src/Plugin/rest/resource/ShapeGeojsonResource.php
+index 374db84..e507503 100755
+--- a/src/Plugin/rest/resource/ShapeGeojsonResource.php
++++ b/src/Plugin/rest/resource/ShapeGeojsonResource.php
+@@ -30,7 +30,7 @@ class ShapeGeojsonResource extends GTFSResourceBase {
+    *
+    * @param string|null $shape_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    */
+   public function get($shape_id = NULL) {
+ 
+diff --git a/src/Plugin/rest/resource/ShapeResource.php b/src/Plugin/rest/resource/ShapeResource.php
+index 850907d..f05119f 100755
+--- a/src/Plugin/rest/resource/ShapeResource.php
++++ b/src/Plugin/rest/resource/ShapeResource.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal;
+ use Drupal\gtfs\Entity\Shape;
+ use PDO;
+@@ -30,7 +31,7 @@ class ShapeResource extends GTFSResourceBase {
+    *
+    * @param string|null $shape_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    */
+   public function get($shape_id = NULL) {
+ 
+@@ -50,7 +51,7 @@ class ShapeResource extends GTFSResourceBase {
+    * @param string $shape_ids
+    *  A comma-separated list of shapes to retrieve.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface[]
++   * @return EntityInterface[]
+    */
+   public static function getShapes($shape_ids = '') {
+     if ($shape_ids == '') {
+diff --git a/src/Plugin/rest/resource/StopDirectionResource.php b/src/Plugin/rest/resource/StopDirectionResource.php
+index 1d56bc2..dea8cc7 100755
+--- a/src/Plugin/rest/resource/StopDirectionResource.php
++++ b/src/Plugin/rest/resource/StopDirectionResource.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\gtfs\Entity\Service;
+ use Drupal;
+ use Drupal\gtfs\Entity\Stop;
+ use PDO;
+@@ -79,9 +82,9 @@ class StopDirectionResource extends GTFSResourceBase {
+    *
+    * @param null $stop_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return ResourceResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function v1($stop_id = NULL) {
+ 
+@@ -163,7 +166,7 @@ class StopDirectionResource extends GTFSResourceBase {
+       }
+       if (!$direction) continue;
+       $data[$key] = $direction->toGTFSObject();
+-      $data[$key]['service'] = Drupal\gtfs\Entity\Service::load($trip['service_id'])->toGTFSObject();
++      $data[$key]['service'] = Service::load($trip['service_id'])->toGTFSObject();
+       $data[$key]['route'] = $direction->route()->toGTFSObject();
+     }
+ 
+diff --git a/src/Plugin/rest/resource/StopListResource.php b/src/Plugin/rest/resource/StopListResource.php
+index bcf3688..3b7b410 100755
+--- a/src/Plugin/rest/resource/StopListResource.php
++++ b/src/Plugin/rest/resource/StopListResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ 
+ /**
+@@ -54,10 +56,10 @@ class StopListResource extends GTFSResourceBase {
+   /**
+    * Responds to route GET requests.
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    *   The response.
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function v1() {
+ 
+diff --git a/src/Plugin/rest/resource/StopResource.php b/src/Plugin/rest/resource/StopResource.php
+index 012ffd1..8964aa0 100755
+--- a/src/Plugin/rest/resource/StopResource.php
++++ b/src/Plugin/rest/resource/StopResource.php
+@@ -46,7 +46,7 @@ class StopResource extends GTFSResourceBase {
+    *
+    * @param string|null $stop_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    * @throws \Exception
+    */
+   public function v1($stop_id = NULL) {
+diff --git a/src/Plugin/rest/resource/StopRouteListResource.php b/src/Plugin/rest/resource/StopRouteListResource.php
+index a7e39fb..3f7fb3b 100755
+--- a/src/Plugin/rest/resource/StopRouteListResource.php
++++ b/src/Plugin/rest/resource/StopRouteListResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ use Drupal\gtfs\Entity\Stop;
+ use PDO;
+@@ -75,9 +77,9 @@ class StopRouteListResource extends GTFSResourceBase {
+    *
+    * @param null $stop_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return ResourceResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function v1($stop_id = NULL) {
+ 
+diff --git a/src/Plugin/rest/resource/StopStopTimeListResource.php b/src/Plugin/rest/resource/StopStopTimeListResource.php
+index a7ce404..ff359be 100755
+--- a/src/Plugin/rest/resource/StopStopTimeListResource.php
++++ b/src/Plugin/rest/resource/StopStopTimeListResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ use Drupal\gtfs\Entity\Stop;
+ 
+@@ -25,9 +27,9 @@ class StopStopTimeListResource extends GTFSResourceBase {
+    *
+    * @param null $stop_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return ResourceResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function get($stop_id = NULL) {
+ 
+diff --git a/src/Plugin/rest/resource/StopTimeListResource.php b/src/Plugin/rest/resource/StopTimeListResource.php
+index bb60963..30bed6a 100755
+--- a/src/Plugin/rest/resource/StopTimeListResource.php
++++ b/src/Plugin/rest/resource/StopTimeListResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ use Drupal\gtfs\Entity\Agency;
+ use Drupal\gtfs\Entity\Route;
+@@ -68,9 +70,9 @@ class StopTimeListResource extends GTFSResourceBase {
+    * @param null $route_id
+    * @param null $trip_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return ResourceResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    * @throws \Exception
+    */
+   public function v1($agency_id = NULL, $route_id = NULL, $trip_id = NULL) {
+diff --git a/src/Plugin/rest/resource/StopTripResource.php b/src/Plugin/rest/resource/StopTripResource.php
+index 995cd44..6a36cbb 100755
+--- a/src/Plugin/rest/resource/StopTripResource.php
++++ b/src/Plugin/rest/resource/StopTripResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ use Drupal\gtfs\Entity\Stop;
+ use PDO;
+@@ -61,9 +63,9 @@ class StopTripResource extends GTFSResourceBase {
+    *
+    * @param null $stop_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return ResourceResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function v1($stop_id = NULL) {
+ 
+diff --git a/src/Plugin/rest/resource/TripGeojsonResource.php b/src/Plugin/rest/resource/TripGeojsonResource.php
+index 0591a38..2f1c248 100755
+--- a/src/Plugin/rest/resource/TripGeojsonResource.php
++++ b/src/Plugin/rest/resource/TripGeojsonResource.php
+@@ -32,7 +32,7 @@ class TripGeojsonResource extends GTFSResourceBase {
+    * @param string|null $route_id
+    * @param string|null $trip_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    * @throws \Exception
+    */
+   public function get($agency_id = NULL, $route_id = NULL, $trip_id = NULL) {
+diff --git a/src/Plugin/rest/resource/TripListResource.php b/src/Plugin/rest/resource/TripListResource.php
+index fa2b29c..af449a5 100755
+--- a/src/Plugin/rest/resource/TripListResource.php
++++ b/src/Plugin/rest/resource/TripListResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ use Drupal\gtfs\Entity\Agency;
+ use Drupal\gtfs\Entity\Route;
+@@ -64,9 +66,9 @@ class TripListResource extends GTFSResourceBase {
+    * @param null $agency_id
+    * @param null $route_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return ResourceResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function v1($agency_id = NULL, $route_id = NULL) {
+ 
+diff --git a/src/Plugin/rest/resource/TripResource.php b/src/Plugin/rest/resource/TripResource.php
+index cd4ecb9..05317e1 100755
+--- a/src/Plugin/rest/resource/TripResource.php
++++ b/src/Plugin/rest/resource/TripResource.php
+@@ -69,7 +69,7 @@ class TripResource extends GTFSResourceBase {
+    * @param string|null $route_id
+    * @param string|null $trip_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
++   * @return ResourceResponse
+    * @throws \Exception
+    */
+   public function v1($agency_id = NULL, $route_id = NULL, $trip_id = NULL) {
+diff --git a/src/Plugin/rest/resource/TripStopListResource.php b/src/Plugin/rest/resource/TripStopListResource.php
+index 58c7c7d..fdd838a 100755
+--- a/src/Plugin/rest/resource/TripStopListResource.php
++++ b/src/Plugin/rest/resource/TripStopListResource.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\gtfs\Plugin\rest\resource;
+ 
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal;
+ use Drupal\gtfs\Entity\Agency;
+ use Drupal\gtfs\Entity\Route;
+@@ -76,9 +78,9 @@ class TripStopListResource extends GTFSResourceBase {
+    * @param null $route_id
+    * @param null $trip_id
+    *
+-   * @return \Drupal\gtfs\Plugin\rest\resource\ResourceResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return ResourceResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    * @throws \Exception
+    */
+   public function v1($agency_id = NULL, $route_id = NULL, $trip_id = NULL) {
+diff --git a/src/Storage/GTFSEntityStorageInterface.php b/src/Storage/GTFSEntityStorageInterface.php
+index 3a1a780..47a91cf 100755
+--- a/src/Storage/GTFSEntityStorageInterface.php
++++ b/src/Storage/GTFSEntityStorageInterface.php
+@@ -20,7 +20,7 @@ interface GTFSEntityStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Gets a list of GTFS Entity revision IDs for a specific GTFS Entity.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $entity
++   * @param GTFSObjectInterface $entity
+    *   The GTFS entity.
+    *
+    * @return int[]
+@@ -31,7 +31,7 @@ interface GTFSEntityStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Gets a list of revision IDs having a given user as GTFS Entity author.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The user entity.
+    *
+    * @return int[]
+@@ -42,7 +42,7 @@ interface GTFSEntityStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Counts the number of revisions in the default language.
+    *
+-   * @param \Drupal\gtfs\Entity\GTFSObjectInterface $entity
++   * @param GTFSObjectInterface $entity
+    *   The GTFS entity.
+    *
+    * @return int
+@@ -53,7 +53,7 @@ interface GTFSEntityStorageInterface extends ContentEntityStorageInterface {
+   /**
+    * Unsets the language for all GTFS Entity with the given language.
+    *
+-   * @param \Drupal\Core\Language\LanguageInterface $language
++   * @param LanguageInterface $language
+    *   The language object.
+    */
+   public function clearRevisionsLanguage(LanguageInterface $language);

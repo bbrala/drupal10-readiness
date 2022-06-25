@@ -1,0 +1,236 @@
+diff --git a/src/EventSubscriber/ExceptionSubscriberBase.php b/src/EventSubscriber/ExceptionSubscriberBase.php
+index 9054b03..a7f2c83 100644
+--- a/src/EventSubscriber/ExceptionSubscriberBase.php
++++ b/src/EventSubscriber/ExceptionSubscriberBase.php
+@@ -2,11 +2,12 @@
+ 
+ namespace Drupal\whoops\EventSubscriber;
+ 
++use Whoops\Handler\HandlerInterface;
++use Symfony\Component\HttpKernel\Event\ExceptionEvent;
+ use Drupal\Core\EventSubscriber\MainContentViewSubscriber;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\HttpFoundation\Request;
+ use Symfony\Component\HttpFoundation\Response;
+-use Symfony\Component\HttpKernel\Event\GetResponseForExceptionEvent;
+ use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ use Whoops\Run as Whoops;
+@@ -70,7 +71,7 @@ abstract class ExceptionSubscriberBase implements EventSubscriberInterface {
+   /**
+    * Gets the handler dedicated to handle the exception in this subscriber.
+    *
+-   * @return \Whoops\Handler\HandlerInterface
++   * @return HandlerInterface
+    *   The exception handler.
+    */
+   abstract protected function getHandler();
+@@ -78,7 +79,7 @@ abstract class ExceptionSubscriberBase implements EventSubscriberInterface {
+   /**
+    * Determines whether the exception should be handled by this subscriber.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The request object.
+    *
+    * @return bool
+@@ -95,12 +96,12 @@ abstract class ExceptionSubscriberBase implements EventSubscriberInterface {
+   /**
+    * Handles exceptions for this subscriber.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseForExceptionEvent $event
++   * @param ExceptionEvent $event
+    *   The event to process.
+    */
+-  public function onException(GetResponseForExceptionEvent $event) {
++  public function onException(ExceptionEvent $event) {
+     if ($this->applies($event->getRequest())) {
+-      $exception = $event->getException();
++      $exception = $event->getThrowable();
+       $response = $this->exceptionToResponse($exception);
+       $event->setResponse($response);
+     }
+@@ -112,7 +113,7 @@ abstract class ExceptionSubscriberBase implements EventSubscriberInterface {
+    * @param \Exception $exception
+    *   The exception to be handled.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   The error response associated with the given exception.
+    */
+   protected function exceptionToResponse(\Exception $exception) {
+diff --git a/src/StackMiddleware/WhoopsMiddleware.php b/src/StackMiddleware/WhoopsMiddleware.php
+index e1d5bea..d23998b 100644
+--- a/src/StackMiddleware/WhoopsMiddleware.php
++++ b/src/StackMiddleware/WhoopsMiddleware.php
+@@ -18,14 +18,14 @@ class WhoopsMiddleware implements HttpKernelInterface {
+   /**
+    * The wrapped HTTP kernel.
+    *
+-   * @var \Symfony\Component\HttpKernel\HttpKernelInterface
++   * @var HttpKernelInterface
+    */
+   protected $kernel;
+ 
+   /**
+    * Constructs a new WhoopsMiddleware.
+    *
+-   * @param \Symfony\Component\HttpKernel\HttpKernelInterface $app
++   * @param HttpKernelInterface $app
+    *   The wrapped HTTP kernel.
+    */
+   public function __construct(HttpKernelInterface $app) {
+diff --git a/tests/modules/whoops_test/src/Controller/WhoopsTestController.php b/tests/modules/whoops_test/src/Controller/WhoopsTestController.php
+index a399711..bb6166b 100644
+--- a/tests/modules/whoops_test/src/Controller/WhoopsTestController.php
++++ b/tests/modules/whoops_test/src/Controller/WhoopsTestController.php
+@@ -25,7 +25,7 @@ class WhoopsTestController extends ControllerBase {
+    * NOTE: Since all 4xx Http Status code errors are caught by the core's
+    * subscribers use a non existent Http Status code for test the behaviour.
+    *
+-   * @throws \Symfony\Component\HttpKernel\Exception\HttpException
++   * @throws HttpException
+    */
+   public function httpException() {
+     throw new HttpException(599, 'Non Existent Http Status');
+diff --git a/tests/src/Unit/DefaultExceptionSubscriberTest.php b/tests/src/Unit/DefaultExceptionSubscriberTest.php
+index 441b3cd..ccc474d 100644
+--- a/tests/src/Unit/DefaultExceptionSubscriberTest.php
++++ b/tests/src/Unit/DefaultExceptionSubscriberTest.php
+@@ -2,11 +2,12 @@
+ 
+ namespace Drupal\Tests\whoops\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Symfony\Component\HttpKernel\Event\ExceptionEvent;
+ use Drupal\Tests\UnitTestCase;
+ use Drupal\whoops\EventSubscriber\DefaultExceptionSubscriber;
+ use Symfony\Component\HttpFoundation\Request;
+ use Symfony\Component\HttpFoundation\Response;
+-use Symfony\Component\HttpKernel\Event\GetResponseForExceptionEvent;
+ use Symfony\Component\HttpKernel\Exception\HttpException;
+ use Symfony\Component\HttpKernel\HttpKernelInterface;
+ 
+@@ -16,17 +17,18 @@ use Symfony\Component\HttpKernel\HttpKernelInterface;
+  */
+ class DefaultExceptionSubscriberTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * The mocked HTTP kernel.
+    *
+-   * @var \Symfony\Component\HttpKernel\HttpKernelInterface
++   * @var HttpKernelInterface
+    */
+   protected $kernel;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->kernel = $this->prophesize(HttpKernelInterface::class)->reveal();
+@@ -39,7 +41,7 @@ class DefaultExceptionSubscriberTest extends UnitTestCase {
+     $request = Request::create('/whoops');
+ 
+     $exception = new \RuntimeException('Houston, we have a problem');
+-    $event = new GetResponseForExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
++    $event = new ExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
+ 
+     $subscriber = new DefaultExceptionSubscriber();
+     $subscriber->onException($event);
+@@ -61,7 +63,7 @@ class DefaultExceptionSubscriberTest extends UnitTestCase {
+     $request->setRequestFormat('unknown');
+ 
+     $exception = new \Exception('Houston, we have a problem');
+-    $event = new GetResponseForExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
++    $event = new ExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
+ 
+     $subscriber = new DefaultExceptionSubscriber();
+     $subscriber->onException($event);
+@@ -87,7 +89,7 @@ class DefaultExceptionSubscriberTest extends UnitTestCase {
+       'X-Custom' => 'test',
+     ];
+     $exception = new HttpException(406, 'Houston, we have a problem', NULL, $headers);
+-    $event = new GetResponseForExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
++    $event = new ExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
+ 
+     $subscriber = new DefaultExceptionSubscriber();
+     $subscriber->onException($event);
+diff --git a/tests/src/Unit/JsonExceptionSubscriberTest.php b/tests/src/Unit/JsonExceptionSubscriberTest.php
+index ccd8320..e0df6a8 100644
+--- a/tests/src/Unit/JsonExceptionSubscriberTest.php
++++ b/tests/src/Unit/JsonExceptionSubscriberTest.php
+@@ -2,11 +2,12 @@
+ 
+ namespace Drupal\Tests\whoops\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Symfony\Component\HttpKernel\Event\ExceptionEvent;
+ use Drupal\Tests\UnitTestCase;
+ use Drupal\whoops\EventSubscriber\JsonExceptionSubscriber;
+ use Symfony\Component\HttpFoundation\Request;
+ use Symfony\Component\HttpFoundation\Response;
+-use Symfony\Component\HttpKernel\Event\GetResponseForExceptionEvent;
+ use Symfony\Component\HttpKernel\Exception\HttpException;
+ use Symfony\Component\HttpKernel\HttpKernelInterface;
+ 
+@@ -16,17 +17,18 @@ use Symfony\Component\HttpKernel\HttpKernelInterface;
+  */
+ class JsonExceptionSubscriberTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * The mocked HTTP kernel.
+    *
+-   * @var \Symfony\Component\HttpKernel\HttpKernelInterface
++   * @var HttpKernelInterface
+    */
+   protected $kernel;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $this->kernel = $this->prophesize(HttpKernelInterface::class)->reveal();
+@@ -40,7 +42,7 @@ class JsonExceptionSubscriberTest extends UnitTestCase {
+     $request->setRequestFormat('json');
+ 
+     $exception = new \RuntimeException('Houston, we have a problem');
+-    $event = new GetResponseForExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
++    $event = new ExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
+ 
+     $subscriber = new JsonExceptionSubscriber();
+     $subscriber->onException($event);
+@@ -68,7 +70,7 @@ class JsonExceptionSubscriberTest extends UnitTestCase {
+     $request->setRequestFormat('hal_json');
+ 
+     $exception = new \RuntimeException('Houston, we have a problem');
+-    $event = new GetResponseForExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
++    $event = new ExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
+ 
+     $subscriber = new JsonExceptionSubscriber();
+     $subscriber->onException($event);
+@@ -96,7 +98,7 @@ class JsonExceptionSubscriberTest extends UnitTestCase {
+     $request->setRequestFormat('html');
+ 
+     $exception = new \Exception('Houston, we have a problem');
+-    $event = new GetResponseForExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
++    $event = new ExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
+ 
+     $subscriber = new JsonExceptionSubscriber();
+     $subscriber->onException($event);
+@@ -116,7 +118,7 @@ class JsonExceptionSubscriberTest extends UnitTestCase {
+       'X-Custom' => 'test',
+     ];
+     $exception = new HttpException(406, 'Houston, we have a problem', NULL, $headers);
+-    $event = new GetResponseForExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
++    $event = new ExceptionEvent($this->kernel, $request, HttpKernelInterface::MASTER_REQUEST, $exception);
+ 
+     $subscriber = new JsonExceptionSubscriber();
+     $subscriber->onException($event);

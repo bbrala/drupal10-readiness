@@ -1,0 +1,592 @@
+diff --git a/search_api_solr_multilingual.drush.inc b/search_api_solr_multilingual.drush.inc
+index 3be434e..0bc4149 100644
+--- a/search_api_solr_multilingual.drush.inc
++++ b/search_api_solr_multilingual.drush.inc
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\search_api_solr_multilingual\Controller\SolrFieldTypeListBuilder;
+ use Drupal\search_api\Entity\Server;
+ 
+ /**
+@@ -52,7 +53,7 @@ function drush_search_api_solr_multilingual_delete_and_reinstall_all_field_types
+  *   The targeted Solr version.
+  */
+ function drush_search_api_solr_multilingual_get_server_config($server_id, $file_name, $solr_version = NULL) {
+-  /** @var Drupal\search_api_solr_multilingual\Controller\SolrFieldTypeListBuilder $list_builder */
++  /** @var SolrFieldTypeListBuilder $list_builder */
+   $list_builder = Drupal::entityTypeManager()->getListBuilder('solr_field_type');
+   $server = Server::load($server_id);
+   if ($solr_version) {
+diff --git a/search_api_solr_multilingual.install b/search_api_solr_multilingual.install
+index a437545..22c74b5 100644
+--- a/search_api_solr_multilingual.install
++++ b/search_api_solr_multilingual.install
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\search_api\ServerInterface;
++use Drupal\search_api_solr_multilingual\SolrMultilingualBackendInterface;
+ /**
+  * @file
+  * Install, update, and uninstall functions for Search API Multilingual Solr.
+@@ -14,7 +16,7 @@ function search_api_solr_multilingual_requirements($phase) {
+   if ($phase == 'runtime') {
+ 
+     $storage = \Drupal::entityTypeManager()->getStorage('search_api_server');
+-    /** @var \Drupal\search_api\ServerInterface[] $servers */
++    /** @var ServerInterface[] $servers */
+     if ($servers = $storage->loadByProperties(['backend' => 'search_api_solr_multilingual'])) {
+       foreach ($servers as $server) {
+         $key = 'search_api_solr_multilingual_' . $server->id();
+@@ -28,7 +30,7 @@ function search_api_solr_multilingual_requirements($phase) {
+           ]),
+         ];
+ 
+-        /** @var \Drupal\search_api_solr_multilingual\SolrMultilingualBackendInterface $backend */
++        /** @var SolrMultilingualBackendInterface $backend */
+         $backend = $server->getBackend();
+         if ($backend->isAvailable()) {
+           $stats = $backend->getSchemaLanguageStatistics();
+diff --git a/search_api_solr_multilingual.module b/search_api_solr_multilingual.module
+index f3ccce2..8df8216 100644
+--- a/search_api_solr_multilingual.module
++++ b/search_api_solr_multilingual.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Config\ConfigInstallerInterface;
+ /**
+  * @file
+  * Contains search_api_solr_multilingual.module.
+@@ -39,7 +40,7 @@ function search_api_solr_multilingual_delete_and_reinstall_all_field_types() {
+   $storage = \Drupal::entityTypeManager()->getStorage('solr_field_type');
+   $storage->delete($storage->loadMultiple());
+ 
+-  /** @var \Drupal\Core\Config\ConfigInstallerInterface $config_installer */
++  /** @var ConfigInstallerInterface $config_installer */
+   $config_installer = \Drupal::service('config.installer');
+   $config_installer->installDefaultConfig('module', 'search_api_solr_multilingual');
+   $restrict_by_dependency = [
+diff --git a/search_api_solr_multilingual.post_update.php b/search_api_solr_multilingual.post_update.php
+index 5ff3cf8..0a32f05 100644
+--- a/search_api_solr_multilingual.post_update.php
++++ b/search_api_solr_multilingual.post_update.php
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\search_api\ServerInterface;
++use Drupal\Core\Config\ConfigInstallerInterface;
+ /**
+  * Re-installs all Solr Field Types to be compatible to the latest structure.
+  */
+@@ -13,7 +15,7 @@ function search_api_solr_multilingual_post_update_replace_solr_field_types() {
+  */
+ function search_api_solr_multilingual_post_update_fix_backend_ids() {
+   $storage = \Drupal::entityTypeManager()->getStorage('search_api_server');
+-  /** @var \Drupal\search_api\ServerInterface[] $servers */
++  /** @var ServerInterface[] $servers */
+   $servers = $storage->loadByProperties(['backend' => 'search_api_solr.multilingual']);
+   foreach ($servers as $server) {
+     $server->set('backend', 'search_api_solr_multilingual');
+@@ -40,7 +42,7 @@ function search_api_solr_multilingual_post_update_replace_solr_field_type_el2()
+     $storage->delete([$field_type]);
+   }
+ 
+-  /** @var \Drupal\Core\Config\ConfigInstallerInterface $config_installer */
++  /** @var ConfigInstallerInterface $config_installer */
+   $config_installer = \Drupal::service('config.installer');
+   $config_installer->installDefaultConfig('module', 'search_api_solr_multilingual');
+   $restrict_by_dependency = [
+diff --git a/src/Access/LocalActionAccessCheck.php b/src/Access/LocalActionAccessCheck.php
+index 35a4106..67f5fb2 100644
+--- a/src/Access/LocalActionAccessCheck.php
++++ b/src/Access/LocalActionAccessCheck.php
+@@ -16,7 +16,7 @@ class LocalActionAccessCheck implements AccessInterface {
+   /**
+    * A custom access check.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   Run access checks for this account.
+    */
+   public function access(AccountInterface $account, ServerInterface $search_api_server = NULL) {
+diff --git a/src/Controller/SolrFieldTypeController.php b/src/Controller/SolrFieldTypeController.php
+index 6181113..e907e75 100644
+--- a/src/Controller/SolrFieldTypeController.php
++++ b/src/Controller/SolrFieldTypeController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\search_api_solr_multilingual\Controller;
+ 
++use ZipStream\ZipStream;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\search_api\ServerInterface;
+ use Symfony\Component\HttpFoundation\Response;
+@@ -15,7 +16,7 @@ class SolrFieldTypeController extends ControllerBase {
+   /**
+    * Provides the listing page.
+    *
+-   * @param \Drupal\search_api\ServerInterface $search_api_server
++   * @param ServerInterface $search_api_server
+    *
+    * @return array
+    *   A render array as expected by drupal_render().
+@@ -27,7 +28,7 @@ class SolrFieldTypeController extends ControllerBase {
+   /**
+    * Provides an XML snippet containing all extra Solr field types.
+    *
+-   * @param \Drupal\search_api\ServerInterface $search_api_server
++   * @param ServerInterface $search_api_server
+    *
+    * @return array
+    *   A render array as expected by drupal_render().
+@@ -41,7 +42,7 @@ class SolrFieldTypeController extends ControllerBase {
+   /**
+    * Provides an XML snippet containing all extra Solr fields.
+    *
+-   * @param \Drupal\search_api\ServerInterface $search_api_server
++   * @param ServerInterface $search_api_server
+    *
+    * @return array
+    *   A render array as expected by drupal_render().
+@@ -55,7 +56,7 @@ class SolrFieldTypeController extends ControllerBase {
+   /**
+    * Provides a zip archive containing a complete Solr configuration.
+    *
+-   * @param \Drupal\search_api\ServerInterface $search_api_server
++   * @param ServerInterface $search_api_server
+    *
+    * @return array
+    *   A render array as expected by drupal_render().
+@@ -64,7 +65,7 @@ class SolrFieldTypeController extends ControllerBase {
+     ob_clean();
+ 
+     try {
+-      /** @var \ZipStream\ZipStream $zip */
++      /** @var ZipStream $zip */
+       $zip = $this->getListBuilder($search_api_server)->getConfigZip();
+       $zip->finish();
+ 
+@@ -84,9 +85,9 @@ class SolrFieldTypeController extends ControllerBase {
+    *
+    * Ensures that the list builder uses the correct Solr backend.
+    *
+-   * @param \Drupal\search_api\ServerInterface $search_api_server
++   * @param ServerInterface $search_api_server
+    *
+-   * @return \Drupal\search_api_solr_multilingual\Controller\SolrFieldTypeListBuilder
++   * @return SolrFieldTypeListBuilder
+    */
+   protected function getListBuilder(ServerInterface $search_api_server) {
+     /** @var SolrFieldTypeListBuilder $list_builder */
+diff --git a/src/Controller/SolrFieldTypeListBuilder.php b/src/Controller/SolrFieldTypeListBuilder.php
+index 440251b..aeb95f8 100644
+--- a/src/Controller/SolrFieldTypeListBuilder.php
++++ b/src/Controller/SolrFieldTypeListBuilder.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\search_api_solr_multilingual\Controller;
+ 
++use Drupal\search_api_solr_multilingual\SolrMultilingualBackendInterface;
++use Drupal\search_api_solr_multilingual\SolrFieldTypeInterface;
++use Drupal\search_api_solr\SolrBackendInterface;
++use Drupal\Core\Config\Entity\ConfigEntityStorageInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityListBuilder;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\search_api\ServerInterface;
+@@ -14,7 +18,7 @@ use ZipStream\ZipStream;
+ class SolrFieldTypeListBuilder extends ConfigEntityListBuilder {
+ 
+   /**
+-   * @var \Drupal\search_api_solr_multilingual\SolrMultilingualBackendInterface
++   * @var SolrMultilingualBackendInterface
+    */
+   protected $backend;
+ 
+@@ -43,7 +47,7 @@ class SolrFieldTypeListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $solr_field_type) {
+-    /** @var \Drupal\search_api_solr_multilingual\SolrFieldTypeInterface $solr_field_type */
++    /** @var SolrFieldTypeInterface $solr_field_type */
+     $domains = $solr_field_type->getDomains();
+     if (empty($domains)) {
+       $domains = ['generic'];
+@@ -74,7 +78,7 @@ class SolrFieldTypeListBuilder extends ConfigEntityListBuilder {
+       $domain = 'generic';
+       $warning = FALSE;
+       try {
+-        /** @var \Drupal\search_api_solr\SolrBackendInterface $backend */
++        /** @var SolrBackendInterface $backend */
+         $backend = $this->getBackend();
+         $domain = $backend->getDomain();
+         $solr_version = $backend->getSolrConnector()->getSolrVersion();
+@@ -88,7 +92,7 @@ class SolrFieldTypeListBuilder extends ConfigEntityListBuilder {
+         $warning = TRUE;
+       }
+       $entity_ids = $this->getEntityIds();
+-      /** @var \Drupal\Core\Config\Entity\ConfigEntityStorageInterface $storage */
++      /** @var ConfigEntityStorageInterface $storage */
+       $storage = $this->getStorage();
+       $entities = $storage->loadMultipleOverrideFree($entity_ids);
+ 
+@@ -97,7 +101,7 @@ class SolrFieldTypeListBuilder extends ConfigEntityListBuilder {
+       // values for managed_schema, minimum_solr_version and domains.
+       $selection = [];
+       foreach ($entities as $key => $solr_field_type) {
+-        /** @var \Drupal\search_api_solr_multilingual\SolrFieldTypeInterface $solr_field_type */
++        /** @var SolrFieldTypeInterface $solr_field_type */
+         $version = $solr_field_type->getMinimumSolrVersion();
+         $domains = $solr_field_type->getDomains();
+         if (
+@@ -168,7 +172,7 @@ class SolrFieldTypeListBuilder extends ConfigEntityListBuilder {
+    * @inheritdoc
+    */
+   public function getDefaultOperations(EntityInterface $solr_field_type) {
+-    /** @var \Drupal\search_api_solr_multilingual\SolrFieldTypeInterface $solr_field_type */
++    /** @var SolrFieldTypeInterface $solr_field_type */
+     $operations = parent::getDefaultOperations($solr_field_type);
+ 
+     if ($solr_field_type->access('view') && $solr_field_type->hasLinkTemplate('export-form')) {
+@@ -199,7 +203,7 @@ class SolrFieldTypeListBuilder extends ConfigEntityListBuilder {
+       $indentation .= '  ';
+     }
+     $xml = $this->getExtraFileHead($target_solr_version, 'types');
+-    /** @var \Drupal\search_api_solr_multilingual\SolrFieldTypeInterface $solr_field_type */
++    /** @var SolrFieldTypeInterface $solr_field_type */
+     foreach ($this->load() as $solr_field_type) {
+       if (!$solr_field_type->isManagedSchema()) {
+         $xml .= "\n$indentation" . str_replace("\n", "\n$indentation", $solr_field_type->getFieldTypeAsXml());
+@@ -228,7 +232,7 @@ class SolrFieldTypeListBuilder extends ConfigEntityListBuilder {
+       $indentation .= '  ';
+     }
+ 
+-    /** @var \Drupal\search_api_solr_multilingual\SolrFieldTypeInterface $solr_field_type */
++    /** @var SolrFieldTypeInterface $solr_field_type */
+     foreach ($this->load() as $solr_field_type) {
+       if (!$solr_field_type->isManagedSchema()) {
+         foreach ($solr_field_type->getDynamicFields() as $dynamic_field) {
+@@ -315,16 +319,16 @@ EOD;
+   }
+ 
+   /**
+-   * @return \ZipStream\ZipStream
++   * @return ZipStream
+    */
+   public function getConfigZip() {
+     $solr_field_types = $this->load();
+ 
+-    /** @var \Drupal\search_api_solr\SolrBackendInterface $backend */
++    /** @var SolrBackendInterface $backend */
+     $backend = $this->getBackend();
+     $connector = $backend->getSolrConnector();
+     $solr_branch = $connector->getSolrBranch($this->assumed_minimum_version);
+-    $search_api_solr_conf_path = drupal_get_path('module', 'search_api_solr') . '/solr-conf/' . $solr_branch;
++    $search_api_solr_conf_path = \Drupal::service('extension.list.module')->getPath('search_api_solr') . '/solr-conf/' . $solr_branch;
+     $solrcore_properties = parse_ini_file($search_api_solr_conf_path . '/solrcore.properties', FALSE, INI_SCANNER_RAW);
+     $schema = file_get_contents($search_api_solr_conf_path . '/schema.xml');
+     $schema = preg_replace('@<fieldType name="text_und".*?</fieldType>@ms', '<!-- fieldType text_und is moved to schema_extra_types.xml by Search API Multilingual Solr -->', $schema);
+@@ -336,7 +340,7 @@ EOD;
+     $zip->addFile('schema_extra_fields.xml', $this->generateSchemaExtraFieldsXml());
+ 
+     // Add language specific text files.
+-    /** @var \Drupal\search_api_solr_multilingual\SolrFieldTypeInterface $solr_field_type */
++    /** @var SolrFieldTypeInterface $solr_field_type */
+     foreach ($solr_field_types as $solr_field_type) {
+       $text_files = $solr_field_type->getTextFiles();
+       foreach ($text_files as $text_file_name => $text_file) {
+@@ -383,7 +387,7 @@ EOD;
+   }
+ 
+   /**
+-   * @return \Drupal\search_api_solr_multilingual\SolrMultilingualBackendInterface
++   * @return SolrMultilingualBackendInterface
+    */
+   protected function getBackend() {
+     return $this->backend;
+diff --git a/src/EventSubscriber/ConfigSubscriber.php b/src/EventSubscriber/ConfigSubscriber.php
+index 22accc3..5975f3d 100644
+--- a/src/EventSubscriber/ConfigSubscriber.php
++++ b/src/EventSubscriber/ConfigSubscriber.php
+@@ -16,12 +16,12 @@ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ class ConfigSubscriber implements EventSubscriberInterface {
+ 
+   /**
+-   * @var \Drupal\Core\Config\ConfigInstallerInterface
++   * @var ConfigInstallerInterface
+    */
+   protected $configInstaller;
+ 
+   /**
+-   * @param \Drupal\Core\Config\ConfigInstallerInterface $configInstaller
++   * @param ConfigInstallerInterface $configInstaller
+    *   The Config Installer.
+    */
+   public function __construct(ConfigInstallerInterface $configInstaller) {
+@@ -39,7 +39,7 @@ class ConfigSubscriber implements EventSubscriberInterface {
+   /**
+    * Installs all available Solr Field Types for a new language.
+    *
+-   * @param \Drupal\Core\Config\ConfigCrudEvent $event
++   * @param ConfigCrudEvent $event
+    */
+   public function onConfigSave(ConfigCrudEvent $event) {
+     $saved_config = $event->getConfig();
+diff --git a/src/Form/SolrFieldTypeExportForm.php b/src/Form/SolrFieldTypeExportForm.php
+index 85e1130..85c476e 100644
+--- a/src/Form/SolrFieldTypeExportForm.php
++++ b/src/Form/SolrFieldTypeExportForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\search_api_solr_multilingual\Form;
+ 
++use Drupal\search_api_solr_multilingual\Entity\SolrFieldType;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -14,7 +15,7 @@ class SolrFieldTypeExportForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function form(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\search_api_solr_multilingual\Entity\SolrFieldType $solr_field_type */
++    /** @var SolrFieldType $solr_field_type */
+     $solr_field_type = $this->entity;
+ 
+     $form['id'] = array(
+@@ -76,10 +77,10 @@ class SolrFieldTypeExportForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\search_api_solr_multilingual\Entity\SolrFieldType $solr_field_type */
++    /** @var SolrFieldType $solr_field_type */
+     $solr_field_type = $this->entity;
+ 
+-    $form_state->setRedirectUrl($solr_field_type->urlInfo('collection'));
++    $form_state->setRedirectUrl($solr_field_type->toUrl('collection'));
+   }
+ 
+ }
+diff --git a/src/Plugin/search_api/backend/AbstractSearchApiSolrMultilingualBackend.php b/src/Plugin/search_api/backend/AbstractSearchApiSolrMultilingualBackend.php
+index 2a0ef4c..3e33f85 100644
+--- a/src/Plugin/search_api/backend/AbstractSearchApiSolrMultilingualBackend.php
++++ b/src/Plugin/search_api/backend/AbstractSearchApiSolrMultilingualBackend.php
+@@ -202,7 +202,7 @@ abstract class AbstractSearchApiSolrMultilingualBackend extends SearchApiSolrBac
+         $solr_fields = implode(' ', $solarium_query->getMltFields());
+       }
+       else {
+-        /** @var \Solarium\QueryType\Select\Query\Query $solarium_query */
++        /** @var Query $solarium_query */
+         $edismax = $solarium_query->getEDisMax();
+         $solr_fields = $edismax->getQueryFields();
+         $hl = $solarium_query->getHighlighting();
+@@ -296,7 +296,7 @@ abstract class AbstractSearchApiSolrMultilingualBackend extends SearchApiSolrBac
+    *   The lanaguage to get the mapping for.
+    * @param array $solr_fields
+    *   The mapping from Drupal to Solr field names.
+-   * @param \Drupal\search_api\IndexInterface $index_fields
++   * @param IndexInterface $index_fields
+    *   The fields handled by the curent index.
+    *
+    * @return array
+@@ -387,7 +387,7 @@ abstract class AbstractSearchApiSolrMultilingualBackend extends SearchApiSolrBac
+    * @param \Solarium\QueryType\Update\Query\Document\Document[] $documents
+    *   An array of \Solarium\QueryType\Update\Query\Document\Document objects
+    *   ready to be indexed, generated from $items array.
+-   * @param \Drupal\search_api\IndexInterface $index
++   * @param IndexInterface $index
+    *   The search index for which items are being indexed.
+    * @param array $items
+    *   An array of items being indexed.
+@@ -468,7 +468,7 @@ abstract class AbstractSearchApiSolrMultilingualBackend extends SearchApiSolrBac
+    * @return bool
+    *   True if an element of the given kind and name exists, false otherwise.
+    *
+-   * @throws \Drupal\search_api_solr_multilingual\SearchApiSolrMultilingualException
++   * @throws SearchApiSolrMultilingualException
+    */
+   protected function isPartOfSchema($kind, $name) {
+     static $previous_calls;
+diff --git a/src/Plugin/search_api/backend/SearchApiSolrMultilingualManagedSchemaBackend.php b/src/Plugin/search_api/backend/SearchApiSolrMultilingualManagedSchemaBackend.php
+index cda0fad..7ce52b8 100644
+--- a/src/Plugin/search_api/backend/SearchApiSolrMultilingualManagedSchemaBackend.php
++++ b/src/Plugin/search_api/backend/SearchApiSolrMultilingualManagedSchemaBackend.php
+@@ -56,7 +56,7 @@ class SearchApiSolrMultilingualManagedSchemaBackend extends AbstractSearchApiSol
+     $field_type_name = 'm_' . Utility::decodeSolrName($solr_field_type_name) . '_5_2_0';
+ 
+     // Get the field type definition from Drupal.
+-    /** @var \Drupal\search_api_solr_multilingual\Entity\SolrFieldType $field_type_entity */
++    /** @var SolrFieldType $field_type_entity */
+     $field_type_entity = SolrFieldType::load($field_type_name);
+     if (!$field_type_entity) {
+       throw new SearchApiSolrMultilingualException("There's no field type $field_type_name.");
+diff --git a/tests/src/Functional/IntegrationTest.php b/tests/src/Functional/IntegrationTest.php
+index e0cffbf..893fbbb 100644
+--- a/tests/src/Functional/IntegrationTest.php
++++ b/tests/src/Functional/IntegrationTest.php
+@@ -24,12 +24,13 @@ class IntegrationTest extends \Drupal\Tests\search_api_solr\Functional\Integrati
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+   }
+ 
+   /**
+    * {@inheritdoc}
++   * @doesNotPerformAssertions
+    */
+   public function testFramework() {
+     parent::testFramework();
+diff --git a/tests/src/Functional/ViewsTest.php b/tests/src/Functional/ViewsTest.php
+index 28e6c23..54eb9b4 100644
+--- a/tests/src/Functional/ViewsTest.php
++++ b/tests/src/Functional/ViewsTest.php
+@@ -23,7 +23,7 @@ class ViewsTest extends \Drupal\Tests\search_api\Functional\ViewsTest {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     // Skip parent::setUp().
+     SearchApiBrowserTestBase::setUp();
+ 
+@@ -50,7 +50,7 @@ class ViewsTest extends \Drupal\Tests\search_api\Functional\ViewsTest {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function tearDown() {
++  protected function tearDown(): void {
+     $index = Index::load($this->indexId);
+     $index->clear();
+     sleep(2);
+diff --git a/tests/src/Kernel/Processor/AddHierarchyTest.php b/tests/src/Kernel/Processor/AddHierarchyTest.php
+index 4a0dda7..714945b 100644
+--- a/tests/src/Kernel/Processor/AddHierarchyTest.php
++++ b/tests/src/Kernel/Processor/AddHierarchyTest.php
+@@ -29,7 +29,7 @@ class AddHierarchyTest extends \Drupal\Tests\search_api\Kernel\Processor\AddHier
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp($processor = NULL) {
++  public function setUp($processor = NULL): void {
+     parent::setUp();
+     $this->enableSolrServer('search_api_solr_multilingual_test', '/config/install/search_api.server.solr_multilingual_search_server.yml');
+   }
+diff --git a/tests/src/Kernel/Processor/ContentAccessTest.php b/tests/src/Kernel/Processor/ContentAccessTest.php
+index 03473f3..4cd8865 100644
+--- a/tests/src/Kernel/Processor/ContentAccessTest.php
++++ b/tests/src/Kernel/Processor/ContentAccessTest.php
+@@ -27,7 +27,7 @@ class ContentAccessTest extends \Drupal\Tests\search_api\Kernel\Processor\Conten
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp($processor = NULL) {
++  public function setUp($processor = NULL): void {
+     parent::setUp();
+     $this->enableSolrServer('search_api_solr_multilingual_test', '/config/install/search_api.server.solr_multilingual_search_server.yml');
+   }
+diff --git a/tests/src/Kernel/SearchApiSolrMultilingualLocationTest.php b/tests/src/Kernel/SearchApiSolrMultilingualLocationTest.php
+index dd07464..c8f08ca 100644
+--- a/tests/src/Kernel/SearchApiSolrMultilingualLocationTest.php
++++ b/tests/src/Kernel/SearchApiSolrMultilingualLocationTest.php
+@@ -40,7 +40,7 @@ class SearchApiSolrMultilingualLocationTest extends SearchApiSolrLocationTest {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     BackendTestBase::setUp();
+ 
+     $this->installConfig([
+diff --git a/tests/src/Kernel/SearchApiSolrMultilingualTest.php b/tests/src/Kernel/SearchApiSolrMultilingualTest.php
+index cf8b39e..156923a 100644
+--- a/tests/src/Kernel/SearchApiSolrMultilingualTest.php
++++ b/tests/src/Kernel/SearchApiSolrMultilingualTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\search_api_solr_multilingual\Kernel;
+ 
++use Psr\Log\LoggerInterface;
++use Drupal\search_api_solr\SolrBackendInterface;
++use Drupal\search_api_solr_multilingual\Controller\SolrFieldTypeListBuilder;
+ use Drupal\Core\Language\LanguageInterface;
+ use Drupal\search_api\Entity\Server;
+ use Drupal\search_api\Utility\Utility;
+@@ -43,14 +46,14 @@ class SearchApiSolrMultilingualTest extends SearchApiSolrTest {
+   /**
+    * The mocked logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     BackendTestBase::setUp();
+ 
+     $this->installEntitySchema('user');
+@@ -67,6 +70,7 @@ class SearchApiSolrMultilingualTest extends SearchApiSolrTest {
+ 
+   /**
+    * {@inheritdoc}
++   * @doesNotPerformAssertions
+    */
+   public function testAutocomplete() {
+     // @todo
+@@ -76,7 +80,7 @@ class SearchApiSolrMultilingualTest extends SearchApiSolrTest {
+    * Tests the conversion of language aware queries into Solr queries.
+    */
+   public function testQueryConditionsAndLanguageFilter() {
+-    /** @var \Drupal\search_api_solr\SolrBackendInterface $backend */
++    /** @var SolrBackendInterface $backend */
+     $backend = Server::load($this->serverId)->getBackend();
+     list($fields, $mapping) = $this->getFieldsAndMapping($backend);
+     $options = [];
+@@ -103,9 +107,10 @@ class SearchApiSolrMultilingualTest extends SearchApiSolrTest {
+ 
+   /**
+    * Tests classic multilingual schema.
++   * @doesNotPerformAssertions
+    */
+   public function testClassicMultilingualSchema() {
+-    /** @var Drupal\search_api_solr_multilingual\Controller\SolrFieldTypeListBuilder $list_builder */
++    /** @var SolrFieldTypeListBuilder $list_builder */
+     $list_builder = \Drupal::entityTypeManager()
+       ->getListBuilder('solr_field_type');
+ 
+diff --git a/tests/src/Kernel/SolrFieldTypeTest.php b/tests/src/Kernel/SolrFieldTypeTest.php
+index f9389c6..d9d03ca 100644
+--- a/tests/src/Kernel/SolrFieldTypeTest.php
++++ b/tests/src/Kernel/SolrFieldTypeTest.php
+@@ -43,10 +43,10 @@ class SolrFieldTypeTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+-    $this->configNames = array_keys(\Drupal::service('file_system')->scanDirectory(drupal_get_path('module', 'search_api_solr_multilingual') . '/config', '/search_api_solr_multilingual.solr_field_type.text_/', ['key' => 'name']));
++    $this->configNames = array_keys(\Drupal::service('file_system')->scanDirectory(\Drupal::service('extension.list.module')->getPath('search_api_solr_multilingual') . '/config', '/search_api_solr_multilingual.solr_field_type.text_/', ['key' => 'name']));
+ 
+     foreach ($this->configNames as $config_name) {
+       preg_match('/search_api_solr_multilingual.solr_field_type.text_(.*)_\d+_\d+_\d+/', $config_name, $matches);
+diff --git a/tests/src/Kernel/UtilitiesTest.php b/tests/src/Kernel/UtilitiesTest.php
+index e9bfc5e..f05c727 100644
+--- a/tests/src/Kernel/UtilitiesTest.php
++++ b/tests/src/Kernel/UtilitiesTest.php
+@@ -24,7 +24,7 @@ class UtilitiesTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+   }
+ 

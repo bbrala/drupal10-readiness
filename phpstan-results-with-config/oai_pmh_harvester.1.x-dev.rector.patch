@@ -1,0 +1,481 @@
+diff --git a/oai_pmh_harvester.info.yml b/oai_pmh_harvester.info.yml
+index c8482a8..e986f94 100644
+--- a/oai_pmh_harvester.info.yml
++++ b/oai_pmh_harvester.info.yml
+@@ -1,6 +1,5 @@
+ name: 'OAI-PMH Harvester'
+ type: module
+ description: 'Harvest bibliographic records from an OAI-PMH source, like Koha, and caches them in a table so we can refer to them from fields.'
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^8 || ^9 || ^10
+ package: 'OAI-PMH Harvester'
+diff --git a/oai_pmh_harvester.module b/oai_pmh_harvester.module
+index ef81a1c..1369b1b 100644
+--- a/oai_pmh_harvester.module
++++ b/oai_pmh_harvester.module
+@@ -1,5 +1,10 @@
+ <?php
+ 
++use Drupal\oai_pmh_harvester\Exceptions\ConfigException;
++use Drupal\oai_pmh_harvester\Exceptions\DatabaseException;
++use Drupal\oai_pmh_harvester\Exceptions\EndpointException;
++use Phpoaipmh\Exception\OaipmhException;
++use Scriptotek\Marc\Exceptions\RecordNotFound;
+ /**
+  * @file
+  * Contains oai_pmh_harvester.module.
+@@ -27,11 +32,11 @@ function oai_pmh_harvester_help($route_name, RouteMatchInterface $route_match) {
+ /**
+  * Implements hook_cron().
+  *
+- * @throws \Drupal\oai_pmh_harvester\Exceptions\ConfigException
+- * @throws \Drupal\oai_pmh_harvester\Exceptions\DatabaseException
+- * @throws \Drupal\oai_pmh_harvester\Exceptions\EndpointException
+- * @throws \Phpoaipmh\Exception\OaipmhException
+- * @throws \Scriptotek\Marc\Exceptions\RecordNotFound
++ * @throws ConfigException
++ * @throws DatabaseException
++ * @throws EndpointException
++ * @throws OaipmhException
++ * @throws RecordNotFound
+  */
+ function oai_pmh_harvester_cron(): void {
+   $config = Drupal::config('oai_pmh_harvester.settings');
+diff --git a/src/Batch/ReDecodeAll.php b/src/Batch/ReDecodeAll.php
+index ee96701..1eb9b8a 100644
+--- a/src/Batch/ReDecodeAll.php
++++ b/src/Batch/ReDecodeAll.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\oai_pmh_harvester\Batch;
+ 
++use Scriptotek\Marc\Exceptions\RecordNotFound;
++use Drupal\oai_pmh_harvester\Service\DecoderService;
+ use Drupal;
+ use Drupal\Core\Database\Database;
+ use Drupal\oai_pmh_harvester\Util;
+@@ -119,12 +121,12 @@ class ReDecodeAll {
+    * @param object $record
+    *   The record to re-decode.
+    *
+-   * @throws \Scriptotek\Marc\Exceptions\RecordNotFound
++   * @throws RecordNotFound
+    */
+   private static function processOne(object $record): void {
+     // Decode the data and extract the authors and titles.
+     $xml = new SimpleXMLElement($record->harvested_data);
+-    /** @var \Drupal\oai_pmh_harvester\Service\DecoderService $decoder */
++    /** @var DecoderService $decoder */
+     $decoder = Drupal::service('oai_pmh_harvester.decoder');
+     $csl = $decoder->decodeOne($xml->metadata->record);
+ 
+diff --git a/src/Event/HarvestPreMergeEvent.php b/src/Event/HarvestPreMergeEvent.php
+index 9feb9d6..29dbbaf 100644
+--- a/src/Event/HarvestPreMergeEvent.php
++++ b/src/Event/HarvestPreMergeEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\oai_pmh_harvester\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use SimpleXMLElement;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * An event that should fire just before harvested data is merged into the DB.
+diff --git a/src/Form/InspectForm.php b/src/Form/InspectForm.php
+index f1cc3ad..1e4d53e 100644
+--- a/src/Form/InspectForm.php
++++ b/src/Form/InspectForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\oai_pmh_harvester\Form;
+ 
++use Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -19,32 +20,32 @@ class InspectForm extends FormBase {
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\Messenger
++   * @var Messenger
+    */
+   protected $messenger;
+ 
+   /**
+    * The state.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $db;
+ 
+   /**
+    * Inspect form constructor.
+    *
+-   * @param \Drupal\Core\Messenger\Messenger $messenger
++   * @param Messenger $messenger
+    *   The messenger.
+-   * @param \Drupal\Core\State\State $state
++   * @param State $state
+    *   The state.
+-   * @param \Drupal\Core\Database\Connection $db
++   * @param Connection $db
+    *   The database connection.
+    */
+   public function __construct(
+@@ -60,7 +61,7 @@ class InspectForm extends FormBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException
++   * @throws ServiceCircularReferenceException
+    */
+   public static function create(ContainerInterface $container) {
+     return new static(
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index d811214..58f67ab 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\oai_pmh_harvester\Form;
+ 
++use Drupal\Core\Config\ConfigValueException;
+ use DateInterval;
+ use Drupal\Core\Config\TypedConfigManagerInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+@@ -100,7 +101,7 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * {@inheritDoc}
+    *
+-   * @throws \Drupal\Core\Config\ConfigValueException
++   * @throws ConfigValueException
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     $config = $this->getConfig();
+diff --git a/src/Form/StatusForm.php b/src/Form/StatusForm.php
+index 4f70b40..3e1eba9 100644
+--- a/src/Form/StatusForm.php
++++ b/src/Form/StatusForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\oai_pmh_harvester\Form;
+ 
++use Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException;
+ use DateTimeInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Form\FormBase;
+@@ -24,25 +25,25 @@ class StatusForm extends FormBase {
+   /**
+    * The state.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected State $state;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected Connection $db;
+ 
+   /**
+    * Status form constructor.
+    *
+-   * @param \Drupal\Core\Messenger\Messenger $messenger
++   * @param Messenger $messenger
+    *   The messenger.
+-   * @param \Drupal\Core\State\State $state
++   * @param State $state
+    *   The state.
+-   * @param \Drupal\Core\Database\Connection $db
++   * @param Connection $db
+    *   The database connection.
+    */
+   public function __construct(
+@@ -58,7 +59,7 @@ class StatusForm extends FormBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Symfony\Component\DependencyInjection\Exception\ServiceCircularReferenceException
++   * @throws ServiceCircularReferenceException
+    */
+   public static function create(ContainerInterface $container) {
+     return new static(
+diff --git a/src/Harvester.php b/src/Harvester.php
+index 27135d5..c7f0c98 100644
+--- a/src/Harvester.php
++++ b/src/Harvester.php
+@@ -4,6 +4,8 @@
+ namespace Drupal\oai_pmh_harvester;
+ 
+ 
++use Drupal\oai_pmh_harvester\Exceptions\DatabaseException;
++use Scriptotek\Marc\Exceptions\RecordNotFound;
+ use DateInterval;
+ use DateTimeImmutable;
+ use DateTimeInterface;
+@@ -42,7 +44,7 @@ class Harvester {
+   private ?DateTimeImmutable $last;
+ 
+   /**
+-   * @var \Drupal\oai_pmh_harvester\Service\HarvesterService
++   * @var HarvesterService
+    *
+    * The harvester service.
+    *
+@@ -62,7 +64,7 @@ class Harvester {
+    * @param \DateTimeImmutable|null $last
+    *   The end ("until" value) of the last harvest run's range.
+    *   Null if the harvester should start from the very beginning.
+-   * @param \Drupal\oai_pmh_harvester\Service\HarvesterService $service
++   * @param HarvesterService $service
+    *   The harvester service. Maybe this is a misnomer. Anyway, it parses the
+    *   harvested XML results and writes them to the database.
+    */
+@@ -122,10 +124,10 @@ class Harvester {
+   /**
+    * Perform one harvest run.
+    *
+-   * @throws \Drupal\oai_pmh_harvester\Exceptions\DatabaseException
+-   * @throws \Drupal\oai_pmh_harvester\Exceptions\EndpointException
+-   * @throws \Phpoaipmh\Exception\OaipmhException
+-   * @throws \Scriptotek\Marc\Exceptions\RecordNotFound
++   * @throws DatabaseException
++   * @throws EndpointException
++   * @throws OaipmhException
++   * @throws RecordNotFound
+    */
+   public function run() {
+     [$harvest_from, $harvest_until] = $this->getHarvestRange();
+@@ -180,7 +182,7 @@ class Harvester {
+    * @return \DateTimeImmutable[]
+    *   An array of DateTimeImmutable objects: [$harvest_from, $harvest_until].
+    *
+-   * @throws \Drupal\oai_pmh_harvester\Exceptions\EndpointException
++   * @throws EndpointException
+    */
+   public function getHarvestRange(): array {
+     // If harvest_from is NULL, get the earliestDatestamp from "Identify".
+@@ -210,7 +212,7 @@ class Harvester {
+    *
+    * @return \DateTimeImmutable
+    *
+-   * @throws \Drupal\oai_pmh_harvester\Exceptions\EndpointException
++   * @throws EndpointException
+    */
+   public function getEarliestDatestamp(): DateTimeImmutable {
+     $identify = $this->endpoint->identify();
+diff --git a/src/Service/DecoderService.php b/src/Service/DecoderService.php
+index 8f66ab2..b9eeda2 100644
+--- a/src/Service/DecoderService.php
++++ b/src/Service/DecoderService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\oai_pmh_harvester\Service;
+ 
++use Scriptotek\Marc\Exceptions\RecordNotFound;
+ use Drupal\oai_pmh_harvester\Event\HarvestPreMergeEvent;
+ use RudolfByker\PhpMarcCsl\MarcCslVariables;
+ use Scriptotek\Marc\Record;
+@@ -16,14 +17,14 @@ class DecoderService {
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   public $dispatcher;
+ 
+   /**
+    * DecoderService constructor.
+    *
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $dispatcher
++   * @param EventDispatcherInterface $dispatcher
+    *   The event dispatcher.
+    */
+   public function __construct(EventDispatcherInterface $dispatcher) {
+@@ -36,17 +37,17 @@ class DecoderService {
+    * @param \SimpleXMLElement $xml
+    *   The Marc XML record to decode.
+    *
+-   * @return \RudolfByker\PhpMarcCsl\MarcCslVariables
++   * @return MarcCslVariables
+    *   The decoded CSL data.
+    *
+-   * @throws \Scriptotek\Marc\Exceptions\RecordNotFound
++   * @throws RecordNotFound
+    *   When the provided XML element is not a MARC record.
+    */
+   public function decodeOne(SimpleXMLElement $xml): MarcCslVariables {
+     $csl = new MarcCslVariables(Record::fromSimpleXMLElement($xml));
+ 
+     // Allow other modules to modify the $csl object before we return it.
+-    $this->dispatcher->dispatch(HarvestPreMergeEvent::EVENT_NAME, new HarvestPreMergeEvent($xml, $csl));
++    $this->dispatcher->dispatch(new HarvestPreMergeEvent($xml, $csl), HarvestPreMergeEvent::EVENT_NAME);
+ 
+     return $csl;
+   }
+diff --git a/src/Service/HarvesterService.php b/src/Service/HarvesterService.php
+index a22fb9d..97799ba 100644
+--- a/src/Service/HarvesterService.php
++++ b/src/Service/HarvesterService.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\oai_pmh_harvester\Service;
+ 
++use Scriptotek\Marc\Exceptions\RecordNotFound;
+ use Drupal\Core\Database\Connection;
+ use Drupal\oai_pmh_harvester\Exceptions\DatabaseException;
+ use Drupal\oai_pmh_harvester\Util;
+@@ -16,23 +17,23 @@ class HarvesterService {
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   public Connection $db;
+ 
+   /**
+    * The Marc to CSL decoder service.
+    *
+-   * @var \Drupal\oai_pmh_harvester\Service\DecoderService
++   * @var DecoderService
+    */
+   public DecoderService $decoder;
+ 
+   /**
+    * HarvesterService constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $db
++   * @param Connection $db
+    *   The database connection to use.
+-   * @param \Drupal\oai_pmh_harvester\Service\DecoderService $decoder
++   * @param DecoderService $decoder
+    *   The Marc to CSL decoder service.
+    */
+   public function __construct(Connection $db, DecoderService $decoder) {
+@@ -50,9 +51,9 @@ class HarvesterService {
+    *   Multiple values: [id, action]
+    *   Action is one of "deleted" or "updated".
+    *
+-   * @throws \Drupal\oai_pmh_harvester\Exceptions\DatabaseException
++   * @throws DatabaseException
+    *   When the provided XML element does not contain a MARC record.
+-   * @throws \Scriptotek\Marc\Exceptions\RecordNotFound
++   * @throws RecordNotFound
+    *   When the DB merge query fails.
+    */
+   public function harvestOne(SimpleXMLElement $xml): array {
+diff --git a/src/Util.php b/src/Util.php
+index c01fab1..f64f0fc 100644
+--- a/src/Util.php
++++ b/src/Util.php
+@@ -80,7 +80,7 @@ class Util {
+    *
+    * Concatenates the title, container title and collection title.
+    *
+-   * @param \RudolfByker\PhpMarcCsl\MarcCslVariables $csl
++   * @param MarcCslVariables $csl
+    *   The Marc-CSL variables object.
+    *
+    * @return string
+@@ -100,7 +100,7 @@ class Util {
+    *
+    * Concatenates all authors from the given CSL Variables.
+    *
+-   * @param \RudolfByker\PhpMarcCsl\MarcCslVariables $csl
++   * @param MarcCslVariables $csl
+    *   The Marc-CSL variables object.
+    *
+    * @return string
+@@ -216,7 +216,7 @@ class Util {
+    *
+    * @return \DateInterval
+    *
+-   * @throws \Drupal\oai_pmh_harvester\Exceptions\ConfigException
++   * @throws ConfigException
+    */
+   public static function getHarvestInterval(): DateInterval {
+     $config_name = self::SETTINGS_KEY;
+@@ -245,7 +245,7 @@ class Util {
+    *
+    * @return string
+    *
+-   * @throws \Drupal\oai_pmh_harvester\Exceptions\ConfigException
++   * @throws ConfigException
+    */
+   public static function getOaiPmhUrl(): string {
+     $config_name = self::SETTINGS_KEY;
+@@ -262,8 +262,8 @@ class Util {
+   /**
+    * Get an OAI-PMH harvester, based on the current settings.
+    *
+-   * @return \Drupal\oai_pmh_harvester\Harvester
+-   * @throws \Drupal\oai_pmh_harvester\Exceptions\ConfigException
++   * @return Harvester
++   * @throws ConfigException
+    */
+   public static function getHarvester(): Harvester {
+     return new Harvester(
+diff --git a/tests/src/Functional/InstallTest.php b/tests/src/Functional/InstallTest.php
+index 9881bed..668c306 100644
+--- a/tests/src/Functional/InstallTest.php
++++ b/tests/src/Functional/InstallTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\oai_pmh_harvester\Functional;
+ 
++use Behat\Mink\Exception\ExpectationException;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -24,12 +25,15 @@ class InstallTest extends BrowserTestBase {
+   /**
+    * Make sure the site still works.
+    *
+-   * @throws \Behat\Mink\Exception\ExpectationException
++   * @throws ExpectationException
+    */
+   public function testLoadFront() {
+     $this->drupalGet('<front>');
+     $this->assertSession()->statusCodeEquals(200);
+-    $this->assertText('Log in');
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Verify the assertion: pageTextContains() for HTML responses, responseContains() for non-HTML responses.
++    // The passed text should be HTML decoded, exactly as a human sees it in the browser.
++    $this->assertSession()->pageTextContains('Log in');
+   }
+ 
+ }
+diff --git a/tests/src/Unit/UtilTest.php b/tests/src/Unit/UtilTest.php
+index b9a91fc..8d35b3f 100644
+--- a/tests/src/Unit/UtilTest.php
++++ b/tests/src/Unit/UtilTest.php
+@@ -81,9 +81,7 @@ class UtilTest extends UnitTestCase {
+     // Mock the Drupal::time container.
+     $container = new ContainerBuilder();
+     Drupal::setContainer($container);
+-    $mockTime = $this->getMockBuilder('Drupal\Component\Datetime\TimeInterface')
+-        ->disableOriginalConstructor()
+-        ->getMock();
++    $mockTime = $this->createMock('Drupal\Component\Datetime\TimeInterface');
+     $mockTime->method('getRequestTime')->willReturn(12345);
+     $container->set('datetime.time', $mockTime);
+ 

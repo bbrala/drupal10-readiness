@@ -1,0 +1,972 @@
+diff --git a/composer.json b/composer.json
+index 1b0897c..2b5fb5f 100644
+--- a/composer.json
++++ b/composer.json
+@@ -20,7 +20,7 @@
+     "league/oauth2-facebook": "^2",
+     "espresso-dev/instagram-basic-display-php": "^1.1",
+     "zoonman/linkedin-api-php-client": "dev-master",
+-    "drupal/core": "^8.7.7 || ^9"
++    "drupal/core": "^9.3 || ^10"
+   }
+   ,
+   "require-dev": {
+diff --git a/social_feed_fetcher.info.yml b/social_feed_fetcher.info.yml
+index 77cac3d..56a7419 100644
+--- a/social_feed_fetcher.info.yml
++++ b/social_feed_fetcher.info.yml
+@@ -3,6 +3,6 @@ type: module
+ description: 'Fetching social feeds from Facebook, Twitter, Instagram, and aggregates them into a content type.'
+ configure: social_feed_fetcher.settings
+ package: Other
+-core_version_requirement: ^8.7.7 || ^9
++core_version_requirement: ^9.3 || ^10
+ dependencies:
+ - drupal:node
+diff --git a/src/Commands/SocialFeedFetcherCommands.php b/src/Commands/SocialFeedFetcherCommands.php
+index 79e83ce..5a04e81 100644
+--- a/src/Commands/SocialFeedFetcherCommands.php
++++ b/src/Commands/SocialFeedFetcherCommands.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\social_feed_fetcher\Commands;
+ 
++use Drupal\Core\Queue\QueueInterface;
++use Drupal\Core\Queue\QueueWorkerInterface;
+ use Drupal\Core\Queue\SuspendQueueException;
+ use Drush\Commands\DrushCommands;
+ 
+@@ -41,9 +43,9 @@ class SocialFeedFetcherCommands extends DrushCommands {
+     $queue_manager = \Drupal::service('plugin.manager.queue_worker');
+ 
+     foreach ($queuesID as $queueID) {
+-      /** @var \Drupal\Core\Queue\QueueInterface $queue */
++      /** @var QueueInterface $queue */
+       $queue = $queue_factory->get($queueID);
+-      /** @var \Drupal\Core\Queue\QueueWorkerInterface $queue_worker */
++      /** @var QueueWorkerInterface $queue_worker */
+       $queue_worker = $queue_manager->createInstance($queueID);
+ 
+       while ($item = $queue->claimItem()) {
+diff --git a/src/Controller/AuthorizationCodeController.php b/src/Controller/AuthorizationCodeController.php
+index 713411f..50186a7 100644
+--- a/src/Controller/AuthorizationCodeController.php
++++ b/src/Controller/AuthorizationCodeController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Controller;
+ 
++use Psr\Log\LoggerInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+@@ -23,50 +24,50 @@ class AuthorizationCodeController extends ControllerBase {
+   /**
+    * MessengerInterface definition.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * RequestStack definition.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * ConfigFactoryInterface definition.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * LoggerInterface definition.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The client of linkedin.
+    *
+-   * @var \LinkedIn\Client
++   * @var Client
+    */
+   public $client;
+ 
+   /**
+    * AuthorizationCodeController constructor.
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   MessengerInterface definition.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   RequestStack definition.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   ConfigFactoryInterface definition.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $loggerChannelFactory
++   * @param LoggerChannelFactoryInterface $loggerChannelFactory
+    *   LoggerInterface definition.
+-   * @param \LinkedIn\Client $client
++   * @param Client $client
+    *   The linkedin client.
+    */
+   public function __construct(MessengerInterface $messenger, RequestStack $requestStack, ConfigFactoryInterface $configFactory, LoggerChannelFactoryInterface $loggerChannelFactory, Client $client) {
+@@ -93,10 +94,10 @@ class AuthorizationCodeController extends ControllerBase {
+   /**
+    * Catch response from Linkedin authentication to get an authorization code.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   Symfony request.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   The redirect response.
+    */
+   public function getResponse(Request $request) {
+@@ -127,7 +128,7 @@ class AuthorizationCodeController extends ControllerBase {
+    * @param string $code
+    *   The authorization token.
+    *
+-   * @return bool|\LinkedIn\AccessToken
++   * @return bool|AccessToken
+    *   The result of request.
+    */
+   protected function getAccessToken($code) {
+@@ -148,7 +149,7 @@ class AuthorizationCodeController extends ControllerBase {
+   /**
+    * Set as variable the value of access token and expires_in.
+    *
+-   * @param \LinkedIn\AccessToken $accessToken
++   * @param AccessToken $accessToken
+    *   The access token.
+    *
+    * @return bool
+diff --git a/src/Controller/AuthorizationInstagramController.php b/src/Controller/AuthorizationInstagramController.php
+index 9599126..81880c6 100644
+--- a/src/Controller/AuthorizationInstagramController.php
++++ b/src/Controller/AuthorizationInstagramController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Controller;
+ 
++use GuzzleHttp\Exception\GuzzleException;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -23,41 +24,41 @@ class AuthorizationInstagramController extends ControllerBase {
+   /**
+    * MessengerInterface definition.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * RequestStack definition.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+    * ConfigFactoryInterface definition.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The instagram client.
+    *
+-   * @var \EspressoDev\InstagramBasicDisplay\InstagramBasicDisplay
++   * @var InstagramBasicDisplay
+    */
+   protected $instagramClient;
+ 
+   /**
+    * AuthorizationCodeController constructor.
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   MessengerInterface definition.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
++   * @param RequestStack $requestStack
+    *   RequestStack definition.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   ConfigFactoryInterface definition.
+-   * @param \EspressoDev\InstagramBasicDisplay\InstagramBasicDisplay $instagramBasicDisplay
++   * @param InstagramBasicDisplay $instagramBasicDisplay
+    *   The instagram client.
+    */
+   public function __construct(MessengerInterface $messenger, RequestStack $requestStack, ConfigFactoryInterface $configFactory, InstagramBasicDisplay $instagramBasicDisplay) {
+@@ -82,13 +83,13 @@ class AuthorizationInstagramController extends ControllerBase {
+   /**
+    * Catch response from Linkedin authentication to get an authorization code.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The symfony request.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   The redirect response.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function getResponse(Request $request) {
+     $process = FALSE;
+@@ -115,7 +116,7 @@ class AuthorizationInstagramController extends ControllerBase {
+    * @return bool
+    *   The result of request.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   protected function getAccessToken($code) {
+     $client = new Client([
+diff --git a/src/Form/SocialPostSettingsForm.php b/src/Form/SocialPostSettingsForm.php
+index e3fe287..30326ba 100644
+--- a/src/Form/SocialPostSettingsForm.php
++++ b/src/Form/SocialPostSettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Form;
+ 
++use LinkedIn\Client;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\CronInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+@@ -21,21 +22,21 @@ class SocialPostSettingsForm extends ConfigFormBase {
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The cron service.
+    *
+-   * @var \Drupal\Core\CronInterface
++   * @var CronInterface
+    */
+   protected $cron;
+ 
+   /**
+    * The state keyvalue collection.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+@@ -48,7 +49,7 @@ class SocialPostSettingsForm extends ConfigFormBase {
+   private $requestTime;
+ 
+   /**
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+@@ -537,7 +538,7 @@ class SocialPostSettingsForm extends ConfigFormBase {
+       ],
+     ];
+     if ($config->get('linkedin_client_id') && $config->get('linkedin_secret_app')) {
+-      /** @var \LinkedIn\Client $linkedin */
++      /** @var Client $linkedin */
+       $linkedin = \Drupal::service('social_feed_fetcher.linkedin.client');
+       // Define scope permissions.
+       $scopes = [
+diff --git a/src/ImportSocialFeedService.php b/src/ImportSocialFeedService.php
+index e5322c3..f30b0af 100644
+--- a/src/ImportSocialFeedService.php
++++ b/src/ImportSocialFeedService.php
+@@ -2,6 +2,13 @@
+ 
+ namespace Drupal\social_feed_fetcher;
+ 
++use Drupal\Core\Config\Config;
++use GuzzleHttp\Exception\GuzzleException;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\social_feed_fetcher\Plugin\SocialDataProvider\FacebookDataProvider;
++use Drupal\social_feed_fetcher\Plugin\SocialDataProvider\TwitterDataProvider;
++use Drupal\social_feed_fetcher\Plugin\SocialDataProvider\InstagramDataProvider;
++use Drupal\social_feed_fetcher\Plugin\SocialDataProvider\LinkedinDataProvider;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Messenger\MessengerInterface;
+@@ -21,59 +28,59 @@ class ImportSocialFeedService implements ContainerInjectionInterface {
+   /**
+    * Config definition.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   private $config;
+ 
+   /**
+    * QueueFactory  definition.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   private $queue;
+ 
+   /**
+    * SocialDataProviderManager definition.
+    *
+-   * @var \Drupal\social_feed_fetcher\SocialDataProviderManager
++   * @var SocialDataProviderManager
+    */
+   private $socialDataProvider;
+ 
+   /**
+    * State definition.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   private $state;
+ 
+   /**
+    * LoggerInterface definition.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   private $logger;
+ 
+   /**
+    * MessengerInterface definition.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * ImportSocialFeedService constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactory $config_factory
++   * @param ConfigFactory $config_factory
+    *   ConfigFactory definition.
+-   * @param \Drupal\Core\Queue\QueueFactory $queueFactory
++   * @param QueueFactory $queueFactory
+    *   QueueFactory definition.
+-   * @param \Drupal\social_feed_fetcher\SocialDataProviderManager $socialDataProviderManager
++   * @param SocialDataProviderManager $socialDataProviderManager
+    *   SocialDataProviderManager definition.
+-   * @param \Drupal\Core\State\State $state
++   * @param State $state
+    *   State definition.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   Logger definition.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   Messenger definition.
+    */
+   public function __construct(ConfigFactory $config_factory, QueueFactory $queueFactory, SocialDataProviderManager $socialDataProviderManager, State $state, LoggerInterface $logger, MessengerInterface $messenger) {
+@@ -89,7 +96,7 @@ class ImportSocialFeedService implements ContainerInjectionInterface {
+    * Pull social feeds, as configured by module settings.
+    *
+    * @throws \Exception
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function import() {
+ 
+@@ -129,8 +136,8 @@ class ImportSocialFeedService implements ContainerInjectionInterface {
+   /**
+    * Make import.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
+-   * @throws \GuzzleHttp\Exception\GuzzleException|\Facebook\Exceptions\FacebookSDKException
++   * @throws PluginException
++   * @throws GuzzleException|\Facebook\Exceptions\FacebookSDKException
+    */
+   protected function doImport() {
+     $facebook_count = 0;
+@@ -169,14 +176,14 @@ class ImportSocialFeedService implements ContainerInjectionInterface {
+    * @return int|void
+    *   Count of imported posts.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    * @throws \Facebook\Exceptions\FacebookSDKException
+    */
+   protected function doFacebookImport() {
+     // Get facebook posts, if enabled.
+     $facebook_count = 0;
+     $facebook_queue = $this->queue->get('social_posts_facebook_queue_worker');
+-    /** @var \Drupal\social_feed_fetcher\Plugin\SocialDataProvider\FacebookDataProvider $facebook */
++    /** @var FacebookDataProvider $facebook */
+     $facebook = $this->socialDataProvider->createInstance('facebook');
+     $facebook->setClient();
+     $posts_count_num = $this->config->get('fb_no_feeds');
+@@ -202,12 +209,12 @@ class ImportSocialFeedService implements ContainerInjectionInterface {
+    * @return int
+    *   Imported posts count.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   private function doTweeterImport() {
+     $twitter_count = 0;
+     $twitter_queue = $this->queue->get('social_posts_twitter_queue_worker');
+-    /** @var \Drupal\social_feed_fetcher\Plugin\SocialDataProvider\TwitterDataProvider $twitter */
++    /** @var TwitterDataProvider $twitter */
+     $twitter = $this->socialDataProvider->createInstance('twitter');
+     $twitter->setTimelines($this->config->get('timeline'), $this->config->get('screen_name'));
+     $twitter->setClient();
+@@ -231,13 +238,13 @@ class ImportSocialFeedService implements ContainerInjectionInterface {
+    * @return int
+    *   Imported posts count.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    * @throws \Exception
+    */
+   private function doInstagrammImport() {
+     $instagram_count = 0;
+     $instagram_queue = $this->queue->get('social_posts_instagram_queue_worker');
+-    /** @var \Drupal\social_feed_fetcher\Plugin\SocialDataProvider\InstagramDataProvider $instagram */
++    /** @var InstagramDataProvider $instagram */
+     $instagram = $this->socialDataProvider->createInstance('instagram');
+     $instagram->setClient();
+     try {
+@@ -260,14 +267,14 @@ class ImportSocialFeedService implements ContainerInjectionInterface {
+    * @return int
+    *   Imported posts count.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws PluginException
++   * @throws GuzzleException
+    */
+   private function doLinkedinImport() {
+     $linkedin_count = 0;
+     $linkedin_posts = [];
+     $linkedin_queue = $this->queue->get('social_posts_linkedin_queue_worker');
+-    /** @var \Drupal\social_feed_fetcher\Plugin\SocialDataProvider\LinkedinDataProvider $linkedin */
++    /** @var LinkedinDataProvider $linkedin */
+     $linkedin = $this->socialDataProvider->createInstance('linkedin');
+     $linkedin->setFeed($this->config->get('linkedin_feed_type'));
+     if ($this->config->get('linkedin_feed_type') === 'companies') {
+diff --git a/src/Plugin/NodeProcessor/FacebookNodeProcessor.php b/src/Plugin/NodeProcessor/FacebookNodeProcessor.php
+index 4d77f9f..c30b233 100644
+--- a/src/Plugin/NodeProcessor/FacebookNodeProcessor.php
++++ b/src/Plugin/NodeProcessor/FacebookNodeProcessor.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Plugin\NodeProcessor;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\social_feed_fetcher\PluginNodeProcessorPluginBase;
+ 
+@@ -20,7 +21,7 @@ class FacebookNodeProcessor extends PluginNodeProcessorPluginBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function processItem($source, $data_item) {
+     if (!$this->isPostIdExist($data_item['id'])) {
+@@ -71,7 +72,7 @@ class FacebookNodeProcessor extends PluginNodeProcessorPluginBase {
+     $data = $response->getBody();
+     $uri = $path . '/' . mt_rand() . '.jpg';
+     $this->fileSystem->prepareDirectory($path, FileSystemInterface::CREATE_DIRECTORY);
+-    return file_save_data($data, $uri, FileSystemInterface::EXISTS_REPLACE)->id();
++    return \Drupal::service('file.repository')->writeData($data, $uri, FileSystemInterface::EXISTS_REPLACE)->id();
+   }
+ 
+ }
+diff --git a/src/Plugin/NodeProcessor/InstagramNodeProcessor.php b/src/Plugin/NodeProcessor/InstagramNodeProcessor.php
+index b135f98..be54bd1 100644
+--- a/src/Plugin/NodeProcessor/InstagramNodeProcessor.php
++++ b/src/Plugin/NodeProcessor/InstagramNodeProcessor.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Plugin\NodeProcessor;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\Datetime\DrupalDateTime;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\datetime\Plugin\Field\FieldType\DateTimeItemInterface;
+@@ -22,7 +23,7 @@ class InstagramNodeProcessor extends PluginNodeProcessorPluginBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function processItem($source, $data_item) {
+     if (!$this->isPostIdExist($data_item['raw']->id)) {
+@@ -73,7 +74,7 @@ class InstagramNodeProcessor extends PluginNodeProcessorPluginBase {
+     $uri = $path . '/' . $name;
+     $this->fileSystem->prepareDirectory($path, FileSystemInterface::CREATE_DIRECTORY);
+     $uri = explode('?', $uri);
+-    return file_save_data($data, $uri[0], FileSystemInterface::EXISTS_REPLACE)->id();
++    return \Drupal::service('file.repository')->writeData($data, $uri[0], FileSystemInterface::EXISTS_REPLACE)->id();
+   }
+ 
+ }
+diff --git a/src/Plugin/NodeProcessor/LinkedinNodeProcessor.php b/src/Plugin/NodeProcessor/LinkedinNodeProcessor.php
+index e305f69..cd382fa 100644
+--- a/src/Plugin/NodeProcessor/LinkedinNodeProcessor.php
++++ b/src/Plugin/NodeProcessor/LinkedinNodeProcessor.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Plugin\NodeProcessor;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\social_feed_fetcher\PluginNodeProcessorPluginBase;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -21,7 +22,7 @@ class LinkedinNodeProcessor extends PluginNodeProcessorPluginBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function processItem($source, $data_item) {
+     $item = $data_item['updateContent']['companyStatusUpdate']['share'];
+@@ -79,10 +80,10 @@ class LinkedinNodeProcessor extends PluginNodeProcessorPluginBase {
+     $uri = $path . '/' . $name;
+     $this->fileSystem->prepareDirectory($path, FileSystemInterface::CREATE_DIRECTORY);
+     $uri = explode('?', $uri);
+-    if (!file_save_data($data, $uri[0], FileSystemInterface::EXISTS_REPLACE)) {
++    if (!\Drupal::service('file.repository')->writeData($data, $uri[0], FileSystemInterface::EXISTS_REPLACE)) {
+       return 0;
+     }
+-    return file_save_data($data, $uri[0], FileSystemInterface::EXISTS_REPLACE)->id();
++    return \Drupal::service('file.repository')->writeData($data, $uri[0], FileSystemInterface::EXISTS_REPLACE)->id();
+   }
+ 
+ }
+diff --git a/src/Plugin/NodeProcessor/TwitterNodeProcessor.php b/src/Plugin/NodeProcessor/TwitterNodeProcessor.php
+index 644c024..15543aa 100644
+--- a/src/Plugin/NodeProcessor/TwitterNodeProcessor.php
++++ b/src/Plugin/NodeProcessor/TwitterNodeProcessor.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Plugin\NodeProcessor;
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\social_feed_fetcher\PluginNodeProcessorPluginBase;
+ 
+@@ -20,7 +21,7 @@ class TwitterNodeProcessor extends PluginNodeProcessorPluginBase {
+   /**
+    * {@inheritdoc}
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function processItem($source, $data_item) {
+     if (!$this->isPostIdExist($data_item->id)) {
+@@ -71,10 +72,10 @@ class TwitterNodeProcessor extends PluginNodeProcessorPluginBase {
+     $uri = $path . '/' . $name;
+     $this->fileSystem->prepareDirectory($path, FileSystemInterface::CREATE_DIRECTORY);
+     $uri = explode('?', $uri);
+-    if (!file_save_data($data, $uri[0], FileSystemInterface::EXISTS_REPLACE)) {
++    if (!\Drupal::service('file.repository')->writeData($data, $uri[0], FileSystemInterface::EXISTS_REPLACE)) {
+       return 0;
+     }
+-    return file_save_data($data, $uri[0], FileSystemInterface::EXISTS_REPLACE)->id();
++    return \Drupal::service('file.repository')->writeData($data, $uri[0], FileSystemInterface::EXISTS_REPLACE)->id();
+   }
+ 
+ }
+diff --git a/src/Plugin/QueueWorker/SocialPostFacebookQueueWorker.php b/src/Plugin/QueueWorker/SocialPostFacebookQueueWorker.php
+index f59b8ca..37b8a2e 100644
+--- a/src/Plugin/QueueWorker/SocialPostFacebookQueueWorker.php
++++ b/src/Plugin/QueueWorker/SocialPostFacebookQueueWorker.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Plugin\QueueWorker;
+ 
++use Drupal\social_feed_fetcher\Plugin\NodeProcessor\FacebookNodeProcessor;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+ use Drupal\social_feed_fetcher\PluginNodeProcessorManager;
+@@ -20,7 +21,7 @@ class SocialPostFacebookQueueWorker extends SocialPostQueueWorkerBase {
+    * {@inheritdoc}
+    */
+   public function processItem($data) {
+-    /** @var \Drupal\social_feed_fetcher\Plugin\NodeProcessor\FacebookNodeProcessor $facebook_node_processor */
++    /** @var FacebookNodeProcessor $facebook_node_processor */
+     $facebook_node_processor = $this->nodeProcessor->createInstance('facebook_processor');
+     $facebook_node_processor->processItem('facebook', $data);
+   }
+diff --git a/src/Plugin/QueueWorker/SocialPostInstagramQueueWorker.php b/src/Plugin/QueueWorker/SocialPostInstagramQueueWorker.php
+index 055c6c0..a5e8d1b 100644
+--- a/src/Plugin/QueueWorker/SocialPostInstagramQueueWorker.php
++++ b/src/Plugin/QueueWorker/SocialPostInstagramQueueWorker.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Plugin\QueueWorker;
+ 
++use Drupal\social_feed_fetcher\Plugin\NodeProcessor\InstagramNodeProcessor;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+ use Drupal\social_feed_fetcher\PluginNodeProcessorManager;
+@@ -20,7 +21,7 @@ class SocialPostInstagramQueueWorker extends SocialPostQueueWorkerBase {
+    * {@inheritdoc}
+    */
+   public function processItem($data) {
+-    /** @var \Drupal\social_feed_fetcher\Plugin\NodeProcessor\InstagramNodeProcessor $instagram_processor */
++    /** @var InstagramNodeProcessor $instagram_processor */
+     $instagram_processor = $this->nodeProcessor->createInstance('instagram_processor');
+     $instagram_processor->processItem('instagram', $data);
+   }
+diff --git a/src/Plugin/QueueWorker/SocialPostLinkedinQueueWorker.php b/src/Plugin/QueueWorker/SocialPostLinkedinQueueWorker.php
+index 48c368c..ae358e2 100644
+--- a/src/Plugin/QueueWorker/SocialPostLinkedinQueueWorker.php
++++ b/src/Plugin/QueueWorker/SocialPostLinkedinQueueWorker.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Plugin\QueueWorker;
+ 
++use Drupal\social_feed_fetcher\Plugin\NodeProcessor\LinkedinNodeProcessor;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+ use Drupal\social_feed_fetcher\PluginNodeProcessorManager;
+@@ -20,7 +21,7 @@ class SocialPostLinkedinQueueWorker extends SocialPostQueueWorkerBase {
+    * {@inheritdoc}
+    */
+   public function processItem($data) {
+-    /** @var \Drupal\social_feed_fetcher\Plugin\NodeProcessor\LinkedinNodeProcessor $linkedin_processor */
++    /** @var LinkedinNodeProcessor $linkedin_processor */
+     $linkedin_processor = $this->nodeProcessor->createInstance('linkedin_processor');
+     $linkedin_processor->processItem('linkedin', $data);
+   }
+diff --git a/src/Plugin/QueueWorker/SocialPostQueueWorkerBase.php b/src/Plugin/QueueWorker/SocialPostQueueWorkerBase.php
+index 3f37ac9..7622ba4 100644
+--- a/src/Plugin/QueueWorker/SocialPostQueueWorkerBase.php
++++ b/src/Plugin/QueueWorker/SocialPostQueueWorkerBase.php
+@@ -11,7 +11,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class SocialPostQueueWorkerBase extends QueueWorkerBase implements ContainerFactoryPluginInterface {
+ 
+   /**
+-   * @var \Drupal\social_feed_fetcher\PluginNodeProcessorManager
++   * @var PluginNodeProcessorManager
+    */
+   public $nodeProcessor;
+ 
+diff --git a/src/Plugin/QueueWorker/SocialPostTwitterQueueWorker.php b/src/Plugin/QueueWorker/SocialPostTwitterQueueWorker.php
+index 4263f50..96aa495 100644
+--- a/src/Plugin/QueueWorker/SocialPostTwitterQueueWorker.php
++++ b/src/Plugin/QueueWorker/SocialPostTwitterQueueWorker.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Plugin\QueueWorker;
+ 
++use Drupal\social_feed_fetcher\Plugin\NodeProcessor\TwitterNodeProcessor;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+ use Drupal\social_feed_fetcher\PluginNodeProcessorManager;
+@@ -20,7 +21,7 @@ class SocialPostTwitterQueueWorker extends SocialPostQueueWorkerBase {
+    * {@inheritdoc}
+    */
+   public function processItem($data) {
+-    /** @var \Drupal\social_feed_fetcher\Plugin\NodeProcessor\TwitterNodeProcessor $twitter_node_processor */
++    /** @var TwitterNodeProcessor $twitter_node_processor */
+     $twitter_node_processor = $this->nodeProcessor->createInstance('twitter_processor');
+     $twitter_node_processor->processItem('twitter', $data);
+   }
+diff --git a/src/Plugin/SocialDataProvider/InstagramDataProvider.php b/src/Plugin/SocialDataProvider/InstagramDataProvider.php
+index 84a193f..43f2d35 100644
+--- a/src/Plugin/SocialDataProvider/InstagramDataProvider.php
++++ b/src/Plugin/SocialDataProvider/InstagramDataProvider.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher\Plugin\SocialDataProvider;
+ 
++use EspressoDev\InstagramBasicDisplay\InstagramBasicDisplay;
+ use Drupal\social_feed_fetcher\SocialDataProviderPluginBase;
+ 
+ /**
+@@ -19,7 +20,7 @@ class InstagramDataProvider extends SocialDataProviderPluginBase {
+   /**
+    * Instagram client.
+    *
+-   * @var \EspressoDev\InstagramBasicDisplay\InstagramBasicDisplay
++   * @var InstagramBasicDisplay
+    */
+   protected $instagram;
+ 
+diff --git a/src/Plugin/SocialDataProvider/LinkedinDataProvider.php b/src/Plugin/SocialDataProvider/LinkedinDataProvider.php
+index 186855e..086eb22 100644
+--- a/src/Plugin/SocialDataProvider/LinkedinDataProvider.php
++++ b/src/Plugin/SocialDataProvider/LinkedinDataProvider.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\social_feed_fetcher\Plugin\SocialDataProvider;
+ 
++use GuzzleHttp\Client;
++use GuzzleHttp\Exception\GuzzleException;
+ use Drupal\social_feed_fetcher\SocialDataProviderPluginBase;
+ use LinkedIn\AccessToken;
+ 
+@@ -20,7 +22,7 @@ class LinkedinDataProvider extends SocialDataProviderPluginBase {
+   /**
+    * Twitter OAuth client.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $linkedin;
+ 
+@@ -70,7 +72,7 @@ class LinkedinDataProvider extends SocialDataProviderPluginBase {
+    * @return array
+    *   An array of posts.
+    *
+-   * @throws \GuzzleHttp\Exception\GuzzleException
++   * @throws GuzzleException
+    */
+   public function getPosts($count) {
+     $access = \Drupal::state()->getMultiple(['access_token', 'expires_in', 'expires_in_save']);
+diff --git a/src/Plugin/SocialDataProvider/TwitterDataProvider.php b/src/Plugin/SocialDataProvider/TwitterDataProvider.php
+index 91a3e7a..8ffa1af 100644
+--- a/src/Plugin/SocialDataProvider/TwitterDataProvider.php
++++ b/src/Plugin/SocialDataProvider/TwitterDataProvider.php
+@@ -21,7 +21,7 @@ class TwitterDataProvider extends SocialDataProviderPluginBase {
+   /**
+    * Twitter OAuth client.
+    *
+-   * @var \Abraham\TwitterOAuth\TwitterOAuth
++   * @var TwitterOAuth
+    */
+   protected $twitter;
+ 
+diff --git a/src/PluginNodeProcessorManager.php b/src/PluginNodeProcessorManager.php
+index 3db048c..6f14571 100644
+--- a/src/PluginNodeProcessorManager.php
++++ b/src/PluginNodeProcessorManager.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\social_feed_fetcher;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Component\Plugin\Factory\DefaultFactory;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -20,28 +22,28 @@ class PluginNodeProcessorManager extends DefaultPluginManager {
+   /**
+    * Drupal\Core\Config\Config definition.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * Drupal\Core\Entity\EntityStorageInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface|mixed|object
++   * @var EntityStorageInterface|mixed|object
+    */
+   protected $entityStorage;
+ 
+   /**
+    * GuzzleHttp\ClientInterface definition.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * Drupal\Core\File\FileSystemInterface definition.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+diff --git a/src/PluginNodeProcessorPluginBase.php b/src/PluginNodeProcessorPluginBase.php
+index ae41684..6434a2b 100644
+--- a/src/PluginNodeProcessorPluginBase.php
++++ b/src/PluginNodeProcessorPluginBase.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher;
+ 
++use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Component\Plugin\PluginBase;
+ use Drupal\Core\Config\Config;
+ use Drupal\Core\Datetime\DrupalDateTime;
+@@ -18,28 +19,28 @@ abstract class PluginNodeProcessorPluginBase extends PluginBase implements Plugi
+   /**
+    * Configuration definition.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * EntityStorageInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface|mixed|object
++   * @var EntityStorageInterface|mixed|object
+    */
+   protected $entityStorage;
+ 
+   /**
+    * Guzzle client definition.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * FileSystemInterface definition.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+@@ -101,7 +102,7 @@ abstract class PluginNodeProcessorPluginBase extends PluginBase implements Plugi
+   /**
+    * Setter for entityStorage.
+    *
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $enitytStorage
++   * @param EntityStorageInterface $enitytStorage
+    *   EntityStorageInterface definition.
+    *
+    * @return \Drupal\social_feed_fetcher\PluginNodeProcessorPluginBase
+@@ -115,7 +116,7 @@ abstract class PluginNodeProcessorPluginBase extends PluginBase implements Plugi
+   /**
+    * Setter for Config.
+    *
+-   * @param \Drupal\Core\Config\Config $config
++   * @param Config $config
+    *   Config definition.
+    *
+    * @return $this
+@@ -128,7 +129,7 @@ abstract class PluginNodeProcessorPluginBase extends PluginBase implements Plugi
+   /**
+    * Setter for httpClient.
+    *
+-   * @param \GuzzleHttp\ClientInterface $httpClient
++   * @param ClientInterface $httpClient
+    *   Client definition.
+    *
+    * @return $this
+@@ -141,7 +142,7 @@ abstract class PluginNodeProcessorPluginBase extends PluginBase implements Plugi
+   /**
+    * Get FileSystemInterface.
+    *
+-   * @return \Drupal\Core\File\FileSystemInterface
++   * @return FileSystemInterface
+    *   FileSystemInterface definition.
+    */
+   public function getFileSystem() {
+diff --git a/src/ProviderDataFactory/LinkedinDataProviderFactory.php b/src/ProviderDataFactory/LinkedinDataProviderFactory.php
+index d45caaf..e0aa01f 100644
+--- a/src/ProviderDataFactory/LinkedinDataProviderFactory.php
++++ b/src/ProviderDataFactory/LinkedinDataProviderFactory.php
+@@ -4,6 +4,8 @@
+ namespace Drupal\social_feed_fetcher\ProviderDataFactory;
+ 
+ 
++use Drupal\Core\Config\Config;
++use LinkedIn\Client;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -11,14 +13,14 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ class LinkedinDataProviderFactory {
+ 
+   /**
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   private $config;
+ 
+   /**
+    * LinkedinClientFactory constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    */
+   public function __construct(ConfigFactoryInterface $configFactory) {
+     $this->config = $configFactory->get('social_feed_fetcher.settings');
+@@ -26,7 +28,7 @@ class LinkedinDataProviderFactory {
+ 
+ 
+   public function createLinkedinClient() {
+-    return new \LinkedIn\Client(
++    return new Client(
+       $this->config->get('linkedin_client_id'),
+       $this->config->get('linkedin_secret_app')
+     );
+diff --git a/src/SocialDataProviderManager.php b/src/SocialDataProviderManager.php
+index 3e4ed4f..2db8cb1 100644
+--- a/src/SocialDataProviderManager.php
++++ b/src/SocialDataProviderManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\social_feed_fetcher;
+ 
++use Drupal\Core\Config\Config;
+ use Drupal\Component\Plugin\Factory\DefaultFactory;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -17,7 +18,7 @@ class SocialDataProviderManager extends DefaultPluginManager {
+   /**
+    * Config definition.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+diff --git a/src/SocialDataProviderPluginBase.php b/src/SocialDataProviderPluginBase.php
+index b8c1d72..ea1e2e8 100644
+--- a/src/SocialDataProviderPluginBase.php
++++ b/src/SocialDataProviderPluginBase.php
+@@ -13,7 +13,7 @@ abstract class SocialDataProviderPluginBase extends PluginBase implements Social
+   /**
+    * Configuration definition.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+@@ -42,7 +42,7 @@ abstract class SocialDataProviderPluginBase extends PluginBase implements Social
+   /**
+    * Setter for Config.
+    *
+-   * @param \Drupal\Core\Config\Config $config
++   * @param Config $config
+    *   Configuration definition.
+    *
+    * @return $this

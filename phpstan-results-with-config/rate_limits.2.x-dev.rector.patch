@@ -1,0 +1,189 @@
+diff --git a/rate_limits.info.yml b/rate_limits.info.yml
+index f055881..1d83849 100644
+--- a/rate_limits.info.yml
++++ b/rate_limits.info.yml
+@@ -4,5 +4,4 @@ description: Provides arbitrary rate limits per route.
+ configure: entity.rate_limit_config.collection
+ dependencies:
+   - drupal:system (>=8.5)
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^8 || ^9 || ^10
+diff --git a/src/EventSubscriber/RequestSubscriberCheckLimits.php b/src/EventSubscriber/RequestSubscriberCheckLimits.php
+index 9712aa7..eab8d15 100644
+--- a/src/EventSubscriber/RequestSubscriberCheckLimits.php
++++ b/src/EventSubscriber/RequestSubscriberCheckLimits.php
+@@ -2,13 +2,17 @@
+ 
+ namespace Drupal\rate_limits\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
++use Symfony\Component\HttpKernel\Exception\HttpException;
++use Drupal\rate_limits\Entity\RateLimitConfig;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Flood\FloodInterface;
+ use Drupal\Core\Session\AccountProxyInterface;
+ use Symfony\Cmf\Component\Routing\RouteObjectInterface;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\HttpFoundation\Response;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ use Symfony\Component\Routing\Route;
+ use Symfony\Component\Routing\RouterInterface;
+@@ -19,22 +23,22 @@ use Symfony\Component\Routing\RouterInterface;
+ class RequestSubscriberCheckLimits implements EventSubscriberInterface {
+ 
+   /**
+-   * @var \Symfony\Component\Routing\RouterInterface
++   * @var RouterInterface
+    */
+   protected $router;
+ 
+   /**
+-   * @var \Drupal\Core\Flood\FloodInterface
++   * @var FloodInterface
+    */
+   protected $flood;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+@@ -60,15 +64,15 @@ class RequestSubscriberCheckLimits implements EventSubscriberInterface {
+   /**
+    * Check the limits on the request.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The request event.
+    *
+-   * @throws \Symfony\Component\HttpKernel\Exception\HttpException
++   * @throws HttpException
+    *   When the system is flooded.
+    * @throws \Exception
+    *   When the flood table does not exist.
+    */
+-  public function onRequest(GetResponseEvent $event) {
++  public function onRequest(RequestEvent $event) {
+     $request = $event->getRequest();
+     try {
+       $route_data = $this->router->matchRequest($request);
+@@ -77,7 +81,7 @@ class RequestSubscriberCheckLimits implements EventSubscriberInterface {
+       return;
+     }
+ 
+-    /** @var \Symfony\Component\Routing\Route $route */
++    /** @var Route $route */
+     $route = $route_data[RouteObjectInterface::ROUTE_OBJECT];
+     $config = $this->loadConfig($route);
+     if (!$config) {
+@@ -109,14 +113,14 @@ class RequestSubscriberCheckLimits implements EventSubscriberInterface {
+   /**
+    * Loads the rate limit configuration based on the tags.
+    *
+-   * @param \Symfony\Component\Routing\Route $route
++   * @param Route $route
+    *   The route to be rate limited.
+    *
+-   * @return \Drupal\rate_limits\Entity\RateLimitConfig|NULL
++   * @return RateLimitConfig|NULL
+    *   The rate limit.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   protected function loadConfig(Route $route) {
+     $route_tags = $route->getOption('tags');
+@@ -130,7 +134,7 @@ class RequestSubscriberCheckLimits implements EventSubscriberInterface {
+     if (empty($ids)) {
+       return NULL;
+     }
+-    /** @var \Drupal\rate_limits\Entity\RateLimitConfig[] $configs */
++    /** @var RateLimitConfig[] $configs */
+     $configs = $storage->loadMultiple($ids);
+     // Find the config that has all tags.
+     foreach ($configs as $config) {
+@@ -157,7 +161,7 @@ class RequestSubscriberCheckLimits implements EventSubscriberInterface {
+    *   The event name.
+    * @param array $flood_config
+    *   The configuration with the limits.
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The request event.
+    *
+    * @return bool
+@@ -166,7 +170,7 @@ class RequestSubscriberCheckLimits implements EventSubscriberInterface {
+    * @throws \Exception
+    *   When the flood table is not created.
+    */
+-  protected function checkIp($event_name, $flood_config, GetResponseEvent $event) {
++  protected function checkIp($event_name, $flood_config, RequestEvent $event) {
+     $allowed = $this->flood->isAllowed(
+       $event_name,
+       $flood_config['ip_limit'],
+@@ -189,7 +193,7 @@ class RequestSubscriberCheckLimits implements EventSubscriberInterface {
+    *   The event name.
+    * @param array $flood_config
+    *   The configuration with the limits.
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   The request event.
+    *
+    * @return bool
+@@ -198,7 +202,7 @@ class RequestSubscriberCheckLimits implements EventSubscriberInterface {
+    * @throws \Exception
+    *   When the flood table is not created.
+    */
+-  protected function checkUser($event_name, $flood_config, GetResponseEvent $event) {
++  protected function checkUser($event_name, $flood_config, RequestEvent $event) {
+     if ($this->currentUser->isAnonymous()) {
+       // The user check does not apply to anonymous.
+       return TRUE;
+diff --git a/tests/src/Functional/RateLimitsApiFunctionalTest.php b/tests/src/Functional/RateLimitsApiFunctionalTest.php
+index 4c5b07b..72cf990 100644
+--- a/tests/src/Functional/RateLimitsApiFunctionalTest.php
++++ b/tests/src/Functional/RateLimitsApiFunctionalTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\rate_limits\Functional;
+ 
++use Drupal\Core\Session\AccountInterface;
+ use Drupal\rate_limits\Entity\JsonapiResourceConfig;
+ use Drupal\rate_limits\Entity\RateLimitConfig;
+ use Drupal\Tests\BrowserTestBase;
+@@ -15,12 +16,12 @@ use Drupal\user\Entity\Role;
+ class RateLimitsApiFunctionalTest extends BrowserTestBase {
+ 
+   /**
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $account;
+ 
+   /**
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $adminAccount;
+ 
+@@ -32,7 +33,7 @@ class RateLimitsApiFunctionalTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $config = RateLimitConfig::create([
+       'label' => $this->randomGenerator->name(),

@@ -1,0 +1,646 @@
+diff --git a/library_manager.drush.inc b/library_manager.drush.inc
+index 0eb04c5..3844c32 100644
+--- a/library_manager.drush.inc
++++ b/library_manager.drush.inc
+@@ -102,7 +102,7 @@ function drush_library_manager_lm_check_assets() {
+       foreach ($library_info[$asset_type] as $file) {
+ 
+         if ($file['type'] == 'file') {
+-          $url = file_create_url($file['data']);
++          $url = \Drupal::service('file_url_generator')->generateAbsoluteString($file['data']);
+         }
+         elseif ($file['type'] == 'external') {
+           $url = $file['data'];
+diff --git a/library_manager.module b/library_manager.module
+index ed6fd12..5c28f67 100644
+--- a/library_manager.module
++++ b/library_manager.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\library_manager\LibraryDefinitionInterface;
++use Drupal\Core\Config\Entity\ConfigEntityStorageInterface;
+ /**
+  * @file
+  * Primary module hooks for Library manager module.
+@@ -76,7 +78,7 @@ function library_manager_build_libraries() {
+ 
+     $libraries_path = \Drupal::config('library_manager.settings')->get('libraries_path');
+ 
+-    /** @var Drupal\library_manager\LibraryDefinitionInterface[] $definitions */
++    /** @var LibraryDefinitionInterface[] $definitions */
+     $definitions = \Drupal::service('entity_type.manager')
+       ->getStorage('library_definition')
+       ->loadMultiple();
+@@ -174,10 +176,10 @@ function library_manager_build_libraries() {
+  * Implements hook_page_attachments().
+  */
+ function library_manager_page_attachments(array &$attachments) {
+-  /** @var Drupal\Core\Config\Entity\ConfigEntityStorageInterface $storage */
++  /** @var ConfigEntityStorageInterface $storage */
+   $storage = \Drupal::service('entity_type.manager')->getStorage('library_definition');
+ 
+-  /** @var Drupal\library_manager\LibraryDefinitionInterface[] $definitions */
++  /** @var LibraryDefinitionInterface[] $definitions */
+   $definitions = $storage->loadByProperties(['load' => TRUE]);
+   $context_repository = \Drupal::service('context.repository');
+   $context_handler = \Drupal::service('context.handler');
+diff --git a/src/Commands/LibraryManagerCommands.php b/src/Commands/LibraryManagerCommands.php
+index 5a35c7c..2d4c65e 100644
+--- a/src/Commands/LibraryManagerCommands.php
++++ b/src/Commands/LibraryManagerCommands.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\library_manager\Commands;
+ 
++use Drush\Log\Logger;
+ use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
+ use Drupal\Component\Serialization\Yaml;
+ use Drupal\Core\State\StateInterface;
+@@ -14,7 +15,7 @@ use GuzzleHttp\Exception\GuzzleException;
+ /**
+  * Drush integration for Library manager module.
+  *
+- * @property \Drush\Log\Logger $logger
++ * @property Logger $logger
+  */
+ class LibraryManagerCommands extends DrushCommands {
+ 
+@@ -23,41 +24,41 @@ class LibraryManagerCommands extends DrushCommands {
+   /**
+    * Library discovery.
+    *
+-   * @var \Drupal\library_manager\LibraryDiscoveryInterface
++   * @var LibraryDiscoveryInterface
+    */
+   protected $libraryDiscovery;
+ 
+   /**
+    * YAML serialization service.
+    *
+-   * @var \Drupal\Component\Serialization\Yaml
++   * @var Yaml
+    */
+   protected $serializer;
+ 
+   /**
+    * The HTTP client to fetch the feed data with.
+    *
+-   * @var \GuzzleHttp\Client
++   * @var Client
+    */
+   protected $httpClient;
+ 
+   /**
+    * The state backend.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * LibraryManagerCommands constructor.
+    *
+-   * @param \Drupal\library_manager\LibraryDiscoveryInterface $library_discovery
++   * @param LibraryDiscoveryInterface $library_discovery
+    *   Library discovery.
+-   * @param \Drupal\Component\Serialization\Yaml $serializer
++   * @param Yaml $serializer
+    *   YAML serializer.
+-   * @param \GuzzleHttp\Client $http_client
++   * @param Client $http_client
+    *   The Guzzle HTTP client.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state store.
+    */
+   public function __construct(LibraryDiscoveryInterface $library_discovery, Yaml $serializer, Client $http_client, StateInterface $state) {
+@@ -105,7 +106,7 @@ class LibraryManagerCommands extends DrushCommands {
+    *   license: License
+    * @default-fields name,version
+    *
+-   * @return \Consolidation\OutputFormatters\StructuredData\RowsOfFields
++   * @return RowsOfFields
+    *   List of libraries.
+    */
+   public function libraryList() {
+@@ -152,7 +153,7 @@ class LibraryManagerCommands extends DrushCommands {
+         foreach ($library_info[$asset_type] as $file) {
+ 
+           if ($file['type'] == 'file') {
+-            $url = file_create_url($file['data']);
++            $url = \Drupal::service('file_url_generator')->generateAbsoluteString($file['data']);
+           }
+           elseif ($file['type'] == 'external') {
+             $url = $file['data'];
+diff --git a/src/Controller/LibraryCollectionController.php b/src/Controller/LibraryCollectionController.php
+index 3a55670..27d38ec 100644
+--- a/src/Controller/LibraryCollectionController.php
++++ b/src/Controller/LibraryCollectionController.php
+@@ -18,14 +18,14 @@ class LibraryCollectionController extends ControllerBase {
+   /**
+    * The library discovery service.
+    *
+-   * @var \Drupal\library_manager\LibraryDiscoveryInterface
++   * @var LibraryDiscoveryInterface
+    */
+   protected $libraryDiscovery;
+ 
+   /**
+    * Constructs the controller object.
+    *
+-   * @param \Drupal\library_manager\LibraryDiscoveryInterface $library_discovery
++   * @param LibraryDiscoveryInterface $library_discovery
+    *   The discovery service.
+    */
+   public function __construct(LibraryDiscoveryInterface $library_discovery) {
+@@ -129,10 +129,10 @@ class LibraryCollectionController extends ControllerBase {
+   /**
+    * Builds autocomplete response for the library ID.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   The request object that contains the typed keys.
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
++   * @return JsonResponse
+    *   The matched library ID as a JSON response.
+    */
+   public function buildAutocomplete(Request $request) {
+diff --git a/src/Controller/LibraryDefinitionListBuilder.php b/src/Controller/LibraryDefinitionListBuilder.php
+index 3b55b05..467e21b 100644
+--- a/src/Controller/LibraryDefinitionListBuilder.php
++++ b/src/Controller/LibraryDefinitionListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\library_manager\Controller;
+ 
++use Drupal\library_manager\LibraryDefinitionInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityListBuilder;
+ use Drupal\Core\Entity\EntityInterface;
+ 
+@@ -25,7 +26,7 @@ class LibraryDefinitionListBuilder extends ConfigEntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\library_manager\LibraryDefinitionInterface $entity */
++    /** @var LibraryDefinitionInterface $entity */
+     $row['id'] = $entity->id();
+     $row['version'] = $entity->get('version');
+     $row['load'] = $entity->get('load') ? $this->t('Yes') : $this->t('No');
+diff --git a/src/Controller/LibraryDetailsController.php b/src/Controller/LibraryDetailsController.php
+index 3a080e6..01e3bc3 100644
+--- a/src/Controller/LibraryDetailsController.php
++++ b/src/Controller/LibraryDetailsController.php
+@@ -18,23 +18,23 @@ class LibraryDetailsController extends ControllerBase {
+   /**
+    * The library discovery service.
+    *
+-   * @var \Drupal\library_manager\LibraryDiscoveryInterface
++   * @var LibraryDiscoveryInterface
+    */
+   protected $libraryDiscovery;
+ 
+   /**
+    * The serialization service.
+    *
+-   * @var \Drupal\Component\Serialization\SerializationInterface
++   * @var SerializationInterface
+    */
+   protected $serializer;
+ 
+   /**
+    * Constructs the controller object.
+    *
+-   * @param \Drupal\library_manager\LibraryDiscoveryInterface $library_discovery
++   * @param LibraryDiscoveryInterface $library_discovery
+    *   The discovery service.
+-   * @param \Drupal\Component\Serialization\SerializationInterface $serializer
++   * @param SerializationInterface $serializer
+    *   The serialization service.
+    */
+   public function __construct(LibraryDiscoveryInterface $library_discovery, SerializationInterface $serializer) {
+diff --git a/src/Entity/LibraryDefinition.php b/src/Entity/LibraryDefinition.php
+index f856df2..30fc2c0 100644
+--- a/src/Entity/LibraryDefinition.php
++++ b/src/Entity/LibraryDefinition.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\library_manager\Entity;
+ 
++use Drupal\Core\Executable\ExecutableManagerInterface;
+ use Drupal\Core\Condition\ConditionPluginCollection;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -184,7 +185,7 @@ class LibraryDefinition extends ConfigEntityBase implements LibraryDefinitionInt
+   /**
+    * Gets the condition plugin manager.
+    *
+-   * @return \Drupal\Core\Executable\ExecutableManagerInterface
++   * @return ExecutableManagerInterface
+    *   The condition plugin manager.
+    */
+   protected function conditionPluginManager() {
+diff --git a/src/Form/AssetsCheckForm.php b/src/Form/AssetsCheckForm.php
+index 13bbc2d..2d8311e 100644
+--- a/src/Form/AssetsCheckForm.php
++++ b/src/Form/AssetsCheckForm.php
+@@ -20,32 +20,32 @@ class AssetsCheckForm extends FormBase {
+   /**
+    * The library discovery service.
+    *
+-   * @var \Drupal\library_manager\LibraryDiscoveryInterface
++   * @var LibraryDiscoveryInterface
+    */
+   protected $libraryDiscovery;
+ 
+   /**
+    * The state service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The date.formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * Constructs a AssetsReportForm object.
+    *
+-   * @param \Drupal\library_manager\LibraryDiscoveryInterface $library_discovery
++   * @param LibraryDiscoveryInterface $library_discovery
+    *   The discovery service.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state service.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The formatter service.
+    */
+   public function __construct(LibraryDiscoveryInterface $library_discovery, StateInterface $state, DateFormatterInterface $date_formatter) {
+@@ -108,7 +108,7 @@ class AssetsCheckForm extends FormBase {
+       foreach (['css', 'js'] as $asset_type) {
+         foreach ($library_info[$asset_type] as $file) {
+           if ($file['type'] == 'file') {
+-            $operations[] = [$processCallback, [file_create_url($file['data'])]];
++            $operations[] = [$processCallback, [\Drupal::service('file_url_generator')->generateAbsoluteString($file['data'])]];
+           }
+           elseif ($file['type'] == 'external') {
+             $operations[] = [$processCallback, [$file['data']]];
+diff --git a/src/Form/LibraryDefinitionBuildForm.php b/src/Form/LibraryDefinitionBuildForm.php
+index 039d8b8..bfddebe 100644
+--- a/src/Form/LibraryDefinitionBuildForm.php
++++ b/src/Form/LibraryDefinitionBuildForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\library_manager\Form;
+ 
++use Drupal\library_manager\LibraryDefinitionInterface;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Link;
+@@ -13,21 +14,21 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+ /**
+  * Builds the form to create a library definition from existing library.
+  *
+- * @property \Drupal\library_manager\LibraryDefinitionInterface $entity
++ * @property LibraryDefinitionInterface $entity
+  */
+ class LibraryDefinitionBuildForm extends EntityForm {
+ 
+   /**
+    * The library discovery service.
+    *
+-   * @var \Drupal\library_manager\LibraryDiscoveryInterface
++   * @var LibraryDiscoveryInterface
+    */
+   protected $libraryDiscovery;
+ 
+   /**
+    * Constructs the form object.
+    *
+-   * @param \Drupal\library_manager\LibraryDiscoveryInterface $library_discovery
++   * @param LibraryDiscoveryInterface $library_discovery
+    *   The discovery service.
+    */
+   public function __construct(LibraryDiscoveryInterface $library_discovery) {
+diff --git a/src/Form/LibraryDefinitionCssDeleteForm.php b/src/Form/LibraryDefinitionCssDeleteForm.php
+index b1302eb..89e56f7 100644
+--- a/src/Form/LibraryDefinitionCssDeleteForm.php
++++ b/src/Form/LibraryDefinitionCssDeleteForm.php
+@@ -2,13 +2,14 @@
+ 
+ namespace Drupal\library_manager\Form;
+ 
++use Drupal\library_manager\LibraryDefinitionInterface;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+ /**
+  * Library definition CSS form.
+  *
+- * @property \Drupal\library_manager\LibraryDefinitionInterface $entity
++ * @property LibraryDefinitionInterface $entity
+  */
+ class LibraryDefinitionCssDeleteForm extends EntityForm {
+ 
+diff --git a/src/Form/LibraryDefinitionCssForm.php b/src/Form/LibraryDefinitionCssForm.php
+index 03ed989..3cd7a50 100644
+--- a/src/Form/LibraryDefinitionCssForm.php
++++ b/src/Form/LibraryDefinitionCssForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\library_manager\Form;
+ 
++use Drupal\library_manager\LibraryDefinitionInterface;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Url;
+@@ -10,7 +11,7 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+ /**
+  * Library definition CSS form.
+  *
+- * @property \Drupal\library_manager\LibraryDefinitionInterface $entity
++ * @property LibraryDefinitionInterface $entity
+  */
+ class LibraryDefinitionCssForm extends EntityForm {
+ 
+diff --git a/src/Form/LibraryDefinitionDuplicateForm.php b/src/Form/LibraryDefinitionDuplicateForm.php
+index d8549ae..18a96f0 100644
+--- a/src/Form/LibraryDefinitionDuplicateForm.php
++++ b/src/Form/LibraryDefinitionDuplicateForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\library_manager\Form;
+ 
++use Drupal\library_manager\LibraryDefinitionInterface;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\library_manager\Entity\LibraryDefinition;
+@@ -9,7 +10,7 @@ use Drupal\library_manager\Entity\LibraryDefinition;
+ /**
+  * Form controller for the Views duplicate form.
+  *
+- * @property \Drupal\library_manager\LibraryDefinitionInterface $entity
++ * @property LibraryDefinitionInterface $entity
+  */
+ class LibraryDefinitionDuplicateForm extends EntityForm {
+ 
+diff --git a/src/Form/LibraryDefinitionForm.php b/src/Form/LibraryDefinitionForm.php
+index f01e75e..43bc871 100644
+--- a/src/Form/LibraryDefinitionForm.php
++++ b/src/Form/LibraryDefinitionForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\library_manager\Form;
+ 
++use Drupal\library_manager\LibraryDefinitionInterface;
++use Drupal\Core\Condition\ConditionInterface;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Core\Condition\ConditionManager;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -16,30 +18,30 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+ /**
+  * Library definition form.
+  *
+- * @property \Drupal\library_manager\LibraryDefinitionInterface $entity
++ * @property LibraryDefinitionInterface $entity
+  */
+ class LibraryDefinitionForm extends EntityForm {
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The library discovery service.
+    *
+-   * @var \Drupal\Core\Condition\ConditionManager
++   * @var ConditionManager
+    */
+   protected $conditionManager;
+ 
+   /**
+    * Constructs the form object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Condition\ConditionManager $condition_manager
++   * @param ConditionManager $condition_manager
+    *   Condition manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, ConditionManager $condition_manager) {
+@@ -389,7 +391,7 @@ class LibraryDefinitionForm extends EntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+@@ -409,7 +411,7 @@ class LibraryDefinitionForm extends EntityForm {
+ 
+     foreach ($this->conditionManager->getDefinitions() as $condition_id => $definition) {
+ 
+-      /** @var \Drupal\Core\Condition\ConditionInterface $condition */
++      /** @var ConditionInterface $condition */
+       $condition = $this->conditionManager->createInstance($condition_id, isset($visibility[$condition_id]) ? $visibility[$condition_id] : []);
+       $form_state->set(['conditions', $condition_id], $condition);
+       $condition_form = $condition->buildConfigurationForm([], $form_state);
+@@ -435,7 +437,7 @@ class LibraryDefinitionForm extends EntityForm {
+    *
+    * @param array $form
+    *   A nested array form elements comprising the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   protected function validateVisibility(array $form, FormStateInterface $form_state) {
+diff --git a/src/Form/LibraryDefinitionJsDeleteForm.php b/src/Form/LibraryDefinitionJsDeleteForm.php
+index 23d3a48..3b70a06 100644
+--- a/src/Form/LibraryDefinitionJsDeleteForm.php
++++ b/src/Form/LibraryDefinitionJsDeleteForm.php
+@@ -2,13 +2,14 @@
+ 
+ namespace Drupal\library_manager\Form;
+ 
++use Drupal\library_manager\LibraryDefinitionInterface;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ 
+ /**
+  * Library definition JS form.
+  *
+- * @property \Drupal\library_manager\LibraryDefinitionInterface $entity
++ * @property LibraryDefinitionInterface $entity
+  */
+ class LibraryDefinitionJsDeleteForm extends EntityForm {
+ 
+diff --git a/src/Form/LibraryDefinitionJsForm.php b/src/Form/LibraryDefinitionJsForm.php
+index a7afc1b..dc3ab20 100644
+--- a/src/Form/LibraryDefinitionJsForm.php
++++ b/src/Form/LibraryDefinitionJsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\library_manager\Form;
+ 
++use Drupal\library_manager\LibraryDefinitionInterface;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Url;
+@@ -10,7 +11,7 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+ /**
+  * Library definition js form.
+  *
+- * @property \Drupal\library_manager\LibraryDefinitionInterface $entity
++ * @property LibraryDefinitionInterface $entity
+  */
+ class LibraryDefinitionJsForm extends EntityForm {
+ 
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index d93e872..cbcbcaf 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -16,16 +16,16 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * The library discovery service.
+    *
+-   * @var \Drupal\library_manager\LibraryDiscoveryInterface
++   * @var LibraryDiscoveryInterface
+    */
+   protected $libraryDiscovery;
+ 
+   /**
+    * Constructs the form object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\library_manager\LibraryDiscoveryInterface $library_discovery
++   * @param LibraryDiscoveryInterface $library_discovery
+    *   The discovery service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, LibraryDiscoveryInterface $library_discovery) {
+diff --git a/src/LibraryDefinitionInterface.php b/src/LibraryDefinitionInterface.php
+index b81622c..fd63fd4 100644
+--- a/src/LibraryDefinitionInterface.php
++++ b/src/LibraryDefinitionInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\library_manager;
+ 
++use Drupal\Core\Condition\ConditionInterface;
++use Drupal\Core\Condition\ConditionPluginCollection;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ 
+ /**
+@@ -30,7 +32,7 @@ interface LibraryDefinitionInterface extends ConfigEntityInterface {
+   /**
+    * Gets conditions for this block.
+    *
+-   * @return \Drupal\Core\Condition\ConditionInterface[]|\Drupal\Core\Condition\ConditionPluginCollection
++   * @return ConditionInterface[]|ConditionPluginCollection
+    *   An array or collection of configured condition plugins.
+    */
+   public function getVisibilityConditions();
+@@ -41,7 +43,7 @@ interface LibraryDefinitionInterface extends ConfigEntityInterface {
+    * @param string $instance_id
+    *   The condition plugin instance ID.
+    *
+-   * @return \Drupal\Core\Condition\ConditionInterface
++   * @return ConditionInterface
+    *   A condition plugin.
+    */
+   public function getVisibilityCondition($instance_id);
+diff --git a/src/LibraryDiscovery.php b/src/LibraryDiscovery.php
+index bb84ff9..8460277 100644
+--- a/src/LibraryDiscovery.php
++++ b/src/LibraryDiscovery.php
+@@ -18,14 +18,14 @@ class LibraryDiscovery extends BaseLibraryDiscovery implements LibraryDiscoveryI
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The theme handler service.
+    *
+-   * @var \Drupal\Core\Extension\ThemeHandlerInterface
++   * @var ThemeHandlerInterface
+    */
+   protected $themeHandler;
+ 
+@@ -39,11 +39,11 @@ class LibraryDiscovery extends BaseLibraryDiscovery implements LibraryDiscoveryI
+   /**
+    * Constructs the controller object.
+    *
+-   * @param \Drupal\Core\Cache\CacheCollectorInterface $library_discovery_collector
++   * @param CacheCollectorInterface $library_discovery_collector
+    *   The library discovery cache collector.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+-   * @param \Drupal\Core\Extension\ThemeHandlerInterface $theme_handler
++   * @param ThemeHandlerInterface $theme_handler
+    *   The theme handler service.
+    * @param string $root
+    *   The app root.
+@@ -129,9 +129,11 @@ class LibraryDiscovery extends BaseLibraryDiscovery implements LibraryDiscoveryI
+    * {@inheritdoc}
+    */
+   public function getExtensionPath($extension) {
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Unsupported extension type encountered, using extension.path.resolver instead of extension.list
+     $path = $extension == 'core' ?
+       'core' :
+-      drupal_get_path($this->moduleHandler->moduleExists($extension) ? 'module' : 'theme', $extension);
++      \Drupal::service('extension.path.resolver')->getPath($this->moduleHandler->moduleExists($extension) ? 'module' : 'theme', $extension);
+ 
+     return $path . '/';
+   }
+diff --git a/tests/src/FunctionalJavascript/LibraryFilterTest.php b/tests/src/FunctionalJavascript/LibraryFilterTest.php
+index 22baac5..94adec1 100644
+--- a/tests/src/FunctionalJavascript/LibraryFilterTest.php
++++ b/tests/src/FunctionalJavascript/LibraryFilterTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\library_manager\FunctionalJavascript;
+ 
++use Behat\Mink\Element\NodeElement;
+ use Drupal\FunctionalJavascriptTests\WebDriverTestBase;
+ 
+ /**
+@@ -79,7 +80,7 @@ class LibraryFilterTest extends WebDriverTestBase {
+     $page = $this->getSession()->getPage();
+     $rows = $page->findAll('css', '[data-drupal-selector = "library-list"] tbody tr:not(.empty-row)');
+     $rows = array_filter($rows, function ($row) {
+-      /** @var \Behat\Mink\Element\NodeElement $row */
++      /** @var NodeElement $row */
+       return $row->isVisible();
+     });
+     return count($rows);
+@@ -90,7 +91,7 @@ class LibraryFilterTest extends WebDriverTestBase {
+    */
+   protected function assertEmptyRow($visible) {
+     $page = $this->getSession()->getPage();
+-    /** @var \Behat\Mink\Element\NodeElement $empty_row */
++    /** @var NodeElement $empty_row */
+     $empty_row = $page->findAll('css', '.empty-row')[0];
+     $visible ?
+       $this->assertTrue($empty_row->isVisible()) :

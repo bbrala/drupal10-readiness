@@ -1,0 +1,2844 @@
+diff --git a/modules/entity_share_async/entity_share_async.module b/modules/entity_share_async/entity_share_async.module
+index d414220..400e858 100644
+--- a/modules/entity_share_async/entity_share_async.module
++++ b/modules/entity_share_async/entity_share_async.module
+@@ -6,6 +6,7 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\entity_share_async\Service\QueueHelperInterface;
+ 
+ use Drupal\Core\Form\FormStateInterface;
+ 
+@@ -68,7 +69,7 @@ function entity_share_async_form_entity_share_client_pull_form_alter(&$form, For
+  *
+  * @param array $form
+  *   The form.
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state.
+  */
+ function _entity_share_async_form_submit(array &$form, FormStateInterface $form_state) {
+@@ -78,7 +79,7 @@ function _entity_share_async_form_submit(array &$form, FormStateInterface $form_
+   $channel_id = $form_state->getValue('channel');
+   $import_config_id = $form_state->getValue('import_config');
+ 
+-  /** @var \Drupal\entity_share_async\Service\QueueHelperInterface $queue_helper */
++  /** @var QueueHelperInterface $queue_helper */
+   $queue_helper = \Drupal::service('entity_share_async.queue_helper');
+   $queue_helper->enqueue($remote_id, $channel_id, $import_config_id, $selected_entities);
+ }
+diff --git a/modules/entity_share_async/src/Plugin/QueueWorker/EntityShareAsyncWorker.php b/modules/entity_share_async/src/Plugin/QueueWorker/EntityShareAsyncWorker.php
+index 792a738..2ab4662 100644
+--- a/modules/entity_share_async/src/Plugin/QueueWorker/EntityShareAsyncWorker.php
++++ b/modules/entity_share_async/src/Plugin/QueueWorker/EntityShareAsyncWorker.php
+@@ -27,21 +27,21 @@ class EntityShareAsyncWorker extends QueueWorkerBase implements ContainerFactory
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The import service.
+    *
+-   * @var \Drupal\entity_share_client\Service\ImportServiceInterface
++   * @var ImportServiceInterface
+    */
+   private $importService;
+ 
+   /**
+    * The state storage.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   private $stateStorage;
+ 
+diff --git a/modules/entity_share_async/src/Service/QueueHelper.php b/modules/entity_share_async/src/Service/QueueHelper.php
+index 494d909..e776da1 100644
+--- a/modules/entity_share_async/src/Service/QueueHelper.php
++++ b/modules/entity_share_async/src/Service/QueueHelper.php
+@@ -17,23 +17,23 @@ class QueueHelper implements QueueHelperInterface {
+   /**
+    * The queue factory service.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The state service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * QueueHelper constructor.
+    *
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   The queue factory service.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state service.
+    */
+   public function __construct(
+diff --git a/modules/entity_share_async/tests/src/Functional/EntityShareAsyncFunctionalTest.php b/modules/entity_share_async/tests/src/Functional/EntityShareAsyncFunctionalTest.php
+index 2c04dee..607192a 100644
+--- a/modules/entity_share_async/tests/src/Functional/EntityShareAsyncFunctionalTest.php
++++ b/modules/entity_share_async/tests/src/Functional/EntityShareAsyncFunctionalTest.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\entity_share_async\Functional;
+ 
++use Drupal\entity_share_async\Service\QueueHelperInterface;
+ use Drupal\node\NodeInterface;
+ use Drupal\Tests\entity_share_client\Functional\EntityShareClientFunctionalTestBase;
+ 
+@@ -77,7 +78,7 @@ class EntityShareAsyncFunctionalTest extends EntityShareClientFunctionalTestBase
+     $state_storage = $this->container->get('state');
+     $channel_id = static::$entityTypeId . '_' . static::$entityBundleId . '_' . static::$entityLangcode;
+ 
+-    /** @var \Drupal\entity_share_async\Service\QueueHelperInterface $queue_helper */
++    /** @var QueueHelperInterface $queue_helper */
+     $queue_helper = $this->container->get('entity_share_async.queue_helper');
+     $queue_helper->enqueue($this->remote->id(), $channel_id, $this::IMPORT_CONFIG_ID, ['es_test']);
+ 
+diff --git a/modules/entity_share_client/entity_share_client.install b/modules/entity_share_client/entity_share_client.install
+index 68a5456..9710939 100644
+--- a/modules/entity_share_client/entity_share_client.install
++++ b/modules/entity_share_client/entity_share_client.install
+@@ -6,6 +6,11 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationPluginManager;
++use Drupal\entity_share_client\Entity\RemoteInterface;
++use Drupal\entity_share_client\Plugin\ClientAuthorization\BasicAuth;
++use Drupal\entity_share_client\Plugin\ClientAuthorization\Anonymous;
++use Drupal\entity_share_client\Entity\ImportConfig;
+ 
+ use Drupal\Core\Config\Entity\ConfigEntityType;
+ use Drupal\Core\Entity\ContentEntityType;
+@@ -57,11 +62,11 @@ function entity_share_client_update_8302() {
+  * Move any basic auth credentials stored in configuration into the new plugin.
+  */
+ function entity_share_client_update_8303() {
+-  /** @var \Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationPluginManager $manager */
++  /** @var ClientAuthorizationPluginManager $manager */
+   $manager = \Drupal::service('plugin.manager.entity_share_client_authorization');
+   $state = \Drupal::state();
+   // Iterate on remotes.
+-  /** @var \Drupal\entity_share_client\Entity\RemoteInterface[] $remotes */
++  /** @var RemoteInterface[] $remotes */
+   $remotes = Remote::loadMultiple();
+   foreach ($remotes as $remote) {
+     // Check that the remote config had not already been converted into the new
+@@ -73,7 +78,7 @@ function entity_share_client_update_8303() {
+     if (!empty($remote->get('basic_auth_username'))
+       && !empty($remote->get('basic_auth_password'))
+     ) {
+-      /** @var \Drupal\entity_share_client\Plugin\ClientAuthorization\BasicAuth $plugin */
++      /** @var BasicAuth $plugin */
+       $plugin = $manager->createInstance('basic_auth');
+       $configuration = $plugin->getConfiguration();
+       // For the update. Init plugin UUID with the same UUID as the remote
+@@ -85,7 +90,7 @@ function entity_share_client_update_8303() {
+       $state->set($configuration['uuid'], $credentials);
+     }
+     else {
+-      /** @var \Drupal\entity_share_client\Plugin\ClientAuthorization\Anonymous $plugin */
++      /** @var Anonymous $plugin */
+       $plugin = $manager->createInstance('anonymous');
+       $configuration = $plugin->getConfiguration();
+       // For the update. Init plugin UUID with the same UUID as the remote
+@@ -110,7 +115,7 @@ function entity_share_client_update_8303() {
+  */
+ function entity_share_client_update_8304() {
+   try {
+-    /** @var \Drupal\entity_share_client\Entity\ImportConfig[] $import_config_items */
++    /** @var ImportConfig[] $import_config_items */
+     $import_config_items = \Drupal::entityTypeManager()->getStorage('import_config')
+       ->loadMultiple();
+     foreach ($import_config_items as $item) {
+diff --git a/modules/entity_share_client/entity_share_client.module b/modules/entity_share_client/entity_share_client.module
+index 5c0d8fc..97746af 100644
+--- a/modules/entity_share_client/entity_share_client.module
++++ b/modules/entity_share_client/entity_share_client.module
+@@ -6,6 +6,7 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\entity_share_client\Service\StateInformationInterface;
+ 
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface;
+@@ -16,7 +17,7 @@ use Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface;
+  * Delete "Entity import status" when its entity is deleted.
+  */
+ function entity_share_client_entity_delete(EntityInterface $entity) {
+-  /** @var \Drupal\entity_share_client\Service\StateInformationInterface $state_information_service */
++  /** @var StateInformationInterface $state_information_service */
+   $state_information_service = \Drupal::service('entity_share_client.state_information');
+   // This will delete "Entity import status" for all languages.
+   $state_information_service->deleteImportStatusOfEntity($entity);
+@@ -28,7 +29,7 @@ function entity_share_client_entity_delete(EntityInterface $entity) {
+  * Delete "Entity import status" when translation of an entity is deleted.
+  */
+ function entity_share_client_entity_translation_delete(EntityInterface $translation) {
+-  /** @var \Drupal\entity_share_client\Service\StateInformationInterface $state_information_service */
++  /** @var StateInformationInterface $state_information_service */
+   $state_information_service = \Drupal::service('entity_share_client.state_information');
+   // This deletes "Entity import status" only for translation being deleted.
+   $state_information_service->deleteImportStatusOfEntity($translation, $translation->language()->getId());
+diff --git a/modules/entity_share_client/entity_share_client.post_update.php b/modules/entity_share_client/entity_share_client.post_update.php
+index 3ca20ad..c1532fb 100644
+--- a/modules/entity_share_client/entity_share_client.post_update.php
++++ b/modules/entity_share_client/entity_share_client.post_update.php
+@@ -6,6 +6,10 @@
+  */
+ 
+ declare(strict_types = 1);
++use Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Core\Entity\EntityFieldManagerInterface;
++use Drupal\entity_share_client\Entity\ImportConfigInterface;
+ 
+ use Drupal\Core\Field\BaseFieldDefinition;
+ use Drupal\entity_share_client\Entity\EntityImportStatusInterface;
+@@ -60,18 +64,18 @@ function entity_share_client_post_update_create_default_import_config() {
+  */
+ function entity_share_client_post_update_convert_policy_to_string(&$sandbox) {
+   $definition_update_manager = \Drupal::entityDefinitionUpdateManager();
+-  /** @var \Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface $last_installed_schema_repository */
++  /** @var EntityLastInstalledSchemaRepositoryInterface $last_installed_schema_repository */
+   $last_installed_schema_repository = \Drupal::service('entity.last_installed_schema.repository');
+ 
+   $entity_type = $definition_update_manager->getEntityType('entity_import_status');
+   $field_storage_definitions = $last_installed_schema_repository->getLastInstalledFieldStorageDefinitions('entity_import_status');
+   if (empty($entity_type->getClass())) {
+-    /** @var \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager */
++    /** @var EntityTypeManagerInterface $entity_type_manager */
+     $entity_type_manager = \Drupal::service('entity_type.manager');
+     $entity_type = $entity_type_manager->getDefinition($entity_type->id());
+   }
+   if (empty($field_storage_definitions)) {
+-    /** @var \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager */
++    /** @var EntityFieldManagerInterface $entity_field_manager */
+     $entity_field_manager = \Drupal::service('entity_field.manager');
+     $field_storage_definitions = $entity_field_manager->getFieldStorageDefinitions('entity_import_status');
+     $last_installed_schema_repository->setLastInstalledFieldStorageDefinitions('entity_import_status', $field_storage_definitions);
+@@ -108,7 +112,7 @@ function entity_share_client_post_update_set_new_default_policy() {
+  * Set new default settings on default data processor.
+  */
+ function entity_share_client_post_update_update_default_data_processor_policy_settings() {
+-  /** @var \Drupal\entity_share_client\Entity\ImportConfigInterface[] $import_configs */
++  /** @var ImportConfigInterface[] $import_configs */
+   $import_configs = \Drupal::entityTypeManager()->getStorage('import_config')
+     ->loadMultiple();
+ 
+@@ -126,7 +130,7 @@ function entity_share_client_post_update_update_default_data_processor_policy_se
+  * Set a default max size to import config.
+  */
+ function entity_share_client_post_update_set_default_max_size() {
+-  /** @var \Drupal\entity_share_client\Entity\ImportConfigInterface[] $import_configs */
++  /** @var ImportConfigInterface[] $import_configs */
+   $import_configs = \Drupal::entityTypeManager()
+     ->getStorage('import_config')
+     ->loadMultiple();
+diff --git a/modules/entity_share_client/src/Annotation/ClientAuthorization.php b/modules/entity_share_client/src/Annotation/ClientAuthorization.php
+index 6ad1e7b..721ed03 100644
+--- a/modules/entity_share_client/src/Annotation/ClientAuthorization.php
++++ b/modules/entity_share_client/src/Annotation/ClientAuthorization.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -33,7 +34,7 @@ class ClientAuthorization extends Plugin {
+   /**
+    * A human readable name for the authorization type provided by this plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/modules/entity_share_client/src/Annotation/ImportProcessor.php b/modules/entity_share_client/src/Annotation/ImportProcessor.php
+index 4cc8cab..fc4eec6 100644
+--- a/modules/entity_share_client/src/Annotation/ImportProcessor.php
++++ b/modules/entity_share_client/src/Annotation/ImportProcessor.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -25,14 +26,14 @@ class ImportProcessor extends Plugin {
+   /**
+    * The plugin label.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    */
+   public $label;
+ 
+   /**
+    * The plugin description.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    */
+   public $description;
+ 
+diff --git a/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationInterface.php b/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationInterface.php
+index 8da3bf1..6e2263f 100644
+--- a/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationInterface.php
++++ b/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationInterface.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\ClientAuthorization;
+ 
++use GuzzleHttp\Client;
+ use Drupal\Component\Plugin\ConfigurableInterface;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use Drupal\Core\Plugin\PluginFormInterface;
+@@ -42,7 +43,7 @@ interface ClientAuthorizationInterface extends PluginInspectionInterface, Plugin
+    * @param string $url
+    *   The remote url.
+    *
+-   * @return \GuzzleHttp\Client
++   * @return Client
+    *   The HTTP client.
+    */
+   public function getJsonApiClient($url);
+@@ -53,7 +54,7 @@ interface ClientAuthorizationInterface extends PluginInspectionInterface, Plugin
+    * @param string $url
+    *   The url to set in the client.
+    *
+-   * @return \GuzzleHttp\Client
++   * @return Client
+    *   The HTTP client.
+    */
+   public function getClient($url);
+diff --git a/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationPluginBase.php b/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationPluginBase.php
+index 2c21a6d..388ba58 100644
+--- a/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationPluginBase.php
++++ b/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationPluginBase.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\ClientAuthorization;
+ 
++use Drupal\Core\KeyValueStore\KeyValueStoreInterface;
+ use Drupal\Component\Uuid\UuidInterface;
+ use Drupal\Core\KeyValueStore\KeyValueFactoryInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+@@ -22,28 +23,28 @@ abstract class ClientAuthorizationPluginBase extends PluginBase implements Clien
+   /**
+    * Injected key service.
+    *
+-   * @var \Drupal\entity_share_client\Service\KeyProvider
++   * @var KeyProvider
+    */
+   protected $keyService;
+ 
+   /**
+    * The key value store to use.
+    *
+-   * @var \Drupal\Core\KeyValueStore\KeyValueStoreInterface
++   * @var KeyValueStoreInterface
+    */
+   protected $keyValueStore;
+ 
+   /**
+    * Injected UUID service.
+    *
+-   * @var \Drupal\Component\Uuid\UuidInterface
++   * @var UuidInterface
+    */
+   protected $uuid;
+ 
+   /**
+    * Injected HTTP client factory.
+    *
+-   * @var \Drupal\Core\Http\ClientFactory
++   * @var ClientFactory
+    */
+   protected $httpClientFactory;
+ 
+diff --git a/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationPluginManager.php b/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationPluginManager.php
+index c3d4476..fa2e89d 100644
+--- a/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationPluginManager.php
++++ b/modules/entity_share_client/src/ClientAuthorization/ClientAuthorizationPluginManager.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\ClientAuthorization;
+ 
++use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Plugin\DefaultPluginManager;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+@@ -19,9 +20,9 @@ class ClientAuthorizationPluginManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+@@ -37,17 +38,17 @@ class ClientAuthorizationPluginManager extends DefaultPluginManager {
+    * @param string $uuid
+    *   Allow the uuid to be explicitly set.
+    *
+-   * @return \Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface[]
++   * @return ClientAuthorizationInterface[]
+    *   The array of plugins.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function getAvailablePlugins($uuid = '') {
+     $plugins = [];
+     $configuration = empty($uuid) ? [] : ['uuid' => $uuid];
+     $definitions = $this->getDefinitions();
+     foreach ($definitions as $definition) {
+-      /** @var \Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface $plugin */
++      /** @var ClientAuthorizationInterface $plugin */
+       $plugin = $this->createInstance($definition['id'], $configuration);
+       if ($plugin->checkIfAvailable()) {
+         $plugins[$plugin->getPluginId()] = $plugin;
+diff --git a/modules/entity_share_client/src/Commands/EntityShareClientCommands.php b/modules/entity_share_client/src/Commands/EntityShareClientCommands.php
+index 79976cd..bd668e7 100644
+--- a/modules/entity_share_client/src/Commands/EntityShareClientCommands.php
++++ b/modules/entity_share_client/src/Commands/EntityShareClientCommands.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Commands;
+ 
++use Drupal\entity_share_client\Entity\RemoteInterface;
+ use Consolidation\AnnotatedCommand\CommandData;
+ use Consolidation\AnnotatedCommand\CommandError;
+ use Consolidation\SiteAlias\SiteAliasManagerAwareInterface;
+@@ -27,32 +28,32 @@ class EntityShareClientCommands extends DrushCommands implements SiteAliasManage
+   /**
+    * The interoperability CLI service.
+    *
+-   * @var \Drupal\entity_share_client\Service\EntityShareClientCliService
++   * @var EntityShareClientCliService
+    */
+   protected $cliService;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The remote manager.
+    *
+-   * @var \Drupal\entity_share_client\Service\RemoteManagerInterface
++   * @var RemoteManagerInterface
+    */
+   protected $remoteManager;
+ 
+   /**
+    * EntityShareClientCommands constructor.
+    *
+-   * @param \Drupal\entity_share_client\Service\EntityShareClientCliService $cliService
++   * @param EntityShareClientCliService $cliService
+    *   The CLI service which allows interoperability.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+-   * @param \Drupal\entity_share_client\Service\RemoteManagerInterface $remoteManager
++   * @param RemoteManagerInterface $remoteManager
+    *   The remote manager.
+    */
+   public function __construct(
+@@ -114,7 +115,7 @@ class EntityShareClientCommands extends DrushCommands implements SiteAliasManage
+   public function pullAllChannels(string $remote_id, string $import_config_id, $options = ['ignore-channel-ids' => '']): void {
+     $ignoredChannelIds = explode(',', $options['ignore-channel-ids']);
+ 
+-    /** @var \Drupal\entity_share_client\Entity\RemoteInterface $remote */
++    /** @var RemoteInterface $remote */
+     $remote = $this->entityTypeManager->getStorage('remote')->load($remote_id);
+     $channels = $this->remoteManager->getChannelsInfos($remote);
+ 
+@@ -148,10 +149,10 @@ class EntityShareClientCommands extends DrushCommands implements SiteAliasManage
+   /**
+    * Validate that a remote ID is valid.
+    *
+-   * @param \Consolidation\AnnotatedCommand\CommandData $commandData
++   * @param CommandData $commandData
+    *   The command data.
+    *
+-   * @return \Consolidation\AnnotatedCommand\CommandError|null
++   * @return CommandError|null
+    *   NULL if no validation error is found. An error otherwise.
+    *
+    * @hook validate @validate-remote-id
+@@ -172,10 +173,10 @@ class EntityShareClientCommands extends DrushCommands implements SiteAliasManage
+   /**
+    * Validate that an import config ID is valid.
+    *
+-   * @param \Consolidation\AnnotatedCommand\CommandData $commandData
++   * @param CommandData $commandData
+    *   The command data.
+    *
+-   * @return \Consolidation\AnnotatedCommand\CommandError|null
++   * @return CommandError|null
+    *   NULL if no validation error is found. An error otherwise.
+    *
+    * @hook validate @validate-import-config-id
+diff --git a/modules/entity_share_client/src/Entity/EntityImportStatus.php b/modules/entity_share_client/src/Entity/EntityImportStatus.php
+index 0869127..9a7ae8e 100644
+--- a/modules/entity_share_client/src/Entity/EntityImportStatus.php
++++ b/modules/entity_share_client/src/Entity/EntityImportStatus.php
+@@ -45,7 +45,7 @@ class EntityImportStatus extends ContentEntityBase implements EntityImportStatus
+    * {@inheritdoc}
+    */
+   public static function baseFieldDefinitions(EntityTypeInterface $entity_type) {
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition[] $fields */
++    /** @var BaseFieldDefinition[] $fields */
+     $fields = parent::baseFieldDefinitions($entity_type);
+ 
+     // The fields used to relate to the imported entity.
+diff --git a/modules/entity_share_client/src/Entity/Remote.php b/modules/entity_share_client/src/Entity/Remote.php
+index 3ca8080..56f325a 100644
+--- a/modules/entity_share_client/src/Entity/Remote.php
++++ b/modules/entity_share_client/src/Entity/Remote.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Entity;
+ 
++use Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationPluginManager;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface;
+@@ -99,7 +100,7 @@ class Remote extends ConfigEntityBase implements RemoteInterface {
+     if (!empty($pluginData['pid'])) {
+       // DI not available in entities:
+       // https://www.drupal.org/project/drupal/issues/2142515.
+-      /** @var \Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationPluginManager $manager */
++      /** @var ClientAuthorizationPluginManager $manager */
+       $manager = \Drupal::service('plugin.manager.entity_share_client_authorization');
+       $pluginId = $pluginData['pid'];
+       unset($pluginData['pid']);
+diff --git a/modules/entity_share_client/src/Entity/RemoteInterface.php b/modules/entity_share_client/src/Entity/RemoteInterface.php
+index c843a44..49ad589 100644
+--- a/modules/entity_share_client/src/Entity/RemoteInterface.php
++++ b/modules/entity_share_client/src/Entity/RemoteInterface.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Entity;
+ 
++use Drupal\Component\Plugin\Exception\PluginException;
++use GuzzleHttp\Client;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ use Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface;
+ 
+@@ -15,7 +17,7 @@ interface RemoteInterface extends ConfigEntityInterface {
+   /**
+    * Copies plugin specific data into the Remote.
+    *
+-   * @param \Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface $plugin
++   * @param ClientAuthorizationInterface $plugin
+    *   The authorization plugin to merge.
+    */
+   public function mergePluginConfig(ClientAuthorizationInterface $plugin);
+@@ -23,10 +25,10 @@ interface RemoteInterface extends ConfigEntityInterface {
+   /**
+    * Helper method to instantiate auth plugin from this entity.
+    *
+-   * @return \Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface|null
++   * @return ClientAuthorizationInterface|null
+    *   The plugin if it is defined.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   public function getAuthPlugin();
+ 
+@@ -36,7 +38,7 @@ interface RemoteInterface extends ConfigEntityInterface {
+    * @param bool $json
+    *   Is this client for JSON operations?
+    *
+-   * @return \GuzzleHttp\Client
++   * @return Client
+    *   The configured client.
+    */
+   public function getHttpClient(bool $json);
+diff --git a/modules/entity_share_client/src/EntityImportStatusListBuilder.php b/modules/entity_share_client/src/EntityImportStatusListBuilder.php
+index d3b4cef..73dbd4e 100644
+--- a/modules/entity_share_client/src/EntityImportStatusListBuilder.php
++++ b/modules/entity_share_client/src/EntityImportStatusListBuilder.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+@@ -31,54 +32,54 @@ class EntityImportStatusListBuilder extends EntityListBuilder {
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityTypeBundleInfo;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The import policies manager.
+    *
+-   * @var \Drupal\entity_share_client\ImportPolicy\ImportPolicyPluginManager
++   * @var ImportPolicyPluginManager
+    */
+   protected $policiesManager;
+ 
+   /**
+    * Constructs a new UserListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle info.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\entity_share_client\ImportPolicy\ImportPolicyPluginManager $policies_manager
++   * @param ImportPolicyPluginManager $policies_manager
+    *   The policies manager.
+    */
+   public function __construct(
+@@ -147,7 +148,7 @@ class EntityImportStatusListBuilder extends EntityListBuilder {
+     $row['entity_id'] = $entity->entity_id->value;
+     $row['langcode'] = $this->languageManager->getLanguage($entity->langcode->value)->getName();
+     // Label and link to entity should respect the language.
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $imported_entity_translation */
++    /** @var ContentEntityInterface $imported_entity_translation */
+     $imported_entity_translation = $imported_entity->getTranslation($entity->langcode->value);
+     try {
+       $row['entity_label'] = $imported_entity_translation->toLink($imported_entity_translation->label());
+diff --git a/modules/entity_share_client/src/Event/RelationshipFieldValueEvent.php b/modules/entity_share_client/src/Event/RelationshipFieldValueEvent.php
+index 0b26071..3631943 100644
+--- a/modules/entity_share_client/src/Event/RelationshipFieldValueEvent.php
++++ b/modules/entity_share_client/src/Event/RelationshipFieldValueEvent.php
+@@ -4,8 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\Core\Field\FieldItemListInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Defines a RelationshipFieldValueEvent event.
+@@ -17,7 +17,7 @@ class RelationshipFieldValueEvent extends Event {
+   /**
+    * A FieldItemList object.
+    *
+-   * @var \Drupal\Core\Field\FieldItemListInterface
++   * @var FieldItemListInterface
+    */
+   protected $field;
+ 
+@@ -31,7 +31,7 @@ class RelationshipFieldValueEvent extends Event {
+   /**
+    * Constructs a new RelationshipFieldValueEvent.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $field
++   * @param FieldItemListInterface $field
+    *   A FieldItemList object.
+    * @param array $field_value
+    *   An array of the field value to alter.
+@@ -44,7 +44,7 @@ class RelationshipFieldValueEvent extends Event {
+   /**
+    * Returns the FieldItemList object.
+    *
+-   * @return \Drupal\Core\Field\FieldItemListInterface
++   * @return FieldItemListInterface
+    *   Returns the FieldItemList object.
+    */
+   public function getField() {
+diff --git a/modules/entity_share_client/src/EventSubscriber/EntityReferenceRevisionsRelationshipSubscriber.php b/modules/entity_share_client/src/EventSubscriber/EntityReferenceRevisionsRelationshipSubscriber.php
+index d960994..5d3eede 100644
+--- a/modules/entity_share_client/src/EventSubscriber/EntityReferenceRevisionsRelationshipSubscriber.php
++++ b/modules/entity_share_client/src/EventSubscriber/EntityReferenceRevisionsRelationshipSubscriber.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\EventSubscriber;
+ 
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\entity_share_client\Event\RelationshipFieldValueEvent;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+@@ -18,14 +19,14 @@ class EntityReferenceRevisionsRelationshipSubscriber implements EventSubscriberI
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -48,7 +49,7 @@ class EntityReferenceRevisionsRelationshipSubscriber implements EventSubscriberI
+    *
+    * Last revision of the entity on the client site.
+    *
+-   * @param \Drupal\entity_share_client\Event\RelationshipFieldValueEvent $event
++   * @param RelationshipFieldValueEvent $event
+    *   The event containing the field value.
+    */
+   public function alterRelationshipValue(RelationshipFieldValueEvent $event) {
+@@ -61,7 +62,7 @@ class EntityReferenceRevisionsRelationshipSubscriber implements EventSubscriberI
+       $main_property = $field->getItemDefinition()->getMainPropertyName();
+       $field_value = $event->getFieldValue();
+ 
+-      /** @var \Drupal\Core\Entity\ContentEntityInterface $referenced_entity */
++      /** @var ContentEntityInterface $referenced_entity */
+       $referenced_entity = $this->entityTypeManager->getStorage($entity_type)->load($field_value[$main_property]);
+       $last_revision_id = $referenced_entity->getRevisionId();
+ 
+diff --git a/modules/entity_share_client/src/Form/ImportConfigForm.php b/modules/entity_share_client/src/Form/ImportConfigForm.php
+index 1ce10d6..98bb111 100644
+--- a/modules/entity_share_client/src/Form/ImportConfigForm.php
++++ b/modules/entity_share_client/src/Form/ImportConfigForm.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Form;
+ 
++use Drupal\entity_share_client\Entity\ImportConfigInterface;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -22,23 +23,23 @@ class ImportConfigForm extends EntityForm {
+   /**
+    * The import processor plugin manager.
+    *
+-   * @var \Drupal\entity_share_client\ImportProcessor\ImportProcessorPluginManager
++   * @var ImportProcessorPluginManager
+    */
+   protected $importProcessorPluginManager;
+ 
+   /**
+    * The import config manipulator.
+    *
+-   * @var \Drupal\entity_share_client\Service\ImportConfigManipulatorInterface
++   * @var ImportConfigManipulatorInterface
+    */
+   protected $importConfigManipulator;
+ 
+   /**
+    * Constructs an ImportConfigForm object.
+    *
+-   * @param \Drupal\entity_share_client\ImportProcessor\ImportProcessorPluginManager $import_processor_plugin_manager
++   * @param ImportProcessorPluginManager $import_processor_plugin_manager
+    *   The import processor plugin manager.
+-   * @param \Drupal\entity_share_client\Service\ImportConfigManipulatorInterface $import_config_manipulator
++   * @param ImportConfigManipulatorInterface $import_config_manipulator
+    *   The import config manipulator.
+    */
+   public function __construct(
+@@ -65,7 +66,7 @@ class ImportConfigForm extends EntityForm {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\entity_share_client\Entity\ImportConfigInterface $import_config */
++    /** @var ImportConfigInterface $import_config */
+     $import_config = $this->entity;
+     $form['label'] = [
+       '#type' => 'textfield',
+@@ -109,7 +110,7 @@ class ImportConfigForm extends EntityForm {
+     }
+ 
+     $stages = $this->importProcessorPluginManager->getProcessingStages();
+-    /** @var \Drupal\entity_share_client\ImportProcessor\ImportProcessorInterface[][] $processors_by_stage */
++    /** @var ImportProcessorInterface[][] $processors_by_stage */
+     $processors_by_stage = [];
+     foreach ($all_processors as $processor_id => $processor) {
+       foreach (array_keys($stages) as $stage) {
+@@ -265,7 +266,7 @@ class ImportConfigForm extends EntityForm {
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+     $values = $form_state->getValues();
+-    /** @var \Drupal\entity_share_client\Entity\ImportConfigInterface $import_config */
++    /** @var ImportConfigInterface $import_config */
+     $import_config = $this->entity;
+ 
+     // Store processor settings.
+@@ -311,11 +312,11 @@ class ImportConfigForm extends EntityForm {
+   /**
+    * Retrieves all available processors.
+    *
+-   * @return \Drupal\entity_share_client\ImportProcessor\ImportProcessorInterface[]
++   * @return ImportProcessorInterface[]
+    *   The import processors.
+    */
+   protected function getAllProcessors() {
+-    /** @var \Drupal\entity_share_client\Entity\ImportConfigInterface $import_config */
++    /** @var ImportConfigInterface $import_config */
+     $import_config = $this->entity;
+     $processors = $this->importConfigManipulator->getImportProcessors($import_config);
+ 
+diff --git a/modules/entity_share_client/src/Form/PullForm.php b/modules/entity_share_client/src/Form/PullForm.php
+index f743443..48dc4e2 100644
+--- a/modules/entity_share_client/src/Form/PullForm.php
++++ b/modules/entity_share_client/src/Form/PullForm.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Form;
+ 
++use Drupal\entity_share_client\Entity\RemoteInterface;
++use Symfony\Component\HttpFoundation\ParameterBag;
++use Drupal\entity_share_client\Entity\ImportConfigInterface;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Component\Render\MarkupInterface;
+ use Drupal\Component\Serialization\Json;
+@@ -35,7 +38,7 @@ class PullForm extends FormBase {
+   /**
+    * The remote websites known from the website.
+    *
+-   * @var \Drupal\entity_share_client\Entity\RemoteInterface[]
++   * @var RemoteInterface[]
+    */
+   protected $remoteWebsites;
+ 
+@@ -56,63 +59,63 @@ class PullForm extends FormBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The remote manager.
+    *
+-   * @var \Drupal\entity_share_client\Service\RemoteManagerInterface
++   * @var RemoteManagerInterface
+    */
+   protected $remoteManager;
+ 
+   /**
+    * The form helper.
+    *
+-   * @var \Drupal\entity_share_client\Service\FormHelperInterface
++   * @var FormHelperInterface
+    */
+   protected $formHelper;
+ 
+   /**
+    * Query string parameters ($_GET).
+    *
+-   * @var \Symfony\Component\HttpFoundation\ParameterBag
++   * @var ParameterBag
+    */
+   protected $query;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The renderer service.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * The import service.
+    *
+-   * @var \Drupal\entity_share_client\Service\ImportServiceInterface
++   * @var ImportServiceInterface
+    */
+   protected $importService;
+ 
+   /**
+    * The pager manager service.
+    *
+-   * @var \Drupal\Core\Pager\PagerManagerInterface
++   * @var PagerManagerInterface
+    */
+   protected $pagerManager;
+ 
+@@ -126,23 +129,23 @@ class PullForm extends FormBase {
+   /**
+    * Constructs a ContentEntityForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\entity_share_client\Service\RemoteManagerInterface $remote_manager
++   * @param RemoteManagerInterface $remote_manager
+    *   The remote manager service.
+-   * @param \Drupal\entity_share_client\Service\FormHelperInterface $form_helper
++   * @param FormHelperInterface $form_helper
+    *   The form helper service.
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request_stack
++   * @param RequestStack $request_stack
+    *   The request stack.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\Core\Render\RendererInterface $renderer
++   * @param RendererInterface $renderer
+    *   The renderer service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+-   * @param \Drupal\entity_share_client\Service\ImportServiceInterface $import_service
++   * @param ImportServiceInterface $import_service
+    *   The import service.
+-   * @param \Drupal\Core\Pager\PagerManagerInterface $pager_manager
++   * @param PagerManagerInterface $pager_manager
+    *   The pager manager service.
+    */
+   public function __construct(
+@@ -278,7 +281,7 @@ class PullForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function validateSelectedEntities(array &$form, FormStateInterface $form_state) {
+@@ -296,7 +299,7 @@ class PullForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function synchronizeSelectedEntities(array &$form, FormStateInterface $form_state) {
+@@ -314,7 +317,7 @@ class PullForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function importChannel(array &$form, FormStateInterface $form_state) {
+@@ -370,7 +373,7 @@ class PullForm extends FormBase {
+   /**
+    * Builds a required select element, disabled if only one option exists.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+    * @param string $field
+    *   The form field key.
+@@ -409,7 +412,7 @@ class PullForm extends FormBase {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+    *
+    * @return array
+@@ -425,7 +428,7 @@ class PullForm extends FormBase {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+    *
+    * @return array
+@@ -441,7 +444,7 @@ class PullForm extends FormBase {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+    */
+   protected function buildChannelSelect(array &$form, FormStateInterface $form_state) {
+@@ -491,7 +494,7 @@ class PullForm extends FormBase {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+    */
+   protected function buildEntitiesSelectTable(array &$form, FormStateInterface $form_state) {
+@@ -510,7 +513,7 @@ class PullForm extends FormBase {
+ 
+     // At this step we have the channels infos, the selected channel and the
+     // selected import config, so we can "compute" the max size.
+-    /** @var \Drupal\entity_share_client\Entity\ImportConfigInterface $import_config */
++    /** @var ImportConfigInterface $import_config */
+     $import_config = $this->entityTypeManager->getStorage('import_config')->load($selected_import_config);
+     $this->maxSize = EntityShareUtility::getMaxSize($import_config, $selected_channel, $this->channelsInfos);
+ 
+@@ -759,7 +762,7 @@ class PullForm extends FormBase {
+    *
+    * Inspired from \Drupal\Core\Utility\TableSort::header().
+    *
+-   * @param \Drupal\Component\Render\MarkupInterface $header
++   * @param MarkupInterface $header
+    *   The header label.
+    * @param string $header_machine_name
+    *   The header machine name.
+@@ -826,7 +829,7 @@ class PullForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function goToPage(array &$form, FormStateInterface $form_state) {
+@@ -840,7 +843,7 @@ class PullForm extends FormBase {
+   /**
+    * Helper function to redirect with the form to right page to handle pager.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    * @param string $link_name
+    *   The link name. Possibles values: first, prev, next, last.
+@@ -881,7 +884,7 @@ class PullForm extends FormBase {
+    *   - Import config
+    *   - Search keyword.
+    *
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    * @param array $additional_query_parameters
+    *   Array of additional query parameters, if needed.
+@@ -904,7 +907,7 @@ class PullForm extends FormBase {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function resetSort(array &$form, FormStateInterface $form_state) {
+diff --git a/modules/entity_share_client/src/Form/RemoteForm.php b/modules/entity_share_client/src/Form/RemoteForm.php
+index 2024951..beb96b3 100644
+--- a/modules/entity_share_client/src/Form/RemoteForm.php
++++ b/modules/entity_share_client/src/Form/RemoteForm.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Form;
+ 
++use Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationPluginManager;
++use Drupal\entity_share_client\Entity\RemoteInterface;
++use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -22,14 +25,14 @@ class RemoteForm extends EntityForm {
+   /**
+    * Injected plugin service.
+    *
+-   * @var \Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationPluginManager
++   * @var ClientAuthorizationPluginManager
+    */
+   protected $authPluginManager;
+ 
+   /**
+    * The currently configured auth plugin.
+    *
+-   * @var \Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface
++   * @var ClientAuthorizationInterface
+    */
+   protected $authPlugin;
+ 
+@@ -48,7 +51,7 @@ class RemoteForm extends EntityForm {
+   public function form(array $form, FormStateInterface $form_state) {
+     $form = parent::form($form, $form_state);
+ 
+-    /** @var \Drupal\entity_share_client\Entity\RemoteInterface $remote */
++    /** @var RemoteInterface $remote */
+     $remote = $this->entity;
+     $form['label'] = [
+       '#type' => 'textfield',
+@@ -114,7 +117,7 @@ class RemoteForm extends EntityForm {
+    * {@inheritdoc}
+    */
+   public function save(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\entity_share_client\Entity\RemoteInterface $remote */
++    /** @var RemoteInterface $remote */
+     $remote = $this->entity;
+ 
+     if (!empty($form['auth']['#plugins'])) {
+@@ -144,10 +147,10 @@ class RemoteForm extends EntityForm {
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   protected function addAuthOptions(array &$form, FormStateInterface $form_state) {
+     $options = [];
+@@ -209,7 +212,7 @@ class RemoteForm extends EntityForm {
+    *
+    * @param array $form
+    *   The rebuilt form.
+-   * @param \Drupal\Core\Form\FormStateInterface $formState
++   * @param FormStateInterface $formState
+    *   The current form state.
+    *
+    * @return array
+@@ -225,10 +228,10 @@ class RemoteForm extends EntityForm {
+    * @return bool
+    *   True if the remote entity has a plugin.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    */
+   protected function hasAuthPlugin() {
+-    /** @var \Drupal\entity_share_client\Entity\RemoteInterface $remote */
++    /** @var RemoteInterface $remote */
+     $remote = $this->entity;
+     $plugin = $remote->getAuthPlugin();
+     if ($plugin instanceof ClientAuthorizationInterface) {
+@@ -243,10 +246,10 @@ class RemoteForm extends EntityForm {
+    *
+    * @param array $form
+    *   The form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current form state.
+    *
+-   * @return \Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface
++   * @return ClientAuthorizationInterface
+    *   The selected plugin.
+    */
+   protected function getSelectedPlugin(
+@@ -254,7 +257,7 @@ class RemoteForm extends EntityForm {
+     FormStateInterface $form_state) {
+     $authPluginId = $form_state->getValue('pid');
+     $plugins = $form['auth']['#plugins'];
+-    /** @var \Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface $selectedPlugin */
++    /** @var ClientAuthorizationInterface $selectedPlugin */
+     $selectedPlugin = $plugins[$authPluginId];
+     return $selectedPlugin;
+   }
+diff --git a/modules/entity_share_client/src/ImportBatchHelper.php b/modules/entity_share_client/src/ImportBatchHelper.php
+index 9cb572d..e896cc4 100644
+--- a/modules/entity_share_client/src/ImportBatchHelper.php
++++ b/modules/entity_share_client/src/ImportBatchHelper.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client;
+ 
++use Drupal\entity_share_client\Service\ImportServiceInterface;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Component\Utility\NestedArray;
+ use Drupal\Core\StringTranslation\PluralTranslatableMarkup;
+@@ -21,7 +22,7 @@ class ImportBatchHelper {
+   /**
+    * Batch operation.
+    *
+-   * @param \Drupal\entity_share_client\ImportContext $import_context
++   * @param ImportContext $import_context
+    *   The import context.
+    * @param string $url
+    *   The URL to request.
+@@ -29,7 +30,7 @@ class ImportBatchHelper {
+    *   Batch context information.
+    */
+   public static function importUrlBatch(ImportContext $import_context, $url, &$context) {
+-    /** @var \Drupal\entity_share_client\Service\ImportServiceInterface $import_service */
++    /** @var ImportServiceInterface $import_service */
+     $import_service = \Drupal::service('entity_share_client.import_service');
+     $import_prepared = $import_service->prepareImport($import_context);
+     if (!$import_prepared) {
+diff --git a/modules/entity_share_client/src/ImportPolicy/ImportPolicyPluginManager.php b/modules/entity_share_client/src/ImportPolicy/ImportPolicyPluginManager.php
+index 7222d14..8b99951 100644
+--- a/modules/entity_share_client/src/ImportPolicy/ImportPolicyPluginManager.php
++++ b/modules/entity_share_client/src/ImportPolicy/ImportPolicyPluginManager.php
+@@ -27,9 +27,9 @@ class ImportPolicyPluginManager extends DefaultPluginManager {
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+    */
+   public function __construct(
+diff --git a/modules/entity_share_client/src/ImportProcessor/ImportProcessorInterface.php b/modules/entity_share_client/src/ImportProcessor/ImportProcessorInterface.php
+index 171f3a4..2157742 100755
+--- a/modules/entity_share_client/src/ImportProcessor/ImportProcessorInterface.php
++++ b/modules/entity_share_client/src/ImportProcessor/ImportProcessorInterface.php
+@@ -116,7 +116,7 @@ interface ImportProcessorInterface extends ConfigurableInterface {
+    *
+    * If the plugin reacts to this stage.
+    *
+-   * @param \Drupal\entity_share_client\RuntimeImportContext $runtime_import_context
++   * @param RuntimeImportContext $runtime_import_context
+    *   The import context.
+    * @param array $entity_json_data
+    *   The entity JSON data.
+@@ -128,7 +128,7 @@ interface ImportProcessorInterface extends ConfigurableInterface {
+    *
+    * If the plugin reacts to this stage.
+    *
+-   * @param \Drupal\entity_share_client\RuntimeImportContext $runtime_import_context
++   * @param RuntimeImportContext $runtime_import_context
+    *   The import context.
+    * @param array $entity_json_data
+    *   The entity JSON data.
+@@ -143,7 +143,7 @@ interface ImportProcessorInterface extends ConfigurableInterface {
+    *
+    * If the plugin reacts to this stage.
+    *
+-   * @param \Drupal\entity_share_client\RuntimeImportContext $runtime_import_context
++   * @param RuntimeImportContext $runtime_import_context
+    *   The import context.
+    * @param array $entity_json_data
+    *   The entity JSON data.
+@@ -155,9 +155,9 @@ interface ImportProcessorInterface extends ConfigurableInterface {
+    *
+    * If the plugin reacts to this stage.
+    *
+-   * @param \Drupal\entity_share_client\RuntimeImportContext $runtime_import_context
++   * @param RuntimeImportContext $runtime_import_context
+    *   The import context.
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $processed_entity
++   * @param ContentEntityInterface $processed_entity
+    *   The entity being processed.
+    * @param array $entity_json_data
+    *   The entity JSON data.
+@@ -169,9 +169,9 @@ interface ImportProcessorInterface extends ConfigurableInterface {
+    *
+    * If the plugin reacts to this stage.
+    *
+-   * @param \Drupal\entity_share_client\RuntimeImportContext $runtime_import_context
++   * @param RuntimeImportContext $runtime_import_context
+    *   The import context.
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $processed_entity
++   * @param ContentEntityInterface $processed_entity
+    *   The entity being processed.
+    */
+   public function postEntitySave(RuntimeImportContext $runtime_import_context, ContentEntityInterface $processed_entity);
+diff --git a/modules/entity_share_client/src/ImportProcessor/ImportProcessorPluginBase.php b/modules/entity_share_client/src/ImportProcessor/ImportProcessorPluginBase.php
+index 27f4879..e06ea23 100755
+--- a/modules/entity_share_client/src/ImportProcessor/ImportProcessorPluginBase.php
++++ b/modules/entity_share_client/src/ImportProcessor/ImportProcessorPluginBase.php
+@@ -149,7 +149,7 @@ abstract class ImportProcessorPluginBase extends PluginBase implements ImportPro
+    * @param array $form
+    *   An associative array containing the structure of the plugin form as built
+    *   by static::buildConfigurationForm().
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the complete form.
+    */
+   public function validateConfigurationForm(array &$form, FormStateInterface $form_state) {
+@@ -161,7 +161,7 @@ abstract class ImportProcessorPluginBase extends PluginBase implements ImportPro
+    * @param array $form
+    *   An associative array containing the structure of the plugin form as built
+    *   by static::buildConfigurationForm().
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the complete form.
+    */
+   public function submitConfigurationForm(array &$form, FormStateInterface $form_state) {
+diff --git a/modules/entity_share_client/src/ImportProcessor/ImportProcessorPluginManager.php b/modules/entity_share_client/src/ImportProcessor/ImportProcessorPluginManager.php
+index ffaf655..bda79e7 100755
+--- a/modules/entity_share_client/src/ImportProcessor/ImportProcessorPluginManager.php
++++ b/modules/entity_share_client/src/ImportProcessor/ImportProcessorPluginManager.php
+@@ -22,9 +22,9 @@ class ImportProcessorPluginManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+@@ -72,7 +72,7 @@ class ImportProcessorPluginManager extends DefaultPluginManager {
+    * {@inheritdoc}
+    */
+   public function createInstance($plugin_id, array $configuration = []) {
+-    /** @var \Drupal\entity_share_client\ImportProcessor\ImportProcessorInterface $instance */
++    /** @var ImportProcessorInterface $instance */
+     $instance = parent::createInstance($plugin_id);
+     $instance->setConfiguration($configuration);
+     return $instance;
+diff --git a/modules/entity_share_client/src/Plugin/ClientAuthorization/Oauth.php b/modules/entity_share_client/src/Plugin/ClientAuthorization/Oauth.php
+index 3bfee78..41753ed 100644
+--- a/modules/entity_share_client/src/Plugin/ClientAuthorization/Oauth.php
++++ b/modules/entity_share_client/src/Plugin/ClientAuthorization/Oauth.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Plugin\ClientAuthorization;
+ 
++use Drupal\Core\Messenger\MessengerInterface;
++use Psr\Log\LoggerInterface;
++use Drupal\entity_share_client\Entity\RemoteInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationPluginBase;
+ use Drupal\entity_share_client\Entity\Remote;
+@@ -28,14 +31,14 @@ class Oauth extends ClientAuthorizationPluginBase {
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The logger service.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+@@ -229,7 +232,7 @@ class Oauth extends ClientAuthorizationPluginBase {
+   public function submitConfigurationForm(array &$form, FormStateInterface $form_state) {
+     $values = $form_state->getValues();
+     $configuration = $this->getConfiguration();
+-    /** @var \Drupal\entity_share_client\Entity\RemoteInterface $remote */
++    /** @var RemoteInterface $remote */
+     $remote = $form_state->get('remote');
+     $resetConfiguration = $configuration;
+     $provider = $values['credential_provider'];
+@@ -296,7 +299,7 @@ class Oauth extends ClientAuthorizationPluginBase {
+    * @param array $credentials
+    *   Trial credentials.
+    *
+-   * @return \League\OAuth2\Client\Provider\GenericProvider
++   * @return GenericProvider
+    *   An OAuth client provider.
+    */
+   protected function getOauthClient(string $url, array $credentials) {
+@@ -321,12 +324,12 @@ class Oauth extends ClientAuthorizationPluginBase {
+   /**
+    * Helper function to initialize a token.
+    *
+-   * @param \Drupal\entity_share_client\Entity\Remote $remote
++   * @param Remote $remote
+    *   The remote website for which authorization is needed.
+    * @param array $credentials
+    *   Trial credentials.
+    *
+-   * @throws \League\OAuth2\Client\Provider\Exception\IdentityProviderException
++   * @throws IdentityProviderException
+    *   Exception thrown if the provider response contains errors.
+    *
+    * @deprecated in 8.x-3.0-beta4 and will be removed in 4.0.0. Use
+@@ -341,19 +344,18 @@ class Oauth extends ClientAuthorizationPluginBase {
+     $this->initializeToken($remote, $credentials);
+   }
+   // phpcs:enable
+-
+   /**
+    * Helper function to initialize a token.
+    *
+-   * @param \Drupal\entity_share_client\Entity\Remote $remote
++   * @param Remote $remote
+    *   The remote website for which authorization is needed.
+    * @param array $credentials
+    *   Trial credentials.
+    *
+-   * @return \League\OAuth2\Client\Token\AccessTokenInterface
++   * @return AccessTokenInterface
+    *   A valid access token.
+    *
+-   * @throws \League\OAuth2\Client\Provider\Exception\IdentityProviderException
++   * @throws IdentityProviderException
+    *   Exception thrown if the provider response contains errors.
+    */
+   public function initializeToken(Remote $remote, array $credentials) {
+diff --git a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/DefaultDataProcessor.php b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/DefaultDataProcessor.php
+index ed13632..1c6ff39 100644
+--- a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/DefaultDataProcessor.php
++++ b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/DefaultDataProcessor.php
+@@ -4,6 +4,12 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Plugin\EntityShareClient\Processor;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Psr\Log\LoggerInterface;
++use Drupal\Core\Language\LanguageManagerInterface;
++use Drupal\entity_share_client\Service\StateInformationInterface;
++use Drupal\Component\Datetime\TimeInterface;
++use Drupal\entity_share_client\ImportPolicy\ImportPolicyPluginManager;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Language\LanguageInterface;
+@@ -33,42 +39,42 @@ class DefaultDataProcessor extends ImportProcessorPluginBase implements PluginFo
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The Entity import state information service.
+    *
+-   * @var \Drupal\entity_share_client\Service\StateInformationInterface
++   * @var StateInformationInterface
+    */
+   protected $stateInformation;
+ 
+   /**
+    * The Drupal datetime service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The import policies manager.
+    *
+-   * @var \Drupal\entity_share_client\ImportPolicy\ImportPolicyPluginManager
++   * @var ImportPolicyPluginManager
+    */
+   protected $policiesManager;
+ 
+diff --git a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/EmbeddedEntityImporter.php b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/EmbeddedEntityImporter.php
+index 8011622..5b43947 100644
+--- a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/EmbeddedEntityImporter.php
++++ b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/EmbeddedEntityImporter.php
+@@ -55,7 +55,7 @@ class EmbeddedEntityImporter extends EntityReference {
+   /**
+    * Parse text to import embedded entities.
+    *
+-   * @param \Drupal\entity_share_client\RuntimeImportContext $runtime_import_context
++   * @param RuntimeImportContext $runtime_import_context
+    *   The runtime import context.
+    * @param string $text
+    *   The formatted text to parse.
+diff --git a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/EntityReference.php b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/EntityReference.php
+index f17e2db..d9f86ba 100644
+--- a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/EntityReference.php
++++ b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/EntityReference.php
+@@ -4,6 +4,10 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Plugin\EntityShareClient\Processor;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Symfony\Component\EventDispatcher\EventDispatcherInterface;
++use Drupal\entity_share_client\Service\RemoteManagerInterface;
++use Psr\Log\LoggerInterface;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -33,35 +37,35 @@ class EntityReference extends ImportProcessorPluginBase implements PluginFormInt
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The event dispatcher service.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * The remote manager.
+    *
+-   * @var \Drupal\entity_share_client\Service\RemoteManagerInterface
++   * @var RemoteManagerInterface
+    */
+   protected $remoteManager;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Entity reference helper service.
+    *
+-   * @var \Drupal\entity_share_client\Service\EntityReferenceHelperInterface
++   * @var EntityReferenceHelperInterface
+    */
+   protected $entityReferenceHelper;
+ 
+@@ -169,7 +173,7 @@ class EntityReference extends ImportProcessorPluginBase implements PluginFormInt
+ 
+             // Allow to alter the field value with an event.
+             $event = new RelationshipFieldValueEvent($field, $field_value);
+-            $this->eventDispatcher->dispatch(RelationshipFieldValueEvent::EVENT_NAME, $event);
++            $this->eventDispatcher->dispatch($event, RelationshipFieldValueEvent::EVENT_NAME);
+             $field_values[] = $event->getFieldValue();
+           }
+         }
+@@ -232,7 +236,7 @@ class EntityReference extends ImportProcessorPluginBase implements PluginFormInt
+   /**
+    * Helper function.
+    *
+-   * @param \Drupal\entity_share_client\RuntimeImportContext $runtime_import_context
++   * @param RuntimeImportContext $runtime_import_context
+    *   The runtime import context.
+    * @param string $url
+    *   The URL to import.
+diff --git a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/LanguageFallback.php b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/LanguageFallback.php
+index 5975ab5..a6250e2 100644
+--- a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/LanguageFallback.php
++++ b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/LanguageFallback.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Plugin\EntityShareClient\Processor;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Core\Language\LanguageManagerInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Language\LanguageInterface;
+ use Drupal\Core\Plugin\PluginFormInterface;
+@@ -29,14 +31,14 @@ class LanguageFallback extends ImportProcessorPluginBase implements PluginFormIn
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+diff --git a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/LinkInternalContentImporter.php b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/LinkInternalContentImporter.php
+index 58eeb0e..c494e90 100644
+--- a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/LinkInternalContentImporter.php
++++ b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/LinkInternalContentImporter.php
+@@ -50,7 +50,7 @@ class LinkInternalContentImporter extends EntityReference {
+   /**
+    * Attempts to import UUID-enhanced link content.
+    *
+-   * @param \Drupal\entity_share_client\RuntimeImportContext $runtime_import_context
++   * @param RuntimeImportContext $runtime_import_context
+    *   The import context.
+    * @param string $uri
+    *   URI should be in the format entity:[entity_type]/[bundle_name]/[UUID].
+diff --git a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/PhysicalFile.php b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/PhysicalFile.php
+index 938dc57..53414c6 100644
+--- a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/PhysicalFile.php
++++ b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/PhysicalFile.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Plugin\EntityShareClient\Processor;
+ 
++use Drupal\Core\StreamWrapper\StreamWrapperManagerInterface;
++use Psr\Log\LoggerInterface;
++use Drupal\entity_share_client\Service\RemoteManagerInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\File\FileSystemInterface;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -32,28 +35,28 @@ class PhysicalFile extends ImportProcessorPluginBase implements PluginFormInterf
+   /**
+    * The stream wrapper manager.
+    *
+-   * @var \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface
++   * @var StreamWrapperManagerInterface
+    */
+   protected $streamWrapperManager;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The remote manager.
+    *
+-   * @var \Drupal\entity_share_client\Service\RemoteManagerInterface
++   * @var RemoteManagerInterface
+    */
+   protected $remoteManager;
+ 
+   /**
+    * The file system.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var FileSystemInterface
+    */
+   protected $fileSystem;
+ 
+diff --git a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/PreventUpdateProcessor.php b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/PreventUpdateProcessor.php
+index 103fc66..356a4f2 100644
+--- a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/PreventUpdateProcessor.php
++++ b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/PreventUpdateProcessor.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Plugin\EntityShareClient\Processor;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\entity_share_client\Service\StateInformationInterface;
+ use Drupal\Core\Language\LanguageInterface;
+ use Drupal\entity_share_client\ImportProcessor\ImportProcessorPluginBase;
+ use Drupal\entity_share_client\RuntimeImportContext;
+@@ -32,14 +34,14 @@ class PreventUpdateProcessor extends ImportProcessorPluginBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The Entity import state information service.
+    *
+-   * @var \Drupal\entity_share_client\Service\StateInformationInterface
++   * @var StateInformationInterface
+    */
+   protected $stateInformation;
+ 
+diff --git a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/Revision.php b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/Revision.php
+index b9f0312..b670b8f 100644
+--- a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/Revision.php
++++ b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/Revision.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Plugin\EntityShareClient\Processor;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Component\Datetime\TimeInterface;
++use Drupal\entity_share_client\Service\StateInformationInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Plugin\PluginFormInterface;
+@@ -29,21 +32,21 @@ class Revision extends ImportProcessorPluginBase implements PluginFormInterface
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The time service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The Entity import state information service.
+    *
+-   * @var \Drupal\entity_share_client\Service\StateInformationInterface
++   * @var StateInformationInterface
+    */
+   protected $stateInformation;
+ 
+diff --git a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/SkipImported.php b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/SkipImported.php
+index c0cba02..97a7821 100644
+--- a/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/SkipImported.php
++++ b/modules/entity_share_client/src/Plugin/EntityShareClient/Processor/SkipImported.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Plugin\EntityShareClient\Processor;
+ 
++use Drupal\entity_share_client\Service\StateInformationInterface;
++use Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface;
+ use Drupal\entity_share\EntityShareUtility;
+ use Drupal\entity_share_client\ImportProcessor\ImportProcessorPluginBase;
+ use Drupal\entity_share_client\RuntimeImportContext;
+@@ -26,14 +28,14 @@ class SkipImported extends ImportProcessorPluginBase {
+   /**
+    * The Entity import state information service.
+    *
+-   * @var \Drupal\entity_share_client\Service\StateInformationInterface
++   * @var StateInformationInterface
+    */
+   protected $stateInformation;
+ 
+   /**
+    * The resource type repository.
+    *
+-   * @var \Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface
++   * @var ResourceTypeRepositoryInterface
+    */
+   protected $resourceTypeRepository;
+ 
+diff --git a/modules/entity_share_client/src/RuntimeImportContext.php b/modules/entity_share_client/src/RuntimeImportContext.php
+index ab27c20..07b0be3 100644
+--- a/modules/entity_share_client/src/RuntimeImportContext.php
++++ b/modules/entity_share_client/src/RuntimeImportContext.php
+@@ -19,7 +19,7 @@ class RuntimeImportContext {
+   /**
+    * The remote.
+    *
+-   * @var \Drupal\entity_share_client\Entity\RemoteInterface
++   * @var RemoteInterface
+    */
+   protected $remote;
+ 
+@@ -82,7 +82,7 @@ class RuntimeImportContext {
+   /**
+    * The import service used for the import.
+    *
+-   * @var \Drupal\entity_share_client\Service\ImportServiceInterface
++   * @var ImportServiceInterface
+    */
+   protected $importService;
+ 
+@@ -103,7 +103,7 @@ class RuntimeImportContext {
+   /**
+    * Getter.
+    *
+-   * @return \Drupal\entity_share_client\Entity\RemoteInterface
++   * @return RemoteInterface
+    *   The remote.
+    */
+   public function getRemote(): RemoteInterface {
+@@ -113,7 +113,7 @@ class RuntimeImportContext {
+   /**
+    * Setter.
+    *
+-   * @param \Drupal\entity_share_client\Entity\RemoteInterface $remote
++   * @param RemoteInterface $remote
+    *   The remote.
+    */
+   public function setRemote(RemoteInterface $remote): void {
+@@ -283,7 +283,7 @@ class RuntimeImportContext {
+   /**
+    * Getter.
+    *
+-   * @return \Drupal\entity_share_client\Service\ImportServiceInterface
++   * @return ImportServiceInterface
+    *   The import service used for the import.
+    */
+   public function getImportService(): ImportServiceInterface {
+@@ -293,7 +293,7 @@ class RuntimeImportContext {
+   /**
+    * Setter.
+    *
+-   * @param \Drupal\entity_share_client\Service\ImportServiceInterface $importService
++   * @param ImportServiceInterface $importService
+    *   The import service used for the import.
+    */
+   public function setImportService(ImportServiceInterface $importService): void {
+diff --git a/modules/entity_share_client/src/Service/EntityReferenceHelper.php b/modules/entity_share_client/src/Service/EntityReferenceHelper.php
+index f637434..40cdd87 100644
+--- a/modules/entity_share_client/src/Service/EntityReferenceHelper.php
++++ b/modules/entity_share_client/src/Service/EntityReferenceHelper.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+@@ -16,14 +17,14 @@ class EntityReferenceHelper implements EntityReferenceHelperInterface {
+   /**
+    * The entity type definitions.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeInterface[]
++   * @var EntityTypeInterface[]
+    */
+   protected $entityDefinitions;
+ 
+   /**
+    * Class constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(
+diff --git a/modules/entity_share_client/src/Service/EntityReferenceHelperInterface.php b/modules/entity_share_client/src/Service/EntityReferenceHelperInterface.php
+index 4af2aab..3831909 100644
+--- a/modules/entity_share_client/src/Service/EntityReferenceHelperInterface.php
++++ b/modules/entity_share_client/src/Service/EntityReferenceHelperInterface.php
+@@ -31,7 +31,7 @@ interface EntityReferenceHelperInterface {
+    *
+    * Filter on fields not targeting config entities or users.
+    *
+-   * @param \Drupal\Core\Field\FieldItemListInterface $field
++   * @param FieldItemListInterface $field
+    *   The field item list.
+    *
+    * @return int
+diff --git a/modules/entity_share_client/src/Service/EntityShareClientCliService.php b/modules/entity_share_client/src/Service/EntityShareClientCliService.php
+index 69eb2cc..2755ee1 100644
+--- a/modules/entity_share_client/src/Service/EntityShareClientCliService.php
++++ b/modules/entity_share_client/src/Service/EntityShareClientCliService.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Drupal\Core\StringTranslation\TranslationManager;
++use Symfony\Component\Console\Style\StyleInterface;
+ use Drupal\Core\StringTranslation\TranslationInterface;
+ use Drupal\Component\Utility\Timer;
+ use Drupal\entity_share_client\ImportContext;
+@@ -20,23 +22,23 @@ class EntityShareClientCliService {
+   /**
+    * Drupal\Core\StringTranslation\TranslationManager definition.
+    *
+-   * @var \Drupal\Core\StringTranslation\TranslationManager
++   * @var TranslationManager
+    */
+   protected $stringTranslation;
+ 
+   /**
+    * The import service.
+    *
+-   * @var \Drupal\entity_share_client\Service\ImportServiceInterface
++   * @var ImportServiceInterface
+    */
+   protected $importService;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation service.
+-   * @param \Drupal\entity_share_client\Service\ImportServiceInterface $import_service
++   * @param ImportServiceInterface $import_service
+    *   The import service.
+    */
+   public function __construct(
+@@ -56,7 +58,7 @@ class EntityShareClientCliService {
+    *   The remote channel id to import.
+    * @param string $import_config_id
+    *   The import config id to import with.
+-   * @param \Symfony\Component\Console\Style\StyleInterface|\ConfigSplitDrush8Io $input_output
++   * @param StyleInterface|\ConfigSplitDrush8Io $input_output
+    *   The $io interface of the cli tool calling.
+    * @param callable $translate
+    *   The translation function akin to t().
+diff --git a/modules/entity_share_client/src/Service/FormHelper.php b/modules/entity_share_client/src/Service/FormHelper.php
+index 36af3ff..f62dd7d 100644
+--- a/modules/entity_share_client/src/Service/FormHelper.php
++++ b/modules/entity_share_client/src/Service/FormHelper.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Datetime\DrupalDateTime;
+@@ -38,7 +41,7 @@ class FormHelper implements FormHelperInterface {
+   /**
+    * The resource type repository.
+    *
+-   * @var \Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface
++   * @var ResourceTypeRepositoryInterface
+    */
+   protected $resourceTypeRepository;
+ 
+@@ -52,52 +55,52 @@ class FormHelper implements FormHelperInterface {
+   /**
+    * The entity type definitions.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeInterface[]
++   * @var EntityTypeInterface[]
+    */
+   protected $entityDefinitions;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The state information service.
+    *
+-   * @var \Drupal\entity_share_client\Service\StateInformationInterface
++   * @var StateInformationInterface
+    */
+   protected $stateInformation;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * JsonapiHelper constructor.
+    *
+-   * @param \Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface $resource_type_repository
++   * @param ResourceTypeRepositoryInterface $resource_type_repository
+    *   The resource type repository.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle info service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\entity_share_client\Service\StateInformationInterface $state_information
++   * @param StateInformationInterface $state_information
+    *   The state information service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler service.
+    */
+   public function __construct(
+@@ -135,15 +138,15 @@ class FormHelper implements FormHelperInterface {
+    *   The array of options for the tableselect form type element.
+    * @param array $data
+    *   An array of data.
+-   * @param \Drupal\entity_share_client\Entity\RemoteInterface $remote
++   * @param RemoteInterface $remote
+    *   The selected remote.
+    * @param string $channel_id
+    *   The selected channel id.
+    * @param int $level
+    *   The level of indentation.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    * @throws \InvalidArgumentException
+    */
+   protected function addOptionFromJson(array &$options, array $data, RemoteInterface $remote, $channel_id, $level = 0) {
+@@ -242,7 +245,7 @@ class FormHelper implements FormHelperInterface {
+    * @param int $level
+    *   The level of indentation.
+    *
+-   * @return \Drupal\Component\Render\FormattableMarkup|string
++   * @return FormattableMarkup|string
+    *   The prepared label.
+    */
+   protected function getOptionLabel(array $data, array $status_info, array $entity_keys, $remote_url, $level) {
+diff --git a/modules/entity_share_client/src/Service/FormHelperInterface.php b/modules/entity_share_client/src/Service/FormHelperInterface.php
+index e46d342..73dd73e 100644
+--- a/modules/entity_share_client/src/Service/FormHelperInterface.php
++++ b/modules/entity_share_client/src/Service/FormHelperInterface.php
+@@ -16,7 +16,7 @@ interface FormHelperInterface {
+    *
+    * @param array $json_data
+    *   An array of data send by the JSON:API.
+-   * @param \Drupal\entity_share_client\Entity\RemoteInterface $remote
++   * @param RemoteInterface $remote
+    *   The selected remote.
+    * @param string $channel_id
+    *   The selected channel id.
+diff --git a/modules/entity_share_client/src/Service/ImportConfigManipulator.php b/modules/entity_share_client/src/Service/ImportConfigManipulator.php
+index ba3030c..718089e 100644
+--- a/modules/entity_share_client/src/Service/ImportConfigManipulator.php
++++ b/modules/entity_share_client/src/Service/ImportConfigManipulator.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Drupal\entity_share_client\ImportProcessor\ImportProcessorInterface;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\entity_share_client\Entity\ImportConfigInterface;
+ use Drupal\entity_share_client\ImportProcessor\ImportProcessorPluginManager;
+@@ -20,14 +21,14 @@ class ImportConfigManipulator implements ImportConfigManipulatorInterface {
+   /**
+    * The import processor plugin manager.
+    *
+-   * @var \Drupal\entity_share_client\ImportProcessor\ImportProcessorPluginManager
++   * @var ImportProcessorPluginManager
+    */
+   protected $importProcessorPluginManager;
+ 
+   /**
+    * Constructs an ImportConfigManipulator object.
+    *
+-   * @param \Drupal\entity_share_client\ImportProcessor\ImportProcessorPluginManager $import_processor_plugin_manager
++   * @param ImportProcessorPluginManager $import_processor_plugin_manager
+    *   The import processor plugin manager.
+    */
+   public function __construct(ImportProcessorPluginManager $import_processor_plugin_manager) {
+@@ -37,7 +38,7 @@ class ImportConfigManipulator implements ImportConfigManipulatorInterface {
+   /**
+    * Creates multiple plugin objects for the given import config.
+    *
+-   * @param \Drupal\entity_share_client\Entity\ImportConfigInterface $import_config
++   * @param ImportConfigInterface $import_config
+    *   The import config for which to create the plugins.
+    * @param string[]|null $plugin_ids
+    *   (optional) The IDs of the plugins to create, or NULL to create instances
+@@ -47,7 +48,7 @@ class ImportConfigManipulator implements ImportConfigManipulatorInterface {
+    *   Missing configurations are either taken from the index's stored settings,
+    *   if they are present there, or default to an empty array.
+    *
+-   * @return \Drupal\entity_share_client\ImportProcessor\ImportProcessorInterface[]
++   * @return ImportProcessorInterface[]
+    *   The created plugin objects.
+    *
+    * @throws \Exception
+diff --git a/modules/entity_share_client/src/Service/ImportConfigManipulatorInterface.php b/modules/entity_share_client/src/Service/ImportConfigManipulatorInterface.php
+index 63eddbf..802b84a 100644
+--- a/modules/entity_share_client/src/Service/ImportConfigManipulatorInterface.php
++++ b/modules/entity_share_client/src/Service/ImportConfigManipulatorInterface.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Drupal\entity_share_client\ImportProcessor\ImportProcessorInterface;
+ use Drupal\entity_share_client\Entity\ImportConfigInterface;
+ 
+ /**
+@@ -14,10 +15,10 @@ interface ImportConfigManipulatorInterface {
+   /**
+    * Retrieves this import config's processors.
+    *
+-   * @param \Drupal\entity_share_client\Entity\ImportConfigInterface $import_config
++   * @param ImportConfigInterface $import_config
+    *   The import config.
+    *
+-   * @return \Drupal\entity_share_client\ImportProcessor\ImportProcessorInterface[]
++   * @return ImportProcessorInterface[]
+    *   An array of all enabled processors for this import config.
+    */
+   public function getImportProcessors(ImportConfigInterface $import_config);
+@@ -25,12 +26,12 @@ interface ImportConfigManipulatorInterface {
+   /**
+    * Retrieves a specific processor plugin for this import config.
+    *
+-   * @param \Drupal\entity_share_client\Entity\ImportConfigInterface $import_config
++   * @param ImportConfigInterface $import_config
+    *   The import config.
+    * @param string $processor_id
+    *   The ID of the processor plugin to return.
+    *
+-   * @return \Drupal\entity_share_client\ImportProcessor\ImportProcessorInterface
++   * @return ImportProcessorInterface
+    *   The processor plugin with the given ID.
+    *
+    * @throws \Exception
+@@ -42,13 +43,13 @@ interface ImportConfigManipulatorInterface {
+   /**
+    * Loads this import config's processors for a specific stage.
+    *
+-   * @param \Drupal\entity_share_client\Entity\ImportConfigInterface $import_config
++   * @param ImportConfigInterface $import_config
+    *   The import config.
+    * @param array[] $overrides
+    *   (optional) Overrides to apply to the import config's processors, keyed by
+    *   processor IDs with their respective overridden settings as values.
+    *
+-   * @return \Drupal\entity_share_client\ImportProcessor\ImportProcessorInterface[][]
++   * @return ImportProcessorInterface[][]
+    *   An array of all enabled processors that support the given stage for each
+    *   stage, ordered by the weight for that stage.
+    */
+@@ -57,7 +58,7 @@ interface ImportConfigManipulatorInterface {
+   /**
+    * Loads this import config's processors for a specific stage.
+    *
+-   * @param \Drupal\entity_share_client\Entity\ImportConfigInterface $import_config
++   * @param ImportConfigInterface $import_config
+    *   The import config.
+    * @param string $stage
+    *   The stage for which to return the processors. One of the
+@@ -67,7 +68,7 @@ interface ImportConfigManipulatorInterface {
+    *   (optional) Overrides to apply to the import config's processors, keyed by
+    *   processor IDs with their respective overridden settings as values.
+    *
+-   * @return \Drupal\entity_share_client\ImportProcessor\ImportProcessorInterface[]
++   * @return ImportProcessorInterface[]
+    *   An array of all enabled processors that support the given stage, ordered
+    *   by the weight for that stage.
+    */
+diff --git a/modules/entity_share_client/src/Service/ImportService.php b/modules/entity_share_client/src/Service/ImportService.php
+index 9753836..9589afa 100644
+--- a/modules/entity_share_client/src/Service/ImportService.php
++++ b/modules/entity_share_client/src/Service/ImportService.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Drupal\entity_share_client\Entity\ImportConfigInterface;
++use Drupal\entity_share_client\Entity\RemoteInterface;
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -30,73 +33,73 @@ class ImportService implements ImportServiceInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The remote manager service.
+    *
+-   * @var \Drupal\entity_share_client\Service\RemoteManagerInterface
++   * @var RemoteManagerInterface
+    */
+   protected $remoteManager;
+ 
+   /**
+    * The import config manipulator service.
+    *
+-   * @var \Drupal\entity_share_client\Service\ImportConfigManipulatorInterface
++   * @var ImportConfigManipulatorInterface
+    */
+   protected $importConfigManipulator;
+ 
+   /**
+    * The JSON:API helper service.
+    *
+-   * @var \Drupal\entity_share_client\Service\JsonapiHelperInterface
++   * @var JsonapiHelperInterface
+    */
+   protected $jsonapiHelper;
+ 
+   /**
+    * The runtime import context.
+    *
+-   * @var \Drupal\entity_share_client\RuntimeImportContext
++   * @var RuntimeImportContext
+    */
+   protected $runtimeImportContext;
+ 
+   /**
+    * The import processors instances by stages.
+    *
+-   * @var \Drupal\entity_share_client\ImportProcessor\ImportProcessorInterface[][]
++   * @var ImportProcessorInterface[][]
+    */
+   protected $importProcessors;
+ 
+   /**
+    * RemoteManager constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger service.
+-   * @param \Drupal\entity_share_client\Service\RemoteManagerInterface $remote_manager
++   * @param RemoteManagerInterface $remote_manager
+    *   The remote manager service.
+-   * @param \Drupal\entity_share_client\Service\ImportConfigManipulatorInterface $import_config_manipulator
++   * @param ImportConfigManipulatorInterface $import_config_manipulator
+    *   The import config manipulator service.
+-   * @param \Drupal\entity_share_client\Service\JsonapiHelperInterface $jsonapi_helper
++   * @param JsonapiHelperInterface $jsonapi_helper
+    *   The JSON:API helper service.
+    */
+   public function __construct(
+@@ -327,7 +330,7 @@ class ImportService implements ImportServiceInterface {
+       return FALSE;
+     }
+     try {
+-      /** @var \Drupal\entity_share_client\Entity\ImportConfigInterface $import_config */
++      /** @var ImportConfigInterface $import_config */
+       $import_config = $this->entityTypeManager->getStorage('import_config')
+         ->load($import_config_id);
+     }
+@@ -344,7 +347,7 @@ class ImportService implements ImportServiceInterface {
+ 
+     // Prepare runtimeImportContext.
+     try {
+-      /** @var \Drupal\entity_share_client\Entity\RemoteInterface $remote */
++      /** @var RemoteInterface $remote */
+       $remote = $this->entityTypeManager->getStorage('remote')
+         ->load($remote_id);
+     }
+@@ -412,7 +415,7 @@ class ImportService implements ImportServiceInterface {
+    * @param array $entity_data
+    *   JSON:API data for an entity.
+    *
+-   * @return \Drupal\Core\Entity\ContentEntityInterface
++   * @return ContentEntityInterface
+    *   The entity to be processed.
+    */
+   protected function getProcessedEntity(array $entity_data) {
+@@ -450,7 +453,7 @@ class ImportService implements ImportServiceInterface {
+     // the JSON values directly because otherwise we would lose all the
+     // denormalization processes. Especially those created for JSON:API
+     // Extras.
+-    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
++    /** @var ContentEntityInterface $entity */
+     $remote_entity = $this->jsonapiHelper->extractEntity($entity_data);
+ 
+     // New entity.
+@@ -463,7 +466,7 @@ class ImportService implements ImportServiceInterface {
+     }
+     // Existing entity.
+     else {
+-      /** @var \Drupal\Core\Entity\ContentEntityInterface $existing_entity */
++      /** @var ContentEntityInterface $existing_entity */
+       $existing_entity = array_shift($existing_entities);
+       $has_translation = $existing_entity->hasTranslation($data_langcode);
+       // Update the existing translation.
+diff --git a/modules/entity_share_client/src/Service/ImportServiceInterface.php b/modules/entity_share_client/src/Service/ImportServiceInterface.php
+index d19c705..f11a56e 100644
+--- a/modules/entity_share_client/src/Service/ImportServiceInterface.php
++++ b/modules/entity_share_client/src/Service/ImportServiceInterface.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Drupal\entity_share_client\RuntimeImportContext;
++use Psr\Http\Message\ResponseInterface;
+ use Drupal\entity_share_client\ImportContext;
+ 
+ /**
+@@ -16,7 +18,7 @@ interface ImportServiceInterface {
+    *
+    * 50 Max.
+    *
+-   * @param \Drupal\entity_share_client\ImportContext $context
++   * @param ImportContext $context
+    *   The import context.
+    * @param array $uuids
+    *   The list of UUID's to import.
+@@ -34,7 +36,7 @@ interface ImportServiceInterface {
+   /**
+    * Import all the entities on a channel.
+    *
+-   * @param \Drupal\entity_share_client\ImportContext $context
++   * @param ImportContext $context
+    *   The import context.
+    */
+   public function importChannel(ImportContext $context);
+@@ -69,7 +71,7 @@ interface ImportServiceInterface {
+    * and instead of creating a dedicated method for that, it has been put as a
+    * public method.
+    *
+-   * @param \Drupal\entity_share_client\ImportContext $context
++   * @param ImportContext $context
+    *   The import context.
+    *
+    * @return bool
+@@ -80,7 +82,7 @@ interface ImportServiceInterface {
+   /**
+    * Getter.
+    *
+-   * @return \Drupal\entity_share_client\RuntimeImportContext
++   * @return RuntimeImportContext
+    *   The import service's runtime import context.
+    */
+   public function getRuntimeImportContext();
+@@ -96,7 +98,7 @@ interface ImportServiceInterface {
+    * @param string $url
+    *   URL to request.
+    *
+-   * @return \Psr\Http\Message\ResponseInterface
++   * @return ResponseInterface
+    *   The response.
+    *
+    * @see \GuzzleHttp\ClientInterface::request()
+@@ -114,7 +116,7 @@ interface ImportServiceInterface {
+    * @param string $url
+    *   URL to request.
+    *
+-   * @return \Psr\Http\Message\ResponseInterface
++   * @return ResponseInterface
+    *   The response.
+    *
+    * @see \GuzzleHttp\ClientInterface::request()
+diff --git a/modules/entity_share_client/src/Service/JsonapiHelper.php b/modules/entity_share_client/src/Service/JsonapiHelper.php
+index 9ea542b..370d3c5 100644
+--- a/modules/entity_share_client/src/Service/JsonapiHelper.php
++++ b/modules/entity_share_client/src/Service/JsonapiHelper.php
+@@ -21,25 +21,25 @@ class JsonapiHelper implements JsonapiHelperInterface {
+   /**
+    * The JsonApiDocumentTopLevelNormalizer normalizer.
+    *
+-   * @var \Drupal\jsonapi\Normalizer\JsonApiDocumentTopLevelNormalizer
++   * @var JsonApiDocumentTopLevelNormalizer
+    */
+   protected $jsonapiDocumentTopLevelNormalizer;
+ 
+   /**
+    * The resource type repository.
+    *
+-   * @var \Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface
++   * @var ResourceTypeRepositoryInterface
+    */
+   protected $resourceTypeRepository;
+ 
+   /**
+    * JsonapiHelper constructor.
+    *
+-   * @param \Symfony\Component\Serializer\SerializerInterface $serializer
++   * @param SerializerInterface $serializer
+    *   A serializer.
+-   * @param \Drupal\jsonapi\Normalizer\JsonApiDocumentTopLevelNormalizer $jsonapi_document_top_level_normalizer
++   * @param JsonApiDocumentTopLevelNormalizer $jsonapi_document_top_level_normalizer
+    *   The JsonApiDocumentTopLevelNormalizer normalizer.
+-   * @param \Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface $resource_type_repository
++   * @param ResourceTypeRepositoryInterface $resource_type_repository
+    *   The resource type repository.
+    */
+   public function __construct(
+diff --git a/modules/entity_share_client/src/Service/JsonapiHelperInterface.php b/modules/entity_share_client/src/Service/JsonapiHelperInterface.php
+index 224e749..cf4f9a8 100644
+--- a/modules/entity_share_client/src/Service/JsonapiHelperInterface.php
++++ b/modules/entity_share_client/src/Service/JsonapiHelperInterface.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Drupal\Core\Entity\EntityInterface;
+ /**
+  * Jsonapi helper interface methods.
+  */
+@@ -15,7 +16,7 @@ interface JsonapiHelperInterface {
+    * @param array $data
+    *   An array of data.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   An unserialize entity.
+    */
+   public function extractEntity(array $data);
+diff --git a/modules/entity_share_client/src/Service/KeyProvider.php b/modules/entity_share_client/src/Service/KeyProvider.php
+index 75bfc0e..ed988a3 100644
+--- a/modules/entity_share_client/src/Service/KeyProvider.php
++++ b/modules/entity_share_client/src/Service/KeyProvider.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Drupal\Core\KeyValueStore\KeyValueStoreInterface;
+ use Drupal\Core\KeyValueStore\KeyValueFactoryInterface;
+ use Drupal\key\Entity\Key;
+ use Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface;
+@@ -26,14 +27,14 @@ class KeyProvider {
+   /**
+    * The key value store to use.
+    *
+-   * @var \Drupal\Core\KeyValueStore\KeyValueStoreInterface
++   * @var KeyValueStoreInterface
+    */
+   protected $keyValueStore;
+ 
+   /**
+    * KeyService constructor.
+    *
+-   * @param \Drupal\Core\KeyValueStore\KeyValueFactoryInterface $key_value_factory
++   * @param KeyValueFactoryInterface $key_value_factory
+    *   The key value store to use.
+    */
+   public function __construct(KeyValueFactoryInterface $key_value_factory) {
+@@ -63,7 +64,7 @@ class KeyProvider {
+   /**
+    * Get the provided credentials.
+    *
+-   * @param \Drupal\entity_share_client\ClientAuthorization\ClientAuthorizationInterface $plugin
++   * @param ClientAuthorizationInterface $plugin
+    *   An authorization plugin.
+    *
+    * @return array|string
+diff --git a/modules/entity_share_client/src/Service/RemoteManager.php b/modules/entity_share_client/src/Service/RemoteManager.php
+index 8535938..e5d43cd 100644
+--- a/modules/entity_share_client/src/Service/RemoteManager.php
++++ b/modules/entity_share_client/src/Service/RemoteManager.php
+@@ -4,6 +4,8 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use GuzzleHttp\Client;
++use Psr\Http\Message\ResponseInterface;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\entity_share_client\Entity\RemoteInterface;
+ use GuzzleHttp\ClientInterface;
+@@ -36,21 +38,21 @@ class RemoteManager implements RemoteManagerInterface {
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * HTTP clients prepared per remote.
+    *
+-   * @var \GuzzleHttp\ClientInterface[]
++   * @var ClientInterface[]
+    */
+   protected $httpClients = [];
+ 
+   /**
+    * HTTP clients prepared for JSON:API endpoints per remotes.
+    *
+-   * @var \GuzzleHttp\ClientInterface[]
++   * @var ClientInterface[]
+    */
+   protected $jsonApiHttpClients = [];
+ 
+@@ -64,7 +66,7 @@ class RemoteManager implements RemoteManagerInterface {
+   /**
+    * RemoteManager constructor.
+    *
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger service.
+    */
+   public function __construct(
+@@ -128,10 +130,10 @@ class RemoteManager implements RemoteManagerInterface {
+   /**
+    * Prepares a client object from the auth plugin.
+    *
+-   * @param \Drupal\entity_share_client\Entity\RemoteInterface $remote
++   * @param RemoteInterface $remote
+    *   The remote website on which to perform the request.
+    *
+-   * @return \GuzzleHttp\Client
++   * @return Client
+    *   The configured client.
+    */
+   protected function getHttpClient(RemoteInterface $remote) {
+@@ -146,10 +148,10 @@ class RemoteManager implements RemoteManagerInterface {
+   /**
+    * Prepares a client object from the auth plugin.
+    *
+-   * @param \Drupal\entity_share_client\Entity\RemoteInterface $remote
++   * @param RemoteInterface $remote
+    *   The remote website on which to perform the request.
+    *
+-   * @return \GuzzleHttp\Client
++   * @return Client
+    *   The configured client.
+    */
+   protected function getJsonApiHttpClient(RemoteInterface $remote) {
+@@ -164,7 +166,7 @@ class RemoteManager implements RemoteManagerInterface {
+   /**
+    * Performs a HTTP request.
+    *
+-   * @param \GuzzleHttp\ClientInterface $client
++   * @param ClientInterface $client
+    *   The client which will do the request.
+    * @param string $method
+    *   HTTP method.
+@@ -173,7 +175,7 @@ class RemoteManager implements RemoteManagerInterface {
+    * @param array $options
+    *   Some options to alter the behavior.
+    *
+-   * @return \Psr\Http\Message\ResponseInterface|null
++   * @return ResponseInterface|null
+    *   The response or NULL if a problem occurred.
+    *
+    * @see \GuzzleHttp\ClientInterface::request()
+diff --git a/modules/entity_share_client/src/Service/RemoteManagerInterface.php b/modules/entity_share_client/src/Service/RemoteManagerInterface.php
+index b2affd0..280f9bf 100644
+--- a/modules/entity_share_client/src/Service/RemoteManagerInterface.php
++++ b/modules/entity_share_client/src/Service/RemoteManagerInterface.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Psr\Http\Message\ResponseInterface;
+ use Drupal\entity_share_client\Entity\RemoteInterface;
+ 
+ /**
+@@ -16,7 +17,7 @@ interface RemoteManagerInterface {
+    *
+    * We need to override this method during tests to emulate another website.
+    *
+-   * @param \Drupal\entity_share_client\Entity\RemoteInterface $remote
++   * @param RemoteInterface $remote
+    *   The remote website on which to perform the request.
+    * @param string $method
+    *   HTTP method.
+@@ -25,7 +26,7 @@ interface RemoteManagerInterface {
+    * @param array $options
+    *   Some options to alter the behavior.
+    *
+-   * @return \Psr\Http\Message\ResponseInterface
++   * @return ResponseInterface
+    *   The response.
+    *
+    * @see \GuzzleHttp\ClientInterface::request()
+@@ -37,7 +38,7 @@ interface RemoteManagerInterface {
+    *
+    * We need to override this method during tests to emulate another website.
+    *
+-   * @param \Drupal\entity_share_client\Entity\RemoteInterface $remote
++   * @param RemoteInterface $remote
+    *   The remote website on which to perform the request.
+    * @param string $method
+    *   HTTP method.
+@@ -46,7 +47,7 @@ interface RemoteManagerInterface {
+    * @param array $options
+    *   Some options to alter the behavior.
+    *
+-   * @return \Psr\Http\Message\ResponseInterface
++   * @return ResponseInterface
+    *   The response.
+    *
+    * @see \GuzzleHttp\ClientInterface::request()
+@@ -56,7 +57,7 @@ interface RemoteManagerInterface {
+   /**
+    * Get the channels infos of a remote website.
+    *
+-   * @param \Drupal\entity_share_client\Entity\RemoteInterface $remote
++   * @param RemoteInterface $remote
+    *   The remote website on which to get the channels infos.
+    * @param array $options
+    *   Some options to alter the behavior.
+@@ -69,7 +70,7 @@ interface RemoteManagerInterface {
+   /**
+    * Get the field mappings of a remote website.
+    *
+-   * @param \Drupal\entity_share_client\Entity\RemoteInterface $remote
++   * @param RemoteInterface $remote
+    *   The remote website on which to get the field mappings.
+    *
+    * @return array
+diff --git a/modules/entity_share_client/src/Service/StateInformation.php b/modules/entity_share_client/src/Service/StateInformation.php
+index b5df8c1..152cf89 100644
+--- a/modules/entity_share_client/src/Service/StateInformation.php
++++ b/modules/entity_share_client/src/Service/StateInformation.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Drupal\entity_share_client\Entity\EntityImportStatusInterface;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -25,48 +26,48 @@ class StateInformation implements StateInformationInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The resource type repository.
+    *
+-   * @var \Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface
++   * @var ResourceTypeRepositoryInterface
+    */
+   protected $resourceTypeRepository;
+ 
+   /**
+    * The Drupal datetime service.
+    *
+-   * @var \Drupal\Component\Datetime\TimeInterface
++   * @var TimeInterface
+    */
+   protected $time;
+ 
+   /**
+    * The import policies manager.
+    *
+-   * @var \Drupal\entity_share_client\ImportPolicy\ImportPolicyPluginManager
++   * @var ImportPolicyPluginManager
+    */
+   protected $policiesManager;
+ 
+   /**
+    * The entity import status. NULL if not found.
+    *
+-   * @var \Drupal\entity_share_client\Entity\EntityImportStatusInterface|null
++   * @var EntityImportStatusInterface|null
+    */
+   protected $entityImportStatus;
+ 
+   /**
+    * StateInformation constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\jsonapi\ResourceType\ResourceTypeRepositoryInterface $resource_type_repository
++   * @param ResourceTypeRepositoryInterface $resource_type_repository
+    *   The resource type repository.
+-   * @param \Drupal\Component\Datetime\TimeInterface $time
++   * @param TimeInterface $time
+    *   The Drupal time service.
+-   * @param \Drupal\entity_share_client\ImportPolicy\ImportPolicyPluginManager $policies_manager
++   * @param ImportPolicyPluginManager $policies_manager
+    *   The import policies manager.
+    */
+   public function __construct(
+@@ -110,7 +111,7 @@ class StateInformation implements StateInformationInterface {
+     // An entity already exists.
+     // Check if the entity type has a changed date.
+     else {
+-      /** @var \Drupal\Core\Entity\ContentEntityInterface $existing_entity */
++      /** @var ContentEntityInterface $existing_entity */
+       $existing_entity = array_shift($existing_entities);
+ 
+       $resource_type = $this->resourceTypeRepository->get(
+@@ -203,7 +204,7 @@ class StateInformation implements StateInformationInterface {
+    *
+    * @param string $status_info_id
+    *   An identifier of the status info (the value of 'INFO_ID_...' constant).
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   A Drupal content entity.
+    *
+    * @return array
+@@ -244,7 +245,7 @@ class StateInformation implements StateInformationInterface {
+   /**
+    * Checks if the entity has changed on Remote before import.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity being imported.
+    * @param int $remote_changed_time
+    *   The timestamp of "changed" date on Remote.
+@@ -312,7 +313,7 @@ class StateInformation implements StateInformationInterface {
+     if ($langcode) {
+       $search_criteria['langcode'] = $langcode;
+     }
+-    /** @var \Drupal\entity_share_client\Entity\EntityImportStatusInterface[] $import_status_entities */
++    /** @var EntityImportStatusInterface[] $import_status_entities */
+     $entity_storage = $this->entityTypeManager->getStorage('entity_import_status');
+     $import_status_entities = $entity_storage->loadByProperties($search_criteria);
+     if (!empty($import_status_entities)) {
+@@ -358,7 +359,7 @@ class StateInformation implements StateInformationInterface {
+     if ($langcode && $entity_storage->getEntityType()->hasKey('langcode')) {
+       $search_criteria['langcode'] = $langcode;
+     }
+-    /** @var \Drupal\entity_share_client\Entity\EntityImportStatusInterface[] $import_status_entities */
++    /** @var EntityImportStatusInterface[] $import_status_entities */
+     $import_status_entities = $entity_storage->loadByProperties($search_criteria);
+     if ($import_status_entities) {
+       foreach ($import_status_entities as $import_status_entity) {
+diff --git a/modules/entity_share_client/src/Service/StateInformationInterface.php b/modules/entity_share_client/src/Service/StateInformationInterface.php
+index ffe9791..af5e5cb 100644
+--- a/modules/entity_share_client/src/Service/StateInformationInterface.php
++++ b/modules/entity_share_client/src/Service/StateInformationInterface.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client\Service;
+ 
++use Drupal\entity_share_client\Entity\EntityImportStatusInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ 
+@@ -77,7 +78,7 @@ interface StateInformationInterface {
+   /**
+    * Creates a dedicated "Entity import status" entity for imported entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity being imported.
+    * @param array $parameters
+    *   Other data from the import context, with valid keys:
+@@ -85,7 +86,7 @@ interface StateInformationInterface {
+    *     - channel_id.
+    *     - policy.
+    *
+-   * @return \Drupal\entity_share_client\Entity\EntityImportStatusInterface|bool
++   * @return EntityImportStatusInterface|bool
+    *   The newly created "Entity import status" entity or FALSE on failure.
+    */
+   public function createImportStatusOfEntity(ContentEntityInterface $entity, array $parameters);
+@@ -100,7 +101,7 @@ interface StateInformationInterface {
+    * @param string|null $langcode
+    *   Language code.
+    *
+-   * @return \Drupal\entity_share_client\Entity\EntityImportStatusInterface|bool
++   * @return EntityImportStatusInterface|bool
+    *   The "Entity import status" entity or FALSE if none found.
+    */
+   public function getImportStatusByParameters(string $uuid, string $entity_type_id, string $langcode = NULL);
+@@ -108,10 +109,10 @@ interface StateInformationInterface {
+   /**
+    * Gets the dedicated "Entity import status" entity for imported entity.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity being imported.
+    *
+-   * @return \Drupal\entity_share_client\Entity\EntityImportStatusInterface|bool
++   * @return EntityImportStatusInterface|bool
+    *   The "Entity import status" entity or FALSE if none found.
+    */
+   public function getImportStatusOfEntity(ContentEntityInterface $entity);
+@@ -119,7 +120,7 @@ interface StateInformationInterface {
+   /**
+    * Deletes the "Entity import status" entity of an entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity which had been imported.
+    * @param string|null $langcode
+    *   Optional language code, used when deleting only specific translations.
+diff --git a/modules/entity_share_client/tests/modules/entity_share_client_remote_manager_test/src/Service/TestRemoteManager.php b/modules/entity_share_client/tests/modules/entity_share_client_remote_manager_test/src/Service/TestRemoteManager.php
+index 79dff05..84f3ded 100644
+--- a/modules/entity_share_client/tests/modules/entity_share_client_remote_manager_test/src/Service/TestRemoteManager.php
++++ b/modules/entity_share_client/tests/modules/entity_share_client_remote_manager_test/src/Service/TestRemoteManager.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\entity_share_client_remote_manager_test\Service;
+ 
++use Psr\Http\Message\ResponseInterface;
+ use Drupal\entity_share_client\Service\RemoteManager;
+ use GuzzleHttp\ClientInterface;
+ 
+@@ -17,7 +18,7 @@ class TestRemoteManager extends RemoteManager {
+   /**
+    * A mapping, URL => response, from the GET requests made.
+    *
+-   * @var \Psr\Http\Message\ResponseInterface[]
++   * @var ResponseInterface[]
+    */
+   protected $responseMapping = [];
+ 

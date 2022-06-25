@@ -1,0 +1,1568 @@
+diff --git a/entity_usage.install b/entity_usage.install
+index c5c7ccf..b3e4d1a 100644
+--- a/entity_usage.install
++++ b/entity_usage.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityInterface;
+ /**
+  * @file
+  * Install, update and uninstall functions for entity_usage module.
+@@ -211,7 +212,7 @@ function entity_usage_post_update_regenerate_2x(&$sandbox) {
+     $entity_id = $sandbox['entities'][$i]['entity_id'];
+     if ($entity_type && $entity_id) {
+       $entity_storage = \Drupal::entityTypeManager()->getStorage($entity_type);
+-      /** @var \Drupal\Core\Entity\EntityInterface $entity */
++      /** @var EntityInterface $entity */
+       $entity = $entity_storage->load($entity_id);
+       if ($entity->getEntityType()->isRevisionable()) {
+         // Track all revisions and translations of the source entity. Sources
+@@ -224,7 +225,7 @@ function entity_usage_post_update_regenerate_2x(&$sandbox) {
+         $revision_ids = array_keys($result);
+ 
+         foreach ($revision_ids as $revision_id) {
+-          /** @var \Drupal\Core\Entity\EntityInterface $entity_revision */
++          /** @var EntityInterface $entity_revision */
+           if (!$entity_revision = $entity_storage->loadRevision($revision_id)) {
+             continue;
+           }
+diff --git a/entity_usage.module b/entity_usage.module
+index 2dd3f72..16addd2 100644
+--- a/entity_usage.module
++++ b/entity_usage.module
+@@ -78,7 +78,7 @@ function entity_usage_form_alter(&$form, FormStateInterface $form_state, $form_i
+   if (!method_exists($form_object, 'getEntity')) {
+     return;
+   }
+-  /** @var \Drupal\Core\Entity\EntityInterface $entity */
++  /** @var EntityInterface $entity */
+   $entity = $form_object->getEntity();
+   if (empty($entity)) {
+     return;
+diff --git a/entity_usage.views.inc b/entity_usage.views.inc
+index afeadd9..845b3ed 100644
+--- a/entity_usage.views.inc
++++ b/entity_usage.views.inc
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Field\BaseFieldDefinition;
+ /**
+  * @file
+  * Provide views data for entity_usage.module.
+@@ -51,7 +52,7 @@ function entity_usage_views_data_alter(array &$data) {
+     // Decide what column to use as base field depending on this entity type
+     // "id" type.
+     $id_key = $entity_type->getKey('id');
+-    /** @var \Drupal\Core\Field\BaseFieldDefinition $id_field */
++    /** @var BaseFieldDefinition $id_field */
+     $id_field = \Drupal::service('entity_field.manager')->getBaseFieldDefinitions($type)[$id_key];
+     $target_id_column = ($id_field->getType() === 'integer') ? 'target_id' : 'target_id_string';
+ 
+diff --git a/src/Annotation/EntityUsageTrack.php b/src/Annotation/EntityUsageTrack.php
+index 55248c3..51d6a2b 100644
+--- a/src/Annotation/EntityUsageTrack.php
++++ b/src/Annotation/EntityUsageTrack.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_usage\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -23,7 +24,7 @@ class EntityUsageTrack extends Plugin {
+   /**
+    * The human-readable name of the tracking method.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -32,7 +33,7 @@ class EntityUsageTrack extends Plugin {
+   /**
+    * A brief description of the tracking method.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Commands/EntityUsageCommands.php b/src/Commands/EntityUsageCommands.php
+index 2a85ed1..eb684c3 100644
+--- a/src/Commands/EntityUsageCommands.php
++++ b/src/Commands/EntityUsageCommands.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_usage\Commands;
+ 
++use Drupal\Core\Database\Connection;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\entity_usage\EntityUsageQueueBatchManager;
+@@ -16,35 +17,35 @@ class EntityUsageCommands extends DrushCommands {
+   /**
+    * The Entity Usage batch manager.
+    *
+-   * @var \Drupal\entity_usage\EntityUsageBatchManager
++   * @var EntityUsageBatchManager
+    */
+   protected $batchManager;
+ 
+   /**
+    * The Entity Usage queue batch manager.
+    *
+-   * @var \Drupal\entity_usage\EntityUsageQueueBatchManager
++   * @var EntityUsageQueueBatchManager
+    */
+   protected $queueBatchManager;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity usage configuration.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $entityUsageConfig;
+ 
+   /**
+    * The database service.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+diff --git a/src/Controller/ListUsageController.php b/src/Controller/ListUsageController.php
+index 038a7fa..5e12e9a 100644
+--- a/src/Controller/ListUsageController.php
++++ b/src/Controller/ListUsageController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\entity_usage\Controller;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
++use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\block_content\BlockContentInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -29,14 +32,14 @@ class ListUsageController extends ControllerBase {
+   /**
+    * The entity field manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The EntityUsage service.
+    *
+-   * @var \Drupal\entity_usage\EntityUsageInterface
++   * @var EntityUsageInterface
+    */
+   protected $entityUsage;
+ 
+@@ -50,7 +53,7 @@ class ListUsageController extends ControllerBase {
+   /**
+    * The Entity Usage settings config object.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $entityUsageConfig;
+ 
+@@ -64,22 +67,22 @@ class ListUsageController extends ControllerBase {
+   /**
+    * The pager manager.
+    *
+-   * @var \Drupal\Core\Pager\PagerManagerInterface
++   * @var PagerManagerInterface
+    */
+   protected $pagerManager;
+ 
+   /**
+    * ListUsageController constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\entity_usage\EntityUsageInterface $entity_usage
++   * @param EntityUsageInterface $entity_usage
+    *   The EntityUsage service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    * The config factory service.
+-   * @param \Drupal\Core\Pager\PagerManagerInterface $pager_manager
++   * @param PagerManagerInterface $pager_manager
+    *   The pager manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, EntityUsageInterface $entity_usage, ConfigFactoryInterface $config_factory, PagerManagerInterface $pager_manager) {
+@@ -115,7 +118,7 @@ class ListUsageController extends ControllerBase {
+    * @return array
+    *   The page build to be rendered.
+    *
+-   * @throws \Symfony\Component\HttpKernel\Exception\NotFoundHttpException
++   * @throws NotFoundHttpException
+    */
+   public function listUsagePage($entity_type, $entity_id) {
+     $all_rows = $this->getRows($entity_type, $entity_id);
+@@ -284,7 +287,7 @@ class ListUsageController extends ControllerBase {
+   /**
+    * Retrieve the source entity's status.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $source_entity
++   * @param EntityInterface $source_entity
+    *   The source entity.
+    *
+    * @return string
+@@ -319,13 +322,13 @@ class ListUsageController extends ControllerBase {
+    * passed in is a paragraph or a block content, the link we produce will point
+    * to this entity's parent (host) entity instead.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $source_entity
++   * @param EntityInterface $source_entity
+    *   The source entity.
+    * @param string|null $text
+    *   (optional) The link text for the anchor tag as a translated string.
+    *   If NULL, it will use the entity's label. Defaults to NULL.
+    *
+-   * @return \Drupal\Core\Link|string|false
++   * @return Link|string|false
+    *   A link to the entity, or its non-linked label, in case it was impossible
+    *   to correctly build a link. Will return FALSE if this item should not be
+    *   shown on the UI (for example when dealing with an orphan paragraph).
+@@ -395,7 +398,7 @@ class ListUsageController extends ControllerBase {
+    * @param int $entity_id
+    *   The entity ID.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function checkAccess($entity_type, $entity_id) {
+diff --git a/src/Controller/LocalTaskUsageController.php b/src/Controller/LocalTaskUsageController.php
+index 8e4fadd..b3fca5b 100644
+--- a/src/Controller/LocalTaskUsageController.php
++++ b/src/Controller/LocalTaskUsageController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\entity_usage\Controller;
+ 
++use Drupal\Core\Access\AccessResultInterface;
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Routing\RouteMatchInterface;
+ 
+ /**
+@@ -12,10 +14,10 @@ class LocalTaskUsageController extends ListUsageController {
+   /**
+    * Checks access based on whether the user can view the current entity.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   A RouteMatch object.
+    *
+-   * @return \Drupal\Core\Access\AccessResultInterface
++   * @return AccessResultInterface
+    *   The access result.
+    */
+   public function checkAccessLocalTask(RouteMatchInterface $route_match) {
+@@ -26,7 +28,7 @@ class LocalTaskUsageController extends ListUsageController {
+   /**
+    * Title page callback.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   A RouteMatch object.
+    *
+    * @return string
+@@ -40,7 +42,7 @@ class LocalTaskUsageController extends ListUsageController {
+   /**
+    * Lists the usage of a given entity.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   A RouteMatch object.
+    *
+    * @return array
+@@ -54,10 +56,10 @@ class LocalTaskUsageController extends ListUsageController {
+   /**
+    * Retrieves entity from route match.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   The route match.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null
++   * @return EntityInterface|null
+    *   The entity object as determined from the passed-in route match.
+    */
+   protected function getEntityFromRouteMatch(RouteMatchInterface $route_match) {
+diff --git a/src/EntityUpdateManager.php b/src/EntityUpdateManager.php
+index 2cc0e0d..a4bf0d9 100644
+--- a/src/EntityUpdateManager.php
++++ b/src/EntityUpdateManager.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\entity_usage;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\TranslatableInterface;
+@@ -16,32 +18,32 @@ class EntityUpdateManager {
+   /**
+    * The usage track service.
+    *
+-   * @var \Drupal\entity_usage\EntityUsage
++   * @var EntityUsage
+    */
+   protected $usageService;
+ 
+   /**
+    * The usage track manager.
+    *
+-   * @var \Drupal\entity_usage\EntityUsageTrackManager
++   * @var EntityUsageTrackManager
+    */
+   protected $trackManager;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * EntityUpdateManager constructor.
+    *
+-   * @param \Drupal\entity_usage\EntityUsage $usage_service
++   * @param EntityUsage $usage_service
+    *   The usage tracking service.
+-   * @param \Drupal\entity_usage\EntityUsageTrackManager $track_manager
++   * @param EntityUsageTrackManager $track_manager
+    *   The PluginManager track service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    */
+   public function __construct(EntityUsage $usage_service, EntityUsageTrackManager $track_manager, ConfigFactoryInterface $config_factory) {
+@@ -54,7 +56,7 @@ class EntityUpdateManager {
+   /**
+    * Track updates on creation of potential source entities.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity we are dealing with.
+    */
+   public function trackUpdateOnCreation(EntityInterface $entity) {
+@@ -68,7 +70,7 @@ class EntityUpdateManager {
+     if ($entity instanceof TranslatableInterface) {
+       foreach ($entity->getTranslationLanguages() as $translation_language) {
+         if ($entity->hasTranslation($translation_language->getId())) {
+-          /** @var \Drupal\Core\Entity\EntityInterface $translation */
++          /** @var EntityInterface $translation */
+           $translation = $entity->getTranslation($translation_language->getId());
+           foreach ($this->getEnabledPlugins() as $plugin) {
+             $plugin->trackOnEntityCreation($translation);
+@@ -87,7 +89,7 @@ class EntityUpdateManager {
+   /**
+    * Track updates on edit / update of potential source entities.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity we are dealing with.
+    */
+   public function trackUpdateOnEdition(EntityInterface $entity) {
+@@ -101,7 +103,7 @@ class EntityUpdateManager {
+     if ($entity instanceof TranslatableInterface) {
+       foreach ($entity->getTranslationLanguages() as $translation_language) {
+         if ($entity->hasTranslation($translation_language->getId())) {
+-          /** @var \Drupal\Core\Entity\ContentEntityInterface $translation */
++          /** @var ContentEntityInterface $translation */
+           $translation = $entity->getTranslation($translation_language->getId());
+           foreach ($this->getEnabledPlugins() as $plugin) {
+             $plugin->trackOnEntityUpdate($translation);
+@@ -121,7 +123,7 @@ class EntityUpdateManager {
+   /**
+    * Track updates on deletion of entities.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity we are dealing with.
+    * @param string $type
+    *   What type of deletion is being performed:
+@@ -159,7 +161,7 @@ class EntityUpdateManager {
+   /**
+    * Check if an entity is allowed to be tracked as source.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity object.
+    *
+    * @return bool
+@@ -182,7 +184,7 @@ class EntityUpdateManager {
+   /**
+    * Get the enabled tracking plugins, all plugins are enabled by default.
+    *
+-   * @return \Drupal\entity_usage\EntityUsageTrackInterface[]
++   * @return EntityUsageTrackInterface[]
+    *   The enabled plugin instances.
+    */
+   protected function getEnabledPlugins() {
+diff --git a/src/EntityUsage.php b/src/EntityUsage.php
+index baad859..220007b 100644
+--- a/src/EntityUsage.php
++++ b/src/EntityUsage.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_usage;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -18,7 +19,7 @@ class EntityUsage implements EntityUsageInterface {
+   /**
+    * The database connection used to store entity usage information.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+@@ -32,35 +33,35 @@ class EntityUsage implements EntityUsageInterface {
+   /**
+    * An event dispatcher instance.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The ModuleHandler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Construct the EntityUsage object.
+    *
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database connection which will be used to store the entity usage
+    *   information.
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $event_dispatcher
++   * @param EventDispatcherInterface $event_dispatcher
+    *   An event dispatcher instance to use for events.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The ModuleHandler service.
+    * @param string $table
+    *   (optional) The table to store the entity usage info. Defaults to
+@@ -138,7 +139,7 @@ class EntityUsage implements EntityUsageInterface {
+     }
+ 
+     $event = new EntityUsageEvent($target_id, $target_type, $source_id, $source_type, $source_langcode, $source_vid, $method, $field_name, $count);
+-    $this->eventDispatcher->dispatch(Events::USAGE_REGISTER, $event);
++    $this->eventDispatcher->dispatch($event, Events::USAGE_REGISTER);
+   }
+ 
+   /**
+@@ -150,7 +151,7 @@ class EntityUsage implements EntityUsageInterface {
+     $query->execute();
+ 
+     $event = new EntityUsageEvent(NULL, $target_type, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+-    $this->eventDispatcher->dispatch(Events::BULK_DELETE_DESTINATIONS, $event);
++    $this->eventDispatcher->dispatch($event, Events::BULK_DELETE_DESTINATIONS);
+   }
+ 
+   /**
+@@ -162,7 +163,7 @@ class EntityUsage implements EntityUsageInterface {
+     $query->execute();
+ 
+     $event = new EntityUsageEvent(NULL, NULL, NULL, $source_type, NULL, NULL, NULL, NULL, NULL);
+-    $this->eventDispatcher->dispatch(Events::BULK_DELETE_SOURCES, $event);
++    $this->eventDispatcher->dispatch($event, Events::BULK_DELETE_SOURCES);
+   }
+ 
+   /**
+@@ -175,7 +176,7 @@ class EntityUsage implements EntityUsageInterface {
+     $query->execute();
+ 
+     $event = new EntityUsageEvent(NULL, NULL, NULL, $source_type, NULL, NULL, NULL, $field_name, NULL);
+-    $this->eventDispatcher->dispatch(Events::DELETE_BY_FIELD, $event);
++    $this->eventDispatcher->dispatch($event, Events::DELETE_BY_FIELD);
+   }
+ 
+   /**
+@@ -198,7 +199,7 @@ class EntityUsage implements EntityUsageInterface {
+     $query->execute();
+ 
+     $event = new EntityUsageEvent(NULL, NULL, $source_id, $source_type, $source_langcode, $source_vid, NULL, NULL, NULL);
+-    $this->eventDispatcher->dispatch(Events::DELETE_BY_SOURCE_ENTITY, $event);
++    $this->eventDispatcher->dispatch($event, Events::DELETE_BY_SOURCE_ENTITY);
+   }
+ 
+   /**
+@@ -215,7 +216,7 @@ class EntityUsage implements EntityUsageInterface {
+     $query->execute();
+ 
+     $event = new EntityUsageEvent($target_id, $target_type, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+-    $this->eventDispatcher->dispatch(Events::DELETE_BY_TARGET_ENTITY, $event);
++    $this->eventDispatcher->dispatch($event, Events::DELETE_BY_TARGET_ENTITY);
+   }
+ 
+   /**
+diff --git a/src/EntityUsageBatchManager.php b/src/EntityUsageBatchManager.php
+index f2cfc4f..9bb060f 100644
+--- a/src/EntityUsageBatchManager.php
++++ b/src/EntityUsageBatchManager.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\entity_usage;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Entity\EntityInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -24,25 +26,25 @@ class EntityUsageBatchManager implements ContainerInjectionInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity usage configuration.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * Creates a EntityUsageBatchManager object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, TranslationInterface $string_translation, ConfigFactoryInterface $config_factory) {
+@@ -159,7 +161,7 @@ class EntityUsageBatchManager implements ContainerInjectionInterface {
+     $entity_id = reset($entity_ids);
+ 
+     if ($entity_id && $entity = $entity_storage->load($entity_id)) {
+-      /** @var \Drupal\Core\Entity\EntityInterface $entity */
++      /** @var EntityInterface $entity */
+       try {
+         if ($entity->getEntityType()->isRevisionable()) {
+           // We cannot query the revisions due to this bug
+@@ -191,7 +193,7 @@ class EntityUsageBatchManager implements ContainerInjectionInterface {
+           }
+ 
+           foreach ($revision_ids as $revision_id) {
+-            /** @var \Drupal\Core\Entity\EntityInterface $entity_revision */
++            /** @var EntityInterface $entity_revision */
+             if (!$entity_revision = $entity_storage->loadRevision($revision_id)) {
+               continue;
+             }
+diff --git a/src/EntityUsageInterface.php b/src/EntityUsageInterface.php
+index ae2a366..c6b0f16 100644
+--- a/src/EntityUsageInterface.php
++++ b/src/EntityUsageInterface.php
+@@ -135,7 +135,7 @@ interface EntityUsageInterface {
+    *    ]
+    *  ]
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $target_entity
++   * @param EntityInterface $target_entity
+    *   A target entity.
+    * @param bool $nest_results
+    *   (optional) Whether the results should be returned in a nested structure.
+@@ -154,7 +154,7 @@ interface EntityUsageInterface {
+   /**
+    * Provide a list of all referenced target entities for a source entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $source_entity
++   * @param EntityInterface $source_entity
+    *   The source entity to check for references.
+    * @param int $vid
+    *   The revision id to return the references for. Defaults to all revisions.
+@@ -177,7 +177,7 @@ interface EntityUsageInterface {
+    * returned on 2.x will be different from the count returned on 1.x, once
+    * now we track all revisions / translations independently.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   A target (referenced) entity.
+    * @param bool $include_method
+    *   (optional) Whether the results must be wrapped into an additional array
+@@ -204,7 +204,7 @@ interface EntityUsageInterface {
+    * returned on 2.x will be different from the count returned on 1.x, once
+    * now we track all revisions / translations independently.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   A source entity.
+    *
+    * @return array
+diff --git a/src/EntityUsageQueueBatchManager.php b/src/EntityUsageQueueBatchManager.php
+index d8a4972..9fd001a 100644
+--- a/src/EntityUsageQueueBatchManager.php
++++ b/src/EntityUsageQueueBatchManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_usage;
+ 
++use Drupal\Core\Config\Config;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -29,25 +30,25 @@ class EntityUsageQueueBatchManager implements ContainerInjectionInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity usage configuration.
+    *
+-   * @var \Drupal\Core\Config\Config
++   * @var Config
+    */
+   protected $config;
+ 
+   /**
+    * Creates a EntityUsageQueueBatchManager object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
++   * @param TranslationInterface $string_translation
+    *   The string translation service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, TranslationInterface $string_translation, ConfigFactoryInterface $config_factory) {
+diff --git a/src/EntityUsageTrackBase.php b/src/EntityUsageTrackBase.php
+index f8aae7f..5744a6f 100644
+--- a/src/EntityUsageTrackBase.php
++++ b/src/EntityUsageTrackBase.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\entity_usage;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Field\FieldItemInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityFieldManagerInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -21,35 +23,35 @@ abstract class EntityUsageTrackBase extends PluginBase implements EntityUsageTra
+   /**
+    * The usage tracking service.
+    *
+-   * @var \Drupal\entity_usage\EntityUsage
++   * @var EntityUsage
+    */
+   protected $usageService;
+ 
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Entity field manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * The Entity Update config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The EntityRepository service.
+    *
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+@@ -62,15 +64,15 @@ abstract class EntityUsageTrackBase extends PluginBase implements EntityUsageTra
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\entity_usage\EntityUsage $usage_service
++   * @param EntityUsage $usage_service
+    *   The usage tracking service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The EntityTypeManager service.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The EntityFieldManager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The EntityRepositoryInterface service.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityUsage $usage_service, EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, ConfigFactoryInterface $config_factory, EntityRepositoryInterface $entity_repository) {
+@@ -142,7 +144,7 @@ abstract class EntityUsageTrackBase extends PluginBase implements EntityUsageTra
+     $fields = array_keys($this->getReferencingFields($source_entity, $trackable_field_types));
+     foreach ($fields as $field_name) {
+       if ($source_entity->hasField($field_name) && !$source_entity->{$field_name}->isEmpty()) {
+-        /** @var \Drupal\Core\Field\FieldItemInterface $field_item */
++        /** @var FieldItemInterface $field_item */
+         foreach ($source_entity->{$field_name} as $field_item) {
+           // The entity is being created with value on this field, so we just
+           // need to add a tracking record.
+diff --git a/src/EntityUsageTrackInterface.php b/src/EntityUsageTrackInterface.php
+index 35eeb61..858925c 100644
+--- a/src/EntityUsageTrackInterface.php
++++ b/src/EntityUsageTrackInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_usage;
+ 
++use Drupal\Core\Field\FieldDefinitionInterface;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Field\FieldItemInterface;
+@@ -54,7 +55,7 @@ interface EntityUsageTrackInterface extends PluginInspectionInterface {
+   /**
+    * Track usage updates on the creation of entities.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $source_entity
++   * @param EntityInterface $source_entity
+    *   The source entity.
+    */
+   public function trackOnEntityCreation(EntityInterface $source_entity);
+@@ -62,7 +63,7 @@ interface EntityUsageTrackInterface extends PluginInspectionInterface {
+   /**
+    * Track usage updates on the edition of entities.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $source_entity
++   * @param EntityInterface $source_entity
+    *   The source entity.
+    */
+   public function trackOnEntityUpdate(EntityInterface $source_entity);
+@@ -70,12 +71,12 @@ interface EntityUsageTrackInterface extends PluginInspectionInterface {
+   /**
+    * Retrieve fields of the given types on an entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $source_entity
++   * @param EntityInterface $source_entity
+    *   The source entity object.
+    * @param string[] $field_types
+    *   A list of field types.
+    *
+-   * @return \Drupal\Core\Field\FieldDefinitionInterface[]
++   * @return FieldDefinitionInterface[]
+    *   An array of fields that could reference to other content entities.
+    */
+   public function getReferencingFields(EntityInterface $source_entity, array $field_types);
+@@ -83,7 +84,7 @@ interface EntityUsageTrackInterface extends PluginInspectionInterface {
+   /**
+    * Retrieve the target entity(ies) from a field item value.
+    *
+-   * @param \Drupal\Core\Field\FieldItemInterface $item
++   * @param FieldItemInterface $item
+    *   The field item to get the target entity(ies) from.
+    *
+    * @return string[]
+diff --git a/src/EntityUsageTrackManager.php b/src/EntityUsageTrackManager.php
+index 190473c..e0b83ba 100644
+--- a/src/EntityUsageTrackManager.php
++++ b/src/EntityUsageTrackManager.php
+@@ -17,9 +17,9 @@ class EntityUsageTrackManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/src/Events/EntityUsageEvent.php b/src/Events/EntityUsageEvent.php
+index ff907b3..fffe452 100644
+--- a/src/Events/EntityUsageEvent.php
++++ b/src/Events/EntityUsageEvent.php
+@@ -2,7 +2,7 @@
+ 
+ namespace Drupal\entity_usage\Events;
+ 
+-use Symfony\Component\EventDispatcher\Event;
++use Symfony\Contracts\EventDispatcher\Event;
+ 
+ /**
+  * Implementation of Entity Usage events.
+diff --git a/src/Form/BatchUpdateForm.php b/src/Form/BatchUpdateForm.php
+index 65596e1..bf48b5e 100644
+--- a/src/Form/BatchUpdateForm.php
++++ b/src/Form/BatchUpdateForm.php
+@@ -15,14 +15,14 @@ class BatchUpdateForm extends FormBase {
+   /**
+    * The EntityUsageBatchManager service.
+    *
+-   * @var \Drupal\entity_usage\EntityUsageBatchManager
++   * @var EntityUsageBatchManager
+    */
+   protected $batchManager;
+ 
+   /**
+    * BatchUpdateForm constructor.
+    *
+-   * @param \Drupal\entity_usage\EntityUsageBatchManager $batch_manager
++   * @param EntityUsageBatchManager $batch_manager
+    *   The entity usage batch manager.
+    */
+   public function __construct(EntityUsageBatchManager $batch_manager) {
+diff --git a/src/Form/EntityUsageSettingsForm.php b/src/Form/EntityUsageSettingsForm.php
+index 94faf65..053fead 100644
+--- a/src/Form/EntityUsageSettingsForm.php
++++ b/src/Form/EntityUsageSettingsForm.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_usage\Form;
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\ContentEntityTypeInterface;
+@@ -21,28 +22,28 @@ class EntityUsageSettingsForm extends ConfigFormBase {
+   /**
+    * The Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The router builder.
+    *
+-   * @var \Drupal\Core\Routing\RouteBuilderInterface
++   * @var RouteBuilderInterface
+    */
+   protected $routerBuilder;
+ 
+   /**
+    * The Cache Render.
+    *
+-   * @var \Drupal\Core\Cache\CacheBackendInterface
++   * @var CacheBackendInterface
+    */
+   protected $cacheRender;
+ 
+   /**
+    * The Entity Usage Track Manager service.
+    *
+-   * @var \Drupal\entity_usage\EntityUsageTrackManager
++   * @var EntityUsageTrackManager
+    */
+   protected $usageTrackManager;
+ 
+@@ -93,7 +94,7 @@ class EntityUsageSettingsForm extends ConfigFormBase {
+     $content_entity_types = [];
+ 
+     // Filter the entity types.
+-    /** @var \Drupal\Core\Entity\EntityTypeInterface[] $entity_type_options */
++    /** @var EntityTypeInterface[] $entity_type_options */
+     $entity_type_options = [];
+     $tabs_options = [];
+     foreach ($all_entity_types as $entity_type) {
+diff --git a/src/Plugin/Derivative/EntityUsageLocalTask.php b/src/Plugin/Derivative/EntityUsageLocalTask.php
+index 1d1c5db..5553c5b 100644
+--- a/src/Plugin/Derivative/EntityUsageLocalTask.php
++++ b/src/Plugin/Derivative/EntityUsageLocalTask.php
+@@ -19,23 +19,23 @@ class EntityUsageLocalTask extends DeriverBase implements ContainerDeriverInterf
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $config;
+ 
+   /**
+    * Creates an EntityUsageLocalTask object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config
++   * @param ConfigFactoryInterface $config
+    *   The config factory service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, ConfigFactoryInterface $config) {
+diff --git a/src/Plugin/EntityUsage/Track/EntityReference.php b/src/Plugin/EntityUsage/Track/EntityReference.php
+index 1b3f703..d9fe0d9 100644
+--- a/src/Plugin/EntityUsage/Track/EntityReference.php
++++ b/src/Plugin/EntityUsage/Track/EntityReference.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_usage\Plugin\EntityUsage\Track;
+ 
++use Drupal\Core\Field\Plugin\Field\FieldType\EntityReferenceItem;
+ use Drupal\Core\Field\FieldItemInterface;
+ use Drupal\entity_usage\EntityUsageTrackBase;
+ 
+@@ -21,7 +22,7 @@ class EntityReference extends EntityUsageTrackBase {
+    * {@inheritdoc}
+    */
+   public function getTargetEntities(FieldItemInterface $item) {
+-    /** @var \Drupal\Core\Field\Plugin\Field\FieldType\EntityReferenceItem $item */
++    /** @var EntityReferenceItem $item */
+     $item_value = $item->getValue();
+     if (empty($item_value['target_id'])) {
+       return [];
+diff --git a/src/Plugin/EntityUsage/Track/HtmlLink.php b/src/Plugin/EntityUsage/Track/HtmlLink.php
+index 5b1893b..56285cb 100644
+--- a/src/Plugin/EntityUsage/Track/HtmlLink.php
++++ b/src/Plugin/EntityUsage/Track/HtmlLink.php
+@@ -27,7 +27,7 @@ class HtmlLink extends TextFieldEmbedBase {
+   /**
+    * The Drupal Path Validator service.
+    *
+-   * @var \Drupal\Core\Path\PathValidatorInterface
++   * @var PathValidatorInterface
+    */
+   protected $pathValidator;
+ 
+@@ -47,19 +47,19 @@ class HtmlLink extends TextFieldEmbedBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\entity_usage\EntityUsage $usage_service
++   * @param EntityUsage $usage_service
+    *   The usage tracking service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The EntityTypeManager service.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The EntityFieldManager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The EntityRepositoryInterface service.
+-   * @param \Drupal\Core\Path\PathValidatorInterface $path_validator
++   * @param PathValidatorInterface $path_validator
+    *   The Drupal Path Validator service.
+-   * @param \Drupal\Core\StreamWrapper\StreamWrapperInterface $public_stream
++   * @param StreamWrapperInterface $public_stream
+    *   The Public Stream service.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityUsage $usage_service, EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, ConfigFactoryInterface $config_factory, EntityRepositoryInterface $entity_repository, PathValidatorInterface $path_validator, StreamWrapperInterface $public_stream) {
+diff --git a/src/Plugin/EntityUsage/Track/LayoutBuilder.php b/src/Plugin/EntityUsage/Track/LayoutBuilder.php
+index 906b8d9..7dd75f8 100644
+--- a/src/Plugin/EntityUsage/Track/LayoutBuilder.php
++++ b/src/Plugin/EntityUsage/Track/LayoutBuilder.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\entity_usage\Plugin\EntityUsage\Track;
+ 
++use Drupal\layout_builder\Plugin\DataType\SectionData;
++use Drupal\layout_builder\Section;
++use Drupal\Core\Block\BlockPluginInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Core\Entity\ContentEntityStorageInterface;
++use Drupal\block_content\BlockContentInterface;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Core\Block\BlockManagerInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+@@ -29,7 +35,7 @@ class LayoutBuilder extends EntityUsageTrackBase {
+   /**
+    * Block manager.
+    *
+-   * @var \Drupal\Core\Block\BlockManagerInterface
++   * @var BlockManagerInterface
+    */
+   protected $blockManager;
+ 
+@@ -42,17 +48,17 @@ class LayoutBuilder extends EntityUsageTrackBase {
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\entity_usage\EntityUsage $usage_service
++   * @param EntityUsage $usage_service
+    *   The usage tracking service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The EntityTypeManager service.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The EntityFieldManager service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The EntityRepositoryInterface service.
+-   * @param \Drupal\Core\Block\BlockManagerInterface $blockManager
++   * @param BlockManagerInterface $blockManager
+    *   Block manager.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityUsage $usage_service, EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, ConfigFactoryInterface $config_factory, EntityRepositoryInterface $entity_repository, BlockManagerInterface $blockManager) {
+@@ -88,9 +94,9 @@ class LayoutBuilder extends EntityUsageTrackBase {
+     $ebbContentIds = [];
+     $contentDependencyIds = [];
+ 
+-    /** @var \Drupal\layout_builder\Plugin\DataType\SectionData $value */
++    /** @var SectionData $value */
+     foreach ($item as $value) {
+-      /** @var \Drupal\layout_builder\Section $section */
++      /** @var Section $section */
+       $section = $value->getValue();
+       foreach ($section->getComponents() as $component) {
+         $configuration = $component->toArray()['configuration'];
+@@ -109,7 +115,7 @@ class LayoutBuilder extends EntityUsageTrackBase {
+         }
+ 
+         // Check the block plugin's content dependencies.
+-        /** @var \Drupal\Core\Block\BlockPluginInterface $plugin */
++        /** @var BlockPluginInterface $plugin */
+         $plugin = $component->getPlugin();
+         $dependencies = $plugin->calculateDependencies();
+         if (!empty($dependencies['content'])) {
+@@ -142,14 +148,14 @@ class LayoutBuilder extends EntityUsageTrackBase {
+    *   An array of the corresponding block IDs from the revision IDs passed in,
+    *   each prefixed with the string "block_content|".
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   private function prepareBlockContentIds(array $blockContentRevisionIds) {
+-    /** @var \Drupal\Core\Entity\ContentEntityStorageInterface $blockContentStorage */
++    /** @var ContentEntityStorageInterface $blockContentStorage */
+     $blockContentStorage = $this->entityTypeManager->getStorage('block_content');
+ 
+-    /** @var \Drupal\block_content\BlockContentInterface[] $blockContent */
++    /** @var BlockContentInterface[] $blockContent */
+     $ids = $blockContentStorage->getQuery()
+       ->condition($blockContentStorage->getEntityType()->getKey('revision'), $blockContentRevisionIds, 'IN')
+       ->execute();
+diff --git a/src/Plugin/EntityUsage/Track/Link.php b/src/Plugin/EntityUsage/Track/Link.php
+index 288b618..2b1cd40 100644
+--- a/src/Plugin/EntityUsage/Track/Link.php
++++ b/src/Plugin/EntityUsage/Track/Link.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_usage\Plugin\EntityUsage\Track;
+ 
++use Drupal\link\LinkItemInterface;
+ use Drupal\Core\Field\FieldItemInterface;
+ use Drupal\entity_usage\EntityUsageTrackBase;
+ 
+@@ -21,7 +22,7 @@ class Link extends EntityUsageTrackBase {
+    * {@inheritdoc}
+    */
+   public function getTargetEntities(FieldItemInterface $link) {
+-    /** @var \Drupal\link\LinkItemInterface $link */
++    /** @var LinkItemInterface $link */
+     // Check if the link is referencing an entity.
+     $url = $link->getUrl();
+     if (!$url->isRouted() || !preg_match('/^entity\./', $url->getRouteName())) {
+diff --git a/src/Plugin/QueueWorker/EntityUsageRegenerateTrackingInfoWorker.php b/src/Plugin/QueueWorker/EntityUsageRegenerateTrackingInfoWorker.php
+index 021638c..1c77215 100644
+--- a/src/Plugin/QueueWorker/EntityUsageRegenerateTrackingInfoWorker.php
++++ b/src/Plugin/QueueWorker/EntityUsageRegenerateTrackingInfoWorker.php
+@@ -26,21 +26,21 @@ class EntityUsageRegenerateTrackingInfoWorker extends QueueWorkerBase implements
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The logger channel factory.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The Entity Usage update manager service.
+    *
+-   * @var \Drupal\entity_usage\EntityUpdateManager
++   * @var EntityUpdateManager
+    */
+   protected $entityUsageUpdateManager;
+ 
+diff --git a/src/Routing/RouteSubscriber.php b/src/Routing/RouteSubscriber.php
+index d528615..ed24107 100644
+--- a/src/Routing/RouteSubscriber.php
++++ b/src/Routing/RouteSubscriber.php
+@@ -17,23 +17,23 @@ class RouteSubscriber extends RouteSubscriberBase {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $config;
+ 
+   /**
+    * Constructs a new RouteSubscriber object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config
++   * @param ConfigFactoryInterface $config
+    *   The config factory service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_manager, ConfigFactoryInterface $config) {
+diff --git a/tests/src/Functional/EntityUsageLayoutBuilderTest.php b/tests/src/Functional/EntityUsageLayoutBuilderTest.php
+index c3a7f0f..2daa646 100644
+--- a/tests/src/Functional/EntityUsageLayoutBuilderTest.php
++++ b/tests/src/Functional/EntityUsageLayoutBuilderTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\entity_usage\Functional;
+ 
++use Drupal\Core\Routing\RouteBuilderInterface;
+ use Drupal\block_content\Entity\BlockContent;
+ use Drupal\block_content\Entity\BlockContentType;
+ use Drupal\Core\Url;
+@@ -47,7 +48,7 @@ class EntityUsageLayoutBuilderTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     LayoutBuilderEntityViewDisplay::create([
+@@ -67,7 +68,7 @@ class EntityUsageLayoutBuilderTest extends BrowserTestBase {
+       ->set('track_enabled_plugins', ['layout_builder', 'entity_reference'])
+       ->save();
+ 
+-    /** @var \Drupal\Core\Routing\RouteBuilderInterface $routerBuilder */
++    /** @var RouteBuilderInterface $routerBuilder */
+     $routerBuilder = \Drupal::service('router.builder');
+     $routerBuilder->rebuild();
+   }
+diff --git a/tests/src/FunctionalJavascript/BatchUpdateTest.php b/tests/src/FunctionalJavascript/BatchUpdateTest.php
+index 900d5fe..c819471 100644
+--- a/tests/src/FunctionalJavascript/BatchUpdateTest.php
++++ b/tests/src/FunctionalJavascript/BatchUpdateTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\entity_usage\FunctionalJavascript;
+ 
++use Drupal\user\RoleInterface;
++use Drupal\entity_usage\EntityUsage;
+ use Drupal\node\Entity\Node;
+ use Drupal\user\Entity\Role;
+ 
+@@ -26,14 +28,14 @@ class BatchUpdateTest extends EntityUsageJavascriptTestBase {
+     $this->drupalGet('/admin/config/entity-usage/batch-update');
+     $assert_session->pageTextContains('You are not authorized to access this page');
+     // Grant the logged-in the needed permission and try again.
+-    /** @var \Drupal\user\RoleInterface $role */
++    /** @var RoleInterface $role */
+     $role = Role::load('authenticated');
+     $this->grantPermissions($role, ['perform batch updates entity usage']);
+     $this->drupalGet('/admin/config/entity-usage/batch-update');
+     $assert_session->pageTextContains('Batch update');
+     $assert_session->pageTextContains('This page allows you to delete and re-generate again all entity usage statistics in your system');
+ 
+-    /** @var \Drupal\entity_usage\EntityUsage $usage_service */
++    /** @var EntityUsage $usage_service */
+     $usage_service = \Drupal::service('entity_usage.usage');
+ 
+     // Create node 1.
+diff --git a/tests/src/FunctionalJavascript/ConfigEntityTrackingTest.php b/tests/src/FunctionalJavascript/ConfigEntityTrackingTest.php
+index bc3a5c9..fecfad7 100644
+--- a/tests/src/FunctionalJavascript/ConfigEntityTrackingTest.php
++++ b/tests/src/FunctionalJavascript/ConfigEntityTrackingTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\entity_usage\FunctionalJavascript;
+ 
++use Drupal\user\RoleInterface;
++use Drupal\node\NodeInterface;
+ use Drupal\block_content\Entity\BlockContent;
+ use Drupal\block_content\Entity\BlockContentType;
+ use Drupal\field\Entity\FieldConfig;
+@@ -40,10 +42,10 @@ class ConfigEntityTrackingTest extends EntityUsageJavascriptTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+-    /** @var \Drupal\user\RoleInterface $role */
++    /** @var RoleInterface $role */
+     $role = Role::load('authenticated');
+     $this->grantPermissions($role, [
+       'access entity usage statistics',
+@@ -232,7 +234,7 @@ class ConfigEntityTrackingTest extends EntityUsageJavascriptTestBase {
+     $page->pressButton('Save');
+     $this->saveHtmlOutput();
+     $this->assertSession()->pageTextContains('eu_test_ct Node that points to a block with a view has been created.');
+-    /** @var \Drupal\node\NodeInterface $host_node */
++    /** @var NodeInterface $host_node */
+     $host_node = $this->getLastEntityOfType('node', TRUE);
+ 
+     // Check that usage for this view is correctly tracked.
+@@ -349,7 +351,7 @@ class ConfigEntityTrackingTest extends EntityUsageJavascriptTestBase {
+     $page->pressButton('Save');
+     $this->saveHtmlOutput();
+     $this->assertSession()->pageTextContains('eu_test_ct Node that points to a custom block has been created.');
+-    /** @var \Drupal\node\NodeInterface $host_node */
++    /** @var NodeInterface $host_node */
+     $host_node = $this->getLastEntityOfType('node', TRUE);
+ 
+     // Check that usage for this block is correctly tracked.
+diff --git a/tests/src/FunctionalJavascript/ConfigurationFormTest.php b/tests/src/FunctionalJavascript/ConfigurationFormTest.php
+index a781752..f75b028 100644
+--- a/tests/src/FunctionalJavascript/ConfigurationFormTest.php
++++ b/tests/src/FunctionalJavascript/ConfigurationFormTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\entity_usage\FunctionalJavascript;
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Entity\ContentEntityTypeInterface;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+@@ -85,7 +86,7 @@ class ConfigurationFormTest extends EntityUsageJavascriptTestBase {
+ 
+     $all_entity_types = \Drupal::entityTypeManager()->getDefinitions();
+     $content_entity_types = [];
+-    /** @var \Drupal\Core\Entity\EntityTypeInterface[] $entity_types */
++    /** @var EntityTypeInterface[] $entity_types */
+     $entity_types = [];
+     $tabs = [];
+     foreach ($all_entity_types as $entity_type) {
+diff --git a/tests/src/FunctionalJavascript/DynamicEntityReferenceTest.php b/tests/src/FunctionalJavascript/DynamicEntityReferenceTest.php
+index b4ce858..aaae52f 100644
+--- a/tests/src/FunctionalJavascript/DynamicEntityReferenceTest.php
++++ b/tests/src/FunctionalJavascript/DynamicEntityReferenceTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\entity_usage\FunctionalJavascript;
+ 
++use Drupal\entity_usage\EntityUsage;
++use Drupal\node\NodeInterface;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+@@ -33,7 +35,7 @@ class DynamicEntityReferenceTest extends EntityUsageJavascriptTestBase {
+     $page = $session->getPage();
+     $assert_session = $this->assertSession();
+ 
+-    /** @var \Drupal\entity_usage\EntityUsage $usage_service */
++    /** @var EntityUsage $usage_service */
+     $usage_service = \Drupal::service('entity_usage.usage');
+ 
+     // Add a dynamic entity reference field to our test content type.
+@@ -105,7 +107,7 @@ class DynamicEntityReferenceTest extends EntityUsageJavascriptTestBase {
+     $session->wait(500);
+     $this->saveHtmlOutput();
+     $assert_session->pageTextContains('eu_test_ct Node 1 has been created.');
+-    /** @var \Drupal\node\NodeInterface $node1 */
++    /** @var NodeInterface $node1 */
+     $node1 = $this->getLastEntityOfType('node', TRUE);
+ 
+     // Create user 1.
+diff --git a/tests/src/FunctionalJavascript/EmbeddedContentTest.php b/tests/src/FunctionalJavascript/EmbeddedContentTest.php
+index f6992e9..49cb333 100644
+--- a/tests/src/FunctionalJavascript/EmbeddedContentTest.php
++++ b/tests/src/FunctionalJavascript/EmbeddedContentTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\entity_usage\FunctionalJavascript;
+ 
++use Drupal\entity_usage\EntityUsage;
+ use Drupal\field\Entity\FieldConfig;
+ use Drupal\field\Entity\FieldStorageConfig;
+ use Drupal\node\Entity\Node;
+@@ -34,7 +35,7 @@ class EmbeddedContentTest extends EntityUsageJavascriptTestBase {
+     $page = $session->getPage();
+     $assert_session = $this->assertSession();
+ 
+-    /** @var \Drupal\entity_usage\EntityUsage $usage_service */
++    /** @var EntityUsage $usage_service */
+     $usage_service = \Drupal::service('entity_usage.usage');
+ 
+     // Create node 1.
+@@ -120,7 +121,7 @@ class EmbeddedContentTest extends EntityUsageJavascriptTestBase {
+     $page = $session->getPage();
+     $assert_session = $this->assertSession();
+ 
+-    /** @var \Drupal\entity_usage\EntityUsage $usage_service */
++    /** @var EntityUsage $usage_service */
+     $usage_service = \Drupal::service('entity_usage.usage');
+ 
+     // Create node 1.
+@@ -222,7 +223,7 @@ class EmbeddedContentTest extends EntityUsageJavascriptTestBase {
+     $page = $session->getPage();
+     $assert_session = $this->assertSession();
+ 
+-    /** @var \Drupal\entity_usage\EntityUsage $usage_service */
++    /** @var EntityUsage $usage_service */
+     $usage_service = \Drupal::service('entity_usage.usage');
+ 
+     // Create node 1.
+@@ -454,7 +455,7 @@ class EmbeddedContentTest extends EntityUsageJavascriptTestBase {
+ 
+     $media->save();
+ 
+-    /** @var \Drupal\entity_usage\EntityUsage $usage_service */
++    /** @var EntityUsage $usage_service */
+     $usage_service = \Drupal::service('entity_usage.usage');
+ 
+     $usage = $usage_service->listSources($media);
+diff --git a/tests/src/FunctionalJavascript/EntityUsageJavascriptTestBase.php b/tests/src/FunctionalJavascript/EntityUsageJavascriptTestBase.php
+index 1c751f8..5a2974e 100644
+--- a/tests/src/FunctionalJavascript/EntityUsageJavascriptTestBase.php
++++ b/tests/src/FunctionalJavascript/EntityUsageJavascriptTestBase.php
+@@ -34,7 +34,7 @@ abstract class EntityUsageJavascriptTestBase extends WebDriverTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $account = $this->drupalCreateUser([
+diff --git a/tests/src/FunctionalJavascript/EntityUsageLayoutBuilderEntityBrowserBlockTest.php b/tests/src/FunctionalJavascript/EntityUsageLayoutBuilderEntityBrowserBlockTest.php
+index ca33d74..23b468d 100644
+--- a/tests/src/FunctionalJavascript/EntityUsageLayoutBuilderEntityBrowserBlockTest.php
++++ b/tests/src/FunctionalJavascript/EntityUsageLayoutBuilderEntityBrowserBlockTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\entity_usage\FunctionalJavascript;
+ 
++use Drupal\Core\Routing\RouteBuilderInterface;
++use Drupal\user\RoleInterface;
+ use Drupal\layout_builder\Entity\LayoutBuilderEntityViewDisplay;
+ use Drupal\node\Entity\Node;
+ use Drupal\node\Entity\NodeType;
+@@ -40,7 +42,7 @@ class EntityUsageLayoutBuilderEntityBrowserBlockTest extends EntityUsageJavascri
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $node_type = NodeType::create([
+@@ -68,7 +70,7 @@ class EntityUsageLayoutBuilderEntityBrowserBlockTest extends EntityUsageJavascri
+     $this->drupalPlaceBlock('local_tasks_block');
+     $this->drupalPlaceBlock('page_title_block');
+ 
+-    /** @var \Drupal\Core\Routing\RouteBuilderInterface $router_builder */
++    /** @var RouteBuilderInterface $router_builder */
+     $router_builder = \Drupal::service('router.builder');
+     $router_builder->rebuild();
+   }
+@@ -123,7 +125,7 @@ class EntityUsageLayoutBuilderEntityBrowserBlockTest extends EntityUsageJavascri
+       ]);
+     $browser->save();
+ 
+-    /** @var \Drupal\Core\Routing\RouteBuilderInterface $router_builder */
++    /** @var RouteBuilderInterface $router_builder */
+     $router_builder = \Drupal::service('router.builder');
+     $router_builder->rebuild();
+ 
+@@ -135,7 +137,7 @@ class EntityUsageLayoutBuilderEntityBrowserBlockTest extends EntityUsageJavascri
+     $host_node->save();
+ 
+     // Adjust permissions as needed.
+-    /** @var \Drupal\user\RoleInterface $role */
++    /** @var RoleInterface $role */
+     $role = Role::load('authenticated');
+     $this->grantPermissions($role, [
+       'configure all article node layout overrides',
+diff --git a/tests/src/FunctionalJavascript/IntegrationTest.php b/tests/src/FunctionalJavascript/IntegrationTest.php
+index 9c5c781..b1a08b5 100644
+--- a/tests/src/FunctionalJavascript/IntegrationTest.php
++++ b/tests/src/FunctionalJavascript/IntegrationTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\entity_usage\FunctionalJavascript;
+ 
++use Drupal\entity_usage\EntityUsage;
++use Drupal\node\NodeInterface;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\Core\Url;
+ use Drupal\field\Entity\FieldConfig;
+@@ -32,7 +34,7 @@ class IntegrationTest extends EntityUsageJavascriptTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     $account = $this->drupalCreateUser([
+@@ -54,7 +56,7 @@ class IntegrationTest extends EntityUsageJavascriptTestBase {
+     $page = $session->getPage();
+     $assert_session = $this->assertSession();
+ 
+-    /** @var \Drupal\entity_usage\EntityUsage $usage_service */
++    /** @var EntityUsage $usage_service */
+     $usage_service = \Drupal::service('entity_usage.usage');
+ 
+     // Create node 1.
+@@ -329,7 +331,7 @@ class IntegrationTest extends EntityUsageJavascriptTestBase {
+     $page = $session->getPage();
+     $assert_session = $this->assertSession();
+ 
+-    /** @var \Drupal\entity_usage\EntityUsage $usage_service */
++    /** @var EntityUsage $usage_service */
+     $usage_service = \Drupal::service('entity_usage.usage');
+ 
+     // Add a link field to our test content type.
+@@ -365,7 +367,7 @@ class IntegrationTest extends EntityUsageJavascriptTestBase {
+     $session->wait(500);
+     $this->saveHtmlOutput();
+     $assert_session->pageTextContains('eu_test_ct Node 1 has been created.');
+-    /** @var \Drupal\node\NodeInterface $node1 */
++    /** @var NodeInterface $node1 */
+     $node1 = $this->getLastEntityOfType('node', TRUE);
+ 
+     // Create Node 2, referencing Node 1.
+diff --git a/tests/src/FunctionalJavascript/ListControllerTest.php b/tests/src/FunctionalJavascript/ListControllerTest.php
+index 11d8409..cd107c9 100644
+--- a/tests/src/FunctionalJavascript/ListControllerTest.php
++++ b/tests/src/FunctionalJavascript/ListControllerTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\entity_usage\FunctionalJavascript;
+ 
++use Drupal\user\RoleInterface;
++use Drupal\node\NodeInterface;
+ use Drupal\language\Entity\ConfigurableLanguage;
+ use Drupal\node\Entity\Node;
+ use Drupal\Tests\entity_usage\Traits\EntityUsageLastEntityQueryTrait;
+@@ -29,11 +31,11 @@ class ListControllerTest extends EntityUsageJavascriptTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Grant the logged-in user permission to see the statistics page.
+-    /** @var \Drupal\user\RoleInterface $role */
++    /** @var RoleInterface $role */
+     $role = Role::load('authenticated');
+     $this->grantPermissions($role, ['access entity usage statistics']);
+   }
+@@ -55,7 +57,7 @@ class ListControllerTest extends EntityUsageJavascriptTestBase {
+     $session->wait(500);
+     $this->saveHtmlOutput();
+     $assert_session->pageTextContains('eu_test_ct Node 1 has been created.');
+-    /** @var \Drupal\node\NodeInterface $node1 */
++    /** @var NodeInterface $node1 */
+     $node1 = $this->getLastEntityOfType('node', TRUE);
+ 
+     // Create node 2 referencing node 1 using reference field.
+@@ -118,7 +120,7 @@ class ListControllerTest extends EntityUsageJavascriptTestBase {
+     $this->assertEquals('Published', $second_row_status->getText());
+ 
+     // If we unpublish Node 2 its status is correctly reflected.
+-    /** @var \Drupal\node\NodeInterface $node2 */
++    /** @var NodeInterface $node2 */
+     $node2->setUnpublished()->save();
+     $this->drupalGet("/admin/content/entity-usage/node/{$node1->id()}");
+     $second_row_status = $this->xpath('//table/tbody/tr[2]/td[5]')[0];
+@@ -176,7 +178,7 @@ class ListControllerTest extends EntityUsageJavascriptTestBase {
+     }
+ 
+     // Let the logged-in user do multi-lingual stuff.
+-    /** @var \Drupal\user\RoleInterface $authenticated_role */
++    /** @var RoleInterface $authenticated_role */
+     $authenticated_role = Role::load('authenticated');
+     $authenticated_role->grantPermission('administer content translation');
+     $authenticated_role->grantPermission('translate any entity');

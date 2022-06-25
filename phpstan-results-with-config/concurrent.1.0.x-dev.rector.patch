@@ -1,0 +1,209 @@
+diff --git a/concurrent_queue/queue-worker.php b/concurrent_queue/queue-worker.php
+index df9eb79..bb4cd64 100644
+--- a/concurrent_queue/queue-worker.php
++++ b/concurrent_queue/queue-worker.php
+@@ -1,10 +1,13 @@
+ <?php
++use React\EventLoop\Factory;
++use React\Socket\TcpConnector;
++use React\Socket\ConnectionInterface;
+ $memory_limit = 512 * 1024 * 1024 * 0.95;
+ 
+-$loop = React\EventLoop\Factory::create();
+-$tcpConnector = new React\Socket\TcpConnector($loop);
++$loop = Factory::create();
++$tcpConnector = new TcpConnector($loop);
+ $workerManager = \Drupal::service('plugin.manager.queue_worker');
+-$tcpConnector->connect('127.0.0.1:30001')->then(function (React\Socket\ConnectionInterface $connection) use ($loop, $workerManager, $memory_limit) {
++$tcpConnector->connect('127.0.0.1:30001')->then(function (ConnectionInterface $connection) use ($loop, $workerManager, $memory_limit) {
+   $connection->write('r');
+   $connection->on('data', function ($data) use ($connection, $loop, $memory_limit, $workerManager) {
+     $info = unserialize($data);
+diff --git a/concurrent_queue/src/Commands/ConcurrentQueueCommands.php b/concurrent_queue/src/Commands/ConcurrentQueueCommands.php
+index b9411fe..ec39a1a 100644
+--- a/concurrent_queue/src/Commands/ConcurrentQueueCommands.php
++++ b/concurrent_queue/src/Commands/ConcurrentQueueCommands.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\concurrent_queue\Commands;
+ 
++use React\Socket\ServerInterface;
++use Drupal\Core\Queue\QueueInterface;
+ use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
+ use Drupal\Core\Queue\QueueFactory;
+ use Drupal\Core\Queue\QueueWorkerManagerInterface;
+@@ -27,7 +29,7 @@ use React\Socket\Server;
+ class ConcurrentQueueCommands extends DrushCommands {
+ 
+   /**
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueService;
+ 
+@@ -37,12 +39,12 @@ class ConcurrentQueueCommands extends DrushCommands {
+   protected $loop;
+ 
+   /**
+-   * @var \React\Socket\ServerInterface
++   * @var ServerInterface
+    */
+   protected $socket;
+ 
+   /**
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+@@ -75,7 +77,7 @@ class ConcurrentQueueCommands extends DrushCommands {
+   /**
+    * ConcurrentQueueCommands constructor.
+    *
+-   * @param \Drupal\Core\Queue\QueueFactory $queueService
++   * @param QueueFactory $queueService
+    */
+   public function __construct(QueueFactory $queueService)
+   {
+@@ -204,7 +206,7 @@ class ConcurrentQueueCommands extends DrushCommands {
+    */
+   public function spawnWorker() {
+     $moduleDir = \Drupal::service('file_system')->realpath(
+-      drupal_get_path('module', 'concurrent_queue')
++      \Drupal::service('extension.list.module')->getPath('concurrent_queue')
+     );
+     $projectDir = dirname(DRUPAL_ROOT);
+     $bin = 'php -d memory_limit=2G ';
+diff --git a/concurrent_queue/src/EventSubscriber/ConcurrentQueueSubscriber.php b/concurrent_queue/src/EventSubscriber/ConcurrentQueueSubscriber.php
+index c41a518..825a625 100644
+--- a/concurrent_queue/src/EventSubscriber/ConcurrentQueueSubscriber.php
++++ b/concurrent_queue/src/EventSubscriber/ConcurrentQueueSubscriber.php
+@@ -2,10 +2,10 @@
+ 
+ namespace Drupal\concurrent_queue\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
++use Symfony\Component\HttpKernel\Event\ResponseEvent;
+ use Drupal\Core\Messenger\MessengerInterface;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+-use Symfony\Component\HttpKernel\Event\FilterResponseEvent;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -16,14 +16,14 @@ class ConcurrentQueueSubscriber implements EventSubscriberInterface {
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Constructs event subscriber.
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+    */
+   public function __construct(MessengerInterface $messenger) {
+@@ -33,19 +33,19 @@ class ConcurrentQueueSubscriber implements EventSubscriberInterface {
+   /**
+    * Kernel request event handler.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    *   Response event.
+    */
+-  public function onKernelRequest(GetResponseEvent $event) {
++  public function onKernelRequest(RequestEvent $event) {
+   }
+ 
+   /**
+    * Kernel response event handler.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\FilterResponseEvent $event
++   * @param ResponseEvent $event
+    *   Response event.
+    */
+-  public function onKernelResponse(FilterResponseEvent $event) {
++  public function onKernelResponse(ResponseEvent $event) {
+   }
+ 
+   /**
+diff --git a/concurrent_queue_test/src/Commands/ConcurrentQueueTestCommands.php b/concurrent_queue_test/src/Commands/ConcurrentQueueTestCommands.php
+index ad4773d..209bd15 100644
+--- a/concurrent_queue_test/src/Commands/ConcurrentQueueTestCommands.php
++++ b/concurrent_queue_test/src/Commands/ConcurrentQueueTestCommands.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\concurrent_queue_test\Commands;
+ 
++use Drupal\Core\Queue\QueueInterface;
+ use Consolidation\OutputFormatters\StructuredData\RowsOfFields;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Queue\QueueFactory;
+@@ -25,14 +26,14 @@ class ConcurrentQueueTestCommands extends DrushCommands {
+   /**
+    * The Queue instance for characters.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $charactersQueue;
+ 
+   /**
+    * The Queue instance for characters.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+@@ -93,7 +94,7 @@ class ConcurrentQueueTestCommands extends DrushCommands {
+    * @aliases token
+    *
+    * @filter-default-field name
+-   * @return \Consolidation\OutputFormatters\StructuredData\RowsOfFields
++   * @return RowsOfFields
+    */
+   public function token($options = ['format' => 'table']) {
+     $all = \Drupal::token()->getInfo();
+diff --git a/concurrent_queue_test/src/Plugin/QueueWorker/SwapiCharactersWorker.php b/concurrent_queue_test/src/Plugin/QueueWorker/SwapiCharactersWorker.php
+index 6cbc449..1071cfb 100644
+--- a/concurrent_queue_test/src/Plugin/QueueWorker/SwapiCharactersWorker.php
++++ b/concurrent_queue_test/src/Plugin/QueueWorker/SwapiCharactersWorker.php
+@@ -21,12 +21,12 @@ use Drupal\Core\Queue\QueueWorkerBase;
+ class SwapiCharactersWorker extends QueueWorkerBase implements ContainerFactoryPluginInterface{
+ 
+   /**
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $client;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -34,7 +34,7 @@ class SwapiCharactersWorker extends QueueWorkerBase implements ContainerFactoryP
+    * @param array $configuration
+    * @param string $plugin_id
+    * @param mixed $plugin_definition
+-   * @param \GuzzleHttp\ClientInterface $client
++   * @param ClientInterface $client
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, ClientInterface $client, EntityTypeManagerInterface $entityTypeManager) {
+     parent::__construct($configuration, $plugin_id, $plugin_definition);
+@@ -43,7 +43,7 @@ class SwapiCharactersWorker extends QueueWorkerBase implements ContainerFactoryP
+   }
+ 
+   /**
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    * @param array $configuration
+    * @param string $plugin_id
+    * @param mixed $plugin_definition

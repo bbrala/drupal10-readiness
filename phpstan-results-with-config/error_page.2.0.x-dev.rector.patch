@@ -1,0 +1,117 @@
+diff --git a/error_page.info.yml b/error_page.info.yml
+index dffd87b..a33ef16 100644
+--- a/error_page.info.yml
++++ b/error_page.info.yml
+@@ -1,4 +1,4 @@
+ type: module
+ name: 'Error custom pages'
+ description: 'Show a user-friendly page when a fatal error or an exception occurs.'
+-core_version_requirement: ^9
++core_version_requirement: ^9.3 || ^10
+diff --git a/src/ErrorPageRenderer.php b/src/ErrorPageRenderer.php
+index 3260978..eaa6e00 100644
+--- a/src/ErrorPageRenderer.php
++++ b/src/ErrorPageRenderer.php
+@@ -4,6 +4,7 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\error_page;
+ 
++use Drupal\Component\Render\MarkupInterface;
+ use Drupal\Core\Site\Settings;
+ 
+ /**
+@@ -55,7 +56,7 @@ class ErrorPageRenderer {
+    * @param mixed $original_exception
+    *   The original exception. Is used if an additional exception occurs during
+    *   handling the current error.
+-   * @param \Drupal\Component\Render\MarkupInterface|string $error_report
++   * @param MarkupInterface|string $error_report
+    *   The technical error report, including the backtrace, if the site's
+    *   configuration allows it.
+    *
+diff --git a/src/EventSubscriber/ErrorPageExceptionLoggingSubscriber.php b/src/EventSubscriber/ErrorPageExceptionLoggingSubscriber.php
+index bad1355..6141e43 100644
+--- a/src/EventSubscriber/ErrorPageExceptionLoggingSubscriber.php
++++ b/src/EventSubscriber/ErrorPageExceptionLoggingSubscriber.php
+@@ -10,7 +10,6 @@ use Drupal\Core\Site\Settings;
+ use Drupal\Core\Utility\Error;
+ use Drupal\error_page\ErrorPagePhpErrorLogger;
+ use Symfony\Component\HttpKernel\Event\ExceptionEvent;
+-use Symfony\Component\HttpKernel\Event\GetResponseForExceptionEvent;
+ use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
+ 
+ /**
+@@ -28,7 +27,7 @@ class ErrorPageExceptionLoggingSubscriber extends ExceptionLoggingSubscriber {
+     // Attach the UUID to the the event. Don't call the generator as service.
+     $event->uuid = $uuid_enabled ? (new Php())->generate() : NULL;
+ 
+-    $exception = $event->getException();
++    $exception = $event->getThrowable();
+     $error = Error::decodeException($exception);
+     if ($event->uuid) {
+       $error += ['@uuid' => $event->uuid];
+diff --git a/src/EventSubscriber/ErrorPageFinalExceptionSubscriber.php b/src/EventSubscriber/ErrorPageFinalExceptionSubscriber.php
+index 14ceb8e..85870fc 100644
+--- a/src/EventSubscriber/ErrorPageFinalExceptionSubscriber.php
++++ b/src/EventSubscriber/ErrorPageFinalExceptionSubscriber.php
+@@ -10,7 +10,6 @@ use Drupal\Core\Utility\Error;
+ use Drupal\error_page\ErrorPageRenderer;
+ use Symfony\Component\HttpFoundation\Response;
+ use Symfony\Component\HttpKernel\Event\ExceptionEvent;
+-use Symfony\Component\HttpKernel\Event\GetResponseForExceptionEvent;
+ use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+@@ -35,7 +34,7 @@ class ErrorPageFinalExceptionSubscriber extends FinalExceptionSubscriber {
+    * {@inheritdoc}
+    */
+   public function onException(ExceptionEvent $event): void {
+-    $exception = $event->getException();
++    $exception = $event->getThrowable();
+     $error = Error::decodeException($exception);
+ 
+     // Generate an error report if the current error reporting level allows this
+diff --git a/tests/src/Functional/ErrorPageTest.php b/tests/src/Functional/ErrorPageTest.php
+index a327101..61968d0 100644
+--- a/tests/src/Functional/ErrorPageTest.php
++++ b/tests/src/Functional/ErrorPageTest.php
+@@ -4,6 +4,9 @@ declare(strict_types = 1);
+ 
+ namespace Drupal\Tests\error_page\Functional;
+ 
++use Behat\Mink\Exception\ExpectationException;
++use Behat\Mink\Exception\ResponseTextException;
++use Drupal\Core\Database\Connection;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -80,9 +83,9 @@ class ErrorPageTest extends BrowserTestBase {
+    * @param int $code
+    *   The expected HTTP code.
+    *
+-   * @throws \Behat\Mink\Exception\ExpectationException
++   * @throws ExpectationException
+    *   When the expectation is not met.
+-   * @throws \Behat\Mink\Exception\ResponseTextException
++   * @throws ResponseTextException
+    *   When the response code expectation is not met.
+    */
+   protected function doTest(string $path, int $code): void {
+@@ -118,7 +121,7 @@ class ErrorPageTest extends BrowserTestBase {
+     $this->assertArrayNotHasKey('@uuid', $variables);
+ 
+     // Customize the template.
+-    $template = file_get_contents(drupal_get_path('module', 'error_page') . '/markup/error_page.html');
++    $template = file_get_contents(\Drupal::service('extension.list.module')->getPath('error_page') . '/markup/error_page.html');
+     // Fix the message to work without UUID.
+     $template = str_replace(' including <em>{{ uuid }}</em> in your message', '', $template);
+     file_put_contents('public://error_page.html', $template);
+@@ -179,7 +182,7 @@ class ErrorPageTest extends BrowserTestBase {
+    *   The last log entry.
+    */
+   protected function getLastLog(): \stdClass {
+-    /** @var \Drupal\Core\Database\Connection $db */
++    /** @var Connection $db */
+     $db = $this->container->get('database');
+     $log = $db->select('watchdog', 'w')
+       ->fields('w')

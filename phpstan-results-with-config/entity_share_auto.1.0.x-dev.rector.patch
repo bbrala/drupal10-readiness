@@ -1,0 +1,802 @@
+diff --git a/modules/entity_share_auto_client/entity_share_auto_client.module b/modules/entity_share_auto_client/entity_share_auto_client.module
+index db1d7df..2676cf7 100644
+--- a/modules/entity_share_auto_client/entity_share_auto_client.module
++++ b/modules/entity_share_auto_client/entity_share_auto_client.module
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\entity_share_client\Service\ImportServiceInterface;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\entity_share_client\Entity\Remote;
++use GuzzleHttp\ClientInterface;
+ /**
+  * @file
+  * Contains entity_share_auto_client.module.
+@@ -33,7 +37,7 @@ function entity_share_auto_client_help($route_name, RouteMatchInterface $route_m
+ function entity_share_auto_client_instant_import_entity(array $data) {
+   try {
+     $import_context = new ImportContext($data['remote_id'], $data['channel_id'], $data['import_config_id']);
+-    /** @var \Drupal\entity_share_client\Service\ImportServiceInterface $import_service */
++    /** @var ImportServiceInterface $import_service */
+     $import_service = \Drupal::service('entity_share_client.import_service');
+     $ids = $import_service->importEntities($import_context, [$data['uuid']], FALSE);
+     if (!empty($ids)) {
+@@ -70,9 +74,9 @@ function entity_share_auto_client_instant_import_entity(array $data) {
+  *   Item data.
+  */
+ function entity_share_auto_client_instant_server_log(array $logs, array $data) {
+-  /** @var \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager */
++  /** @var EntityTypeManagerInterface $entity_type_manager */
+   $entity_type_manager = \Drupal::service('entity_type.manager');
+-  /** @var \Drupal\entity_share_client\Entity\Remote $remote_entity */
++  /** @var Remote $remote_entity */
+   $remote_entity = $entity_type_manager->getStorage('remote')->load($data['remote_id']);
+   $remote_url = $remote_entity->get('url');
+   $post_url = $remote_url . '/entity_share_auto_instant/updateLog';
+@@ -91,7 +95,7 @@ function entity_share_auto_client_instant_server_log(array $logs, array $data) {
+         $entity->save();
+       }
+     }
+-    /** @var \GuzzleHttp\ClientInterface $http_client */
++    /** @var ClientInterface $http_client */
+     $http_client = \Drupal::service('http_client');
+     $http_client->post($post_url, [
+       'json' => $logs,
+diff --git a/modules/entity_share_auto_client/src/Commands/ImportCommand.php b/modules/entity_share_auto_client/src/Commands/ImportCommand.php
+index 22a2ae3..942c2ed 100644
+--- a/modules/entity_share_auto_client/src/Commands/ImportCommand.php
++++ b/modules/entity_share_auto_client/src/Commands/ImportCommand.php
+@@ -15,14 +15,14 @@ class ImportCommand extends DrushCommands {
+   /**
+    * Drupal\Core\Logger\LoggerChannelFactoryInterface definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * Drupal\entity_share_auto_client\Service\EntityShareImportQueue definition.
+    *
+-   * @var \Drupal\entity_share_auto_client\Service\EntityShareImportQueue
++   * @var EntityShareImportQueue
+    */
+   protected $entityShareImportQueue;
+ 
+diff --git a/modules/entity_share_auto_client/src/Controller/EntityShareAutoClientController.php b/modules/entity_share_auto_client/src/Controller/EntityShareAutoClientController.php
+index 04a43ce..d2b75c8 100644
+--- a/modules/entity_share_auto_client/src/Controller/EntityShareAutoClientController.php
++++ b/modules/entity_share_auto_client/src/Controller/EntityShareAutoClientController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\entity_share_auto_client\Controller;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\entity_share_auto_client\Service\EntityShareAutoQueueImportHelperInterface;
++use Drupal\Core\Config\ImmutableConfig;
+ use Symfony\Component\HttpFoundation\Request;
+ use Symfony\Component\HttpFoundation\Response;
+ use Drupal\Core\Controller\ControllerBase;
+@@ -15,28 +18,28 @@ class EntityShareAutoClientController extends ControllerBase {
+   /**
+    * Drupal\Core\Entity\EntityTypeManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Import queue helper.
+    *
+-   * @var \Drupal\entity_share_auto_client\Service\EntityShareAutoQueueImportHelperInterface
++   * @var EntityShareAutoQueueImportHelperInterface
+    */
+   protected $importQueueHelper;
+ 
+   /**
+    * Client config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $clientConfig;
+ 
+   /**
+    * Current request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+@@ -56,7 +59,7 @@ class EntityShareAutoClientController extends ControllerBase {
+   /**
+    * Get remote and import config.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Return .
+    */
+   public function getRemoteAndImportConfig() {
+@@ -96,10 +99,10 @@ class EntityShareAutoClientController extends ControllerBase {
+   /**
+    * Add import to queue.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   Request.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Return response for client.
+    */
+   public function addImport(Request $request) {
+@@ -136,10 +139,10 @@ class EntityShareAutoClientController extends ControllerBase {
+   /**
+    * Add import to queue.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *   Request.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Return response for client.
+    */
+   public function instantImport(Request $request) {
+diff --git a/modules/entity_share_auto_client/src/Plugin/QueueWorker/EntityShareAutoImportWorker.php b/modules/entity_share_auto_client/src/Plugin/QueueWorker/EntityShareAutoImportWorker.php
+index c411c04..889e760 100755
+--- a/modules/entity_share_auto_client/src/Plugin/QueueWorker/EntityShareAutoImportWorker.php
++++ b/modules/entity_share_auto_client/src/Plugin/QueueWorker/EntityShareAutoImportWorker.php
+@@ -26,21 +26,21 @@ class EntityShareAutoImportWorker extends QueueWorkerBase implements ContainerFa
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The import service.
+    *
+-   * @var \Drupal\entity_share_client\Service\ImportServiceInterface
++   * @var ImportServiceInterface
+    */
+   private $importService;
+ 
+   /**
+    * The state storage.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   private $stateStorage;
+ 
+diff --git a/modules/entity_share_auto_client/src/Service/EntityShareAutoImportQueueHelper.php b/modules/entity_share_auto_client/src/Service/EntityShareAutoImportQueueHelper.php
+index 5bfb607..6e8751a 100755
+--- a/modules/entity_share_auto_client/src/Service/EntityShareAutoImportQueueHelper.php
++++ b/modules/entity_share_auto_client/src/Service/EntityShareAutoImportQueueHelper.php
+@@ -15,23 +15,23 @@ class EntityShareAutoImportQueueHelper implements EntityShareAutoQueueImportHelp
+   /**
+    * The queue factory service.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The state service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * QueueHelper constructor.
+    *
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   The queue factory service.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state service.
+    */
+   public function __construct(
+diff --git a/modules/entity_share_auto_client/src/Service/EntityShareImportQueue.php b/modules/entity_share_auto_client/src/Service/EntityShareImportQueue.php
+index b3908d2..75b5165 100755
+--- a/modules/entity_share_auto_client/src/Service/EntityShareImportQueue.php
++++ b/modules/entity_share_auto_client/src/Service/EntityShareImportQueue.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_share_auto_client\Service;
+ 
++use Drupal\Core\Queue\QueueInterface;
+ use Drupal\Core\DependencyInjection\DependencySerializationTrait;
+ use Drupal\Core\Queue\QueueFactory;
+ use Drupal\Core\Queue\QueueWorkerManager;
+@@ -20,21 +21,21 @@ class EntityShareImportQueue {
+   /**
+    * Subscriber Import Queue.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+   /**
+    * The Queue Worker.
+    *
+-   * @var \Drupal\Core\Queue\QueueWorkerManager
++   * @var QueueWorkerManager
+    */
+   protected $queueManager;
+ 
+   /**
+    * Logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+diff --git a/modules/entity_share_auto_instant/src/Controller/EntityShareAutoInstantController.php b/modules/entity_share_auto_instant/src/Controller/EntityShareAutoInstantController.php
+index 41a07a9..2197ca2 100644
+--- a/modules/entity_share_auto_instant/src/Controller/EntityShareAutoInstantController.php
++++ b/modules/entity_share_auto_instant/src/Controller/EntityShareAutoInstantController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\entity_share_auto_instant\Controller;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\Core\Config\ImmutableConfig;
++use Psr\Log\LoggerInterface;
+ use Drush\Log\LogLevel;
+ use Symfony\Component\HttpFoundation\Request;
+ use Symfony\Component\HttpFoundation\Response;
+@@ -16,28 +19,28 @@ class EntityShareAutoInstantController extends ControllerBase {
+   /**
+    * Drupal\Core\Entity\EntityTypeManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Client config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $serverConfig;
+ 
+   /**
+    * Current request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * Logger channel.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+@@ -57,7 +60,7 @@ class EntityShareAutoInstantController extends ControllerBase {
+   /**
+    * Update log.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    *   Return .
+    */
+   public function updateLog(Request $request) {
+diff --git a/modules/entity_share_auto_instant/src/EntitySyncStatusAccessControlHandler.php b/modules/entity_share_auto_instant/src/EntitySyncStatusAccessControlHandler.php
+index 0511be8..9bdce84 100644
+--- a/modules/entity_share_auto_instant/src/EntitySyncStatusAccessControlHandler.php
++++ b/modules/entity_share_auto_instant/src/EntitySyncStatusAccessControlHandler.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_share_auto_instant;
+ 
++use Drupal\entity_share_auto_instant\Entity\EntitySyncStatusInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -18,8 +19,7 @@ class EntitySyncStatusAccessControlHandler extends EntityAccessControlHandler {
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\entity_share_auto_instant\Entity\EntitySyncStatusInterface $entity */
+-
++    /** @var EntitySyncStatusInterface $entity */
+     switch ($operation) {
+ 
+       case 'view':
+diff --git a/modules/entity_share_auto_instant/src/EntitySyncStatusListBuilder.php b/modules/entity_share_auto_instant/src/EntitySyncStatusListBuilder.php
+index cdee9d5..1d3e790 100644
+--- a/modules/entity_share_auto_instant/src/EntitySyncStatusListBuilder.php
++++ b/modules/entity_share_auto_instant/src/EntitySyncStatusListBuilder.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_share_auto_instant;
+ 
++use Drupal\entity_share_auto_instant\Entity\EntitySyncStatus;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityListBuilder;
+ use Drupal\Core\Link;
+@@ -26,7 +27,7 @@ class EntitySyncStatusListBuilder extends EntityListBuilder {
+    * {@inheritdoc}
+    */
+   public function buildRow(EntityInterface $entity) {
+-    /** @var \Drupal\entity_share_auto_instant\Entity\EntitySyncStatus $entity */
++    /** @var EntitySyncStatus $entity */
+     $row['id'] = $entity->id();
+     $row['name'] = Link::createFromRoute(
+       $entity->label(),
+diff --git a/modules/entity_share_auto_instant/src/Service/EntityShareAutoInstantExport.php b/modules/entity_share_auto_instant/src/Service/EntityShareAutoInstantExport.php
+index a41939d..f17a1cf 100644
+--- a/modules/entity_share_auto_instant/src/Service/EntityShareAutoInstantExport.php
++++ b/modules/entity_share_auto_instant/src/Service/EntityShareAutoInstantExport.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_share_auto_instant\Service;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -24,28 +25,28 @@ class EntityShareAutoInstantExport {
+   /**
+    * GuzzleHttp\ClientInterface definition.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * Client config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $serverConfig;
+ 
+   /**
+    * Logger channel.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -62,9 +63,9 @@ class EntityShareAutoInstantExport {
+   /**
+    * Export entity.
+    *
+-   * @param \Drupal\entity_share_auto_server\Entity\ChannelsAutoInterface $channelsAuto
++   * @param ChannelsAutoInterface $channelsAuto
+    *   Channel auto config entity.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Export entity.
+    */
+   public function exportEntity(ChannelsAutoInterface $channelsAuto, EntityInterface $entity) {
+@@ -116,9 +117,9 @@ class EntityShareAutoInstantExport {
+   /**
+    * Create/update stub log entry. Using custom content entity.
+    *
+-   * @param \Drupal\entity_share_auto_server\Entity\ChannelsAutoInterface $channelsAuto
++   * @param ChannelsAutoInterface $channelsAuto
+    *   Channel auto entity.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity object.
+    * @param string $status
+    *   Status to be updated.
+@@ -161,7 +162,7 @@ class EntityShareAutoInstantExport {
+   /**
+    * Set failed status for sync entity.
+    *
+-   * @param \Drupal\entity_share_auto_server\Entity\ChannelsAutoInterface $channelsAuto
++   * @param ChannelsAutoInterface $channelsAuto
+    *   Channel auto.
+    * @param array $data
+    *   Item data.
+diff --git a/modules/entity_share_auto_server/entity_share_auto_server.module b/modules/entity_share_auto_server/entity_share_auto_server.module
+index cf46de0..34707a1 100644
+--- a/modules/entity_share_auto_server/entity_share_auto_server.module
++++ b/modules/entity_share_auto_server/entity_share_auto_server.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\entity_share_auto_server\Service\EntityShareAutoServer;
+ /**
+  * @file
+  * Contains entity_share_auto_server.module.
+@@ -43,11 +44,11 @@ function entity_share_auto_server_entity_insert(EntityInterface $entity) {
+ /**
+  * Add entity to export queue.
+  *
+- * @param Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  *   Entity object.
+  */
+ function __entity_share_auto_server_enqueue_entity(EntityInterface $entity) {
+-  /** @var \Drupal\entity_share_auto_server\Service\EntityShareAutoServer $entity_server */
++  /** @var EntityShareAutoServer $entity_server */
+   if ($entity instanceof FieldableEntityInterface) {
+     $entity_server = \Drupal::service('entity_share_auto_server.default');
+     $server_config = \Drupal::config('entity_share_auto.entity_share_auto_server.config');
+diff --git a/modules/entity_share_auto_server/src/Form/ChannelsAutoForm.php b/modules/entity_share_auto_server/src/Form/ChannelsAutoForm.php
+index 3d22428..5732982 100644
+--- a/modules/entity_share_auto_server/src/Form/ChannelsAutoForm.php
++++ b/modules/entity_share_auto_server/src/Form/ChannelsAutoForm.php
+@@ -15,14 +15,14 @@ class ChannelsAutoForm extends EntityForm {
+   /**
+    * Guzzle\Client instance.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * Constructs a ChannelForm object.
+    *
+-   * @param \GuzzleHttp\ClientInterface $http_client
++   * @param ClientInterface $http_client
+    *   Http client.
+    */
+   public function __construct(
+@@ -172,7 +172,7 @@ class ChannelsAutoForm extends EntityForm {
+    *
+    * @param array $form
+    *   The form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form state object.
+    *
+    * @return array
+diff --git a/modules/entity_share_auto_server/src/Form/EntityShareAutoServerConfig.php b/modules/entity_share_auto_server/src/Form/EntityShareAutoServerConfig.php
+index 8113803..235e3cf 100644
+--- a/modules/entity_share_auto_server/src/Form/EntityShareAutoServerConfig.php
++++ b/modules/entity_share_auto_server/src/Form/EntityShareAutoServerConfig.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_share_auto_server\Form;
+ 
++use Drupal\Core\State\State;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\Form\ConfigFormBase;
+@@ -18,25 +19,25 @@ class EntityShareAutoServerConfig extends ConfigFormBase {
+   /**
+    * State service.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Constructs a \Drupal\system\ConfigFormBase object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   State service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   Module handler service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, StateInterface $state, ModuleHandlerInterface $module_handler) {
+diff --git a/modules/entity_share_auto_server/src/Plugin/QueueWorker/EntityShareAutoExportWorker.php b/modules/entity_share_auto_server/src/Plugin/QueueWorker/EntityShareAutoExportWorker.php
+index a32292d..7843fef 100644
+--- a/modules/entity_share_auto_server/src/Plugin/QueueWorker/EntityShareAutoExportWorker.php
++++ b/modules/entity_share_auto_server/src/Plugin/QueueWorker/EntityShareAutoExportWorker.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\entity_share_auto_server\Plugin\QueueWorker;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+@@ -26,28 +27,28 @@ class EntityShareAutoExportWorker extends QueueWorkerBase implements ContainerFa
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Guzzle\Client instance.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * Drupal\Core\Logger\LoggerChannelFactoryInterface definition.
+    *
+-   * @var \Drupal\Core\Logger\LoggerChannelFactoryInterface
++   * @var LoggerChannelFactoryInterface
+    */
+   protected $loggerFactory;
+ 
+   /**
+    * The state storage.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   private $stateStorage;
+ 
+@@ -60,7 +61,7 @@ class EntityShareAutoExportWorker extends QueueWorkerBase implements ContainerFa
+   /**
+    * Client config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $serverConfig;
+ 
+diff --git a/modules/entity_share_auto_server/src/Service/EntityShareAutoExportQueueHelper.php b/modules/entity_share_auto_server/src/Service/EntityShareAutoExportQueueHelper.php
+index fcd3dce..148a671 100755
+--- a/modules/entity_share_auto_server/src/Service/EntityShareAutoExportQueueHelper.php
++++ b/modules/entity_share_auto_server/src/Service/EntityShareAutoExportQueueHelper.php
+@@ -15,23 +15,23 @@ class EntityShareAutoExportQueueHelper implements EntityShareAutoQueueExportHelp
+   /**
+    * The queue factory service.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The state service.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * QueueHelper constructor.
+    *
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   The queue factory service.
+-   * @param \Drupal\Core\State\StateInterface $state
++   * @param StateInterface $state
+    *   The state service.
+    */
+   public function __construct(
+diff --git a/modules/entity_share_auto_server/src/Service/EntityShareAutoServer.php b/modules/entity_share_auto_server/src/Service/EntityShareAutoServer.php
+index b650996..32bde89 100644
+--- a/modules/entity_share_auto_server/src/Service/EntityShareAutoServer.php
++++ b/modules/entity_share_auto_server/src/Service/EntityShareAutoServer.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\entity_share_auto_server\Service;
+ 
++use Drupal\Core\State\State;
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\entity_share_auto_instant\Service\EntityShareAutoInstantExport;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -28,63 +33,63 @@ class EntityShareAutoServer implements EntityShareAutoServerInterface {
+   /**
+    * EntityShareAutoQueueHelperInterface definition.
+    *
+-   * @var \Drupal\entity_share_auto_server\Service\EntityShareAutoQueueExportHelperInterface
++   * @var EntityShareAutoQueueExportHelperInterface
+    */
+   protected $entityShareAutoServerQueueHelper;
+ 
+   /**
+    * Drupal\Core\Entity\EntityTypeManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Guzzle\Client instance.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * The channel manipulator.
+    *
+-   * @var \Drupal\entity_share_server\Service\ChannelManipulatorInterface
++   * @var ChannelManipulatorInterface
+    */
+   protected $channelManipulator;
+ 
+   /**
+    * State service.
+    *
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * The module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Client config.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $serverConfig;
+ 
+@@ -106,20 +111,20 @@ class EntityShareAutoServer implements EntityShareAutoServerInterface {
+   /**
+    * Enqueue entity for export.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity for enqueue.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function enqueue(EntityInterface $entity) {
+     $channels = $this->loadChannelWithBundle($entity);
+     foreach ($channels as $channel) {
+       try {
+-        $this->eventDispatcher->dispatch(EntityShareAutoEvent::ENTITY_SHARE_AUTO_ENTITY_ENQUEUE, new EntityShareAutoEvent($entity, $channel->get('channel_type')));
++        $this->eventDispatcher->dispatch(new EntityShareAutoEvent($entity, $channel->get('channel_type')), EntityShareAutoEvent::ENTITY_SHARE_AUTO_ENTITY_ENQUEUE);
+         // Check if instant export is enabled.
+         if ($this->moduleHandler->moduleExists('entity_share_auto_instant') && $this->serverConfig->get('instant_export')) {
+-          /** @var \Drupal\entity_share_auto_instant\Service\EntityShareAutoInstantExport $instant_export_service */
++          /** @var EntityShareAutoInstantExport $instant_export_service */
+           $instant_export_service = \Drupal::service('entity_share_auto_instant.export');
+           $instant_export_service->exportEntity($channel, $entity);
+         }
+@@ -143,14 +148,14 @@ class EntityShareAutoServer implements EntityShareAutoServerInterface {
+   /**
+    * Load channel entity according to auto share channel entity.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity object.
+    *
+    * @return array
+    *   Return entity share auto channel config entity array.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function loadChannelWithBundle(EntityInterface $entity) {
+     $channels = $this->entityTypeManager->getStorage('channel')
+@@ -177,7 +182,7 @@ class EntityShareAutoServer implements EntityShareAutoServerInterface {
+   /**
+    * Helper function to check the presence of entities on a specific channel.
+    *
+-   * @param \Drupal\entity_share_server\Entity\ChannelInterface $channel
++   * @param ChannelInterface $channel
+    *   The channel id on which to check the entities.
+    * @param string $entity_uuid
+    *   The entity UUID to check for.
+diff --git a/modules/entity_share_auto_server/src/Service/EntityShareAutoServerInterface.php b/modules/entity_share_auto_server/src/Service/EntityShareAutoServerInterface.php
+index 7c9783e..ec23abb 100644
+--- a/modules/entity_share_auto_server/src/Service/EntityShareAutoServerInterface.php
++++ b/modules/entity_share_auto_server/src/Service/EntityShareAutoServerInterface.php
+@@ -17,7 +17,7 @@ interface EntityShareAutoServerInterface {
+   /**
+    * Enqueue node for export process.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity needs to export.
+    *
+    * @return mixed
+diff --git a/src/Event/EntityShareAutoEvent.php b/src/Event/EntityShareAutoEvent.php
+index f9faeeb..07ad538 100644
+--- a/src/Event/EntityShareAutoEvent.php
++++ b/src/Event/EntityShareAutoEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\entity_share_auto\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\Core\Entity\EntityInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Class EntityShareAutoEvent definition.
+@@ -23,7 +23,7 @@ class EntityShareAutoEvent extends Event {
+   /**
+    * Node entity.
+    *
+-   * @var \Drupal\Core\Entity\EntityInterface
++   * @var EntityInterface
+    */
+   protected $entity;
+ 
+@@ -37,7 +37,7 @@ class EntityShareAutoEvent extends Event {
+   /**
+    * Constructs a node insertion demo event object.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity to be import.
+    * @param string $channel_id
+    *   Channel id.
+@@ -50,7 +50,7 @@ class EntityShareAutoEvent extends Event {
+   /**
+    * Get the inserted entity.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   Return entity object.
+    */
+   public function getEntity() {

@@ -1,0 +1,373 @@
+diff --git a/email_change_verification.install b/email_change_verification.install
+index a1b6036..57aa903 100644
+--- a/email_change_verification.install
++++ b/email_change_verification.install
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Config\Config;
+ use Drupal\Core\Serialization\Yaml;
+ 
+ /**
+@@ -8,7 +9,7 @@ use Drupal\Core\Serialization\Yaml;
+ function email_change_verification_install($is_syncing) {
+   // Make sure our default config gets installed when this config doesn't exist yet,
+   // even if this module is installed during config import.
+-  /** @var \Drupal\Core\Config\Config $config */
++  /** @var Config $config */
+   $config = Drupal::service('config.factory')->getEditable('email_change_verification.config');
+   if (empty($config->getRawData())) {
+     $configInstallFile = __DIR__ . '/config/install/email_change_verification.config.yml';
+diff --git a/email_change_verification.module b/email_change_verification.module
+index 9245bc3..f754520 100644
+--- a/email_change_verification.module
++++ b/email_change_verification.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityStorageException;
+ include_once 'email_change_verification.token.inc';
+ 
+ use Drupal\Core\Entity\EntityTypeInterface;
+@@ -91,7 +92,7 @@ function email_change_verification_user_form_validate(array &$form, FormStateInt
+  * @param array $form
+  * @param FormStateInterface $form_state
+  *
+- * @throws \Drupal\Core\Entity\EntityStorageException
++ * @throws EntityStorageException
+  */
+ function email_change_verification_user_form_submit(array &$form, FormStateInterface $form_state) {
+   $build_info = $form_state->getBuildInfo();
+diff --git a/email_change_verification.token.inc b/email_change_verification.token.inc
+index 8b7fb33..1084ba8 100644
+--- a/email_change_verification.token.inc
++++ b/email_change_verification.token.inc
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\user\UserInterface;
++use Drupal\email_change_verification\EmailChangeServiceInterface;
+ /**
+  * @file
+  * This file is used to write hooks that used in the module.
+@@ -34,12 +36,12 @@ function email_change_verification_tokens($type, $tokens, array $data, array $op
+   $replacements = [];
+ 
+   if ($type == 'user' && !empty($data['user'])) {
+-    /** @var \Drupal\user\UserInterface $account */
++    /** @var UserInterface $account */
+     $account = $data['user'];
+     foreach ($tokens as $name => $original) {
+       switch ($name) {
+         case 'email_change_verification_link':
+-          /** @var \Drupal\email_change_verification\EmailChangeServiceInterface $service */
++          /** @var EmailChangeServiceInterface $service */
+           $service = Drupal::service('email_change_verification.service');
+           $url = $service->generateVerificationUrl($account);
+           $replacements[$original] = !empty($url) ? $url->toString() : '';
+diff --git a/src/Controller/EmailChangeController.php b/src/Controller/EmailChangeController.php
+index cba1e5f..55edbfd 100644
+--- a/src/Controller/EmailChangeController.php
++++ b/src/Controller/EmailChangeController.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\email_change_verification\Controller;
+ 
++use Symfony\Component\HttpFoundation\RedirectResponse;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Core\Session\AccountProxyInterface;
+ use Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Url;
+@@ -22,23 +25,23 @@ class EmailChangeController extends ControllerBase {
+   /**
+    * The Email change service.
+    *
+-   * @var \Drupal\email_change_verification\EmailChangeServiceInterface
++   * @var EmailChangeServiceInterface
+    */
+   protected $emailChangeService;
+ 
+   /**
+    * Symfony's event dispatcher.
+    *
+-   * @var \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher
++   * @var ContainerAwareEventDispatcher
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * EmailChangeController constructor.
+    *
+-   * @param \Drupal\email_change_verification\EmailChangeServiceInterface $emailChangeService
++   * @param EmailChangeServiceInterface $emailChangeService
+    *   The Email change service.
+-   * @param \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher $eventDispatcher
++   * @param ContainerAwareEventDispatcher $eventDispatcher
+    *   Symfony's event dispatcher.
+    */
+   public function __construct(EmailChangeServiceInterface $emailChangeService, ContainerAwareEventDispatcher $eventDispatcher) {
+@@ -62,7 +65,7 @@ class EmailChangeController extends ControllerBase {
+    * In order to never disclose a mail change link via a referrer header this
+    * controller must always return a redirect response.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user account for which the email change was requested.
+    * @param string $new_email
+    *   The newly requested email address.
+@@ -71,15 +74,15 @@ class EmailChangeController extends ControllerBase {
+    * @param string $hash
+    *   Unique hash.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   An HTTP response doing a redirect.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function verify(UserInterface $user, $new_email, $timestamp, $hash) {
+     // If the user is not logged in, redirect to the login page with
+     // the correct destination.
+-    /** @var \Drupal\Core\Session\AccountProxyInterface $current_user */
++    /** @var AccountProxyInterface $current_user */
+     $current_user = $this->currentUser();
+     if ($current_user->isAnonymous()) {
+       $this->messenger()->addError($this->t('You must be logged in to verify your email address.'));
+diff --git a/src/EmailChangeService.php b/src/EmailChangeService.php
+index 86316d3..557ac81 100644
+--- a/src/EmailChangeService.php
++++ b/src/EmailChangeService.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\email_change_verification;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Core\TypedData\Exception\MissingDataException;
+ use Drupal\Core\Url;
+ use Drupal\Core\Render\Markup;
+ use Drupal\Core\Site\Settings;
+@@ -26,59 +29,59 @@ class EmailChangeService implements EmailChangeServiceInterface {
+   /**
+    * The Drupal database connection service.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * The Email change verification configuration.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The Drupal email manager service.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+   protected $mailManager;
+ 
+   /**
+    * The Drupal messenger service.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * The Drupal token service.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $tokenService;
+ 
+   /**
+    * The Drupal language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * EmailChangeService constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The Drupal database connection service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The Drupal configuration factory.
+-   * @param \Drupal\Core\Mail\MailManagerInterface $mailManager
++   * @param MailManagerInterface $mailManager
+    *   The Drupal email manager service.
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The Drupal messenger service.
+-   * @param \Drupal\Core\Utility\Token $tokenService
++   * @param Token $tokenService
+    *   The Drupal token service.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $languageManager
++   * @param LanguageManagerInterface $languageManager
+    *   The Drupal language manager.
+    */
+   public function __construct(
+@@ -100,12 +103,12 @@ class EmailChangeService implements EmailChangeServiceInterface {
+   /**
+    * Process an email change request.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The user account for which the email change was requested.
+    * @param string $newEmail
+    *   The newly requested email address.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function changeRequest(UserInterface $account, $newEmail) {
+     // Update the user's mail_change field.
+@@ -138,13 +141,13 @@ class EmailChangeService implements EmailChangeServiceInterface {
+   /**
+    * Generates a verification URL.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The user account for which the email change was requested.
+    *
+-   * @return \Drupal\Core\Url|bool
++   * @return Url|bool
+    *   The verification URL or false.
+    *
+-   * @throws \Drupal\Core\TypedData\Exception\MissingDataException
++   * @throws MissingDataException
+    */
+   public function generateVerificationUrl(UserInterface $account) {
+     $mailChange = $account->get('mail_change');
+@@ -170,7 +173,7 @@ class EmailChangeService implements EmailChangeServiceInterface {
+   /**
+    * Checks a verification hash.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The user account for which the email change was requested.
+    * @param string $new_email
+    *   The newly requested email address.
+@@ -190,7 +193,7 @@ class EmailChangeService implements EmailChangeServiceInterface {
+   /**
+    * Helper function to get a hash to use in the verification URL.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The user account for which the email change was requested.
+    * @param int $timestamp
+    *   The timestamp of the email change request.
+diff --git a/src/EmailChangeServiceInterface.php b/src/EmailChangeServiceInterface.php
+index 4b5a766..d05a410 100644
+--- a/src/EmailChangeServiceInterface.php
++++ b/src/EmailChangeServiceInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\email_change_verification;
+ 
++use Drupal\Core\Entity\EntityStorageException;
++use Drupal\Core\Url;
+ use Drupal\user\UserInterface;
+ 
+ /**
+@@ -16,22 +18,22 @@ interface EmailChangeServiceInterface {
+   /**
+    * Process an email change request.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The user account for which the email change was requested.
+    * @param string $newEmail
+    *   The newly requested email address.
+    *
+-   * @throws \Drupal\Core\Entity\EntityStorageException
++   * @throws EntityStorageException
+    */
+   public function changeRequest(UserInterface $account, $newEmail);
+ 
+   /**
+    * Generates a verification URL.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The user account for which the email change was requested.
+    *
+-   * @return \Drupal\Core\Url|bool
++   * @return Url|bool
+    *   The verification URL or false.
+    */
+   public function generateVerificationUrl(UserInterface $account);
+@@ -39,7 +41,7 @@ interface EmailChangeServiceInterface {
+   /**
+    * Checks a verification hash.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    *   The user account for which the email change was requested.
+    * @param string $new_email
+    *   The newly requested email address.
+diff --git a/src/Event/EmailChangeVerificationSetRedirect.php b/src/Event/EmailChangeVerificationSetRedirect.php
+index f4769a8..9b50c41 100644
+--- a/src/Event/EmailChangeVerificationSetRedirect.php
++++ b/src/Event/EmailChangeVerificationSetRedirect.php
+@@ -17,7 +17,7 @@ class EmailChangeVerificationSetRedirect extends Event {
+   /**
+    * The user account for which this change is being made.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $account;
+ 
+@@ -57,7 +57,7 @@ class EmailChangeVerificationSetRedirect extends Event {
+   }
+ 
+   /**
+-   * @return \Drupal\user\UserInterface
++   * @return UserInterface
+    */
+   public function getAccount(): UserInterface {
+     return $this->account;
+diff --git a/src/Event/EmailChangeVerificationSuccess.php b/src/Event/EmailChangeVerificationSuccess.php
+index b0cd34d..115538e 100644
+--- a/src/Event/EmailChangeVerificationSuccess.php
++++ b/src/Event/EmailChangeVerificationSuccess.php
+@@ -15,21 +15,21 @@ class EmailChangeVerificationSuccess extends Event {
+   /**
+    * The account for which the email was successful validated.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   public $account;
+ 
+   /**
+    * VerifiedUserEmailChange constructor.
+    *
+-   * @param \Drupal\user\UserInterface $account
++   * @param UserInterface $account
+    */
+   public function __construct(UserInterface $account) {
+     $this->account = $account;
+   }
+ 
+   /**
+-   * @return \Drupal\user\UserInterface
++   * @return UserInterface
+    */
+   public function getAccount(): UserInterface {
+     return $this->account;

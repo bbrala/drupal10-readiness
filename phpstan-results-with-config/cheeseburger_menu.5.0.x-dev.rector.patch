@@ -1,0 +1,657 @@
+diff --git a/cheeseburger_menu.api.php b/cheeseburger_menu.api.php
+index 362ac85..457d071 100644
+--- a/cheeseburger_menu.api.php
++++ b/cheeseburger_menu.api.php
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\cheeseburger_menu\CheeseburgerMenuItem;
++use Drupal\cheeseburger_menu\CheeseburgerMenu;
+ /**
+  * @file
+  * Hooks provided by the Cheeseburger menu module.
+@@ -13,7 +15,7 @@
+ /**
+  * Implements hook_cheeseburger_menu_item_alter().
+  */
+-function hook_cheeseburger_menu_item_alter(\Drupal\cheeseburger_menu\CheeseburgerMenuItem $cheeseburger_menu_item) {
++function hook_cheeseburger_menu_item_alter(CheeseburgerMenuItem $cheeseburger_menu_item) {
+   if ($cheeseburger_menu_item->getOriginalEntityTypeId() === 'menu_link_content' && $cheeseburger_menu_item->getOriginalEntityId() === 'menu_link_content:b59d109e-3800-4a2d-a8ee-170435ce05ed') {
+     $cheeseburger_menu_item->attribute->addClass('highlighted-menu-item');
+   }
+@@ -26,7 +28,7 @@ function hook_cheeseburger_menu_item_alter(\Drupal\cheeseburger_menu\Cheeseburge
+ /**
+  * Implements hook_cheeseburger_menu_alter().
+  */
+-function hook_cheeseburger_menu_alter(\Drupal\cheeseburger_menu\CheeseburgerMenu $cheeseburger_menu) {
++function hook_cheeseburger_menu_alter(CheeseburgerMenu $cheeseburger_menu) {
+   if ($cheeseburger_menu->getOriginalEntityTypeId() === 'menu' && $cheeseburger_menu->getOriginalEntityId() === 'main') {
+     $cheeseburger_menu->setTitle('Cheeseburger title for menu');
+     $cheeseburger_menu->navigationItemAttribute->addClass('special-menu-navigation-class');
+diff --git a/cheeseburger_menu.module b/cheeseburger_menu.module
+index 9caf710..66f0c2e 100644
+--- a/cheeseburger_menu.module
++++ b/cheeseburger_menu.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\block\Entity\Block;
++use Drupal\cheeseburger_menu\Plugin\Block\CheeseburgerMenuBlock;
++use Drupal\system\Entity\Menu;
+ /**
+  * @file
+  * Contains cheeseburger_menu.module.
+@@ -45,7 +48,7 @@ function cheeseburger_menu_theme($existing, $type, $theme, $path) {
+         ]),
+         'main_navigation_attribute' => new Attribute(['class' => ['cheeseburger-menu__main-navigation-area']]),
+         'trigger_icon' => '<div class="cheeseburger-menu__submenu-trigger-icon dropdown"></div>',
+-        'close_icon' => file_get_contents(drupal_get_path('module', 'cheeseburger_menu') . '/images/trigger-close.svg'),
++        'close_icon' => file_get_contents(\Drupal::service('extension.list.module')->getPath('cheeseburger_menu') . '/images/trigger-close.svg'),
+       ],
+     ],
+     'cheeseburger_menu_trigger' => [
+@@ -62,13 +65,13 @@ function cheeseburger_menu_theme($existing, $type, $theme, $path) {
+ function cheeseburger_menu_page_attachments(array &$attachments) {
+   $active_theme = \Drupal::service('theme.manager')->getActiveTheme();
+   $grouped_triggers = cheeseburger_get_trigger_ids_grouped_by_block_to_trigger($active_theme->getName());
+-  /** @var \Drupal\block\Entity\Block[] $block */
++  /** @var Block[] $block */
+   $blocks = \Drupal::entityTypeManager()->getStorage('block')->loadByProperties([
+     'plugin' => 'cheeseburger_menu',
+     'theme' => $active_theme->getName(),
+   ]);
+   foreach ($blocks as $block) {
+-    /** @var \Drupal\cheeseburger_menu\Plugin\Block\CheeseburgerMenuBlock $block_plugin */
++    /** @var CheeseburgerMenuBlock $block_plugin */
+     $block_plugin = $block->getPlugin();
+     $block_ids = [$block->id()];
+     $block_ids = array_merge($block_ids, $grouped_triggers['block_ids'][$block->id()] ?? []);
+@@ -164,7 +167,7 @@ function cheeseburger_menu_block_view_alter(array &$build, BlockPluginInterface
+  * Implements hook_form_FORM_ID_alter().
+  */
+ function cheeseburger_menu_form_menu_edit_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+-  /** @var \Drupal\system\Entity\Menu $menu */
++  /** @var Menu $menu */
+   $menu = $form_state->getFormObject()->getEntity();
+   if ($menu->id() === 'language') {
+     $form['use_langcode'] = [
+@@ -180,7 +183,7 @@ function cheeseburger_menu_form_menu_edit_form_alter(&$form, FormStateInterface
+  * Save third party setting added to menu on form submission.
+  */
+ function _cheeseburger_menu_save_third_party_settings($form, FormStateInterface $form_state) {
+-  /** @var \Drupal\system\Entity\Menu $menu */
++  /** @var Menu $menu */
+   $menu = $form_state->getFormObject()->getEntity();
+   $menu->setThirdPartySetting('cheeseburger_menu', 'use_langcode', (bool) $form_state->getValue('use_langcode'));
+   $menu->save();
+diff --git a/src/CheeseburgerMenu.php b/src/CheeseburgerMenu.php
+index c97d536..5fe60b4 100644
+--- a/src/CheeseburgerMenu.php
++++ b/src/CheeseburgerMenu.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\cheeseburger_menu;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Component\Utility\Html;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Template\Attribute;
+@@ -14,21 +15,21 @@ class CheeseburgerMenu implements \IteratorAggregate {
+   /**
+    * Menu items.
+    *
+-   * @var \Drupal\cheeseburger_menu\CheeseburgerMenuItem[]
++   * @var CheeseburgerMenuItem[]
+    */
+   protected $menuItems = [];
+ 
+   /**
+    * Navigation meni items.
+    *
+-   * @var \Drupal\cheeseburger_menu\CheeseburgerMenuItem[]
++   * @var CheeseburgerMenuItem[]
+    */
+   protected $navigationMenuItems = [];
+ 
+   /**
+    * Menu title.
+    *
+-   * @var string|\Drupal\Core\StringTranslation\TranslatableMarkup
++   * @var string|TranslatableMarkup
+    */
+   public $title;
+ 
+@@ -77,21 +78,21 @@ class CheeseburgerMenu implements \IteratorAggregate {
+   /**
+    * Navigation item attribute.
+    *
+-   * @var \Drupal\Core\Template\Attribute
++   * @var Attribute
+    */
+   public $navigationItemAttribute;
+ 
+   /**
+    * Menu title attribute.
+    *
+-   * @var \Drupal\Core\Template\Attribute
++   * @var Attribute
+    */
+   public $titleAttribute;
+ 
+   /**
+    * Menu wrapper attributes.
+    *
+-   * @var \Drupal\Core\Template\Attribute
++   * @var Attribute
+    */
+   public $wrapperAttribute;
+ 
+@@ -117,7 +118,7 @@ class CheeseburgerMenu implements \IteratorAggregate {
+    *
+    * @param array $settings
+    *   Settings to create menu from.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity as source, menu and taxonomy vocabulary are supported.
+    *
+    * @return static
+@@ -166,7 +167,7 @@ class CheeseburgerMenu implements \IteratorAggregate {
+   /**
+    * Cheeseburger menu as attribute.
+    *
+-   * @return \Drupal\Core\Template\Attribute
++   * @return Attribute
+    *   Menu id attribute.
+    */
+   public function getIdAsAttribute() {
+@@ -178,7 +179,7 @@ class CheeseburgerMenu implements \IteratorAggregate {
+   /**
+    * Append menu item to menu.
+    *
+-   * @param \Drupal\cheeseburger_menu\CheeseburgerMenuItem $menu_item
++   * @param CheeseburgerMenuItem $menu_item
+    *   Menu item.
+    *
+    * @return static
+@@ -192,7 +193,7 @@ class CheeseburgerMenu implements \IteratorAggregate {
+   /**
+    * Sets menu items.
+    *
+-   * @param \Drupal\cheeseburger_menu\CheeseburgerMenuItem[] $menu_items
++   * @param CheeseburgerMenuItem[] $menu_items
+    *   Menu items.
+    *
+    * @return static
+@@ -206,7 +207,7 @@ class CheeseburgerMenu implements \IteratorAggregate {
+   /**
+    * Returns menu items.
+    *
+-   * @return \Drupal\cheeseburger_menu\CheeseburgerMenuItem[]
++   * @return CheeseburgerMenuItem[]
+    *   Menu items.
+    */
+   public function getMenuItems() {
+@@ -224,7 +225,7 @@ class CheeseburgerMenu implements \IteratorAggregate {
+   /**
+    * Append menu item to navigation.
+    *
+-   * @param \Drupal\cheeseburger_menu\CheeseburgerMenuItem $menu_item
++   * @param CheeseburgerMenuItem $menu_item
+    *   Menu item.
+    *
+    * @return static
+@@ -238,7 +239,7 @@ class CheeseburgerMenu implements \IteratorAggregate {
+   /**
+    * Sets navigation menu items.
+    *
+-   * @param \Drupal\cheeseburger_menu\CheeseburgerMenuItem[] $menu_items
++   * @param CheeseburgerMenuItem[] $menu_items
+    *   Menu items.
+    *
+    * @return static
+@@ -252,7 +253,7 @@ class CheeseburgerMenu implements \IteratorAggregate {
+   /**
+    * Returns menu items.
+    *
+-   * @return \Drupal\cheeseburger_menu\CheeseburgerMenuItem[]
++   * @return CheeseburgerMenuItem[]
+    *   Menu items.
+    */
+   public function getNavigationMenuItems() {
+@@ -262,7 +263,7 @@ class CheeseburgerMenu implements \IteratorAggregate {
+   /**
+    * Returns menu title.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @return TranslatableMarkup|string
+    *   Menu title.
+    */
+   public function getTitle() {
+@@ -272,7 +273,7 @@ class CheeseburgerMenu implements \IteratorAggregate {
+   /**
+    * Sets menu title.
+    *
+-   * @param \Drupal\Core\StringTranslation\TranslatableMarkup|string $title
++   * @param TranslatableMarkup|string $title
+    *   Menu title.
+    */
+   public function setTitle($title) {
+diff --git a/src/CheeseburgerMenuItem.php b/src/CheeseburgerMenuItem.php
+index fb6f55b..8a6af25 100644
+--- a/src/CheeseburgerMenuItem.php
++++ b/src/CheeseburgerMenuItem.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\cheeseburger_menu;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Menu\MenuLinkTreeElement;
+ use Drupal\Core\Template\Attribute;
+@@ -17,35 +18,35 @@ class CheeseburgerMenuItem {
+   /**
+    * Menu item title.
+    *
+-   * @var string|\Drupal\Core\StringTranslation\TranslatableMarkup
++   * @var string|TranslatableMarkup
+    */
+   public $title;
+ 
+   /**
+    * Menu item url.
+    *
+-   * @var \Drupal\Core\Url
++   * @var Url
+    */
+   public $url;
+ 
+   /**
+    * Menu item attributes.
+    *
+-   * @var \Drupal\Core\Template\Attribute
++   * @var Attribute
+    */
+   public $attribute;
+ 
+   /**
+    * Menu label attributes.
+    *
+-   * @var \Drupal\Core\Template\Attribute
++   * @var Attribute
+    */
+   public $labelAttribute;
+ 
+   /**
+    * Menu trigger attributes.
+    *
+-   * @var \Drupal\Core\Template\Attribute
++   * @var Attribute
+    */
+   public $triggerAttribute;
+ 
+@@ -80,11 +81,11 @@ class CheeseburgerMenuItem {
+   /**
+    * CheeseburgerMenuItem constructor.
+    *
+-   * @param string|\Drupal\Core\StringTranslation\TranslatableMarkup $title
++   * @param string|TranslatableMarkup $title
+    *   Menu item title.
+-   * @param \Drupal\Core\Url $url
++   * @param Url $url
+    *   Menu item url.
+-   * @param \Drupal\Core\Template\Attribute|null $attribute
++   * @param Attribute|null $attribute
+    *   Menu item attributes.
+    */
+   public function __construct($title, Url $url, Attribute $attribute = NULL) {
+@@ -103,7 +104,7 @@ class CheeseburgerMenuItem {
+   /**
+    * Creates cheeseburger menu item from menu link tree.
+    *
+-   * @param \Drupal\Core\Menu\MenuLinkTreeElement $menu_link_tree_element
++   * @param MenuLinkTreeElement $menu_link_tree_element
+    *   Menu link tree element to create from.
+    * @param bool $menu_item_settings
+    *   @see \Drupal\cheeseburger_menu\CheeseburgerMenuItem::applySettings()
+@@ -141,7 +142,7 @@ class CheeseburgerMenuItem {
+   /**
+    * Creates cheeseburger menu item from taxonomy term.
+    *
+-   * @param \Drupal\taxonomy\Entity\Term $taxonomy_term
++   * @param Term $taxonomy_term
+    *   Taxonomy term.
+    * @param array $menu_item_settings
+    *   @see \Drupal\cheeseburger_menu\CheeseburgerMenuItem::applySettings()
+@@ -187,7 +188,7 @@ class CheeseburgerMenuItem {
+   /**
+    * Set menu item title.
+    *
+-   * @param \Drupal\Core\StringTranslation\TranslatableMarkup|string $title
++   * @param TranslatableMarkup|string $title
+    *   Menu item title.
+    *
+    * @return static
+@@ -201,7 +202,7 @@ class CheeseburgerMenuItem {
+   /**
+    * Returns menu item title.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|string
++   * @return TranslatableMarkup|string
+    *   Menu item title.
+    */
+   public function getTitle() {
+@@ -211,7 +212,7 @@ class CheeseburgerMenuItem {
+   /**
+    * Sets menu item url.
+    *
+-   * @param \Drupal\Core\Url $url
++   * @param Url $url
+    *   Menu item url.
+    *
+    * @return static
+@@ -225,7 +226,7 @@ class CheeseburgerMenuItem {
+   /**
+    * Returns menu item url.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   Menu item url.
+    */
+   public function getUrl() {
+@@ -235,7 +236,7 @@ class CheeseburgerMenuItem {
+   /**
+    * Sets menu item attribute.
+    *
+-   * @param \Drupal\Core\Template\Attribute $attribute
++   * @param Attribute $attribute
+    *   Menu item attribute.
+    *
+    * @return static
+@@ -249,7 +250,7 @@ class CheeseburgerMenuItem {
+   /**
+    * Returns menu item attribute.
+    *
+-   * @return \Drupal\Core\Template\Attribute
++   * @return Attribute
+    *   Menu item attribute.
+    */
+   public function getAttribute() {
+diff --git a/src/CheeseburgerMenuService.php b/src/CheeseburgerMenuService.php
+index 1b1a365..6709505 100644
+--- a/src/CheeseburgerMenuService.php
++++ b/src/CheeseburgerMenuService.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\cheeseburger_menu;
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\taxonomy\TermStorage;
++use Drupal\taxonomy\Entity\Vocabulary;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -24,38 +27,38 @@ class CheeseburgerMenuService {
+   /**
+    * Drupal\Core\Entity\EntityTypeManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Drupal\Core\Menu\MenuLinkTreeInterface definition.
+    *
+-   * @var \Drupal\Core\Menu\MenuLinkTreeInterface
++   * @var MenuLinkTreeInterface
+    */
+   protected $menuLinkTree;
+ 
+   /**
+    * The active menu trail service.
+    *
+-   * @var \Drupal\Core\Menu\MenuActiveTrailInterface
++   * @var MenuActiveTrailInterface
+    */
+   protected $menuActiveTrail;
+ 
+   /**
+    * Current route match service.
+    *
+-   * @var \Drupal\Core\Routing\CurrentRouteMatch
++   * @var CurrentRouteMatch
+    */
+   protected $currentRouteMatch;
+ 
+   /**
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -115,7 +118,7 @@ class CheeseburgerMenuService {
+   /**
+    * Builds sortable entity row for cheeseburger config form.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   Entity to build.
+    * @param array $default_value
+    *   Cheeseburger config for entity.
+@@ -246,7 +249,7 @@ class CheeseburgerMenuService {
+   /**
+    * Builds region row.
+    *
+-   * @param string|\Drupal\Core\StringTranslation\TranslatableMarkup $title
++   * @param string|TranslatableMarkup $title
+    *   Region title.
+    * @param string $region_name
+    *   Region machine name.
+@@ -285,7 +288,7 @@ class CheeseburgerMenuService {
+    * @param bool $parent_menu_as_link
+    *   Whether parent menu item should be links or not.
+    *
+-   * @return \Drupal\cheeseburger_menu\CheeseburgerMenu
++   * @return CheeseburgerMenu
+    *   Built cheeseburger menu.
+    */
+   public function buildMenu(array $menu_settings, $parent_menu_as_link = FALSE) {
+@@ -340,13 +343,13 @@ class CheeseburgerMenuService {
+    * @param bool $parent_menu_as_link
+    *   Whether parent menu item should be links or not.
+    *
+-   * @return \Drupal\cheeseburger_menu\CheeseburgerMenu
++   * @return CheeseburgerMenu
+    *   Built cheeseburger menu.
+    */
+   public function buildMenuFromVocabulary(array $vocabulary_menu_settings, $parent_menu_as_link = FALSE) {
+-    /** @var \Drupal\taxonomy\TermStorage $term_storage */
++    /** @var TermStorage $term_storage */
+     $term_storage = $this->entityTypeManager->getStorage('taxonomy_term');
+-    /** @var \Drupal\taxonomy\Entity\Vocabulary $vocabulary */
++    /** @var Vocabulary $vocabulary */
+     $vocabulary = $this->entityTypeManager->getStorage('taxonomy_vocabulary')->load($vocabulary_menu_settings['id']);
+ 
+     // @todo Optimize this.
+diff --git a/src/Plugin/Block/CheeseburgerMenuBlock.php b/src/Plugin/Block/CheeseburgerMenuBlock.php
+index ef253d3..db9fcca 100644
+--- a/src/Plugin/Block/CheeseburgerMenuBlock.php
++++ b/src/Plugin/Block/CheeseburgerMenuBlock.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\cheeseburger_menu\Plugin\Block;
+ 
++use Drupal\file\Entity\File;
++use Drupal\cheeseburger_menu\CheeseburgerMenu;
++use Drupal\cheeseburger_menu\CheeseburgerMenuItem;
+ use Drupal\cheeseburger_menu\CheeseburgerMenuService;
+ use Drupal\Core\Block\BlockBase;
+ use Drupal\Core\Cache\Cache;
+@@ -26,21 +29,21 @@ class CheeseburgerMenuBlock extends BlockBase implements ContainerFactoryPluginI
+   /**
+    * Cheeseburger menu service.
+    *
+-   * @var \Drupal\cheeseburger_menu\CheeseburgerMenuService
++   * @var CheeseburgerMenuService
+    */
+   protected $service;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -354,7 +357,7 @@ class CheeseburgerMenuBlock extends BlockBase implements ContainerFactoryPluginI
+       // Setting icon.
+       $icon_setting = &$menu['settings']['icon'];
+       if (isset($icon_setting[0])) {
+-        /** @var \Drupal\file\Entity\File $file */
++        /** @var File $file */
+         $file = $this->entityTypeManager->getStorage('file')->load($icon_setting[0]);
+         $icon_setting = file_get_contents($file->getFileUri());
+       }
+@@ -377,7 +380,7 @@ class CheeseburgerMenuBlock extends BlockBase implements ContainerFactoryPluginI
+   /**
+    * Invokes all hooks provided by cheeseburger_menu module.
+    *
+-   * @param \Drupal\cheeseburger_menu\CheeseburgerMenu[] $menus
++   * @param CheeseburgerMenu[] $menus
+    *   Menus to invoke hooks on.
+    */
+   public function createHooks(array $menus) {
+@@ -390,7 +393,7 @@ class CheeseburgerMenuBlock extends BlockBase implements ContainerFactoryPluginI
+   /**
+    * Invokes hooks on given menu items and its children.
+    *
+-   * @param \Drupal\cheeseburger_menu\CheeseburgerMenuItem[] $menu_items
++   * @param CheeseburgerMenuItem[] $menu_items
+    *   Menu items to invoke hooks on.
+    */
+   public function createMenuItemHooks(array $menu_items) {
+diff --git a/src/Plugin/Block/CheeseburgerMenuTrigger.php b/src/Plugin/Block/CheeseburgerMenuTrigger.php
+index 8fdff9c..083ad4e 100644
+--- a/src/Plugin/Block/CheeseburgerMenuTrigger.php
++++ b/src/Plugin/Block/CheeseburgerMenuTrigger.php
+@@ -24,28 +24,28 @@ class CheeseburgerMenuTrigger extends BlockBase implements ContainerFactoryPlugi
+   /**
+    * Entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * Breakpoint manager.
+    *
+-   * @var \Drupal\breakpoint\BreakpointManagerInterface|null
++   * @var BreakpointManagerInterface|null
+    */
+   protected $breakPointManager;
+ 
+   /**
+    * Theme manager.
+    *
+-   * @var \Drupal\Core\Theme\ThemeManagerInterface
++   * @var ThemeManagerInterface
+    */
+   protected $themeManager;
+ 
+diff --git a/src/Plugin/Deriver/LanguageSwitchLinksDeriver.php b/src/Plugin/Deriver/LanguageSwitchLinksDeriver.php
+index 88d81fc..92f1f20 100644
+--- a/src/Plugin/Deriver/LanguageSwitchLinksDeriver.php
++++ b/src/Plugin/Deriver/LanguageSwitchLinksDeriver.php
+@@ -15,14 +15,14 @@ class LanguageSwitchLinksDeriver extends DeriverBase implements ContainerDeriver
+   /**
+    * Language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * LanguageSwitchLinksDeriver constructor.
+    *
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   Language manager.
+    */
+   public function __construct(LanguageManagerInterface $language_manager) {
+diff --git a/src/Plugin/Menu/LanguageSwitchMenuLink.php b/src/Plugin/Menu/LanguageSwitchMenuLink.php
+index 527e185..36d4f2a 100644
+--- a/src/Plugin/Menu/LanguageSwitchMenuLink.php
++++ b/src/Plugin/Menu/LanguageSwitchMenuLink.php
+@@ -19,28 +19,28 @@ class LanguageSwitchMenuLink extends MenuLinkBase implements ContainerFactoryPlu
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Path matcher.
+    *
+-   * @var \Drupal\Core\Path\PathMatcherInterface
++   * @var PathMatcherInterface
+    */
+   protected $pathMatcher;
+ 
+   /**
+    * Entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Route match.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+@@ -53,11 +53,11 @@ class LanguageSwitchMenuLink extends MenuLinkBase implements ContainerFactoryPlu
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\Core\Path\PathMatcherInterface $path_matcher
++   * @param PathMatcherInterface $path_matcher
+    *   Path matcher.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, LanguageManagerInterface $language_manager, PathMatcherInterface $path_matcher, EntityTypeManagerInterface $entity_type_manager, RouteMatchInterface $route_match) {

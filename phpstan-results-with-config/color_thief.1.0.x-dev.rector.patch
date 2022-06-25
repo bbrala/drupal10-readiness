@@ -1,0 +1,294 @@
+diff --git a/color_thief.info.yml b/color_thief.info.yml
+index 101013f..f4f0849 100644
+--- a/color_thief.info.yml
++++ b/color_thief.info.yml
+@@ -2,5 +2,4 @@ name: Color Thief
+ type: module
+ description: Saves the dominant color for an image file entity and uses it to provide a background color placeholder while images load.
+ package: file
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+diff --git a/color_thief.module b/color_thief.module
+index 26011e5..83305b7 100644
+--- a/color_thief.module
++++ b/color_thief.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Database\Connection;
+ /**
+  * @file
+  * Supporting functions for the Color Thief module.
+@@ -12,7 +13,7 @@ use Drupal\image\Entity\ImageStyle;
+ /**
+  * Check if an entity is supported by Color Thief.
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  *   A file entity to check to see if we can extract a color from it.
+  *
+  * @return bool
+@@ -39,7 +40,7 @@ function color_thief_is_supported_entity(EntityInterface $entity) {
+ /**
+  * Calculate an image file entity's dominant color and save to database.
+  *
+- * @param \Drupal\Core\Entity\EntityInterface $entity
++ * @param EntityInterface $entity
+  *   An entity to try and extract a dominant color from.
+  */
+ function color_thief_update_dominant_color(EntityInterface &$entity) {
+@@ -67,7 +68,7 @@ function color_thief_update_dominant_color(EntityInterface &$entity) {
+   $dominant_color = ColorThief::getColor($absolute_path);
+   $hex_color = sprintf("%02x%02x%02x", $dominant_color[0], $dominant_color[1], $dominant_color[2]);
+ 
+-  /** @var \Drupal\Core\Database\Connection $connection */
++  /** @var Connection $connection */
+   $connection = \Drupal::service('database');
+   $connection->merge('color_thief')
+     ->key('fid', $entity->id())
+diff --git a/src/ColorThiefTrait.php b/src/ColorThiefTrait.php
+index bd86c75..60ef3f2 100644
+--- a/src/ColorThiefTrait.php
++++ b/src/ColorThiefTrait.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\color_thief;
+ 
++use Drupal\Core\Queue\QueueInterface;
++use Drupal\Core\Database\Connection;
+ use Drupal\file\FileInterface;
+ 
+ /**
+@@ -12,11 +14,11 @@ trait ColorThiefTrait {
+   /**
+    * Adds a file to the queue of files to have their color calculated on cron.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   A file entity.
+    */
+   private function addFileEntityToColorThiefQueue(FileInterface $file) {
+-    /** @var \Drupal\Core\Queue\QueueInterface $queue */
++    /** @var QueueInterface $queue */
+     $queue = $this->queueFactory->get('color_thief_color_setter');
+     $item = new \stdClass();
+     $item->fid = $file->id();
+@@ -26,7 +28,7 @@ trait ColorThiefTrait {
+   /**
+    * Checks the database to see if we have calculated this file's color already.
+    *
+-   * @param \Drupal\file\FileInterface $file
++   * @param FileInterface $file
+    *   A file entity.
+    *
+    * @return string|false
+@@ -34,7 +36,7 @@ trait ColorThiefTrait {
+    */
+   private function getColorFromDatabase(FileInterface $file) {
+     // Try and load from the DB first.
+-    /** @var \Drupal\Core\Database\Connection $connection */
++    /** @var Connection $connection */
+     $query = $this->database->select('color_thief', 'ct');
+     $query->addField('ct', 'color');
+     $query->condition('ct.fid', $file->id());
+diff --git a/src/Plugin/Field/FieldFormatter/ImageDominantColorBackgroundFormatter.php b/src/Plugin/Field/FieldFormatter/ImageDominantColorBackgroundFormatter.php
+index 98206f1..91e6e85 100644
+--- a/src/Plugin/Field/FieldFormatter/ImageDominantColorBackgroundFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/ImageDominantColorBackgroundFormatter.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\color_thief\Plugin\Field\FieldFormatter;
+ 
++use Drupal\image\ImageStyleStorageInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\image\Plugin\Field\FieldFormatter\ImageFormatter;
+ use Drupal\color_thief\ColorThiefTrait;
+@@ -33,28 +34,28 @@ class ImageDominantColorBackgroundFormatter extends ImageFormatter {
+   /**
+    * The queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The image style entity storage.
+    *
+-   * @var \Drupal\image\ImageStyleStorageInterface
++   * @var ImageStyleStorageInterface
+    */
+   protected $imageStyleStorage;
+ 
+@@ -65,7 +66,7 @@ class ImageDominantColorBackgroundFormatter extends ImageFormatter {
+    *   The plugin_id for the formatter.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The definition of the field to which the formatter is associated.
+    * @param array $settings
+    *   The formatter settings.
+@@ -75,13 +76,13 @@ class ImageDominantColorBackgroundFormatter extends ImageFormatter {
+    *   The view mode.
+    * @param array $third_party_settings
+    *   Any third party settings settings.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $image_style_storage
++   * @param EntityStorageInterface $image_style_storage
+    *   The image style storage.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   The queue factory.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database connection.
+    */
+   public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, $label, $view_mode, array $third_party_settings, AccountInterface $current_user, EntityStorageInterface $image_style_storage, QueueFactory $queue_factory, Connection $database) {
+diff --git a/src/Plugin/Field/FieldFormatter/ResponsiveImageDominantColorBackgroundFormatter.php b/src/Plugin/Field/FieldFormatter/ResponsiveImageDominantColorBackgroundFormatter.php
+index 1a4d073..0c998af 100644
+--- a/src/Plugin/Field/FieldFormatter/ResponsiveImageDominantColorBackgroundFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/ResponsiveImageDominantColorBackgroundFormatter.php
+@@ -34,42 +34,42 @@ class ResponsiveImageDominantColorBackgroundFormatter extends ResponsiveImageFor
+   /**
+    * The responsive image style storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $responsiveImageStyleStorage;
+ 
+   /**
+    * The image style entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $imageStyleStorage;
+ 
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The link generator.
+    *
+-   * @var \Drupal\Core\Utility\LinkGeneratorInterface
++   * @var LinkGeneratorInterface
+    */
+   protected $linkGenerator;
+ 
+   /**
+    * The queue factory.
+    *
+-   * @var \Drupal\Core\Queue\QueueFactory
++   * @var QueueFactory
+    */
+   protected $queueFactory;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $connection;
+ 
+@@ -80,7 +80,7 @@ class ResponsiveImageDominantColorBackgroundFormatter extends ResponsiveImageFor
+    *   The plugin_id for the formatter.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Field\FieldDefinitionInterface $field_definition
++   * @param FieldDefinitionInterface $field_definition
+    *   The definition of the field to which the formatter is associated.
+    * @param array $settings
+    *   The formatter settings.
+@@ -90,17 +90,17 @@ class ResponsiveImageDominantColorBackgroundFormatter extends ResponsiveImageFor
+    *   The view mode.
+    * @param array $third_party_settings
+    *   Any third party settings.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $responsive_image_style_storage
++   * @param EntityStorageInterface $responsive_image_style_storage
+    *   The responsive image style storage.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $image_style_storage
++   * @param EntityStorageInterface $image_style_storage
+    *   The image style storage.
+-   * @param \Drupal\Core\Utility\LinkGeneratorInterface $link_generator
++   * @param LinkGeneratorInterface $link_generator
+    *   The link generator service.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current user.
+-   * @param \Drupal\Core\Queue\QueueFactory $queue_factory
++   * @param QueueFactory $queue_factory
+    *   The queue factory.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database connection.
+    */
+   public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, $label, $view_mode, array $third_party_settings, EntityStorageInterface $responsive_image_style_storage, EntityStorageInterface $image_style_storage, LinkGeneratorInterface $link_generator, AccountInterface $current_user, QueueFactory $queue_factory, Connection $database) {
+diff --git a/src/Plugin/QueueWorker/ColorSetter.php b/src/Plugin/QueueWorker/ColorSetter.php
+index 5343959..eefe7c4 100644
+--- a/src/Plugin/QueueWorker/ColorSetter.php
++++ b/src/Plugin/QueueWorker/ColorSetter.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\color_thief\Plugin\QueueWorker;
+ 
++use Drupal\file\FileInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+@@ -21,7 +22,7 @@ class ColorSetter extends QueueWorkerBase implements ContainerFactoryPluginInter
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+@@ -34,7 +35,7 @@ class ColorSetter extends QueueWorkerBase implements ContainerFactoryPluginInter
+    *   The plugin_id for the plugin instance.
+    * @param mixed $plugin_definition
+    *   The plugin implementation definition.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager service.
+    */
+   public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager) {
+@@ -58,9 +59,9 @@ class ColorSetter extends QueueWorkerBase implements ContainerFactoryPluginInter
+    * {@inheritdoc}
+    */
+   public function processItem($data) {
+-    require_once drupal_get_path('module', 'color_thief') . '/color_thief.module';
++    require_once \Drupal::service('extension.list.module')->getPath('color_thief') . '/color_thief.module';
+ 
+-    /** @var \Drupal\file\FileInterface $file */
++    /** @var FileInterface $file */
+     $file = $this->entityTypeManager->getStorage('file')->load($data->fid);
+     color_thief_update_dominant_color($file);
+   }

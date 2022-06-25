@@ -1,0 +1,994 @@
+diff --git a/composer.json b/composer.json
+index d147840..ffc1639 100644
+--- a/composer.json
++++ b/composer.json
+@@ -7,7 +7,7 @@
+     "require": {
+         "drupal/block_renderer": "^1.0@alpha",
+         "dragonmantank/cron-expression": "^3.0",
+-        "drupal/core": "^8.8 || ^9",
+-        "lorisleiva/cron-translator": "^0.1.1"
++        "lorisleiva/cron-translator": "^0.1.1",
++        "drupal/core": "^9.1 || ^10"
+     }
+ }
+diff --git a/digest.info.yml b/digest.info.yml
+index f603264..fe7e784 100644
+--- a/digest.info.yml
++++ b/digest.info.yml
+@@ -3,7 +3,7 @@ type: module
+ description: Send out notification digests about new content.
+ 
+ package: Digest
+-core_version_requirement: ^8.8 || ^9
++core_version_requirement: ^9.1 || ^10
+ 
+ configure: digest.digest_settings
+ 
+diff --git a/src/Controller/DigestController.php b/src/Controller/DigestController.php
+index 67e0493..bd5bb6d 100644
+--- a/src/Controller/DigestController.php
++++ b/src/Controller/DigestController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\digest\Controller;
+ 
++use Symfony\Component\HttpFoundation\RedirectResponse;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\digest\Entity\DigestInterface;
+ 
+@@ -13,12 +14,12 @@ class DigestController extends ControllerBase {
+   /**
+    * Performs a given operation on a digest entity.
+    *
+-   * @param \Drupal\digest\Entity\DigestInterface $digest
++   * @param DigestInterface $digest
+    *   The digest to do the operation on.
+    * @param string $operation
+    *   The operation to perform.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   A redirect, usually back to the digest listing page.
+    *
+    * @throws \BadMethodCallException
+diff --git a/src/DigestManager.php b/src/DigestManager.php
+index da7a293..91e4cc8 100644
+--- a/src/DigestManager.php
++++ b/src/DigestManager.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\digest;
+ 
++use Drupal\Core\Config\Entity\ConfigEntityStorageInterface;
++use Drupal\Core\Queue\QueueInterface;
++use Psr\Log\LoggerInterface;
++use Drupal\digest\Entity\DigestInterface;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+@@ -15,41 +19,41 @@ class DigestManager implements DigestManagerInterface {
+   /**
+    * The digest storage.
+    *
+-   * @var \Drupal\Core\Config\Entity\ConfigEntityStorageInterface
++   * @var ConfigEntityStorageInterface
+    */
+   protected $storage;
+ 
+   /**
+    * The digest send queue.
+    *
+-   * @var \Drupal\Core\Queue\QueueInterface
++   * @var QueueInterface
+    */
+   protected $queue;
+ 
+   /**
+    * The config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The Digest module logger.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * Constructs a new DigestManager.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
++   * @param EntityTypeManagerInterface $entityTypeManager
+    *   The entity type manager.
+-   * @param \Drupal\Core\Queue\QueueFactory $queueFactory
++   * @param QueueFactory $queueFactory
+    *   The queue factory.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The config factory.
+-   * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $loggerFactory
++   * @param LoggerChannelFactoryInterface $loggerFactory
+    *   The logger channel factory.
+    */
+   public function __construct(EntityTypeManagerInterface $entityTypeManager, QueueFactory $queueFactory, ConfigFactoryInterface $configFactory, LoggerChannelFactoryInterface $loggerFactory) {
+@@ -69,7 +73,7 @@ class DigestManager implements DigestManagerInterface {
+     $digest_query = $this->storage->getQuery()
+       ->condition('status', TRUE);
+ 
+-    /** @var \Drupal\digest\Entity\DigestInterface[] $digests */
++    /** @var DigestInterface[] $digests */
+     $digests = $this->storage->loadMultiple($digest_query->execute());
+     return $digests;
+ 
+diff --git a/src/DigestManagerInterface.php b/src/DigestManagerInterface.php
+index f3eff0a..538638e 100644
+--- a/src/DigestManagerInterface.php
++++ b/src/DigestManagerInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\digest;
+ 
++use Drupal\digest\Entity\DigestInterface;
+ /**
+  * Defines the functionality for a digest manager.
+  *
+@@ -12,7 +13,7 @@ interface DigestManagerInterface {
+   /**
+    * Returns an array of all enabled digests.
+    *
+-   * @return \Drupal\digest\Entity\DigestInterface[]
++   * @return DigestInterface[]
+    *   All enabled digests.
+    */
+   public function getEnabled();
+diff --git a/src/Entity/Digest.php b/src/Entity/Digest.php
+index 9199d77..05d1090 100644
+--- a/src/Entity/Digest.php
++++ b/src/Entity/Digest.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\digest\Entity;
+ 
++use Drupal\Core\Block\BlockManagerInterface;
++use Drupal\Core\State\StateInterface;
++use Drupal\Core\Mail\MailManagerInterface;
++use Drupal\Core\Render\RendererInterface;
++use Drupal\Core\Session\AccountSwitcherInterface;
+ use Cron\CronExpression;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Config\Entity\ConfigEntityBase;
+@@ -96,28 +101,28 @@ class Digest extends ConfigEntityBase implements DigestInterface {
+   /**
+    * The block plugin manager.
+    *
+-   * @var \Drupal\Core\Block\BlockManagerInterface
++   * @var BlockManagerInterface
+    */
+   protected $blockManager;
+ 
+   /**
+    * The state.
+    *
+-   * @var \Drupal\Core\State\StateInterface
++   * @var StateInterface
+    */
+   protected $state;
+ 
+   /**
+    * The mail manager.
+    *
+-   * @var \Drupal\Core\Mail\MailManagerInterface
++   * @var MailManagerInterface
+    */
+   protected $mailManager;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+@@ -305,7 +310,7 @@ class Digest extends ConfigEntityBase implements DigestInterface {
+ 
+     // Switch to the recipients account to avoid permission issues (e.g., when
+     // sending during CRON).
+-    /** @var \Drupal\Core\Session\AccountSwitcherInterface $account_switcher */
++    /** @var AccountSwitcherInterface $account_switcher */
+     $account_switcher = \Drupal::service('account_switcher');
+     $account_switcher->switchTo($user);
+ 
+@@ -416,7 +421,7 @@ class Digest extends ConfigEntityBase implements DigestInterface {
+ 
+     foreach ($user_ids as $user_id) {
+ 
+-      /** @var \Drupal\user\UserInterface $user */
++      /** @var UserInterface $user */
+       $user = $user_storage->load($user_id);
+ 
+       // Get the subscription field and values.
+diff --git a/src/Entity/DigestInterface.php b/src/Entity/DigestInterface.php
+index a2a9af9..8ebc3cc 100644
+--- a/src/Entity/DigestInterface.php
++++ b/src/Entity/DigestInterface.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\digest\Entity;
+ 
++use Cron\CronExpression;
++use Drupal\Core\Block\BlockPluginInterface;
++use Drupal\Component\Plugin\Exception\PluginException;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ use Drupal\user\UserInterface;
+ 
+@@ -51,7 +55,7 @@ interface DigestInterface extends ConfigEntityInterface {
+   /**
+    * Returns the current schedule as a CronExpression.
+    *
+-   * @return \Cron\CronExpression|null
++   * @return CronExpression|null
+    *   The CronExpression representation of the schedule.
+    *   Returns NULL if the schedule is invalid or missing.
+    */
+@@ -60,7 +64,7 @@ interface DigestInterface extends ConfigEntityInterface {
+   /**
+    * Sets the schedule of the digest.
+    *
+-   * @param string|\Cron\CronExpression $setTo
++   * @param string|CronExpression $setTo
+    *   The value to set the schedule to.
+    * @param bool $updateSendDate
+    *   Whether the send date should be updated.
+@@ -76,7 +80,7 @@ interface DigestInterface extends ConfigEntityInterface {
+   /**
+    * Gets the block plugin used for this digests display.
+    *
+-   * @return \Drupal\Core\Block\BlockPluginInterface
++   * @return BlockPluginInterface
+    *   The block plugin for this digest.
+    *   If the value for the display block ID is invalid the 'broken' block will
+    *   be returned.
+@@ -91,7 +95,7 @@ interface DigestInterface extends ConfigEntityInterface {
+    *
+    * @return $this
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\PluginException
++   * @throws PluginException
+    *   Thrown when the given block ID is not valid.
+    */
+   public function setDisplayBlock($setTo);
+@@ -133,10 +137,10 @@ interface DigestInterface extends ConfigEntityInterface {
+   /**
+    * Builds an email and sends it out to the given user.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user to send this digest to.
+    *
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws EntityMalformedException
+    *   Thrown when a the digest cannot be sent out. For instance, there is no
+    *   valid block to display.
+    */
+diff --git a/src/Form/Digest/DigestEditForm.php b/src/Form/Digest/DigestEditForm.php
+index e98e525..82c20c7 100644
+--- a/src/Form/Digest/DigestEditForm.php
++++ b/src/Form/Digest/DigestEditForm.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\digest\Form\Digest;
+ 
++use Drupal\Core\Block\BlockManagerInterface;
++use Drupal\Core\Plugin\Context\ContextRepositoryInterface;
++use Drupal\Core\Theme\ThemeManagerInterface;
+ use Cron\CronExpression;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -19,21 +22,21 @@ class DigestEditForm extends EntityForm {
+   /**
+    * The block manager.
+    *
+-   * @var \Drupal\Core\Block\BlockManagerInterface
++   * @var BlockManagerInterface
+    */
+   protected $blockManager;
+ 
+   /**
+    * The context repository.
+    *
+-   * @var \Drupal\Core\Plugin\Context\ContextRepositoryInterface
++   * @var ContextRepositoryInterface
+    */
+   protected $contextRepository;
+ 
+   /**
+    * The theme manager.
+    *
+-   * @var \Drupal\Core\Theme\ThemeManagerInterface
++   * @var ThemeManagerInterface
+    */
+   protected $themeManager;
+ 
+@@ -175,7 +178,7 @@ class DigestEditForm extends EntityForm {
+    *
+    * @param array $form
+    *   An associative array containing the structure of the form.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    *
+    * @return array
+diff --git a/src/Form/Digest/DigestTestForm.php b/src/Form/Digest/DigestTestForm.php
+index dc4dc7f..85c5dab 100644
+--- a/src/Form/Digest/DigestTestForm.php
++++ b/src/Form/Digest/DigestTestForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\digest\Form\Digest;
+ 
++use Drupal\Core\Session\AccountProxyInterface;
++use Drupal\user\UserInterface;
+ use Drupal\Core\Entity\EntityForm;
+ use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal\Core\Form\FormStateInterface;
+@@ -17,7 +19,7 @@ class DigestTestForm extends EntityForm {
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+@@ -87,7 +89,7 @@ class DigestTestForm extends EntityForm {
+ 
+       $user_storage = $this->entityTypeManager->getStorage('user');
+ 
+-      /** @var \Drupal\user\UserInterface $user */
++      /** @var UserInterface $user */
+       $user = $user_storage->load($form_state->getValue('send_to_user'));
+ 
+       $this->entity->send($user);
+diff --git a/src/Plugin/Field/FieldWidget/SubscriptionWidget.php b/src/Plugin/Field/FieldWidget/SubscriptionWidget.php
+index 195f48d..2e2e102 100644
+--- a/src/Plugin/Field/FieldWidget/SubscriptionWidget.php
++++ b/src/Plugin/Field/FieldWidget/SubscriptionWidget.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\digest\Plugin\Field\FieldWidget;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\FieldableEntityInterface;
+ use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\Core\Field\Plugin\Field\FieldWidget\OptionsWidgetBase;
+@@ -27,7 +28,7 @@ class SubscriptionWidget extends OptionsWidgetBase {
+   /**
+    * The digest entity storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $digestStorage;
+ 
+@@ -76,7 +77,7 @@ class SubscriptionWidget extends OptionsWidgetBase {
+   /**
+    * Returns an array to describe the options given by ::getOptions.
+    *
+-   * @param \Drupal\Core\Entity\FieldableEntityInterface $entity
++   * @param FieldableEntityInterface $entity
+    *   The entity for which to return options.
+    *
+    * @return array
+diff --git a/src/Plugin/QueueWorker/DigestSendQueue.php b/src/Plugin/QueueWorker/DigestSendQueue.php
+index 258b90f..b2640ba 100644
+--- a/src/Plugin/QueueWorker/DigestSendQueue.php
++++ b/src/Plugin/QueueWorker/DigestSendQueue.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\digest\Plugin\QueueWorker;
+ 
++use Drupal\user\UserStorageInterface;
++use Drupal\Core\Config\Entity\ConfigEntityStorageInterface;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\user\UserInterface;
++use Drupal\digest\Entity\DigestInterface;
+ use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Drupal\Core\Queue\QueueWorkerBase;
+@@ -28,14 +33,14 @@ class DigestSendQueue extends QueueWorkerBase implements ContainerFactoryPluginI
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\user\UserStorageInterface
++   * @var UserStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The digest storage.
+    *
+-   * @var \Drupal\Core\Config\Entity\ConfigEntityStorageInterface
++   * @var ConfigEntityStorageInterface
+    */
+   protected $digestStorage;
+ 
+@@ -46,7 +51,7 @@ class DigestSendQueue extends QueueWorkerBase implements ContainerFactoryPluginI
+ 
+     $instance = new static($configuration, $plugin_id, $plugin_definition);
+ 
+-    /** @var \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager */
++    /** @var EntityTypeManagerInterface $entityTypeManager */
+     $entityTypeManager = $container->get('entity_type.manager');
+ 
+     $instance->userStorage = $entityTypeManager->getStorage('user');
+@@ -61,10 +66,10 @@ class DigestSendQueue extends QueueWorkerBase implements ContainerFactoryPluginI
+    */
+   public function processItem($data) {
+ 
+-    /** @var \Drupal\user\UserInterface $user */
++    /** @var UserInterface $user */
+     $user = $this->userStorage->load($data['user']);
+ 
+-    /** @var \Drupal\digest\Entity\DigestInterface $digest */
++    /** @var DigestInterface $digest */
+     $digest = $this->digestStorage->load($data['digest']);
+ 
+     // Send out the digest to the given user.
+diff --git a/tests/modules/digest_test/src/Plugin/Block/TestAdminBlock.php b/tests/modules/digest_test/src/Plugin/Block/TestAdminBlock.php
+index f63c88f..e16a2e9 100644
+--- a/tests/modules/digest_test/src/Plugin/Block/TestAdminBlock.php
++++ b/tests/modules/digest_test/src/Plugin/Block/TestAdminBlock.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\digest_test\Plugin\Block;
+ 
++use Drupal\Core\Session\AccountProxyInterface;
+ use Drupal\Core\Block\BlockBase;
+ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -19,7 +20,7 @@ class TestAdminBlock extends BlockBase implements ContainerFactoryPluginInterfac
+   /**
+    * The current user.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $currentUser;
+ 
+diff --git a/tests/src/Functional/DigestListBuilderTest.php b/tests/src/Functional/DigestListBuilderTest.php
+index 86cadd9..e625009 100644
+--- a/tests/src/Functional/DigestListBuilderTest.php
++++ b/tests/src/Functional/DigestListBuilderTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\digest\Functional;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\Core\Url;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -29,7 +30,7 @@ class DigestListBuilderTest extends BrowserTestBase {
+   /**
+    * An admin user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   private $adminUser;
+ 
+diff --git a/tests/src/Functional/Form/Digest/DigestEditFormTest.php b/tests/src/Functional/Form/Digest/DigestEditFormTest.php
+index 0557e11..5eccaea 100644
+--- a/tests/src/Functional/Form/Digest/DigestEditFormTest.php
++++ b/tests/src/Functional/Form/Digest/DigestEditFormTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\digest\Functional\Form\Digest;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\Core\Url;
+ use Drupal\Tests\BrowserTestBase;
+ use Lorisleiva\CronTranslator\CronTranslator;
+@@ -30,7 +31,7 @@ class DigestEditFormTest extends BrowserTestBase {
+   /**
+    * An admin user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   private $adminUser;
+ 
+@@ -78,7 +79,7 @@ class DigestEditFormTest extends BrowserTestBase {
+     $blockUsed = 'page_title_block';
+     $page->fillField('display_block', $blockUsed);
+ 
+-    $this->drupalPostForm(NULL, [], 'Save');
++    $this->submitForm([], 'Save');
+     $this->assertSession()->pageTextContains('The ' . $titleUsed . ' digest has been created');
+ 
+     // Check the corresponding entity was created.
+@@ -87,9 +88,9 @@ class DigestEditFormTest extends BrowserTestBase {
+ 
+     $this->assertCount(1, $digests);
+     $digest = reset($digests);
+-    $this->assertEqual($digest->get('title'), $titleUsed);
+-    $this->assertEqual($digest->get('schedule'), $scheduleUsed);
+-    $this->assertEqual($digest->get('display_block'), $blockUsed);
++    $this->assertEquals($digest->get('title'), $titleUsed);
++    $this->assertEquals($digest->get('schedule'), $scheduleUsed);
++    $this->assertEquals($digest->get('display_block'), $blockUsed);
+ 
+   }
+ 
+@@ -125,7 +126,7 @@ class DigestEditFormTest extends BrowserTestBase {
+     $newTitle = $this->randomMachineName();
+     $this->getSession()->getPage()->fillField('title', $newTitle);
+ 
+-    $this->drupalPostForm(NULL, [], 'Save');
++    $this->submitForm([], 'Save');
+     $this->assertSession()->pageTextContains('The ' . $newTitle . ' digest has been updated');
+ 
+     // Check the corresponding entity was updated.
+@@ -134,7 +135,7 @@ class DigestEditFormTest extends BrowserTestBase {
+ 
+     $this->assertCount(1, $digests);
+     $digest = reset($digests);
+-    $this->assertEqual($digest->get('title'), $newTitle);
++    $this->assertEquals($digest->get('title'), $newTitle);
+ 
+   }
+ 
+diff --git a/tests/src/Functional/Form/Digest/DigestTestFormTest.php b/tests/src/Functional/Form/Digest/DigestTestFormTest.php
+index 7a864b4..08c94ca 100644
+--- a/tests/src/Functional/Form/Digest/DigestTestFormTest.php
++++ b/tests/src/Functional/Form/Digest/DigestTestFormTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\digest\Functional\Form\Digest;
+ 
++use Drupal\user\Entity\User;
++use Drupal\digest\Entity\Digest;
++use Drupal\Core\Session\AccountProxyInterface;
+ use Drupal\Tests\BrowserTestBase;
+ 
+ /**
+@@ -28,14 +31,14 @@ class DigestTestFormTest extends BrowserTestBase {
+   /**
+    * An admin user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   protected $adminUser;
+ 
+   /**
+    * A testing digest.
+    *
+-   * @var \Drupal\digest\Entity\Digest
++   * @var Digest
+    */
+   protected $digest;
+ 
+@@ -75,7 +78,7 @@ class DigestTestFormTest extends BrowserTestBase {
+     $this->drupalGet($this->digest->toUrl('test-form'));
+     $this->assertSession()->statusCodeEquals(200);
+ 
+-    /** @var \Drupal\Core\Session\AccountProxyInterface $current_user */
++    /** @var AccountProxyInterface $current_user */
+     $current_user = \Drupal::service('current_user');
+ 
+     // Ensure the current user is used as the default field value.
+@@ -86,7 +89,7 @@ class DigestTestFormTest extends BrowserTestBase {
+       ->fieldValueEquals($user_field, $user_field_value);
+ 
+     // Send the digest.
+-    $this->drupalPostForm(NULL, [], 'Send');
++    $this->submitForm([], 'Send');
+ 
+     $this->assertSession()->pageTextContains('The digest was sent successfully.');
+ 
+@@ -120,7 +123,7 @@ class DigestTestFormTest extends BrowserTestBase {
+     $this->assertSession()->statusCodeEquals(200);
+ 
+     // Send the digest.
+-    $this->drupalPostForm(NULL, [], 'Send');
++    $this->submitForm([], 'Send');
+ 
+     $this->assertSession()->pageTextContains('The digest could not be sent.');
+ 
+diff --git a/tests/src/Functional/Form/DigestSettingsFormTest.php b/tests/src/Functional/Form/DigestSettingsFormTest.php
+index 5249a7d..b47e866 100644
+--- a/tests/src/Functional/Form/DigestSettingsFormTest.php
++++ b/tests/src/Functional/Form/DigestSettingsFormTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\digest\Functional\Form;
+ 
++use Drupal\user\Entity\User;
+ use Drupal\Core\Url;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -29,7 +30,7 @@ class DigestSettingsFormTest extends BrowserTestBase {
+   /**
+    * An admin user.
+    *
+-   * @var \Drupal\user\Entity\User
++   * @var User
+    */
+   private $adminUser;
+ 
+diff --git a/tests/src/Functional/Plugin/Field/FieldWidget/SubscriptionWidgetTest.php b/tests/src/Functional/Plugin/Field/FieldWidget/SubscriptionWidgetTest.php
+index 27bb630..2fb76ce 100644
+--- a/tests/src/Functional/Plugin/Field/FieldWidget/SubscriptionWidgetTest.php
++++ b/tests/src/Functional/Plugin/Field/FieldWidget/SubscriptionWidgetTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\digest\Functional\Plugin\Field\FieldWidget;
+ 
++use Drupal\user\UserInterface;
++use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
++use Drupal\digest\Entity\DigestInterface;
+ use Drupal\digest\Entity\Digest;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -17,7 +20,7 @@ class SubscriptionWidgetTest extends BrowserTestBase {
+   /**
+    * A testing user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+@@ -43,7 +46,7 @@ class SubscriptionWidgetTest extends BrowserTestBase {
+     $this->user = $this->drupalCreateUser();
+     $this->drupalLogin($this->user);
+ 
+-    /** @var \Drupal\Core\Entity\Display\EntityFormDisplayInterface $form_display */
++    /** @var EntityFormDisplayInterface $form_display */
+     $form_display = \Drupal::service('entity_display.repository')
+       ->getFormDisplay('user', 'user');
+ 
+@@ -81,14 +84,14 @@ class SubscriptionWidgetTest extends BrowserTestBase {
+    */
+   public function testWidget() {
+ 
+-    /** @var \Drupal\digest\Entity\DigestInterface $digest_one */
++    /** @var DigestInterface $digest_one */
+     $digest_one = Digest::create([
+       'id' => 'digest_one',
+       'title' => $this->randomMachineName(),
+     ]);
+     $digest_one->save();
+ 
+-    /** @var \Drupal\digest\Entity\DigestInterface $digest_two */
++    /** @var DigestInterface $digest_two */
+     $digest_two = Digest::create([
+       'id' => 'digest_two',
+       'title' => $this->randomMachineName(),
+diff --git a/tests/src/Kernel/DigestManagerTest.php b/tests/src/Kernel/DigestManagerTest.php
+index 3c74386..a66eb59 100644
+--- a/tests/src/Kernel/DigestManagerTest.php
++++ b/tests/src/Kernel/DigestManagerTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\digest\Kernel;
+ 
++use Drupal\digest\DigestManagerInterface;
++use Drupal\Core\Config\Entity\ConfigEntityStorageInterface;
++use Drupal\digest\Entity\DigestInterface;
++use Drupal\Core\Logger\LoggerChannelFactoryInterface;
+ use Drupal\Core\Logger\RfcLogLevel;
+ use Drupal\KernelTests\Core\Entity\EntityKernelTestBase;
+ use Psr\Log\LoggerInterface;
+@@ -20,14 +24,14 @@ class DigestManagerTest extends EntityKernelTestBase {
+   /**
+    * The digest manager.
+    *
+-   * @var \Drupal\digest\DigestManagerInterface
++   * @var DigestManagerInterface
+    */
+   protected $manager;
+ 
+   /**
+    * The digest storage.
+    *
+-   * @var \Drupal\Core\Config\Entity\ConfigEntityStorageInterface
++   * @var ConfigEntityStorageInterface
+    */
+   protected $storage;
+ 
+@@ -71,7 +75,7 @@ class DigestManagerTest extends EntityKernelTestBase {
+     // The enabled digest should be returned.
+     $enabled = $this->manager->getEnabled();
+     $this->assertCount(1, $enabled);
+-    $this->assertEqual($digest_1->id(), reset($enabled)->id());
++    $this->assertEquals($digest_1->id(), reset($enabled)->id());
+ 
+     $this->storage->create([
+       'id' => 'digest_2',
+@@ -81,7 +85,7 @@ class DigestManagerTest extends EntityKernelTestBase {
+     // The new digest should not be returned.
+     $enabled = $this->manager->getEnabled();
+     $this->assertCount(1, $enabled);
+-    $this->assertEqual($digest_1->id(), reset($enabled)->id());
++    $this->assertEquals($digest_1->id(), reset($enabled)->id());
+ 
+   }
+ 
+@@ -96,7 +100,7 @@ class DigestManagerTest extends EntityKernelTestBase {
+     $options = $this->manager->getAsOptions();
+     $this->assertCount(0, $options);
+ 
+-    /** @var \Drupal\digest\Entity\DigestInterface $digest_1 */
++    /** @var DigestInterface $digest_1 */
+     $digest_1 = $this->storage->create([
+       'id' => 'digest_1',
+       'title' => 'My digest',
+@@ -115,7 +119,7 @@ class DigestManagerTest extends EntityKernelTestBase {
+     $this->assertCount(1, $options);
+ 
+     // Check that the options were created correctly.
+-    $this->assertEqual($options[$digest_1->id()], $digest_1->getTitle());
++    $this->assertEquals($options[$digest_1->id()], $digest_1->getTitle());
+     $this->assertFalse(isset($options[$digest_2->id()]));
+ 
+   }
+@@ -137,7 +141,7 @@ class DigestManagerTest extends EntityKernelTestBase {
+         RfcLogLevel::WARNING, $this->stringContains('display')
+       ));
+ 
+-    /** @var \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_factory */
++    /** @var LoggerChannelFactoryInterface $logger_factory */
+     $logger_factory = \Drupal::service('logger.factory');
+     $logger_factory->addLogger($logger);
+ 
+@@ -151,7 +155,7 @@ class DigestManagerTest extends EntityKernelTestBase {
+     $this->assertEquals(0, $queue->numberOfItems());
+ 
+     // Create digests to queue.
+-    /** @var \Drupal\digest\Entity\DigestInterface $digest_1 */
++    /** @var DigestInterface $digest_1 */
+     $digest_1 = $this->storage->create([
+       'id' => 'digest_1',
+       'title' => 'Queue me',
+@@ -160,7 +164,7 @@ class DigestManagerTest extends EntityKernelTestBase {
+     ]);
+     $digest_1->save();
+ 
+-    /** @var \Drupal\digest\Entity\DigestInterface $digest_2 */
++    /** @var DigestInterface $digest_2 */
+     $digest_2 = $this->storage->create([
+       'id' => 'digest_2',
+       'status' => FALSE,
+@@ -168,7 +172,7 @@ class DigestManagerTest extends EntityKernelTestBase {
+     ]);
+     $digest_2->save();
+ 
+-    /** @var \Drupal\digest\Entity\DigestInterface $digest_3 */
++    /** @var DigestInterface $digest_3 */
+     $digest_3 = $this->storage->create([
+       'id' => 'digest_3',
+       'description' => 'Malformed!',
+@@ -194,12 +198,12 @@ class DigestManagerTest extends EntityKernelTestBase {
+ 
+     // Check that the data was created correctly.
+     $data = $queue->claimItem()->data;
+-    $this->assertEqual($digest_1->id(), $data['digest']);
+-    $this->assertEqual($user->id(), $data['user']);
++    $this->assertEquals($digest_1->id(), $data['digest']);
++    $this->assertEquals($user->id(), $data['user']);
+ 
+     // Check that the send date of the digest has been updated.
+     $this->assertFalse($digest_1->shouldSend());
+-    $this->assertEqual($digest_1->getNextSendDate(), $digest_1->getSchedule()->getNextRunDate());
++    $this->assertEquals($digest_1->getNextSendDate(), $digest_1->getSchedule()->getNextRunDate());
+ 
+   }
+ 
+diff --git a/tests/src/Kernel/Entity/DigestTest.php b/tests/src/Kernel/Entity/DigestTest.php
+index 8924b0a..4f7ae74 100644
+--- a/tests/src/Kernel/Entity/DigestTest.php
++++ b/tests/src/Kernel/Entity/DigestTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\digest\Kernel\Entity;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\digest\Entity\Digest;
+ use Cron\CronExpression;
+ use Drupal\Component\Plugin\Exception\PluginException;
+ use Drupal\Core\Entity\EntityMalformedException;
+@@ -19,14 +21,14 @@ class DigestTest extends EntityKernelTestBase {
+   /**
+    * The digest storage.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $digestStorage;
+ 
+   /**
+    * A digest.
+    *
+-   * @var \Drupal\digest\Entity\Digest
++   * @var Digest
+    */
+   protected $digest;
+ 
+@@ -69,7 +71,7 @@ class DigestTest extends EntityKernelTestBase {
+ 
+     $title = $this->randomMachineName();
+     $this->digest->setTitle($title);
+-    $this->assertEqual($title, $this->digest->getTitle());
++    $this->assertEquals($title, $this->digest->getTitle());
+ 
+   }
+ 
+@@ -85,7 +87,7 @@ class DigestTest extends EntityKernelTestBase {
+ 
+     $description = $this->randomMachineName();
+     $this->digest->setDescription($description);
+-    $this->assertEqual($description, $this->digest->getDescription());
++    $this->assertEquals($description, $this->digest->getDescription());
+ 
+   }
+ 
+@@ -109,7 +111,7 @@ class DigestTest extends EntityKernelTestBase {
+     // Should successfully set and retrieve a cron expression.
+     $this->digest->setSchedule($valid_cron);
+     $expression = $this->digest->getSchedule()->getExpression();
+-    $this->assertEqual($valid_cron, $expression);
++    $this->assertEquals($valid_cron, $expression);
+ 
+     try {
+ 
+@@ -122,7 +124,7 @@ class DigestTest extends EntityKernelTestBase {
+ 
+       // The schedule should not have changed.
+       $expression = $this->digest->getSchedule()->getExpression();
+-      $this->assertEqual($valid_cron, $expression);
++      $this->assertEquals($valid_cron, $expression);
+ 
+     }
+ 
+@@ -131,13 +133,13 @@ class DigestTest extends EntityKernelTestBase {
+     $valid_cron = '0 0 * * 5';
+     $this->digest->set('schedule', $valid_cron);
+     $expression = $this->digest->getSchedule();
+-    $this->assertEqual($valid_cron, $expression);
++    $this->assertEquals($valid_cron, $expression);
+ 
+     // The same results should occur if a CronExpression object is passed in.
+     $cron_expression = new CronExpression($valid_cron);
+     $this->digest->setSchedule($cron_expression);
+     $expression = $this->digest->getSchedule();
+-    $this->assertEqual($cron_expression, $expression);
++    $this->assertEquals($cron_expression, $expression);
+ 
+     // The next send date should be updated when changing the schedule.
+     $valid_cron = '0 0 * * 3';
+@@ -171,7 +173,7 @@ class DigestTest extends EntityKernelTestBase {
+     // Should successfully set and retrieve the display block.
+     $this->digest->setDisplayBlock($valid_block);
+     $block = $this->digest->getDisplayBlock();
+-    $this->assertEqual($valid_block, $block->getPluginId());
++    $this->assertEquals($valid_block, $block->getPluginId());
+ 
+     try {
+ 
+@@ -184,7 +186,7 @@ class DigestTest extends EntityKernelTestBase {
+ 
+       // The display block should not have changed.
+       $block = $this->digest->getDisplayBlock();
+-      $this->assertEqual($valid_block, $block->getPluginId());
++      $this->assertEquals($valid_block, $block->getPluginId());
+ 
+     }
+ 
+@@ -193,7 +195,7 @@ class DigestTest extends EntityKernelTestBase {
+     $valid_block = 'user_login_block';
+     $this->digest->set('display_block', $valid_block);
+     $block = $this->digest->getDisplayBlock();
+-    $this->assertEqual($valid_block, $block->getPluginId());
++    $this->assertEquals($valid_block, $block->getPluginId());
+ 
+   }
+ 
+diff --git a/tests/src/Unit/Controller/DigestControllerTest.php b/tests/src/Unit/Controller/DigestControllerTest.php
+index e72ac99..18b0d89 100644
+--- a/tests/src/Unit/Controller/DigestControllerTest.php
++++ b/tests/src/Unit/Controller/DigestControllerTest.php
+@@ -22,7 +22,7 @@ class DigestControllerTest extends UnitTestCase {
+   /**
+    * The digest controller.
+    *
+-   * @var \Drupal\digest\Controller\DigestController
++   * @var DigestController
+    */
+   protected $controller;
+ 
+diff --git a/tests/src/Unit/Plugin/QueueWorker/DigestSendQueueTest.php b/tests/src/Unit/Plugin/QueueWorker/DigestSendQueueTest.php
+index d65ecb2..fdd607f 100644
+--- a/tests/src/Unit/Plugin/QueueWorker/DigestSendQueueTest.php
++++ b/tests/src/Unit/Plugin/QueueWorker/DigestSendQueueTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\digest\Kernel\Plugin\QueueWorker;
+ 
++use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Config\Entity\ConfigEntityStorageInterface;
+ use Drupal\Core\DependencyInjection\ContainerBuilder;
+ use Drupal\Core\Entity\EntityMalformedException;
+@@ -27,56 +28,56 @@ class DigestSendQueueTest extends UnitTestCase {
+   /**
+    * The digest queue worker.
+    *
+-   * @var \Drupal\digest\Plugin\QueueWorker\DigestSendQueue
++   * @var DigestSendQueue
+    */
+   protected $queueWorker;
+ 
+   /**
+    * A mocked user.
+    *
+-   * @var \Drupal\user\UserInterface
++   * @var UserInterface
+    */
+   protected $user;
+ 
+   /**
+    * A container for our mocked services.
+    *
+-   * @var \Symfony\Component\DependencyInjection\ContainerInterface
++   * @var ContainerInterface
+    */
+   protected $container;
+ 
+   /**
+    * A mocked entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * A mocked user storage.
+    *
+-   * @var \Drupal\user\UserStorageInterface
++   * @var UserStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * A mocked digest storage.
+    *
+-   * @var \Drupal\Core\Config\Entity\ConfigEntityStorageInterface
++   * @var ConfigEntityStorageInterface
+    */
+   protected $digestStorage;
+ 
+   /**
+    * A mocked mal-formed digest.
+    *
+-   * @var \Drupal\digest\Entity\DigestInterface
++   * @var DigestInterface
+    */
+   protected $badDigest;
+ 
+   /**
+    * A mocked well formed digest.
+    *
+-   * @var \Drupal\digest\Entity\DigestInterface
++   * @var DigestInterface
+    */
+   protected $goodDigest;
+ 

@@ -1,0 +1,411 @@
+diff --git a/schema.module b/schema.module
+index dcd80df..a5c252c 100644
+--- a/schema.module
++++ b/schema.module
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\schema\DatabaseSchemaInspectionInterface;
++use Drupal\schema\SchemaManager;
++use Drupal\schema\SchemaProviderInterface;
+ /**
+  * @file
+  * The Schema module provides functionality built on the Schema API.
+@@ -62,7 +65,7 @@ function schema_get_connection_engine_class($connection = 'default') {
+  *   A database connection key, defaults to the schema_database_connection
+  *   variable, which itself defaults to 'default'.
+  *
+- * @return Drupal\schema\DatabaseSchemaInspectionInterface
++ * @return DatabaseSchemaInspectionInterface
+  *   A schema engine class set to the given connection.
+  */
+ function schema_dbobject($connection = NULL) {
+@@ -369,11 +372,11 @@ function schema_compare_table($ref, $inspect = NULL) {
+  * Computes and returns the complete schema for all the drupal things.
+  */
+ function schema_get_schema($rebuild = FALSE) {
+-  /** @var \Drupal\schema\SchemaManager $manager */
++  /** @var SchemaManager $manager */
+   $manager = Drupal::service('plugin.manager.schema');
+   $plugins = $manager->createInstances();
+   $complete_schema = [];
+-  /** @var \Drupal\schema\SchemaProviderInterface $plugin */
++  /** @var SchemaProviderInterface $plugin */
+   foreach ($plugins as $plugin) {
+     $complete_schema += $plugin->get($rebuild);
+   }
+diff --git a/src/Comparison/SchemaComparator.php b/src/Comparison/SchemaComparator.php
+index ccc5531..71d797b 100644
+--- a/src/Comparison/SchemaComparator.php
++++ b/src/Comparison/SchemaComparator.php
+@@ -13,7 +13,7 @@ use Drupal\schema\DatabaseSchemaInspectionInterface;
+ class SchemaComparator {
+ 
+   /**
+-   * @var \Drupal\schema\DatabaseSchemaInspectionInterface
++   * @var DatabaseSchemaInspectionInterface
+    */
+   protected $inspector;
+ 
+@@ -23,7 +23,7 @@ class SchemaComparator {
+   protected $declared_schema;
+ 
+   /**
+-   * @var \Drupal\schema\Comparison\Result\SchemaComparison
++   * @var SchemaComparison
+    */
+   protected $result = NULL;
+ 
+@@ -32,7 +32,7 @@ class SchemaComparator {
+    *
+    * @param array $declared_schema
+    *   The declared schema.
+-   * @param \Drupal\schema\DatabaseSchemaInspectionInterface $inspector
++   * @param DatabaseSchemaInspectionInterface $inspector
+    *   The database inspector used to retrieve the actual schema.
+    */
+   public function __construct(array $declared_schema, DatabaseSchemaInspectionInterface $inspector) {
+@@ -43,7 +43,7 @@ class SchemaComparator {
+   /**
+    * Compare declared schema and the default database schema.
+    *
+-   * @return \Drupal\schema\Comparison\Result\SchemaComparison
++   * @return SchemaComparison
+    *   The comparison result.
+    */
+   public static function compareDefault() {
+@@ -53,7 +53,7 @@ class SchemaComparator {
+   /**
+    * Execute the schema comparison.
+    *
+-   * @return \Drupal\schema\Comparison\Result\SchemaComparison
++   * @return SchemaComparison
+    *   The comparison result.
+    */
+   public function execute() {
+diff --git a/src/Comparison/SchemaComparisonInfoBuilder.php b/src/Comparison/SchemaComparisonInfoBuilder.php
+index 0466248..4df5248 100644
+--- a/src/Comparison/SchemaComparisonInfoBuilder.php
++++ b/src/Comparison/SchemaComparisonInfoBuilder.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\schema\Comparison;
+ 
++use Drupal\schema\Comparison\Result\MissingTable;
++use Drupal\schema\Comparison\Result\TableComparison;
++use Drupal\schema\Comparison\Result\ExtraTable;
+ use Drupal\schema\Comparison\Result\SchemaComparison;
+ 
+ class SchemaComparisonInfoBuilder {
+@@ -26,18 +29,18 @@ class SchemaComparisonInfoBuilder {
+   public function getTablesArray() {
+     $info = [];
+ 
+-    /** @var \Drupal\schema\Comparison\Result\MissingTable $table */
++    /** @var MissingTable $table */
+     foreach ($this->o->getMissingTables() as $table) {
+       $info['missing'][$table->getModule()][$table->getTableName()] = ['status' => 'missing'];
+     }
+ 
+-    /** @var \Drupal\schema\Comparison\Result\TableComparison $table */
++    /** @var TableComparison $table */
+     foreach ($this->o->getComparedTables() as $table) {
+       $table_info = (new TableComparisonInfoBuilder($table))->getInfoArray();
+       $info[$table_info["status"]][$table->getModule()][$table->getTableName()] = $table_info;
+     }
+ 
+-    /** @var \Drupal\schema\Comparison\Result\ExtraTable $table */
++    /** @var ExtraTable $table */
+     foreach ($this->o->getExtraTables() as $table) {
+       $info['extra'][] = $table->getTableName();
+     }
+diff --git a/src/Comparison/TableComparisonInfoBuilder.php b/src/Comparison/TableComparisonInfoBuilder.php
+index ea4aba6..171ac29 100644
+--- a/src/Comparison/TableComparisonInfoBuilder.php
++++ b/src/Comparison/TableComparisonInfoBuilder.php
+@@ -2,6 +2,12 @@
+ 
+ namespace Drupal\schema\Comparison;
+ 
++use Drupal\schema\Comparison\Result\MissingColumn;
++use Drupal\schema\Comparison\Result\DifferentColumn;
++use Drupal\schema\Comparison\Result\ExtraColumn;
++use Drupal\schema\Comparison\Result\MissingIndex;
++use Drupal\schema\Comparison\Result\DifferentIndex;
++use Drupal\schema\Comparison\Result\ExtraIndex;
+ use Drupal\schema\Comparison\Result\TableComparison;
+ 
+ 
+@@ -24,12 +30,12 @@ class TableComparisonInfoBuilder {
+       ];
+     }
+ 
+-    /** @var \Drupal\schema\Comparison\Result\MissingColumn $column */
++    /** @var MissingColumn $column */
+     foreach ($this->o->getMissingColumns() as $column) {
+       $reasons[] = sprintf("%s: not in database", $column->getColumnName());
+     }
+ 
+-    /** @var \Drupal\schema\Comparison\Result\DifferentColumn $column */
++    /** @var DifferentColumn $column */
+     foreach ($this->o->getDifferentColumns() as $column) {
+       $colname = $column->getColumnName();
+       $kdiffs = $column->getDifferentKeys();
+@@ -42,12 +48,12 @@ class TableComparisonInfoBuilder {
+       ];
+     }
+ 
+-    /** @var \Drupal\schema\Comparison\Result\ExtraColumn $column */
++    /** @var ExtraColumn $column */
+     foreach ($this->o->getExtraColumns() as $column) {
+       $reasons[] = sprintf("%s: unexpected column in database", $column->getColumnName());
+     }
+ 
+-    /** @var \Drupal\schema\Comparison\Result\MissingIndex $index */
++    /** @var MissingIndex $index */
+     foreach ($this->o->getMissingIndexes() as $index) {
+       $keyname = $index->getIndexName();
+       $type = $index->getType();
+@@ -59,7 +65,7 @@ class TableComparisonInfoBuilder {
+       }
+     }
+ 
+-    /** @var \Drupal\schema\Comparison\Result\DifferentIndex $index */
++    /** @var DifferentIndex $index */
+     foreach ($this->o->getDifferentIndexes() as $index) {
+       $type = $index->getType();
+       $keyname = $index->getIndexName();
+@@ -79,7 +85,7 @@ class TableComparisonInfoBuilder {
+       }
+     }
+ 
+-    /** @var \Drupal\schema\Comparison\Result\ExtraIndex $index */
++    /** @var ExtraIndex $index */
+     foreach ($this->o->getExtraIndexes() as $index) {
+       $keyname = $index->getIndexName();
+       $type = $index->getType();
+diff --git a/src/DatabaseSchemaInterface.php b/src/DatabaseSchemaInterface.php
+index a3f45d7..5dee5eb 100644
+--- a/src/DatabaseSchemaInterface.php
++++ b/src/DatabaseSchemaInterface.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\schema;
+ 
++use Drupal\Core\Database\SchemaObjectDoesNotExistException;
++use Drupal\Core\Database\SchemaObjectExistsException;
+ /**
+  * This interface describes public methods of \Drupal\Core\Database\Schema.
+  */
+@@ -63,9 +65,9 @@ interface DatabaseSchemaInterface {
+    * @param $new_name
+    *   The new name for the table.
+    *
+-   * @throws \Drupal\Core\Database\SchemaObjectDoesNotExistException
++   * @throws SchemaObjectDoesNotExistException
+    *   If the specified table doesn't exist.
+-   * @throws \Drupal\Core\Database\SchemaObjectExistsException
++   * @throws SchemaObjectExistsException
+    *   If a table with the specified new name already exists.
+    */
+   public function renameTable($table, $new_name);
+@@ -103,9 +105,9 @@ interface DatabaseSchemaInterface {
+    *   or index including it in this array. See db_change_field() for more
+    *   explanation why.
+    *
+-   * @throws \Drupal\Core\Database\SchemaObjectDoesNotExistException
++   * @throws SchemaObjectDoesNotExistException
+    *   If the specified table doesn't exist.
+-   * @throws \Drupal\Core\Database\SchemaObjectExistsException
++   * @throws SchemaObjectExistsException
+    *   If the specified table already has a field by that name.
+    */
+   public function addField($table, $field, $spec, $keys_new = []);
+@@ -134,7 +136,7 @@ interface DatabaseSchemaInterface {
+    * @param $default
+    *   Default value to be set. NULL for 'default NULL'.
+    *
+-   * @throws \Drupal\Core\Database\SchemaObjectDoesNotExistException
++   * @throws SchemaObjectDoesNotExistException
+    *   If the specified table or field doesn't exist.
+    */
+   public function fieldSetDefault($table, $field, $default);
+@@ -147,7 +149,7 @@ interface DatabaseSchemaInterface {
+    * @param $field
+    *   The field to be altered.
+    *
+-   * @throws \Drupal\Core\Database\SchemaObjectDoesNotExistException
++   * @throws SchemaObjectDoesNotExistException
+    *   If the specified table or field doesn't exist.
+    */
+   public function fieldSetNoDefault($table, $field);
+@@ -173,9 +175,9 @@ interface DatabaseSchemaInterface {
+    * @param $fields
+    *   Fields for the primary key.
+    *
+-   * @throws \Drupal\Core\Database\SchemaObjectDoesNotExistException
++   * @throws SchemaObjectDoesNotExistException
+    *   If the specified table doesn't exist.
+-   * @throws \Drupal\Core\Database\SchemaObjectExistsException
++   * @throws SchemaObjectExistsException
+    *   If the specified table already has a primary key.
+    */
+   public function addPrimaryKey($table, $fields);
+@@ -202,9 +204,9 @@ interface DatabaseSchemaInterface {
+    * @param $fields
+    *   An array of field names.
+    *
+-   * @throws \Drupal\Core\Database\SchemaObjectDoesNotExistException
++   * @throws SchemaObjectDoesNotExistException
+    *   If the specified table doesn't exist.
+-   * @throws \Drupal\Core\Database\SchemaObjectExistsException
++   * @throws SchemaObjectExistsException
+    *   If the specified table already has a key by that name.
+    */
+   public function addUniqueKey($table, $name, $fields);
+@@ -233,9 +235,9 @@ interface DatabaseSchemaInterface {
+    * @param $fields
+    *   An array of field names.
+    *
+-   * @throws \Drupal\Core\Database\SchemaObjectDoesNotExistException
++   * @throws SchemaObjectDoesNotExistException
+    *   If the specified table doesn't exist.
+-   * @throws \Drupal\Core\Database\SchemaObjectExistsException
++   * @throws SchemaObjectExistsException
+    *   If the specified table already has an index by that name.
+    */
+   public function addIndex($table, $name, $fields, array $spec);
+@@ -314,9 +316,9 @@ interface DatabaseSchemaInterface {
+    *   table along with changing the field. The format is the same as a
+    *   table specification but without the 'fields' element.
+    *
+-   * @throws \Drupal\Core\Database\SchemaObjectDoesNotExistException
++   * @throws SchemaObjectDoesNotExistException
+    *   If the specified table or source field doesn't exist.
+-   * @throws \Drupal\Core\Database\SchemaObjectExistsException
++   * @throws SchemaObjectExistsException
+    *   If the specified destination field already exists.
+    */
+   public function changeField($table, $field, $field_new, $spec, $keys_new = []);
+@@ -329,7 +331,7 @@ interface DatabaseSchemaInterface {
+    * @param $table
+    *   A Schema API table definition array.
+    *
+-   * @throws \Drupal\Core\Database\SchemaObjectExistsException
++   * @throws SchemaObjectExistsException
+    *   If the specified table already exists.
+    */
+   public function createTable($name, $table);
+diff --git a/src/Migration/SchemaMigrator.php b/src/Migration/SchemaMigrator.php
+index 8bdacb0..bdc799d 100644
+--- a/src/Migration/SchemaMigrator.php
++++ b/src/Migration/SchemaMigrator.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\schema\Migration;
+ 
++use Psr\Log\LoggerInterface;
++use Drupal\schema\Comparison\Result\DifferentColumn;
++use Drupal\schema\Comparison\Result\ExtraColumn;
+ use Drupal\schema\Comparison\Result\SchemaComparison;
+ use Drupal\schema\Comparison\Result\TableComparison;
+ use Drupal\schema\DatabaseSchemaInspectionInterface;
+@@ -12,7 +15,7 @@ use Drupal\schema\DatabaseSchemaInspectionInterface;
+ class SchemaMigrator {
+ 
+   /**
+-   * @var \Drupal\schema\Comparison\Result\SchemaComparison
++   * @var SchemaComparison
+    */
+   protected $comparison;
+ 
+@@ -22,13 +25,13 @@ class SchemaMigrator {
+   protected $options;
+ 
+   /**
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+-   * @param \Drupal\schema\Comparison\Result\SchemaComparison $comparison
+-   * @param \Drupal\schema\DatabaseSchemaInspectionInterface $dbschema
++   * @param SchemaComparison $comparison
++   * @param DatabaseSchemaInspectionInterface $dbschema
+    * @param SchemaMigratorOptions $options
+    */
+   public function __construct(SchemaComparison $comparison, DatabaseSchemaInspectionInterface $dbschema, SchemaMigratorOptions $options = NULL) {
+@@ -52,7 +55,7 @@ class SchemaMigrator {
+       $tables += $this->comparison->getSameTables();
+     }
+ 
+-    /** @var \Drupal\schema\Comparison\Result\TableComparison $table */
++    /** @var TableComparison $table */
+     foreach ($tables as $table) {
+       if ($this->options()->fixTableComments) {
+         $this->fixTableComment($table);
+@@ -122,12 +125,12 @@ class SchemaMigrator {
+   }
+ 
+   /**
+-   * @param \Drupal\schema\Comparison\Result\TableComparison $table
++   * @param TableComparison $table
+    */
+   protected function updateColumnProperties($table) {
+     $differences = $table->getDifferentColumns();
+     if (!empty($differences)) {
+-      /** @var \Drupal\schema\Comparison\Result\DifferentColumn $column */
++      /** @var DifferentColumn $column */
+       foreach ($differences as $column) {
+         // The schema comparator has already determined that the field exists
+         // and that at least some of the properties are different.+.
+@@ -150,12 +153,12 @@ class SchemaMigrator {
+   }
+ 
+   /**
+-   * @param \Drupal\schema\Comparison\Result\TableComparison $table
++   * @param TableComparison $table
+    */
+   protected function removeExtraColumns($table) {
+     $extra_columns = $table->getExtraColumns();
+     if (!empty($extra_columns)) {
+-      /** @var \Drupal\schema\Comparison\Result\ExtraColumn $column */
++      /** @var ExtraColumn $column */
+       foreach ($extra_columns as $column) {
+         if ($this->dbschema->dropField($column->getTableName(), $column->getColumnName())) {
+           $this->logSuccess("Dropped column {table}.{field}.", [
+@@ -181,7 +184,7 @@ class SchemaMigrator {
+   }
+ 
+   /**
+-   * @param \Drupal\schema\Comparison\Result\TableComparison $table
++   * @param TableComparison $table
+    */
+   protected function recreatePrimaryKey($table) {
+     $primary_key = $table->getDeclaredPrimaryKey();
+@@ -215,7 +218,7 @@ class SchemaMigrator {
+   }
+ 
+   /**
+-   * @param \Drupal\schema\Comparison\Result\TableComparison $table
++   * @param TableComparison $table
+    */
+   protected function recreateIndexes($table) {
+     // Recreate indices by first removing all, then adding them one by one.
+diff --git a/src/SchemaManager.php b/src/SchemaManager.php
+index e428cb3..7cc1506 100644
+--- a/src/SchemaManager.php
++++ b/src/SchemaManager.php
+@@ -18,9 +18,9 @@ class SchemaManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {

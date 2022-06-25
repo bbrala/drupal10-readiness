@@ -1,0 +1,565 @@
+diff --git a/league_oauth_login.install b/league_oauth_login.install
+index 8dab27e..90b730a 100644
+--- a/league_oauth_login.install
++++ b/league_oauth_login.install
+@@ -1,5 +1,12 @@
+ <?php
+ 
++use Drupal\Core\Extension\ModuleInstaller;
++use Drupal\user\UserStorageInterface;
++use Drupal\externalauth\ExternalAuth;
++use Drupal\league_oauth_login\LeagueOauthLoginPluginManager;
++use Drupal\user\UserDataInterface;
++use Drupal\user\Entity\User;
++use Drupal\league_oauth_login\LeagueOauthLoginInterface;
+ /**
+  * @file
+  * Install things for this module.
+@@ -13,19 +20,19 @@ use League\OAuth2\Client\Token\AccessToken;
+  */
+ function league_oauth_login_update_8001() {
+   // First make sure externalauth is enabled.
+-  /** @var \Drupal\Core\Extension\ModuleInstaller $installer */
++  /** @var ModuleInstaller $installer */
+   $installer = \Drupal::service('module_installer');
+   $installer->install(['externalauth']);
+-  /** @var \Drupal\user\UserStorageInterface $user_storage */
++  /** @var UserStorageInterface $user_storage */
+   $user_storage = \Drupal::entityTypeManager()->getStorage('user');
+-  /** @var \Drupal\externalauth\ExternalAuth $externalauth */
++  /** @var ExternalAuth $externalauth */
+   $externalauth = \Drupal::service('externalauth.externalauth');
+   $uids = $user_storage->getQuery()
+     ->execute();
+-  /** @var \Drupal\league_oauth_login\LeagueOauthLoginPluginManager $login_manager */
++  /** @var LeagueOauthLoginPluginManager $login_manager */
+   $login_manager = \Drupal::service('plugin.manager.league_oauth_login');
+   $providers = $login_manager->getDefinitions();
+-  /** @var \Drupal\user\UserDataInterface $user_data */
++  /** @var UserDataInterface $user_data */
+   $user_data = \Drupal::service('user.data');
+   foreach ($uids as $uid) {
+     // See if they have something stored for any provider.
+@@ -33,7 +40,7 @@ function league_oauth_login_update_8001() {
+       $plugin = $login_manager->createInstance($id);
+       $key = LoginController::createUserDataKey($plugin);
+       if ($data = $user_data->get('league_oauth_login', $uid, $key)) {
+-        /** @var \Drupal\user\Entity\User $user */
++        /** @var User $user */
+         $user = $user_storage->load($uid);
+         $externalauth->linkExistingAccount($user->getEmail(), $key, $user);
+       }
+@@ -45,17 +52,17 @@ function league_oauth_login_update_8001() {
+  * Migrate all users to use resource ids instead of email as authname.
+  */
+ function league_oauth_login_update_8002() {
+-  /** @var \Drupal\user\UserStorageInterface $user_storage */
++  /** @var UserStorageInterface $user_storage */
+   $user_storage = \Drupal::entityTypeManager()->getStorage('user');
+   $uids = $user_storage->getQuery()
+     ->sort('uid', 'ASC')
+     ->execute();
+-  /** @var \Drupal\league_oauth_login\LeagueOauthLoginPluginManager $login_manager */
++  /** @var LeagueOauthLoginPluginManager $login_manager */
+   $login_manager = \Drupal::service('plugin.manager.league_oauth_login');
+   $providers = $login_manager->getDefinitions();
+-  /** @var \Drupal\user\UserDataInterface $user_data */
++  /** @var UserDataInterface $user_data */
+   $user_data = \Drupal::service('user.data');
+-  /** @var \Drupal\externalauth\ExternalAuth $externalauth */
++  /** @var ExternalAuth $externalauth */
+   $externalauth = \Drupal::service('externalauth.externalauth');
+   $database = \Drupal::database();
+   foreach ($uids as $uid) {
+@@ -63,11 +70,11 @@ function league_oauth_login_update_8002() {
+     foreach ($providers as $id => $provider) {
+       $plugin = NULL;
+       try {
+-        /** @var \Drupal\league_oauth_login\LeagueOauthLoginInterface $plugin */
++        /** @var LeagueOauthLoginInterface $plugin */
+         $plugin = $login_manager->createInstance($id);
+         $key = LoginController::createUserDataKey($plugin);
+         if ($data = $user_data->get('league_oauth_login', $uid, $key)) {
+-          /** @var \Drupal\user\Entity\User $user */
++          /** @var User $user */
+           if (!$user = $user_storage->load($uid)) {
+             continue;
+           }
+diff --git a/src/Annotation/LeagueOauthLogin.php b/src/Annotation/LeagueOauthLogin.php
+index 0a478ed..d73e81d 100644
+--- a/src/Annotation/LeagueOauthLogin.php
++++ b/src/Annotation/LeagueOauthLogin.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\league_oauth_login\Annotation;
+ 
++use Drupal\Core\Annotation\Translation;
+ use Drupal\Component\Annotation\Plugin;
+ 
+ /**
+@@ -21,7 +22,7 @@ class LeagueOauthLogin extends Plugin {
+   /**
+    * The human-readable name of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+@@ -30,7 +31,7 @@ class LeagueOauthLogin extends Plugin {
+   /**
+    * The description of the plugin.
+    *
+-   * @var \Drupal\Core\Annotation\Translation
++   * @var Translation
+    *
+    * @ingroup plugin_translatable
+    */
+diff --git a/src/Controller/LoginController.php b/src/Controller/LoginController.php
+index 1c0297e..ff2cf59 100644
+--- a/src/Controller/LoginController.php
++++ b/src/Controller/LoginController.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\league_oauth_login\Controller;
+ 
++use League\OAuth2\Client\Provider\ResourceOwnerInterface;
++use Drupal\user\UserInterface;
+ use Composer\Semver\Semver;
+ use Drupal\Component\Plugin\Exception\PluginNotFoundException;
+ use Drupal\Component\Utility\Xss;
+@@ -40,62 +42,62 @@ class LoginController extends ControllerBase {
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\user\UserStorageInterface
++   * @var UserStorageInterface
+    */
+   protected $userStorage;
+   /**
+    * A logger instance.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The user data service.
+    *
+-   * @var \Drupal\user\UserDataInterface
++   * @var UserDataInterface
+    */
+   protected $userData;
+ 
+   /**
+    * Login manager.
+    *
+-   * @var \Drupal\league_oauth_login\LeagueOauthLoginPluginManager
++   * @var LeagueOauthLoginPluginManager
+    */
+   protected $loginManager;
+ 
+   /**
+    * Event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * Session service.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Session\SessionInterface
++   * @var SessionInterface
+    */
+   protected $session;
+ 
+   /**
+    * Kill switch.
+    *
+-   * @var \Drupal\Core\PageCache\ResponsePolicy\KillSwitch
++   * @var KillSwitch
+    */
+   protected $killSwitch;
+ 
+   /**
+    * External auth.
+    *
+-   * @var \Drupal\externalauth\ExternalAuthInterface
++   * @var ExternalAuthInterface
+    */
+   protected $externalAuth;
+ 
+   /**
+    * Current route match.
+    *
+-   * @var \Drupal\Core\Routing\CurrentRouteMatch
++   * @var CurrentRouteMatch
+    */
+   protected $currentRoute;
+ 
+@@ -157,7 +159,7 @@ class LoginController extends ControllerBase {
+       $this->session->set('is_linking', TRUE);
+     }
+     try {
+-      /** @var \Drupal\league_oauth_login\LeagueOauthLoginInterface $plugin */
++      /** @var LeagueOauthLoginInterface $plugin */
+       $plugin = $this->loginManager->createInstance($provider_id);
+       $config = $plugin->getPluginDefinition();
+     }
+@@ -175,7 +177,7 @@ class LoginController extends ControllerBase {
+         $this->eventDispatcher->dispatch($event, LeagueOauthLoginEvents::LOGIN_WHILE_LOGGED_IN);
+       }
+       else {
+-        $this->eventDispatcher->dispatch(LeagueOauthLoginEvents::LOGIN_WHILE_LOGGED_IN, $event);
++        $this->eventDispatcher->dispatch($event, LeagueOauthLoginEvents::LOGIN_WHILE_LOGGED_IN);
+       }
+       $url = Url::fromRoute('user.page')->toString(TRUE)->getGeneratedUrl();
+       if ($event->getRedirectUrl()) {
+@@ -230,7 +232,7 @@ class LoginController extends ControllerBase {
+           $this->eventDispatcher->dispatch($event, LeagueOauthLoginEvents::LOGIN_WITH_CODE);
+         }
+         else {
+-          $this->eventDispatcher->dispatch(LeagueOauthLoginEvents::LOGIN_WITH_CODE, $event);
++          $this->eventDispatcher->dispatch($event, LeagueOauthLoginEvents::LOGIN_WITH_CODE);
+         }
+         // Using the access token, we may look up details about the resource
+         // owner.
+@@ -246,9 +248,9 @@ class LoginController extends ControllerBase {
+           $this->eventDispatcher->dispatch($event, LeagueOauthLoginEvents::ACCESS_TOKEN_EVENT);
+         }
+         else {
+-          $this->eventDispatcher->dispatch(LeagueOauthLoginEvents::ACCESS_TOKEN_EVENT, $event);
++          $this->eventDispatcher->dispatch($event, LeagueOauthLoginEvents::ACCESS_TOKEN_EVENT);
+         }
+-        /** @var \League\OAuth2\Client\Provider\ResourceOwnerInterface $resource_owner */
++        /** @var ResourceOwnerInterface $resource_owner */
+         $resource_owner = $provider->getResourceOwner($access_token);
+         $mail = $plugin->getEmail($resource_owner, $access_token);
+         $name = $plugin->getUserName($resource_owner);
+@@ -277,7 +279,7 @@ class LoginController extends ControllerBase {
+         }
+         $provider_key = self::createUserDataKey($plugin);
+         if (!$link) {
+-          /** @var \Drupal\user\UserInterface $drupal_user */
++          /** @var UserInterface $drupal_user */
+           $drupal_user = $this->externalAuth->loginRegister($authname, $provider_key, [
+             'mail' => $mail,
+             'name' => $name,
+diff --git a/src/Event/AccessTokenEvent.php b/src/Event/AccessTokenEvent.php
+index 23541ea..ed077aa 100644
+--- a/src/Event/AccessTokenEvent.php
++++ b/src/Event/AccessTokenEvent.php
+@@ -19,7 +19,7 @@ else {
+   /**
+    * Class used for the login while logged in event.
+    */
+-  class AccessTokenEvent extends SymfonyEvent {
++  class AccessTokenEvent extends \Symfony\Contracts\EventDispatcher\Event {
+     use LoginEventTrait;
+ 
+   }
+diff --git a/src/Event/AccessTokenEventTrait.php b/src/Event/AccessTokenEventTrait.php
+index 0f59fad..c80d7ec 100644
+--- a/src/Event/AccessTokenEventTrait.php
++++ b/src/Event/AccessTokenEventTrait.php
+@@ -13,14 +13,14 @@ trait AccessTokenEventTrait {
+   /**
+    * Request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * Access token.
+    *
+-   * @var \League\OAuth2\Client\Token\AccessTokenInterface
++   * @var AccessTokenInterface
+    */
+   protected $accessToken;
+ 
+@@ -35,7 +35,7 @@ trait AccessTokenEventTrait {
+   /**
+    * Get the request.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Request
++   * @return Request
+    *   The current request.
+    */
+   public function getRequest() {
+@@ -45,7 +45,7 @@ trait AccessTokenEventTrait {
+   /**
+    * Get access token.
+    *
+-   * @return \League\OAuth2\Client\Token\AccessTokenInterface
++   * @return AccessTokenInterface
+    *   Access token.
+    */
+   public function getAccessToken() {
+diff --git a/src/Event/LoginEventTrait.php b/src/Event/LoginEventTrait.php
+index 7a91ab4..22f86e2 100644
+--- a/src/Event/LoginEventTrait.php
++++ b/src/Event/LoginEventTrait.php
+@@ -13,14 +13,14 @@ trait LoginEventTrait {
+   /**
+    * Request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+   /**
+    * Redirect URL, if any.
+    *
+-   * @var \Drupal\Core\Url
++   * @var Url
+    */
+   protected $redirectUrl;
+ 
+@@ -34,7 +34,7 @@ trait LoginEventTrait {
+   /**
+    * Getter.
+    *
+-   * @return \Drupal\Core\Url
++   * @return Url
+    *   URL.
+    */
+   public function getRedirectUrl() {
+@@ -44,7 +44,7 @@ trait LoginEventTrait {
+   /**
+    * Setter.
+    *
+-   * @param \Drupal\Core\Url $redirectUrl
++   * @param Url $redirectUrl
+    *   URL.
+    */
+   public function setRedirectUrl(Url $redirectUrl) {
+@@ -54,7 +54,7 @@ trait LoginEventTrait {
+   /**
+    * Get the request.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Request
++   * @return Request
+    *   The current request.
+    */
+   public function getRequest() {
+diff --git a/src/Event/LoginWhileLoggedInEvent.php b/src/Event/LoginWhileLoggedInEvent.php
+index 79a2f72..463bb2c 100644
+--- a/src/Event/LoginWhileLoggedInEvent.php
++++ b/src/Event/LoginWhileLoggedInEvent.php
+@@ -19,7 +19,7 @@ else {
+   /**
+    * Class used for the login while logged in event.
+    */
+-  class LoginWhileLoggedInEvent extends SymfonyEvent {
++  class LoginWhileLoggedInEvent extends \Symfony\Contracts\EventDispatcher\Event {
+     use LoginEventTrait;
+ 
+   }
+diff --git a/src/Event/LoginWithCodeEvent.php b/src/Event/LoginWithCodeEvent.php
+index 567d4d2..f8394ca 100644
+--- a/src/Event/LoginWithCodeEvent.php
++++ b/src/Event/LoginWithCodeEvent.php
+@@ -19,7 +19,7 @@ else {
+   /**
+    * Class used for the login while logged in event.
+    */
+-  class LoginWithCodeEvent extends SymfonyEvent {
++  class LoginWithCodeEvent extends \Symfony\Contracts\EventDispatcher\Event {
+     use LoginWithCodeEventTrait;
+ 
+   }
+diff --git a/src/Event/LoginWithCodeEventTrait.php b/src/Event/LoginWithCodeEventTrait.php
+index 850adf3..dd297fe 100644
+--- a/src/Event/LoginWithCodeEventTrait.php
++++ b/src/Event/LoginWithCodeEventTrait.php
+@@ -12,7 +12,7 @@ trait LoginWithCodeEventTrait {
+   /**
+    * Request.
+    *
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   protected $request;
+ 
+@@ -26,7 +26,7 @@ trait LoginWithCodeEventTrait {
+   /**
+    * Get the request.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Request
++   * @return Request
+    *   The current request.
+    */
+   public function getRequest() {
+diff --git a/src/LeagueOauthLoginInterface.php b/src/LeagueOauthLoginInterface.php
+index 8f466f5..baa98f9 100644
+--- a/src/LeagueOauthLoginInterface.php
++++ b/src/LeagueOauthLoginInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\league_oauth_login;
+ 
++use League\OAuth2\Client\Provider\AbstractProvider;
+ use Drupal\Component\Plugin\PluginInspectionInterface;
+ use League\OAuth2\Client\Provider\ResourceOwnerInterface;
+ 
+@@ -13,7 +14,7 @@ interface LeagueOauthLoginInterface extends PluginInspectionInterface {
+   /**
+    * Gets a provider.
+    *
+-   * @return \League\OAuth2\Client\Provider\AbstractProvider
++   * @return AbstractProvider
+    *   The provider.
+    */
+   public function getProvider();
+diff --git a/src/LeagueOauthLoginPluginBase.php b/src/LeagueOauthLoginPluginBase.php
+index 196ecc9..2e1b25a 100644
+--- a/src/LeagueOauthLoginPluginBase.php
++++ b/src/LeagueOauthLoginPluginBase.php
+@@ -16,7 +16,7 @@ abstract class LeagueOauthLoginPluginBase extends PluginBase implements Containe
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+diff --git a/src/LeagueOauthLoginPluginManager.php b/src/LeagueOauthLoginPluginManager.php
+index 669fd13..f0b9bda 100644
+--- a/src/LeagueOauthLoginPluginManager.php
++++ b/src/LeagueOauthLoginPluginManager.php
+@@ -17,9 +17,9 @@ class LeagueOauthLoginPluginManager extends DefaultPluginManager {
+    * @param \Traversable $namespaces
+    *   An object that implements \Traversable which contains the root paths
+    *   keyed by the corresponding namespace to look for plugin implementations.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache_backend
++   * @param CacheBackendInterface $cache_backend
+    *   Cache backend instance to use.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module handler to invoke the alter hook with.
+    */
+   public function __construct(\Traversable $namespaces, CacheBackendInterface $cache_backend, ModuleHandlerInterface $module_handler) {
+diff --git a/tests/src/Kernel/LoginDummyTest.php b/tests/src/Kernel/LoginDummyTest.php
+index 0a9bc2f..2740d33 100644
+--- a/tests/src/Kernel/LoginDummyTest.php
++++ b/tests/src/Kernel/LoginDummyTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\league_oauth_login\Kernel;
+ 
++use Symfony\Component\HttpFoundation\Session\SessionInterface;
++use Drupal\Core\Session\AccountProxyInterface;
++use Drupal\Core\State\StateInterface;
+ use Drupal\league_oauth_login\Controller\LoginController;
+ use Drupal\league_oauth_login_test\DummyProvider;
+ use Drupal\league_oauth_login_test\Plugin\LeagueOauthLogin\Dummy;
+@@ -54,11 +57,11 @@ class LoginDummyTest extends LoginTestBase {
+     $state = $uuid->generate();
+     $request->request->set('code', $code);
+     $request->request->set('state', $state);
+-    /** @var \Symfony\Component\HttpFoundation\Session\SessionInterface $session */
++    /** @var SessionInterface $session */
+     $session = $this->container->get('session');
+     $session->set('is_linking', TRUE);
+     $session->set('oauth2state', $state);
+-    /** @var \Drupal\Core\Session\AccountProxyInterface $current_user */
++    /** @var AccountProxyInterface $current_user */
+     $current_user = $this->container->get('current_user');
+     $account = User::create([
+       'name' => 'testuser@example.com',
+@@ -66,7 +69,7 @@ class LoginDummyTest extends LoginTestBase {
+     ]);
+     $account->save();
+     $current_user->setAccount($account);
+-    /** @var \Drupal\Core\State\StateInterface $state */
++    /** @var StateInterface $state */
+     $state = $this->container->get('state');
+     $uuid = $this->container->get('uuid')->generate();
+     $state->set(DummyProvider::STATE_KEY, $uuid);
+diff --git a/tests/src/Kernel/LoginTestBase.php b/tests/src/Kernel/LoginTestBase.php
+index adc7784..cb4783e 100644
+--- a/tests/src/Kernel/LoginTestBase.php
++++ b/tests/src/Kernel/LoginTestBase.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\league_oauth_login\Kernel;
+ 
++use Drupal\Core\Config\Config;
++use Drupal\Core\Session\AccountProxyInterface;
++use Symfony\Component\HttpFoundation\Session\SessionInterface;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Routing\TrustedRedirectResponse;
+ use Drupal\Core\Url;
+@@ -36,7 +39,7 @@ abstract class LoginTestBase extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+     $this->installEntitySchema('user');
+     $this->installSchema('system', 'sequences');
+@@ -49,7 +52,7 @@ abstract class LoginTestBase extends KernelTestBase {
+    * Create config for the provider.
+    */
+   protected function createConfigForProvider() {
+-    /** @var \Drupal\Core\Config\Config $config */
++    /** @var Config $config */
+     $config = $this->container->get('config.factory')->getEditable('league_oauth_login_' . $this->providerId . '.settings');
+     $config->setData([
+       'clientId' => rand(),
+@@ -86,7 +89,7 @@ abstract class LoginTestBase extends KernelTestBase {
+    */
+   public function testLoginWhileLoggedIn() {
+     $request = Request::createFromGlobals();
+-    /** @var \Drupal\Core\Session\AccountProxyInterface $current_user */
++    /** @var AccountProxyInterface $current_user */
+     $current_user = $this->container->get('current_user');
+     $account = User::create([
+       'name' => 'testuser@example.com',
+@@ -111,7 +114,7 @@ abstract class LoginTestBase extends KernelTestBase {
+     $state = $uuid->generate();
+     $request->request->set('code', $code);
+     $request->request->set('state', $state);
+-    /** @var \Symfony\Component\HttpFoundation\Session\SessionInterface $session */
++    /** @var SessionInterface $session */
+     $session = $this->container->get('session');
+     $session->set('oauth2state', "totally not $state");
+     $controller = LoginController::create($this->container);
+diff --git a/tests/src/Unit/LoginControllerTest.php b/tests/src/Unit/LoginControllerTest.php
+index 95ba75a..1999207 100644
+--- a/tests/src/Unit/LoginControllerTest.php
++++ b/tests/src/Unit/LoginControllerTest.php
+@@ -29,14 +29,14 @@ class LoginControllerTest extends TestCase {
+   /**
+    * Mock login manager.
+    *
+-   * @var \Drupal\league_oauth_login\LeagueOauthLoginPluginManager
++   * @var LeagueOauthLoginPluginManager
+    */
+   private $loginManager;
+ 
+   /**
+    * Get it.
+    *
+-   * @return \Drupal\league_oauth_login\LeagueOauthLoginPluginManager
++   * @return LeagueOauthLoginPluginManager
+    *   The manager.
+    */
+   public function getLoginManager() {
+@@ -46,7 +46,7 @@ class LoginControllerTest extends TestCase {
+   /**
+    * Set it.
+    *
+-   * @param \Drupal\league_oauth_login\LeagueOauthLoginPluginManager $loginManager
++   * @param LeagueOauthLoginPluginManager $loginManager
+    *   The manager.
+    */
+   public function setLoginManager(LeagueOauthLoginPluginManager $loginManager) : void {

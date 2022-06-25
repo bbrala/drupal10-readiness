@@ -1,0 +1,1567 @@
+diff --git a/g2.admin.inc b/g2.admin.inc
+index 0b7dec5..ca8f70a 100644
+--- a/g2.admin.inc
++++ b/g2.admin.inc
+@@ -230,7 +230,7 @@ function g2_admin_settings_submit(&$form, &$form_state) {
+ function g2_admin_settings_validate($form, &$form_state) {
+   $main = $form_state['values']['g2_main'];
+   if (is_numeric($main)) {
+-    if ($main != 0 && !is_object(node_load($main))) {
++    if ($main != 0 && !is_object(\Drupal::service('entity_type.manager')->getStorage('node')->load($main))) {
+       form_set_error('g2_main', t('The node chosen for the main page must be a valid one, or 0: "@nid" is not a valid node id.',
+         array('@nid' => $main)));
+     }
+@@ -241,7 +241,7 @@ function g2_admin_settings_validate($form, &$form_state) {
+   }
+ 
+   $nid = $form_state['values']['g2_homonyms'];
+-  if ($nid != 0 && !is_object(node_load($nid))) {
++  if ($nid != 0 && !is_object(\Drupal::service('entity_type.manager')->getStorage('node')->load($nid))) {
+     form_set_error('g2_homonyms', t('The node chosen for the homonyms disambiguation page must be a valid one, or 0: "@nid" is not a valid node id.',
+       array('@nid' => $nid)));
+   }
+diff --git a/g2.install.php b/g2.install.php
+index 914768f..5b96fcb 100644
+--- a/g2.install.php
++++ b/g2.install.php
+@@ -131,7 +131,9 @@ WHERE v.name LIKE 'g2_%%info' OR v.name LIKE 'g2_%%title'
+   OR v.name LIKE 'g2/%%'
+ SQL;
+ 
+-  $result = db_query($sql);
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++  $result = \Drupal::database()->query($sql);
+ 
+   $count = 0;
+   while (is_object($row = db_fetch_object($result))) {
+@@ -145,6 +147,9 @@ SQL;
+   else {
+     $message = t('No obsolete variable to clean.');
+   }
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // This needs to be replaced, but Rector was not yet able to replace this because the type of message was set with a variable. If you need to continue to use a variable, you might consider using a switch statement.
++  // @noRector
+   drupal_set_message($message, status);
+ 
+   /* Convert Drupal 4.7.x/5.x block deltas
+@@ -161,7 +166,7 @@ SQL;
+   $sql = "UPDATE {blocks} b SET delta = '%s' WHERE module = '%s' AND delta = %d ";
+   $count = 0;
+   foreach ($delta_changes as $old => $new) {
+-    db_query($sql, $new, 'g2', $old);
++    \Drupal::database()->query($sql, $new, 'g2', $old);
+     $count += db_affected_rows();
+   }
+ 
+@@ -173,7 +178,7 @@ SQL;
+     $message = t('No obsolete delta to convert.');
+   }
+ 
+-  drupal_set_message($message, 'status');
++  \Drupal::messenger()->addStatus($message);
+   return array();
+ }
+ 
+@@ -209,7 +214,7 @@ function g2_update_6001() {
+   else {
+     $message = t('No old token to convert for the WOTD feed settings.');
+   }
+-  drupal_set_message($message, 'status');
++  \Drupal::messenger()->addStatus($message);
+   return array();
+ }
+ 
+@@ -233,6 +238,6 @@ function g2_update_6002() {
+   else {
+     $message = t('g2_referer table was there. No need to recreate it.');
+   }
+-  drupal_set_message($message, 'status');
++  \Drupal::messenger()->addStatus($message);
+   return $ret;
+ }
+diff --git a/g2.module b/g2.module
+index 1b46af3..8a0e121 100644
+--- a/g2.module
++++ b/g2.module
+@@ -1,5 +1,50 @@
+ <?php
+ 
++use Drupal\g2\G2\DELTARANDOM;
++use Drupal\g2\G2\VARRANDOMSTORE;
++use Drupal\g2\G2\DEFRANDOMSTORE;
++use Drupal\g2\G2\VARRANDOMTERMS;
++use Drupal\g2\G2\DEFRANDOMTERMS;
++use Drupal\g2\G2\DELTATOP;
++use Drupal\g2\G2\VARTOPITEMCOUNT;
++use Drupal\g2\G2\DEFTOPITEMCOUNT;
++use Drupal\g2\G2\DELTAWOTD;
++use Drupal\g2\G2\VARWOTDENTRY;
++use Drupal\g2\G2\DEFWOTDENTRY;
++use Drupal\g2\G2\PATHAUTOCOMPLETE;
++use Drupal\g2\G2\VARWOTDBODYSIZE;
++use Drupal\g2\G2\DEFWOTDBODYSIZE;
++use Drupal\g2\G2\VARWOTDAUTOCHANGE;
++use Drupal\g2\G2\DEFWOTDAUTOCHANGE;
++use Drupal\g2\G2\VARWOTDTERMS;
++use Drupal\g2\G2\DEFWOTDTERMS;
++use Drupal\g2\G2\VARWOTDTITLE;
++use Drupal\g2\G2\VARWOTDFEEDLINK;
++use Drupal\g2\G2\DEFWOTDFEEDLINK;
++use Drupal\g2\G2\VARWOTDFEEDTITLE;
++use Drupal\g2\G2\VARWOTDFEEDAUTHOR;
++use Drupal\g2\G2\DEFWOTDFEEDAUTHOR;
++use Drupal\g2\G2\VARWOTDFEEDDESCR;
++use Drupal\g2\G2\VARWOTDDATE;
++use Drupal\g2\G2\NODETYPE;
++use Drupal\g2\G2\PATHNODEADD;
++use Drupal\g2\G2\PATHSETTINGS;
++use Drupal\g2\G2\PERMVIEW;
++use Drupal\g2\G2\PATHWOTDFEED;
++use Drupal\g2\G2\TITLEWOTDFEED;
++use Drupal\g2\G2\PERMADMIN;
++use Drupal\g2\G2\TITLEMAIN;
++use Drupal\g2\G2\VARPATHMAIN;
++use Drupal\g2\G2\DEFPATHMAIN;
++use Drupal\g2\G2\VARLOGREFERRERS;
++use Drupal\g2\G2\DEFLOGREFERRERS;
++use Drupal\g2\G2\VARHIDDENTITLE;
++use Drupal\g2\G2\DEFHIDDENTITLE;
++use function Drupal\g2\G2\block_cache_decode;
++use function Drupal\g2\G2\random;
++use function Drupal\g2\G2\wotd;
++use function Drupal\g2\G2\override_site_name;
++use function Drupal\g2\G2\log_referrers;
+ /**
+  * @file
+  * This defines a node-based glossary module, as opposed to the term-based
+@@ -155,7 +200,7 @@ function g2_help($route_name, RouteMatchInterface $route_match) {
+       $definition = $block->getPlugin()->getPluginDefinition();
+       if ($definition['provider'] === 'g2') {
+         $id = $block->getPluginId();
+-        $delta = \Drupal\Component\Utility\Unicode::substr($id, 3);
++        $delta = mb_substr($id, 3);
+         $helps = [
+           G2::DELTA_ALPHABAR => t('This block displays a clickable list of initials from the G2 glossary.'),
+           G2::DELTA_RANDOM => t('This block displays a pseudo-random entry from the G2 glossary.'),
+@@ -427,7 +472,9 @@ function _g2_random() {
+     . "WHERE n.type = '%s' AND (n.status = 1) "
+     . "  AND NOT (n.title = '%s' OR n.nid = %d)";
+   $sq = db_rewrite_sql($sq);
+-  $q = db_query($sq, G2NODETYPE, $random, $wotd_nid);
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // If your `options` argument contains a `target` key, you will need to use `\Drupal\core\Database\Database::getConnection('my_database'). Drupal Rector could not yet evaluate the `options` argument since it was a variable.
++  $q = \Drupal::database()->query($sq, G2NODETYPE, $random, $wotd_nid);
+   $n = db_result($q);
+ 
+   $rand = mt_rand(0, $n - 1); // no need to mt_srand() since PHP 4.2
+@@ -441,7 +488,7 @@ function _g2_random() {
+   $sq = db_rewrite_sql($sq);
+   $q = db_query_range($sq, G2NODETYPE, $random, $wotd_nid, $rand, 1);
+   $nid = db_result($q);
+-  $node = node_load($nid);
++  $node = \Drupal::service('entity_type.manager')->getStorage('node')->load($nid);
+   $node->taxonomy = variable_get(G2VARRANDOMTERMS, G2DEFRANDOMTERMS)
+     ? _g2_comb_taxonomy($node->taxonomy)
+     : [];
+@@ -483,12 +530,14 @@ function _g2_referer_links($form_state, $node) {
+     . "WHERE gr.nid = %d "
+     . tablesort_sql($header);
+   $sq = db_rewrite_sql($sq);
+-  $q = db_query($sq, $nid);
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++  $q = \Drupal::database()->query($sq, $nid);
+   $rows = [];
+   while (is_object($o = db_fetch_object($q))) {
+     $sts = preg_match('/node\/(\d+)/', $o->referer, $matches);
+     if ($sts) {
+-      $node = node_load($matches[1]);
++      $node = \Drupal::service('entity_type.manager')->getStorage('node')->load($matches[1]);
+       $title = l($node->title, 'node/' . $node->nid);
+     }
+     else {
+@@ -569,12 +618,16 @@ function _g2_referer_links_submit(&$form, &$form_state) {
+ function _g2_referer_wipe($nid = NULL) {
+   if (isset($nid)) {
+     $sq = 'DELETE from {g2_referer} WHERE nid = %d';
+-    db_query($sq, $nid);
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++    \Drupal::database()->query($sq, $nid);
+     drupal_goto('node/' . $nid);
+   }
+   else {
+     $sq = 'DELETE from {g2_referer}';
+-    db_query($sq);
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++    \Drupal::database()->query($sq);
+   }
+ }
+ 
+@@ -589,7 +642,7 @@ function _g2_referer_wipe($nid = NULL) {
+ function _g2_wotd($bodysize = 0) {
+   // No need for a static: this function is normally never called twice.
+   $nid = variable_get(G2VARWOTDENTRY, G2DEFWOTDENTRY);
+-  $node = node_load($nid);
++  $node = \Drupal::service('entity_type.manager')->getStorage('node')->load($nid);
+   if (empty($node)) {
+     return NULL;
+   }
+@@ -704,7 +757,7 @@ function g2_block($op = 'list', $delta = 0, $edit = []) {
+          * @see _g2_autocomplete()
+          */
+         $nid = variable_get(G2VARWOTDENTRY, G2DEFWOTDENTRY);
+-        $node = node_load($nid);
++        $node = \Drupal::service('entity_type.manager')->getStorage('node')->load($nid);
+         if (empty($node)) {
+           $node = new stdClass();
+           $node->nid = 0;
+@@ -896,7 +949,9 @@ function g2_cron() {
+  * Implement hook_delete().
+  */
+ function g2_delete(&$node) {
+-  db_query('DELETE FROM {g2_node} WHERE nid = %d', $node->nid);
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++  \Drupal::database()->query('DELETE FROM {g2_node} WHERE nid = %d', $node->nid);
+ }
+ 
+ /**
+@@ -917,10 +972,12 @@ function g2_entry_load($title) {
+   $min_status = user_access('administer nodes')
+     ? NODE_NOT_PUBLISHED
+     : NODE_PUBLISHED;
+-  $q = db_query($sq, G2NODETYPE, $min_status, $title);
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // If your `options` argument contains a `target` key, you will need to use `\Drupal\core\Database\Database::getConnection('my_database'). Drupal Rector could not yet evaluate the `options` argument since it was a variable.
++  $q = \Drupal::database()->query($sq, G2NODETYPE, $min_status, $title);
+   $nodes = [];
+   while (is_object($node = db_fetch_object($q))) {
+-    $nodes[$node->nid] = node_load($node->nid);
++    $nodes[$node->nid] = \Drupal::service('entity_type.manager')->getStorage('node')->load($node->nid);
+   }
+   return $nodes;
+ }
+@@ -1067,7 +1124,9 @@ function g2_insert($node) {
+  * @XXX New feature to add: make extra node info revision-aware
+  */
+ function g2_load($node) {
+-  $ret = db_fetch_object(db_query('SELECT * FROM {g2_node} WHERE nid = %s', $node->nid));
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++  $ret = db_fetch_object(\Drupal::database()->query('SELECT * FROM {g2_node} WHERE nid = %s', $node->nid));
+   return $ret;
+ }
+ 
+@@ -1239,7 +1298,7 @@ function g2_preprocess_page(&$vars) {
+  * Submit handler for "wipe referers" button.
+  *
+  * @param array $form
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  */
+ function g2_referer_wipe_button_submit(array $form, FormStateInterface $form_state) {
+   drupal_goto('g2/wipe');
+@@ -1250,9 +1309,9 @@ function g2_referer_wipe_button_submit(array $form, FormStateInterface $form_sta
+  *
+  * This is the same form for both global wipe and individual node wipe.
+  *
+- * @param \Drupal\Core\Form\FormStateInterface $form_state
++ * @param FormStateInterface $form_state
+  *   The form state.
+- * @param null|\Drupal\node\NodeInterface $node
++ * @param null|NodeInterface $node
+  *   The node from which to erase.
+  *
+  * @return array
+@@ -1294,7 +1353,7 @@ function g2_referer_wipe_confirm_form(FormStateInterface $form_state, NodeInterf
+  */
+ function g2_referer_wipe_confirm_form_submit($form, &$form_state) {
+   _g2_referer_wipe();
+-  drupal_set_message(t('Referer information has been erased on all G2 entries'));
++  \Drupal::messenger()->addStatus(t('Referer information has been erased on all G2 entries'));
+   $form_state['redirect'] = G2PATHSETTINGS;
+ }
+ 
+@@ -1426,12 +1485,16 @@ function g2_view(&$node, $teaser = FALSE, $page = FALSE) {
+     $sq = 'UPDATE {g2_referer} '
+       . 'SET incoming = incoming + 1 '
+       . "WHERE nid = %d AND referer = '%s'";
+-    db_query($sq, $node->nid, $referer);
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // If your `options` argument contains a `target` key, you will need to use `\Drupal\core\Database\Database::getConnection('my_database'). Drupal Rector could not yet evaluate the `options` argument since it was a variable.
++    \Drupal::database()->query($sq, $node->nid, $referer);
+     if (!db_affected_rows()) {
+       $sq = 'INSERT INTO {g2_referer} '
+         . '  (nid, referer, incoming) '
+         . "VALUES (%d, '%s', 1) ";
+-      db_query($sq, $node->nid, $referer);
++      // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++      // If your `options` argument contains a `target` key, you will need to use `\Drupal\core\Database\Database::getConnection('my_database'). Drupal Rector could not yet evaluate the `options` argument since it was a variable.
++      \Drupal::database()->query($sq, $node->nid, $referer);
+     }
+   }
+   else {
+@@ -1451,7 +1514,7 @@ function g2_view(&$node, $teaser = FALSE, $page = FALSE) {
+ function g2_views_api() {
+   return [
+     'api' => '2.0',
+-    'path' => drupal_get_path('module', 'g2') . '/views',
++    'path' => \Drupal::service('extension.list.module')->getPath('g2') . '/views',
+   ];
+ }
+ 
+@@ -1561,7 +1624,7 @@ function theme_g2_teaser($title, $teaser) {
+ /**
+  * Theme a WOTD block.
+  *
+- * @param \Drupal\node\Entity\Node|null $node
++ * @param Node|null $node
+  *   The node for the word of the day. teaser and body are already filtered and
+  *   truncated if needed.
+  *
+@@ -1623,15 +1686,15 @@ function Zg2_block_configure($delta) {
+   $info = g2_block_info();
+   $info = $info[$delta];
+   $form['caching'] = [
+-    '#markup' => t('<p>Caching mode: @mode</p>', ['@mode' => G2\block_cache_decode($info['cache'])]),
++    '#markup' => t('<p>Caching mode: @mode</p>', ['@mode' => block_cache_decode($info['cache'])]),
+   ];
+ 
+   switch ($delta) {
+-    case G2\DELTARANDOM:
+-      $form[G2\VARRANDOMSTORE] = [
++    case DELTARANDOM:
++      $form[VARRANDOMSTORE] = [
+         '#type' => 'checkbox',
+         '#title' => t('Store latest random entry'),
+-        '#default_value' => variable_get(G2\VARRANDOMSTORE, G2\DEFRANDOMSTORE),
++        '#default_value' => variable_get(VARRANDOMSTORE, DEFRANDOMSTORE),
+         '#description' => t(
+           'When this setting is TRUE (default value),
+       the latest random value is kept in the DB to avoid showing the same pseudo-random
+@@ -1640,10 +1703,10 @@ function Zg2_block_configure($delta) {
+       For larger sites, unchecking this setting will remove one database write with locking.'
+         ),
+       ];
+-      $form[G2\VARRANDOMTERMS] = [
++      $form[VARRANDOMTERMS] = [
+         '#type' => 'checkbox',
+         '#title' => t('Return taxonomy terms for the current entry'),
+-        '#default_value' => variable_get(G2\VARRANDOMTERMS, G2\DEFRANDOMTERMS),
++        '#default_value' => variable_get(VARRANDOMTERMS, DEFRANDOMTERMS),
+         '#description' => t(
+           'The taxonomy terms will be returned by the API and made available to the theme.
+          Default G2 themeing will display them.'
+@@ -1651,30 +1714,30 @@ function Zg2_block_configure($delta) {
+       ];
+       break;
+ 
+-    case G2\DELTATOP:
+-      $form[G2\VARTOPITEMCOUNT] = [
++    case DELTATOP:
++      $form[VARTOPITEMCOUNT] = [
+         '#type' => 'select',
+         '#title' => t('Number of items'),
+-        '#default_value' => variable_get(G2\VARTOPITEMCOUNT, G2\DEFTOPITEMCOUNT),
++        '#default_value' => variable_get(VARTOPITEMCOUNT, DEFTOPITEMCOUNT),
+         '#options' => $count_options,
+       ];
+       break;
+ 
+-    case G2\DELTAWOTD:
++    case DELTAWOTD:
+       // Convert nid to "title [<nid>]" even if missing.
+       // @see autocomplete()
+-      $nid = variable_get(G2\VARWOTDENTRY, G2\DEFWOTDENTRY);
+-      $node = node_load($nid);
++      $nid = variable_get(VARWOTDENTRY, DEFWOTDENTRY);
++      $node = \Drupal::service('entity_type.manager')->getStorage('node')->load($nid);
+       if (empty($node)) {
+         $node = new stdClass();
+         $node->nid = 0;
+         $node->title = NULL;
+       }
+-      $form[G2\VARWOTDENTRY] = [
++      $form[VARWOTDENTRY] = [
+         '#type' => 'textfield',
+         '#title' => t('Entry for the day'),
+         '#maxlength' => 60,
+-        '#autocomplete_path' => G2\PATHAUTOCOMPLETE,
++        '#autocomplete_path' => PATHAUTOCOMPLETE,
+         '#required' => TRUE,
+         // !title: we don't filter since this is input, not output,
+         // and can contain normally escaped characters, to accommodate
+@@ -1687,83 +1750,83 @@ function Zg2_block_configure($delta) {
+           ]
+         ),
+       ];
+-      $form[G2\VARWOTDBODYSIZE] = [
++      $form[VARWOTDBODYSIZE] = [
+         '#type' => 'textfield',
+         '#title' => t('Number of text characters to be displayed from entry definition body, if one exists'),
+         '#size' => 4,
+         '#maxlength' => 4,
+         '#required' => TRUE,
+-        '#default_value' => variable_get(G2\VARWOTDBODYSIZE, G2\DEFWOTDBODYSIZE),
++        '#default_value' => variable_get(VARWOTDBODYSIZE, DEFWOTDBODYSIZE),
+       ];
+-      $form[G2\VARWOTDAUTOCHANGE] = [
++      $form[VARWOTDAUTOCHANGE] = [
+         '#type' => 'checkbox',
+         '#title' => t('Auto-change daily'),
+         '#required' => TRUE,
+-        '#default_value' => variable_get(G2\VARWOTDAUTOCHANGE, G2\DEFWOTDAUTOCHANGE),
++        '#default_value' => variable_get(VARWOTDAUTOCHANGE, DEFWOTDAUTOCHANGE),
+         '#description' => t('This setting will only work if cron or poormanscron is used.'),
+       ];
+-      $form[G2\VARWOTDTERMS] = [
++      $form[VARWOTDTERMS] = [
+         '#type' => 'checkbox',
+         '#title' => t('Return taxonomy terms for the current entry'),
+-        '#default_value' => variable_get(G2\VARWOTDTERMS, G2\DEFWOTDTERMS),
++        '#default_value' => variable_get(VARWOTDTERMS, DEFWOTDTERMS),
+         '#description' => t(
+           'The taxonomy terms will be returned by the API and made available to the theme.
+          Default G2 themeing will display them.'
+         ),
+       ];
+       $default_wotd_title = t('Word of the day in the G2 glossary');
+-      $form[G2\VARWOTDTITLE] = [
++      $form[VARWOTDTITLE] = [
+         '#type' => 'textfield',
+         '#title' => t('Title for the WOTD block'),
+         '#description' => t(
+           'This title is also the default title for the WOTD feed, if none is defined. It is overridden by the default Drupal block title, if the latter is not empty.'
+         ),
+         '#required' => TRUE,
+-        '#default_value' => variable_get(G2\VARWOTDTITLE, $default_wotd_title),
++        '#default_value' => variable_get(VARWOTDTITLE, $default_wotd_title),
+       ];
+ 
+       $form['wotd_feed'] = [
+         '#type' => 'fieldset',
+         '#title' => t('RSS Feed'),
+       ];
+-      $form['wotd_feed'][G2\VARWOTDFEEDLINK] = [
++      $form['wotd_feed'][VARWOTDFEEDLINK] = [
+         '#type' => 'checkbox',
+         '#title' => t('Display feed link'),
+-        '#default_value' => variable_get(G2\VARWOTDFEEDLINK, G2\DEFWOTDFEEDLINK),
++        '#default_value' => variable_get(VARWOTDFEEDLINK, DEFWOTDFEEDLINK),
+         '#description' => t('Should the theme display the link to the RSS feed for this block ?'),
+       ];
+-      $form['wotd_feed'][G2\VARWOTDFEEDTITLE] = [
++      $form['wotd_feed'][VARWOTDFEEDTITLE] = [
+         '#type' => 'textfield',
+         '#title' => t('The feed title'),
+         '#size' => 60,
+         '#maxlength' => 60,
+         '#required' => TRUE,
+-        '#default_value' => variable_get(G2\VARWOTDFEEDTITLE, variable_get(G2\VARWOTDTITLE, $default_wotd_title)),
++        '#default_value' => variable_get(VARWOTDFEEDTITLE, variable_get(VARWOTDTITLE, $default_wotd_title)),
+         '#description' => t(
+           'The title for the feed itself.
+          This will typically be used by aggregators to remind users of the feed and link to it.
+          If nulled, G2 will reset it to the title of the block.'
+         ),
+       ];
+-      $form['wotd_feed'][G2\VARWOTDFEEDAUTHOR] = [
++      $form['wotd_feed'][VARWOTDFEEDAUTHOR] = [
+         '#type' => 'textfield',
+         '#title' => t('The feed item author'),
+         '#size' => 60,
+         '#maxlength' => 60,
+         '#required' => TRUE,
+-        '#default_value' => variable_get(G2\VARWOTDFEEDAUTHOR, G2\DEFWOTDFEEDAUTHOR),
++        '#default_value' => variable_get(VARWOTDFEEDAUTHOR, DEFWOTDFEEDAUTHOR),
+         '#description' => t(
+           'The author name to be included in the feed entries.
+       In this string @author will be replaced by the actual author information.'
+         ),
+       ];
+-      $form['wotd_feed'][G2\VARWOTDFEEDDESCR] = [
++      $form['wotd_feed'][VARWOTDFEEDDESCR] = [
+         '#type' => 'textfield',
+         '#title' => t('The feed description'),
+         '#size' => 60,
+         '#maxlength' => 60,
+         '#required' => TRUE,
+-        '#default_value' => variable_get(G2\VARWOTDFEEDDESCR, t('A daily definition from the G2 Glossary at !site')),
++        '#default_value' => variable_get(VARWOTDFEEDDESCR, t('A daily definition from the G2 Glossary at !site')),
+         '#description' => t(
+           'The description for the feed itself.
+       This will typically be used by aggregators when describing the feed prior to subscription.
+@@ -1783,16 +1846,16 @@ function Zg2_block_configure($delta) {
+  */
+ function Zg2_block_info() {
+   $blocks = [];
+-  $blocks[G2\DELTARANDOM]['info'] = variable_get('g2_random_info', t('G2 Random'));
+-  $blocks[G2\DELTATOP]['info'] = variable_get('g2_top_info', t('G2 Top'));
+-  $blocks[G2\DELTAWOTD]['info'] = variable_get('g2_wotd_info', t('G2 Word of the day'));
++  $blocks[DELTARANDOM]['info'] = variable_get('g2_random_info', t('G2 Random'));
++  $blocks[DELTATOP]['info'] = variable_get('g2_top_info', t('G2 Top'));
++  $blocks[DELTAWOTD]['info'] = variable_get('g2_wotd_info', t('G2 Word of the day'));
+ 
+   // Else it couldn't be random.
+-  $blocks[G2\DELTARANDOM]['cache'] = DRUPAL_NO_CACHE;
++  $blocks[DELTARANDOM]['cache'] = DRUPAL_NO_CACHE;
+   // Can contain unpublished nodes.
+-  $blocks[G2\DELTATOP]['cache'] = DRUPAL_CACHE_PER_ROLE;
++  $blocks[DELTATOP]['cache'] = DRUPAL_CACHE_PER_ROLE;
+   // Not all roles have g2 view permission.
+-  $blocks[G2\DELTAWOTD]['cache'] = DRUPAL_CACHE_PER_ROLE;
++  $blocks[DELTAWOTD]['cache'] = DRUPAL_CACHE_PER_ROLE;
+   return $blocks;
+ }
+ 
+@@ -1801,32 +1864,32 @@ function Zg2_block_info() {
+  */
+ function Zg2_block_save($delta, $edit) {
+   switch ($delta) {
+-    case G2\DELTARANDOM:
+-      variable_set(G2\VARRANDOMSTORE, $edit[G2\VARRANDOMSTORE]);
+-      variable_set(G2\VARRANDOMTERMS, $edit[G2\VARRANDOMTERMS]);
++    case DELTARANDOM:
++      variable_set(VARRANDOMSTORE, $edit[VARRANDOMSTORE]);
++      variable_set(VARRANDOMTERMS, $edit[VARRANDOMTERMS]);
+       break;
+ 
+-    case G2\DELTATOP:
+-      variable_set(G2\VARTOPITEMCOUNT, $edit[G2\VARTOPITEMCOUNT]);
++    case DELTATOP:
++      variable_set(VARTOPITEMCOUNT, $edit[VARTOPITEMCOUNT]);
+       break;
+ 
+-    case G2\DELTAWOTD:
++    case DELTAWOTD:
+       // Convert "some title [<nid>, sticky]" to nid.
+-      $entry = $edit[G2\VARWOTDENTRY];
++      $entry = $edit[VARWOTDENTRY];
+       $matches = [];
+       $count = preg_match('/.*\[(\d*).*\]$/', $entry, $matches);
+       $nid = $count ? $matches[1] : 0;
+ 
+-      variable_set(G2\VARWOTDENTRY, $nid);
+-      variable_set(G2\VARWOTDBODYSIZE, $edit[G2\VARWOTDBODYSIZE]);
+-      variable_set(G2\VARWOTDAUTOCHANGE, $edit[G2\VARWOTDAUTOCHANGE]);
+-      variable_set(G2\VARWOTDDATE, REQUEST_TIME);
+-      variable_set(G2\VARWOTDTERMS, $edit[G2\VARWOTDTERMS]);
+-      variable_set(G2\VARWOTDFEEDLINK, $edit[G2\VARWOTDFEEDLINK]);
+-      variable_set(G2\VARWOTDFEEDTITLE, $edit[G2\VARWOTDFEEDTITLE]);
+-      variable_set(G2\VARWOTDFEEDDESCR, $edit[G2\VARWOTDFEEDDESCR]);
+-      variable_set(G2\VARWOTDFEEDAUTHOR, $edit[G2\VARWOTDFEEDAUTHOR]);
+-      variable_set(G2\VARWOTDTITLE, $edit[G2\VARWOTDTITLE]);
++      variable_set(VARWOTDENTRY, $nid);
++      variable_set(VARWOTDBODYSIZE, $edit[VARWOTDBODYSIZE]);
++      variable_set(VARWOTDAUTOCHANGE, $edit[VARWOTDAUTOCHANGE]);
++      variable_set(VARWOTDDATE, \Drupal::time()->getRequestTime());
++      variable_set(VARWOTDTERMS, $edit[VARWOTDTERMS]);
++      variable_set(VARWOTDFEEDLINK, $edit[VARWOTDFEEDLINK]);
++      variable_set(VARWOTDFEEDTITLE, $edit[VARWOTDFEEDTITLE]);
++      variable_set(VARWOTDFEEDDESCR, $edit[VARWOTDFEEDDESCR]);
++      variable_set(VARWOTDFEEDAUTHOR, $edit[VARWOTDFEEDAUTHOR]);
++      variable_set(VARWOTDTITLE, $edit[VARWOTDTITLE]);
+       break;
+ 
+     default:
+@@ -1840,13 +1903,13 @@ function Zg2_block_save($delta, $edit) {
+ function Zg2_block_view($delta) {
+   // watchdog('g2', "hook_block/view/$delta");
+   switch ($delta) {
+-    case G2\DELTARANDOM:
++    case DELTARANDOM:
+       $block['subject'] = t('Random G2 glossary entry');
+-      $block['content'] = theme('g2_random', ['node' => G2\random()]);
++      $block['content'] = theme('g2_random', ['node' => random()]);
+       break;
+ 
+-    case G2\DELTATOP:
+-      $max = variable_get(G2\VARTOPITEMCOUNT, G2\DEFTOPITEMCOUNT);
++    case DELTATOP:
++      $max = variable_get(VARTOPITEMCOUNT, DEFTOPITEMCOUNT);
+       $block['subject'] = t(
+         '@count most popular G2 glossary entries',
+         ['@count' => $max]
+@@ -1854,9 +1917,9 @@ function Zg2_block_view($delta) {
+       $block['content'] = theme('g2_node_list', ['nodes' => G2\top($max, FALSE, TRUE)]);
+       break;
+ 
+-    case G2\DELTAWOTD:
+-      $block['subject'] = variable_get(G2\VARWOTDTITLE, t('Word of the day in the G2 glossary'));
+-      $block['content'] = theme('g2_wotd', ['node' => G2\wotd(variable_get(G2\VARWOTDBODYSIZE, G2\DEFWOTDBODYSIZE))]);
++    case DELTAWOTD:
++      $block['subject'] = variable_get(VARWOTDTITLE, t('Word of the day in the G2 glossary'));
++      $block['content'] = theme('g2_wotd', ['node' => wotd(variable_get(VARWOTDBODYSIZE, DEFWOTDBODYSIZE))]);
+       break;
+ 
+     // Should happen only when using a new code version on an older schema
+@@ -1895,15 +1958,15 @@ function Zg2_context_registry() {
+  * which is the default case.
+  */
+ function Zg2_cron() {
+-  if (variable_get(G2\VARWOTDAUTOCHANGE, G2\DEFWOTDAUTOCHANGE)) {
+-    $date0 = date('z', variable_get(G2\VARWOTDDATE, REQUEST_TIME));
++  if (variable_get(VARWOTDAUTOCHANGE, DEFWOTDAUTOCHANGE)) {
++    $date0 = date('z', variable_get(VARWOTDDATE, \Drupal::time()->getRequestTime()));
+     $date1 = date('z');
+     if ($date1 <> $date0) {
+-      $random = G2\random();
++      $random = random();
+       // watchdog("g2_cron", "d0 = $date0, d1 = $date1, random : "
+       // . print_r($random,TRUE) . "</pre>", NULL, WATCHDOG_INFO);
+-      variable_set(G2\VARWOTDENTRY, $random->nid);
+-      variable_set(G2\VARWOTDDATE, mktime());
++      variable_set(VARWOTDENTRY, $random->nid);
++      variable_set(VARWOTDDATE, mktime());
+     }
+   }
+ }
+@@ -1915,7 +1978,7 @@ function Zg2_ctools_plugin_api($module, $api) {
+   if ($module == 'context' && $api == 'context') {
+     $ret = [
+       'version' => 3,
+-      'path' => drupal_get_path('module', 'g2') . '/context',
++      'path' => \Drupal::service('extension.list.module')->getPath('g2') . '/context',
+       // Not until http://drupal.org/node/1242632 is fixed
+       // 'file' => 'g2.context_defaults.inc',
+     ];
+@@ -1932,7 +1995,9 @@ function Zg2_ctools_plugin_api($module, $api) {
+  */
+ function Zg2_delete($node) {
+   // dsm($node, __FUNCTION__);
+-  db_delete('g2_node')
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++  \Drupal::database()->delete('g2_node')
+     ->condition('nid', $node->nid)
+     ->execute();
+ }
+@@ -1959,7 +2024,7 @@ function Zg2_field_extra_fields() {
+     'weight' => 99,
+   ];
+ 
+-  $extra['node'][G2\NODETYPE] = [
++  $extra['node'][NODETYPE] = [
+     'form' => [
+       'expansion' => $expansion,
+       'period' => $period,
+@@ -2020,7 +2085,7 @@ function Zg2_form(&$node, $form_state) {
+     $node->title = check_plain(
+       drupal_substr(
+         $_GET['q'],
+-        drupal_strlen(G2\PATHNODEADD) + 1
++        drupal_strlen(PATHNODEADD) + 1
+       )
+     );
+   }
+@@ -2072,7 +2137,7 @@ function Zg2_form(&$node, $form_state) {
+     '#weight' => -5,
+     '#access' => $admin,
+     '#attached' => [
+-      'js' => [drupal_get_path('module', 'g2') . '/g2.js'],
++      'js' => [\Drupal::service('extension.list.module')->getPath('g2') . '/g2.js'],
+     ],
+   ];
+   $form['publishing']['complement'] = [
+@@ -2114,7 +2179,9 @@ function Zg2_insert($node) {
+  * XXX New feature to add: make extra node info revision-aware.
+  */
+ function Zg2_load($nodes) {
+-  $q = db_select('g2_node', 'gn');
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++  $q = \Drupal::database()->select('g2_node', 'gn');
+   $result = $q->fields('gn')
+     ->condition('gn.nid', array_keys($nodes), 'IN')
+     ->execute();
+@@ -2132,7 +2199,7 @@ function Zg2_load($nodes) {
+ function Zg2_menu() {
+   $items = [];
+ 
+-  $items[G2\PATHSETTINGS] = [
++  $items[PATHSETTINGS] = [
+     'title' => 'G2 glossary',
+     'description' => 'Define the various parameters used by the G2 module',
+     'page callback' => 'drupal_get_form',
+@@ -2141,16 +2208,16 @@ function Zg2_menu() {
+   ];
+ 
+   // AJAX autocomplete callback, so no menu entry.
+-  $items[G2\PATHAUTOCOMPLETE] = [
++  $items[PATHAUTOCOMPLETE] = [
+     'page callback' => 'G2\autocomplete',
+-    'access arguments' => [G2\PERMVIEW],
++    'access arguments' => [PERMVIEW],
+     'type' => MENU_CALLBACK,
+   ];
+ 
+-  $items[G2\PATHWOTDFEED] = [
+-    'title' => G2\TITLEWOTDFEED,
++  $items[PATHWOTDFEED] = [
++    'title' => TITLEWOTDFEED,
+     'page callback' => 'G2\wotd_feed',
+-    'access arguments' => [G2\PERMVIEW],
++    'access arguments' => [PERMVIEW],
+     'type' => MENU_CALLBACK,
+   ];
+ 
+@@ -2158,7 +2225,7 @@ function Zg2_menu() {
+   $items['g2/wipe'] = [
+     'page callback' => 'drupal_get_form',
+     'page arguments' => ['G2\referer_wipe_confirm_form'],
+-    'access arguments' => [G2\PERMADMIN],
++    'access arguments' => [PERMADMIN],
+     'type' => MENU_CALLBACK,
+   ];
+ 
+@@ -2166,7 +2233,7 @@ function Zg2_menu() {
+   $items['g2/wipe/%g2_nid'] = [
+     'page callback' => 'drupal_get_form',
+     'page arguments' => ['G2\referer_wipe_confirm_form', 2],
+-    'access arguments' => [G2\PERMADMIN],
++    'access arguments' => [PERMADMIN],
+     'type' => MENU_CALLBACK,
+   ];
+ 
+@@ -2174,7 +2241,7 @@ function Zg2_menu() {
+     'title' => 'Referers',
+     'page callback' => 'drupal_get_form',
+     'page arguments' => ['G2\referer_links', 1],
+-    'access arguments' => [G2\PERMADMIN],
++    'access arguments' => [PERMADMIN],
+     'type' => MENU_LOCAL_TASK,
+     'weight' => 2,
+   ];
+@@ -2194,8 +2261,8 @@ function Zg2_menu() {
+  *   - FALSE otherwise
+  */
+ function Zg2_nid_load($us_nid = 0) {
+-  $node = node_load($us_nid);
+-  if ($node->type != G2\NODETYPE) {
++  $node = \Drupal::service('entity_type.manager')->getStorage('node')->load($us_nid);
++  if ($node->type != NODETYPE) {
+     $node = NULL;
+   }
+   return $node;
+@@ -2209,11 +2276,11 @@ function Zg2_node_access($node, $op, $account) {
+     case 'create':
+     case 'delete':
+     case 'update':
+-      $ret = user_access(G2\PERMADMIN, $account);
++      $ret = user_access(PERMADMIN, $account);
+       break;
+ 
+     case 'view':
+-      $ret = user_access(G2\PERMVIEW, $account);
++      $ret = user_access(PERMVIEW, $account);
+       break;
+ 
+     default:
+@@ -2236,7 +2303,7 @@ function Zg2_node_access($node, $op, $account) {
+  */
+ function Zg2_node_info() {
+   $ret = [
+-    G2\NODETYPE => [
++    NODETYPE => [
+       'name' => t('G2 entry'),
+       'base' => 'g2',
+       'description' => t(
+@@ -2263,11 +2330,11 @@ function Zg2_node_info() {
+  * - Do not apply to non-WOTD feeds.
+  */
+ function Zg2_node_view($node, $view_mode, $langcode) {
+-  if ($view_mode == 'rss' && $node->type == G2\NODETYPE && ($_GET['q'] == G2\PATHWOTDFEED)) {
+-    $node->created = variable_get(G2\VARWOTDDATE, REQUEST_TIME);
++  if ($view_mode == 'rss' && $node->type == NODETYPE && ($_GET['q'] == PATHWOTDFEED)) {
++    $node->created = variable_get(VARWOTDDATE, \Drupal::time()->getRequestTime());
+     $node->name = filter_xss_admin(
+       strtr(
+-        variable_get(G2\VARWOTDFEEDAUTHOR, '@author'),
++        variable_get(VARWOTDFEEDAUTHOR, '@author'),
+         ['@author' => check_plain($node->name)]
+       )
+     );
+@@ -2279,14 +2346,14 @@ function Zg2_node_view($node, $view_mode, $langcode) {
+  */
+ function Zg2_permission() {
+   $ret = [
+-    G2\PERMADMIN => [
++    PERMADMIN => [
+       'title' => t('Administer G2 entries'),
+       'description' => t(
+         'Access administrative information on G2 entries. This permission does not grant access to the module settings, which are controlled by the "administer site configuration" permission.'
+       ),
+       'restrict access' => TRUE,
+     ],
+-    G2\PERMVIEW => [
++    PERMVIEW => [
+       'title' => t('View G2 entries'),
+       'description' => t('This permission allows viewing G2 entries, subject to additional node access control.'),
+     ],
+@@ -2317,9 +2384,11 @@ function Zg2_update($node) {
+  * Implements hook_user_load().
+  */
+ function Zg2_user_load($users) {
+-  $q = db_select('node', 'n');
++  // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++  // You will need to use `\Drupal\core\Database\Database::getConnection()` if you do not yet have access to the container here.
++  $q = \Drupal::database()->select('node', 'n');
+   $result = $q->fields('n', ['nid', 'title', 'uid', 'type'])
+-    ->condition('n.type', G2\NODETYPE)
++    ->condition('n.type', NODETYPE)
+     ->condition('n.status', 1)
+     ->condition('n.uid', array_keys($users), 'IN')
+     ->orderBy('n.changed', 'DESC')
+@@ -2369,16 +2438,16 @@ function Zg2_view($node, $view_mode) {
+ 
+   if (node_is_page($node)) {
+     $bc = drupal_get_breadcrumb();
+-    $bc[] = l(G2\TITLEMAIN, $g2_home = variable_get(G2\VARPATHMAIN, G2\DEFPATHMAIN));
++    $bc[] = l(TITLEMAIN, $g2_home = variable_get(VARPATHMAIN, DEFPATHMAIN));
+     $initial = drupal_substr($title, 0, 1);
+     $bc[] = l($title[0], $g2_home . '/initial/' . $initial);
+     unset($initial);
+     drupal_set_breadcrumb($bc);
+-    G2\override_site_name();
++    override_site_name();
+ 
+     // Only log referrers on full page views.
+-    if (variable_get(G2\VARLOGREFERRERS, G2\DEFLOGREFERRERS)) {
+-      G2\log_referrers($node);
++    if (variable_get(VARLOGREFERRERS, DEFLOGREFERRERS)) {
++      log_referrers($node);
+     }
+ 
+     // Activate context.
+@@ -2422,7 +2491,7 @@ function Zg2_view($node, $view_mode) {
+   // The following line adds invisible text that will be prepended to
+   // the node in case some search routine favors the beginning of the
+   // body. It can be turned off in case search engines frown upon this.
+-  if (variable_get(G2\VARHIDDENTITLE, G2\DEFHIDDENTITLE)) {
++  if (variable_get(VARHIDDENTITLE, DEFHIDDENTITLE)) {
+     $node->content['g2_extra_title'] = [
+       '#markup' => '<div class="g2-extra-title">'
+         . check_plain($node->title)
+@@ -2440,7 +2509,7 @@ function Zg2_view($node, $view_mode) {
+ function Zg2_views_api() {
+   return [
+     'api' => '3.0',
+-    'path' => drupal_get_path('module', 'g2') . '/views',
++    'path' => \Drupal::service('extension.list.module')->getPath('g2') . '/views',
+   ];
+ }
+ 
+@@ -2574,11 +2643,11 @@ function Ztheme_g2_wotd($variables) {
+       'title' => t('&nbsp;(+)'),
+     ]
+   );
+-  if (variable_get(G2\VARWOTDFEEDLINK, G2\DEFWOTDFEEDLINK)) {
++  if (variable_get(VARWOTDFEEDLINK, DEFWOTDFEEDLINK)) {
+     $ret .= theme(
+       'feed_icon',
+       [
+-        'url' => url(G2\PATHWOTDFEED, ['absolute' => TRUE]),
++        'url' => url(PATHWOTDFEED, ['absolute' => TRUE]),
+         // TODO: find a better title.
+         'title' => t('Glossary feed'),
+       ]
+diff --git a/src/Alphabar.php b/src/Alphabar.php
+index 00203f1..e44e430 100644
+--- a/src/Alphabar.php
++++ b/src/Alphabar.php
+@@ -7,6 +7,7 @@
+ 
+ namespace Drupal\g2;
+ 
++use Drupal\Core\GeneratedLink;
+ use Drupal\Component\Utility\Unicode;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Url;
+@@ -29,7 +30,7 @@ class Alphabar {
+   /**
+    * The link generator service.
+    *
+-   * @var \Drupal\Core\Utility\LinkGenerator
++   * @var LinkGenerator
+    */
+   protected $linkGenerator;
+ 
+@@ -43,9 +44,9 @@ class Alphabar {
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config
++   * @param ConfigFactoryInterface $config
+    *   The config factory service.
+-   * @param \Drupal\Core\Utility\LinkGenerator $link_generator
++   * @param LinkGenerator $link_generator
+    *   The link generator service.
+    */
+   public function __construct(ConfigFactoryInterface $config, LinkGenerator $link_generator) {
+@@ -70,7 +71,7 @@ class Alphabar {
+   /**
+    * Return an array of links to entries-by-initial pages.
+    *
+-   * @return array<string,\Drupal\Core\GeneratedLink>
++   * @return array<string, GeneratedLink>
+    *   A hash of initials to entry pages.
+    */
+   public function getLinks() {
+@@ -85,8 +86,8 @@ class Alphabar {
+     $initials = $this->config['contents'];
+     $route_name = $this->routeName;
+ 
+-    for ($i = 0; $i < Unicode::strlen($initials); $i++) {
+-      $initial = Unicode::substr($initials, $i, 1);
++    for ($i = 0; $i < mb_strlen($initials); $i++) {
++      $initial = mb_substr($initials, $i, 1);
+       $path = G2::encodeTerminal($initial);
+       $parameters = ['g2_initial' => $path];
+       $url = Url::fromRoute($route_name, $parameters, $options);
+diff --git a/src/Controller/Homonyms.php b/src/Controller/Homonyms.php
+index 528dcb5..1e5c89c 100644
+--- a/src/Controller/Homonyms.php
++++ b/src/Controller/Homonyms.php
+@@ -7,6 +7,8 @@
+ 
+ namespace Drupal\g2\Controller;
+ 
++use Drupal\node\NodeInterface;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Routing\RouteMatchInterface;
+@@ -46,14 +48,14 @@ class Homonyms implements ContainerInjectionInterface {
+   /**
+    * The entity.manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityManager;
+ 
+   /**
+    * Homonyms constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_manager
++   * @param EntityTypeManagerInterface $entity_manager
+    *   The entity.manager service.
+    * @param array $config
+    *   The g2.settings/controller.homonyms configuration.
+@@ -120,10 +122,10 @@ class Homonyms implements ContainerInjectionInterface {
+   /**
+    * Build a redirect response to the matching G2 entry canonical URL.
+    *
+-   * @param \Drupal\node\NodeInterface[] $g2_match
++   * @param NodeInterface[] $g2_match
+    *   The match array, containing a single node entity.
+    *
+-   * @return \Symfony\Component\HttpFoundation\RedirectResponse
++   * @return RedirectResponse
+    *   The redirect response.
+    */
+   protected function indexRedirectSingleMatch(array $g2_match) {
+@@ -142,7 +144,7 @@ class Homonyms implements ContainerInjectionInterface {
+    *
+    * @param string $raw_match
+    *   The raw, unsafe string requested.
+-   * @param \Drupal\node\NodeInterface[] $g2_match
++   * @param NodeInterface[] $g2_match
+    *   The match array, containing node entities indexed by nid.
+    *
+    * @return array<string,array|string>
+@@ -212,12 +214,12 @@ class Homonyms implements ContainerInjectionInterface {
+   /**
+    * Controller for g2.entries.
+    *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route
++   * @param RouteMatchInterface $route
+    *   The current route.
+-   * @param \Drupal\node\NodeInterface[] $g2_match
++   * @param NodeInterface[] $g2_match
+    *   Unsafe. The entry for which to find matching G2 entries.
+    *
+-   * @return array<string,array|string>|\Symfony\Component\HttpFoundation\RedirectResponse
++   * @return array<string, (array | string)>|RedirectResponse
+    *   Render array or redirect response.
+    */
+   public function indexAction(RouteMatchInterface $route, array $g2_match) {
+@@ -259,14 +261,14 @@ class Homonyms implements ContainerInjectionInterface {
+   }
+ 
+   /**
+-   * Title callback for g2.entries.
+-   *
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route
+-   *   The current route match.
+-   *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup The page title.
+-   *   The page title.
+-   */
++  * Title callback for g2.entries.
++  *
++   * @param RouteMatchInterface $route
++  *   The current route match.
++  *
++   * @return TranslatableMarkup The page title.
++    The page title.
++  */
+   public function indexTitle(RouteMatchInterface $route) {
+     $raw_match = $route->getRawParameter('g2_match');
+     return t('G2 entries matching %entry', ['%entry' => $raw_match]);
+diff --git a/src/Controller/Initial.php b/src/Controller/Initial.php
+index 106458d..71721a5 100644
+--- a/src/Controller/Initial.php
++++ b/src/Controller/Initial.php
+@@ -8,6 +8,7 @@
+ namespace Drupal\g2\Controller;
+ 
+ 
++use Drupal\Core\StringTranslation\TranslatableMarkup;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -23,23 +24,23 @@ class Initial implements ContainerInjectionInterface {
+   /**
+    * The current_user service.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+    * The database service.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * Initial constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database service.
+-   * @param \Drupal\Core\Session\AccountInterface $current_user
++   * @param AccountInterface $current_user
+    *   The current_user service.
+    */
+   public function __construct(Connection $database, AccountInterface $current_user) {
+@@ -164,7 +165,7 @@ class Initial implements ContainerInjectionInterface {
+    * @param string $g2_initial
+    *   The raw initial matching the route regexp.
+    *
+-   * @return \Drupal\Core\StringTranslation\TranslatableMarkup
++   * @return TranslatableMarkup
+    *   The page title.
+    */
+   public function indexTitle($g2_initial = '@') {
+diff --git a/src/Controller/Main.php b/src/Controller/Main.php
+index 581397a..82fd6d1 100644
+--- a/src/Controller/Main.php
++++ b/src/Controller/Main.php
+@@ -31,30 +31,30 @@ class Main implements ContainerInjectionInterface {
+   /**
+    * The g2.alphabar service.
+    *
+-   * @var \Drupal\g2\Alphabar
++   * @var Alphabar
+    */
+   protected $alphabar;
+ 
+   /**
+    * The module configuration.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * The entity_type.manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Main constructor.
+    *
+-   * @param \Drupal\g2\Alphabar $alphabar
++   * @param Alphabar $alphabar
+    *   The g2.alphabar service.
+-   * @param \Drupal\Core\Config\ImmutableConfig $config
++   * @param ImmutableConfig $config
+    *   The module configuration.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager,
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 110eaec..2ab0f8b 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -44,7 +44,7 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * The router.builder service.
+    *
+-   * @var \Drupal\Core\Routing\RouteBuilderInterface
++   * @var RouteBuilderInterface
+    */
+   protected $routerBuilder;
+ 
+@@ -53,11 +53,11 @@ class SettingsForm extends ConfigFormBase {
+    *
+    * @param \Drupal\Core\Entity\Query\QueryFactory $entity_query
+    *   The entity.query service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The factory for configuration objects.
+    * @param array $config_schema
+    *   The schema array for the configuration data.
+-   * @param \Drupal\Core\Routing\RouteBuilderInterface $router_builder
++   * @param RouteBuilderInterface $router_builder
+    *   The router.builder service.
+    */
+   public function __construct(
+@@ -500,7 +500,7 @@ class SettingsForm extends ConfigFormBase {
+   public function submitControllerForm() {
+     // @TODO Really necessary ? We change selected routes, not modifying them.
+     $this->routerBuilder->rebuild();
+-    drupal_set_message($this->t('The router has been rebuilt.'));
++    $this->messenger()->addStatus($this->t('The router has been rebuilt.'));
+   }
+ 
+   /**
+@@ -518,7 +518,7 @@ class SettingsForm extends ConfigFormBase {
+       $this->{$handler}();
+     }
+ 
+-    drupal_set_message($this->t('The configuration options have been saved.'));
++    $this->messenger()->addStatus($this->t('The configuration options have been saved.'));
+   }
+ 
+ }
+diff --git a/src/Latest.php b/src/Latest.php
+index fe4144e..f49ad31 100644
+--- a/src/Latest.php
++++ b/src/Latest.php
+@@ -7,6 +7,8 @@
+ 
+ namespace Drupal\g2;
+ 
++use Drupal\node\NodeInterface;
++use Drupal\Core\GeneratedLink;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\Query\QueryFactory;
+ use Drupal\Core\Routing\UrlGeneratorInterface;
+@@ -31,7 +33,7 @@ class Latest {
+   /**
+    * The link generator service.
+    *
+-   * @var \Drupal\Core\Utility\LinkGenerator
++   * @var LinkGenerator
+    */
+   protected $linkGenerator;
+ 
+@@ -45,20 +47,20 @@ class Latest {
+   /**
+    * The URL generator service.
+    *
+-   * @var \Drupal\Core\Routing\UrlGeneratorInterface
++   * @var UrlGeneratorInterface
+    */
+   protected $urlGenerator;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config
++   * @param ConfigFactoryInterface $config
+    *   The config factory service.
+-   * @param \Drupal\Core\Utility\LinkGenerator $link_generator
++   * @param LinkGenerator $link_generator
+    *   The link generator service.
+    * @param \Drupal\Core\Entity\Query\QueryFactory $entity_query
+    *   The entity.query service.
+-   * @param \Drupal\Core\Routing\UrlGeneratorInterface $url_generator
++   * @param UrlGeneratorInterface $url_generator
+    *   The URL generator service.
+    */
+   public function __construct(ConfigFactoryInterface $config, LinkGenerator $link_generator,
+@@ -78,7 +80,7 @@ class Latest {
+    *   The maximum number of entries to return. Limited both by the configured
+    *   maximum number of entries and the actual number of entries available.
+    *
+-   * @return array<integer,\Drupal\node\NodeInterface>
++   * @return array<integer, NodeInterface>
+    *   A node-by-nid hash, ordered by latest change timestamp.
+    */
+   public function getEntries($count) {
+@@ -101,7 +103,7 @@ class Latest {
+    *   The maximum number of entries to return. Limited both by the configured
+    *   maximum number of entries and the actual number of entries available.
+    *
+-   * @return array <string,\Drupal\Core\GeneratedLink>
++   * @return array<string, GeneratedLink>
+    *   A hash of nid to to entry links.
+    */
+   public function getLinks($count) {
+@@ -114,7 +116,7 @@ class Latest {
+     ];
+     $route_name = 'entity.node.canonical';
+ 
+-    /** @var \Drupal\node\NodeInterface $node */
++    /** @var NodeInterface $node */
+     foreach ($this->getEntries($count) as $node) {
+       $parameters = ['node' => $node->id()];
+       $url = Url::fromRoute($route_name, $parameters, $options);
+diff --git a/src/ParamConverter/NodeMatch.php b/src/ParamConverter/NodeMatch.php
+index 7f62be7..260ac53 100644
+--- a/src/ParamConverter/NodeMatch.php
++++ b/src/ParamConverter/NodeMatch.php
+@@ -7,6 +7,7 @@
+ 
+ namespace Drupal\g2\ParamConverter;
+ 
++use Drupal\node\NodeInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Entity\Query\QueryFactory;
+ use Drupal\Core\ParamConverter\ParamConverterInterface;
+@@ -27,7 +28,7 @@ class NodeMatch implements ParamConverterInterface {
+   /**
+    * The current_user service.
+    *
+-   * @var \Drupal\Core\Session\AccountProxy
++   * @var AccountProxy
+    */
+   protected $currentUser;
+ 
+@@ -39,16 +40,16 @@ class NodeMatch implements ParamConverterInterface {
+   /**
+    * The entity_type.manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * NodeMatch constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $etm
++   * @param EntityTypeManagerInterface $etm
+    *   The entity_type.manager service.
+-   * @param \Drupal\Core\Session\AccountProxy $current_user
++   * @param AccountProxy $current_user
+    *   The current_user service.
+    * @param \Drupal\Core\Entity\Query\QueryFactory $entity_query
+    *   The entity.query service.
+@@ -65,7 +66,7 @@ class NodeMatch implements ParamConverterInterface {
+    *
+    * Only returns unpublished nodes to users with "administer g2 entries".
+    *
+-   * @return \Drupal\node\NodeInterface[]
++   * @return NodeInterface[]
+    *   A possibly empty array of nodes.
+    */
+   public function convert($value, $definition, $name, array $defaults) {
+diff --git a/src/Plugin/Block/AlphabarBlock.php b/src/Plugin/Block/AlphabarBlock.php
+index 29f81e8..8ddbb41 100644
+--- a/src/Plugin/Block/AlphabarBlock.php
++++ b/src/Plugin/Block/AlphabarBlock.php
+@@ -26,7 +26,7 @@ class AlphabarBlock extends BlockBase implements ContainerFactoryPluginInterface
+   /**
+    * The Alphabar service.
+    *
+-   * @var \Drupal\g2\Alphabar
++   * @var Alphabar
+    */
+   protected $alphabar;
+ 
+@@ -46,7 +46,7 @@ class AlphabarBlock extends BlockBase implements ContainerFactoryPluginInterface
+    *   The block ID.
+    * @param mixed $plugin_definition
+    *   The block definition.
+-   * @param \Drupal\g2\Alphabar $alphabar
++   * @param Alphabar $alphabar
+    *   The Alphabar service.
+    * @param array $block_config
+    *   The block configuration.
+@@ -87,7 +87,7 @@ class AlphabarBlock extends BlockBase implements ContainerFactoryPluginInterface
+   /**
+    * Creates an instance of the plugin.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The container to pull out services used in the plugin.
+    * @param array $configuration
+    *   A configuration array containing information about the plugin instance.
+diff --git a/src/Plugin/Block/LatestBlock.php b/src/Plugin/Block/LatestBlock.php
+index fe7ab27..2dd6bb0 100644
+--- a/src/Plugin/Block/LatestBlock.php
++++ b/src/Plugin/Block/LatestBlock.php
+@@ -33,7 +33,7 @@ class LatestBlock extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * The g2.latest service.
+    *
+-   * @var \Drupal\g2\Latest
++   * @var Latest
+    */
+   protected $latest;
+ 
+@@ -46,7 +46,7 @@ class LatestBlock extends BlockBase implements ContainerFactoryPluginInterface {
+    *   The block ID.
+    * @param mixed $plugin_definition
+    *   The block definition.
+-   * @param \Drupal\g2\Latest $latest
++   * @param Latest $latest
+    *   The g2.latest service.
+    * @param array $block_config
+    *   The block configuration.
+@@ -75,7 +75,7 @@ class LatestBlock extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * Creates an instance of the plugin.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The container to pull out services used in the plugin.
+    * @param array $configuration
+    *   A configuration array containing information about the plugin instance.
+diff --git a/src/Plugin/Block/TopBlock.php b/src/Plugin/Block/TopBlock.php
+index 1d763a4..429ed43 100644
+--- a/src/Plugin/Block/TopBlock.php
++++ b/src/Plugin/Block/TopBlock.php
+@@ -33,7 +33,7 @@ class TopBlock extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * The g2.top service.
+    *
+-   * @var \Drupal\g2\Top
++   * @var Top
+    */
+   protected $top;
+ 
+@@ -46,7 +46,7 @@ class TopBlock extends BlockBase implements ContainerFactoryPluginInterface {
+    *   The block ID.
+    * @param mixed $plugin_definition
+    *   The block definition.
+-   * @param \Drupal\g2\Top $top
++   * @param Top $top
+    *   The g2.top service.
+    * @param array $block_config
+    *   The block configuration.
+@@ -80,7 +80,7 @@ class TopBlock extends BlockBase implements ContainerFactoryPluginInterface {
+   /**
+    * Creates an instance of the plugin.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The container to pull out services used in the plugin.
+    * @param array $configuration
+    *   A configuration array containing information about the plugin instance.
+diff --git a/src/Requirements.php b/src/Requirements.php
+index d4dd991..db4961f 100644
+--- a/src/Requirements.php
++++ b/src/Requirements.php
+@@ -29,14 +29,14 @@ class Requirements implements ContainerInjectionInterface {
+   /**
+    * The g2.settings configuration.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $g2Config;
+ 
+   /**
+    * The module_handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -47,20 +47,20 @@ class Requirements implements ContainerInjectionInterface {
+   /**
+    * The statistics.settings configuration.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $statisticsConfig;
+ 
+   /**
+    * Requirements constructor.
+    *
+-   * @param \Drupal\Core\Config\ImmutableConfig $g2_config
++   * @param ImmutableConfig $g2_config
+    *   The g2.settings configuration.
+-   * @param \Drupal\Core\Routing\RouteProviderInterface $route_provider
++   * @param RouteProviderInterface $route_provider
+    *   The router.route_provider service.
+-   * @param \Drupal\Core\Config\ImmutableConfig $statistics_config
++   * @param ImmutableConfig $statistics_config
+    *   The statistics.settings configuration.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module_handler service.
+    */
+   public function __construct(ImmutableConfig $g2_config, RouteProviderInterface $route_provider,
+@@ -79,7 +79,7 @@ class Requirements implements ContainerInjectionInterface {
+    * class, but not the container itself. Every call to this method must return
+    * a new instance of this class; that is, it may not implement a singleton.
+    *
+-   * @param \Symfony\Component\DependencyInjection\ContainerInterface $container
++   * @param ContainerInterface $container
+    *   The service container this instance should use.
+    *
+    * @return static
+@@ -106,7 +106,7 @@ class Requirements implements ContainerInjectionInterface {
+    *
+    * @param string $key
+    *   The config key for the route to validate.
+-   * @param \Drupal\Component\Render\MarkupInterface $title
++   * @param MarkupInterface $title
+    *   The requirement check title.
+    *
+    * @return array
+@@ -149,7 +149,7 @@ class Requirements implements ContainerInjectionInterface {
+    *
+    * @param string $key
+    *   The config key for the route to validate.
+-   * @param \Drupal\Component\Render\MarkupInterface $title
++   * @param MarkupInterface $title
+    *   The requirement check title.
+    *
+    * @return array
+diff --git a/src/Tests/AlphabarTest.php b/src/Tests/AlphabarTest.php
+index 3e3467b..6fe74eb 100644
+--- a/src/Tests/AlphabarTest.php
++++ b/src/Tests/AlphabarTest.php
+@@ -6,6 +6,7 @@
+ 
+ namespace Drupal\g2\Tests;
+ 
++use Drupal\g2\Alphabar;
+ use Drupal\Component\Utility\Unicode;
+ use Drupal\KernelTests\KernelTestBase;
+ 
+@@ -35,7 +36,7 @@ class AlphabarTest extends KernelTestBase {
+   /**
+    * The G2 Alphabar service.
+    *
+-   * @var \Drupal\g2\Alphabar
++   * @var Alphabar
+    */
+   protected $alphabar;
+ 
+@@ -44,7 +45,7 @@ class AlphabarTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+     $this->installConfig(static::MODULES);
+     $this->installSchema('system', 'router');
+@@ -62,7 +63,7 @@ class AlphabarTest extends KernelTestBase {
+     $links = $this->alphabar->getLinks();
+     $this->assertTrue(is_array($links));
+ 
+-    $expected = Unicode::strlen($this->alphabar->getContents());
++    $expected = mb_strlen($this->alphabar->getContents());
+     $actual = count($links);
+     $this->assertEquals($expected, $actual, 'The number of links matches the number of runes in alphabar.contents');
+   }
+diff --git a/src/Top.php b/src/Top.php
+index 298ca41..992b2b8 100644
+--- a/src/Top.php
++++ b/src/Top.php
+@@ -7,6 +7,7 @@
+ 
+ namespace Drupal\g2;
+ 
++use Drupal\Core\GeneratedLink;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\Query\QueryFactory;
+@@ -45,7 +46,7 @@ class Top {
+   /**
+    * The database service.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+@@ -59,40 +60,40 @@ class Top {
+   /**
+    * The link generator service.
+    *
+-   * @var \Drupal\Core\Utility\LinkGenerator
++   * @var LinkGenerator
+    */
+   protected $linkGenerator;
+ 
+   /**
+    * The logger.channel.g2 service.
+    *
+-   * @var \Psr\Log\LoggerInterface
++   * @var LoggerInterface
+    */
+   protected $logger;
+ 
+   /**
+    * The URL generator service.
+    *
+-   * @var \Drupal\Core\Routing\UrlGeneratorInterface
++   * @var UrlGeneratorInterface
+    */
+   protected $urlGenerator;
+ 
+   /**
+    * Constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config
++   * @param ConfigFactoryInterface $config
+    *   The config factory service.
+-   * @param \Drupal\Core\Utility\LinkGenerator $link_generator
++   * @param LinkGenerator $link_generator
+    *   The link generator service.
+    * @param \Drupal\Core\Entity\Query\QueryFactory $entity_query
+    *   The entity.query service.
+-   * @param \Drupal\Core\Routing\UrlGeneratorInterface $url_generator
++   * @param UrlGeneratorInterface $url_generator
+    *   The URL generator service.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   The module_handler service.
+-   * @param \Drupal\Core\Database\Connection $connection
++   * @param Connection $connection
+    *   The database service.
+-   * @param \Psr\Log\LoggerInterface $logger
++   * @param LoggerInterface $logger
+    *   The logger.channel.g2 service.
+    */
+   public function __construct(ConfigFactoryInterface $config, LinkGenerator $link_generator,
+@@ -120,7 +121,7 @@ class Top {
+    *   The type of statistic by which to order. Must be one of the
+    *   self::STATISTICS_* individual statistics.
+    *
+-   * @return array <integer,\Drupal\g2\TopRecord>
++   * @return array<integer, TopRecord>
+    *   A node-by-nid hash, ordered by latest change timestamp.
+    */
+   public function getEntries($count, $statistic = self::STATISTICS_DAY) {
+@@ -206,7 +207,7 @@ class Top {
+    *   The type of statistic by which to order. Must be one of the
+    *   self::STATISTICS_* individual statistics.
+    *
+-   * @return array <string,\Drupal\Core\GeneratedLink>
++   * @return array<string, GeneratedLink>
+    *   A hash of nid to to entry links.
+    */
+   public function getLinks($count, $statistic = self::STATISTICS_DAY) {

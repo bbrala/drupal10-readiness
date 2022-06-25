@@ -1,0 +1,281 @@
+diff --git a/poool.info.yml b/poool.info.yml
+index 8485d41..cf401cc 100644
+--- a/poool.info.yml
++++ b/poool.info.yml
+@@ -2,6 +2,5 @@ name: Poool
+ type: module
+ description: 'Provides a poool configuration entity.'
+ package: Statistics
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^8 || ^9 || ^10
+ configure: entity.poool.collection
+diff --git a/poool.module b/poool.module
+index 73a9854..5abe15a 100644
+--- a/poool.module
++++ b/poool.module
+@@ -1,5 +1,11 @@
+ <?php
+ 
++use Drupal\Core\Cache\Cache;
++use Drupal\poool\Component\Render\PooolJavaScriptSnippet;
++use Drupal\poool\Manager\PooolManager;
++use Drupal\Core\Entity\ContentEntityInterface;
++use Drupal\Core\Entity\Entity\EntityViewDisplay;
++use Drupal\poool\PooolHelperService;
+ /**
+  * Implements hook_page_attachments().
+  *
+@@ -12,7 +18,7 @@ function poool_page_attachments(array &$page) {
+   $request = \Drupal::request();
+ 
+   // Add module cache tags.
+-  $page['#cache']['tags'] = \Drupal\Core\Cache\Cache::mergeTags(isset($page['#cache']['tags']) ? $page['#cache']['tags'] : [], $config->getCacheTags());
++  $page['#cache']['tags'] = Cache::mergeTags(isset($page['#cache']['tags']) ? $page['#cache']['tags'] : [], $config->getCacheTags());
+ 
+   // Get page http status code for visibility filtering.
+   $status = NULL;
+@@ -59,7 +65,7 @@ EOF;
+     $page['#attached']['html_head'][] = [
+       [
+         '#tag' => 'script',
+-        '#value' => new \Drupal\poool\Component\Render\PooolJavaScriptSnippet($script),
++        '#value' => new PooolJavaScriptSnippet($script),
+       ],
+       'poool_tracking_script',
+     ];
+@@ -178,9 +184,9 @@ function _poool_page_type_pages() {
+   // Cache conversion result if function is called more than once.
+   if (!isset($page_match)) {
+     $page_entity = _poool_get_page_entity();
+-    /** @var \Drupal\poool\Manager\PooolManager $pooolManager */
++    /** @var PooolManager $pooolManager */
+     $pooolManager = \Drupal::service('poool.manager');
+-    $entity_settings = $page_entity instanceof \Drupal\Core\Entity\ContentEntityInterface ? $pooolManager->getPooolSettingsForEntity($page_entity) : NULL;
++    $entity_settings = $page_entity instanceof ContentEntityInterface ? $pooolManager->getPooolSettingsForEntity($page_entity) : NULL;
+     if (isset($entity_settings['page-type'])) {
+       return $entity_settings['page-type'];
+     }
+@@ -364,17 +370,17 @@ function poool_preprocess_field(&$variables) {
+     $entity = $variables['element']['#object'];
+     $view_mode = $variables['element']['#view_mode'];
+     $field_name = $variables['element']['#field_name'];
+-    $entity_display = \Drupal\Core\Entity\Entity\EntityViewDisplay::collectRenderDisplay($entity, $view_mode);
++    $entity_display = EntityViewDisplay::collectRenderDisplay($entity, $view_mode);
+     $field_display = $entity_display->getComponent($field_name);
+ 
+     if (isset($field_display['third_party_settings']['poool']['poool_tag_placed']) && $field_display['third_party_settings']['poool']['poool_tag_placed']) {
+       $currentUser = \Drupal::currentUser();
+-      /** @var \Drupal\poool\PooolHelperService $pooolHelper */
++      /** @var PooolHelperService $pooolHelper */
+       $pooolHelper = \Drupal::service('poool.helper');
+       if (!$pooolHelper->userIsPremium($currentUser)) {
+-        /** @var \Drupal\poool\Manager\PooolManager $pooolManager */
++        /** @var PooolManager $pooolManager */
+         $pooolManager = \Drupal::service('poool.manager');
+-        $entity_settings = $entity instanceof \Drupal\Core\Entity\ContentEntityInterface ? $pooolManager->getPooolSettingsForEntity($entity) : NULL;
++        $entity_settings = $entity instanceof ContentEntityInterface ? $pooolManager->getPooolSettingsForEntity($entity) : NULL;
+         $variables['attributes']['data-poool'] = $entity_settings['percent'] ?? $field_display['third_party_settings']['poool']['poool_visibility_percent'];
+         $variables['attributes']['data-poool-mode'] = $entity_settings['mode'] ?? $field_display['third_party_settings']['poool']['poool_mode'];
+       }
+diff --git a/src/Event/PooolUserIsPremiumEvent.php b/src/Event/PooolUserIsPremiumEvent.php
+index 4d4972d..e7f1cd1 100644
+--- a/src/Event/PooolUserIsPremiumEvent.php
++++ b/src/Event/PooolUserIsPremiumEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\poool\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\Core\Session\AccountProxyInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Defines the pool user is premium event.
+@@ -15,7 +15,7 @@ class PooolUserIsPremiumEvent extends Event {
+   /**
+    * The user account.
+    *
+-   * @var \Drupal\Core\Session\AccountProxyInterface
++   * @var AccountProxyInterface
+    */
+   protected $account;
+ 
+@@ -29,7 +29,7 @@ class PooolUserIsPremiumEvent extends Event {
+   /**
+    * Constructs a new PooolUserIsPremiumEvent object.
+    *
+-   * @param \Drupal\Core\Session\AccountProxyInterface $account
++   * @param AccountProxyInterface $account
+    *   The account.
+    */
+   public function __construct(AccountProxyInterface $account) {
+@@ -39,7 +39,7 @@ class PooolUserIsPremiumEvent extends Event {
+   /**
+    * Get the account.
+    *
+-   * @return \Drupal\Core\Session\AccountProxyInterface
++   * @return AccountProxyInterface
+    *   The account.
+    */
+   public function getAccount(): AccountProxyInterface {
+diff --git a/src/Form/PooolSettingsForm.php b/src/Form/PooolSettingsForm.php
+index 88d775e..06487f3 100644
+--- a/src/Form/PooolSettingsForm.php
++++ b/src/Form/PooolSettingsForm.php
+@@ -18,14 +18,14 @@ class PooolSettingsForm extends ConfigFormBase {
+   /**
+    * The Poool manager.
+    *
+-   * @var \Drupal\poool\Manager\PooolManager
++   * @var PooolManager
+    */
+   protected $pooolManager;
+ 
+   /**
+    * {@inheritdoc}
+    *
+-   * @var \Drupal\poool\Manager\PooolManager $poool_manager
++   * @var PooolManager $poool_manager
+    *   The poool manager.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory, PooolManager $poool_manager) {
+diff --git a/src/Manager/PooolManager.php b/src/Manager/PooolManager.php
+index f9ebb21..97bb760 100644
+--- a/src/Manager/PooolManager.php
++++ b/src/Manager/PooolManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\poool\Manager;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\Core\Entity\ContentEntityTypeInterface;
+@@ -16,32 +17,32 @@ class PooolManager {
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The entity type bundle info service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $entityTypeBundleInfo;
+ 
+   /**
+    * The immutable poool configuration entity.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * PooolManager constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle info service.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager, EntityTypeBundleInfoInterface $entity_type_bundle_info, ConfigFactoryInterface $config_factory) {
+@@ -52,7 +53,7 @@ class PooolManager {
+   /**
+    * Get all content entity types.
+    *
+-   * @return \Drupal\Core\Entity\ContentEntityTypeInterface[]
++   * @return ContentEntityTypeInterface[]
+    */
+   public function getContentEntityTypes() {
+     $definitions = $this->entityTypeManager->getDefinitions();
+diff --git a/src/Plugin/Field/FieldType/PooolFieldItem.php b/src/Plugin/Field/FieldType/PooolFieldItem.php
+index 63da03e..5c47b57 100644
+--- a/src/Plugin/Field/FieldType/PooolFieldItem.php
++++ b/src/Plugin/Field/FieldType/PooolFieldItem.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\poool\Plugin\Field\FieldType;
+ 
++use Drupal\poool\Manager\PooolManager;
+ use Drupal\Core\Field\FieldItemBase;
+ use Drupal\Core\Field\FieldStorageDefinitionInterface;
+ use Drupal\Core\TypedData\DataDefinition;
+@@ -62,7 +63,7 @@ class PooolFieldItem extends FieldItemBase {
+   public function preSave() {
+     parent::preSave();
+ 
+-    /** @var \Drupal\poool\Manager\PooolManager $pooolManager */
++    /** @var PooolManager $pooolManager */
+     $pooolManager = \Drupal::service('poool.manager');
+     // Get field defaults.
+     $default_settings = $pooolManager->fieldDefaultSettings();
+diff --git a/src/Plugin/Field/FieldWidget/PooolDefaultWidget.php b/src/Plugin/Field/FieldWidget/PooolDefaultWidget.php
+index 1c845f5..172b84e 100644
+--- a/src/Plugin/Field/FieldWidget/PooolDefaultWidget.php
++++ b/src/Plugin/Field/FieldWidget/PooolDefaultWidget.php
+@@ -29,13 +29,13 @@ class PooolDefaultWidget extends WidgetBase implements ContainerFactoryPluginInt
+   /**
+    * The poool helper service.
+    *
+-   * @var \Drupal\poool\Manager\PooolManager
++   * @var PooolManager
+    */
+   protected $pooolManager;
+ 
+   /**
+    * {@inheritdoc}
+-   * @param \Drupal\poool\Manager\PooolManager $pooolManager
++   * @param PooolManager $pooolManager
+    *   The poool manager.
+    */
+   public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, array $third_party_settings, PooolManager $pooolManager) {
+diff --git a/src/PooolHelperService.php b/src/PooolHelperService.php
+index 4a13797..d5527a8 100644
+--- a/src/PooolHelperService.php
++++ b/src/PooolHelperService.php
+@@ -17,14 +17,14 @@ class PooolHelperService {
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+    * PooolHelperService constructor.
+    *
+-   * @param \Symfony\Component\EventDispatcher\EventDispatcherInterface $eventDispatcher
++   * @param EventDispatcherInterface $eventDispatcher
+    *   The event dispatcher.
+    */
+   public function __construct(EventDispatcherInterface $eventDispatcher) {
+@@ -34,14 +34,14 @@ class PooolHelperService {
+   /**
+    * Does the user is premium.
+    *
+-   * @param \Drupal\Core\Session\AccountProxyInterface $account
++   * @param AccountProxyInterface $account
+    *   The user account.
+    *
+    * @return bool
+    */
+   public function userIsPremium(AccountProxyInterface $account) {
+     $event = new PooolUserIsPremiumEvent($account);
+-    $this->eventDispatcher->dispatch(PooolEvents::POOOL_USER_IS_PREMIUM, $event);
++    $this->eventDispatcher->dispatch($event, PooolEvents::POOOL_USER_IS_PREMIUM);
+     return $event->isPremium();
+   }
+ 

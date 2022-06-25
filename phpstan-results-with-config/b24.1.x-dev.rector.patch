@@ -1,0 +1,734 @@
+diff --git a/modules/b24_commerce/b24_commerce.module b/modules/b24_commerce/b24_commerce.module
+index bf89453..4a4e893 100644
+--- a/modules/b24_commerce/b24_commerce.module
++++ b/modules/b24_commerce/b24_commerce.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\commerce_order\Entity\OrderItemInterface;
++use Drupal\commerce_product\Entity\Product;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\taxonomy\Entity\Term;
+ /**
+@@ -21,7 +23,7 @@ function b24_commerce_preprocess_page(&$variables) {
+ /**
+  * Implements hook_entity_insert().
+  */
+-function b24_commerce_commerce_order_item_insert(Drupal\commerce_order\Entity\OrderItemInterface $item) {
++function b24_commerce_commerce_order_item_insert(OrderItemInterface $item) {
+   return _b24_commerce_update_products($item);
+ }
+ 
+@@ -29,7 +31,7 @@ function b24_commerce_commerce_order_item_insert(Drupal\commerce_order\Entity\Or
+ /**
+  * Implements hook_entity_insert().
+  */
+-function b24_commerce_commerce_order_item_update(Drupal\commerce_order\Entity\OrderItemInterface $item) {
++function b24_commerce_commerce_order_item_update(OrderItemInterface $item) {
+   return _b24_commerce_update_products($item);
+ }
+ 
+@@ -37,7 +39,7 @@ function b24_commerce_commerce_order_item_update(Drupal\commerce_order\Entity\Or
+ /**
+  * Implements hook_entity_insert().
+  */
+-function b24_commerce_commerce_order_item_delete(Drupal\commerce_order\Entity\OrderItemInterface $item) {
++function b24_commerce_commerce_order_item_delete(OrderItemInterface $item) {
+   return _b24_commerce_update_products($item);
+ }
+ 
+@@ -46,7 +48,7 @@ function b24_commerce_commerce_order_item_delete(Drupal\commerce_order\Entity\Or
+  * @param \Drupal\commerce_order\Entity\OrderItemInterface $item
+  * @return mixed
+  */
+-function _b24_commerce_update_products(Drupal\commerce_order\Entity\OrderItemInterface $item) {
++function _b24_commerce_update_products(OrderItemInterface $item) {
+   $order = $item->getOrder();
+   return $order ? \Drupal::service('b24_commerce.event_subscriber')->updateProducts($order) : FALSE;
+ }
+@@ -86,7 +88,7 @@ function b24_commerce_commerce_product_variation_delete(EntityInterface $entity)
+ /**
+  * Implements hook_ENTITY_TYPE_delete().
+  */
+-function b24_commerce_commerce_product_delete(Drupal\commerce_product\Entity\Product $entity) {
++function b24_commerce_commerce_product_delete(Product $entity) {
+   $variations = $entity->get('variations')->getValue();
+   foreach ($variations as $variation) {
+     \Drupal::service('b24.rest_manager')->deleteProduct($variation['target_id'], TRUE);
+diff --git a/modules/b24_commerce/src/Event/B24CommerceEvent.php b/modules/b24_commerce/src/Event/B24CommerceEvent.php
+index 07d0b0d..d664040 100644
+--- a/modules/b24_commerce/src/Event/B24CommerceEvent.php
++++ b/modules/b24_commerce/src/Event/B24CommerceEvent.php
+@@ -3,7 +3,6 @@
+ namespace Drupal\b24_commerce\Event;
+ 
+ use Drupal\commerce_order\Entity\OrderInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * todo: we have lack information about B24 response here which makes this event not so useful as I wanted.
+@@ -14,7 +13,7 @@ use Symfony\Component\EventDispatcher\Event;
+  *
+  * @see \Drupal\commerce_order\Event\OrderEvents
+  */
+-class B24CommerceEvent extends Event {
++class B24CommerceEvent extends \Symfony\Contracts\EventDispatcher\Event {
+ 
+   /**
+    * Name of the event fired after adding a new Bitrix24 entity.
+diff --git a/modules/b24_commerce/src/EventSubscriber/B24CommerceSubscriber.php b/modules/b24_commerce/src/EventSubscriber/B24CommerceSubscriber.php
+index 96d7c41..ac6ff0d 100644
+--- a/modules/b24_commerce/src/EventSubscriber/B24CommerceSubscriber.php
++++ b/modules/b24_commerce/src/EventSubscriber/B24CommerceSubscriber.php
+@@ -21,8 +21,6 @@ use Drupal\Core\Utility\Token;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+ use Drupal\state_machine\Event\WorkflowTransitionEvent;
+-use Symfony\Component\HttpKernel\Event\FilterResponseEvent;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ use Drupal\Core\Extension\ModuleHandler;
+ 
+@@ -34,32 +32,32 @@ class B24CommerceSubscriber implements EventSubscriberInterface {
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+-   * @var \Drupal\b24\Service\RestManager
++   * @var RestManager
+    */
+   protected $restManager;
+ 
+   /**
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $token;
+ 
+   /**
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   protected $currentUser;
+ 
+   /**
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $dispatcher;
+ 
+@@ -71,7 +69,7 @@ class B24CommerceSubscriber implements EventSubscriberInterface {
+   /**
+    * Constructs event subscriber.
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+    */
+   public function __construct(
+@@ -171,7 +169,7 @@ class B24CommerceSubscriber implements EventSubscriberInterface {
+       ])->execute();
+ 
+     $event = new B24CommerceEvent($order, 'deal', $deal);
+-    $this->dispatcher->dispatch(B24CommerceEvent::ENTITY_INSERT, $event);
++    $this->dispatcher->dispatch($event, B24CommerceEvent::ENTITY_INSERT);
+     $this->updateProducts($order, 'deal', $deal);
+     return $deal ?? NULL;
+   }
+@@ -195,7 +193,7 @@ class B24CommerceSubscriber implements EventSubscriberInterface {
+     $this->moduleHandler->alter('b24_commerce_data', $fields, $context);
+     $ext_id = $this->restManager->addLead($fields);
+     $event = new B24CommerceEvent($order, 'lead', $ext_id);
+-    $this->dispatcher->dispatch(B24CommerceEvent::ENTITY_INSERT, $event);
++    $this->dispatcher->dispatch($event, B24CommerceEvent::ENTITY_INSERT);
+     if ($ext_id) {
+       $hash = $this->getHash($fields);
+       $this->database->insert('b24_reference')
+@@ -371,7 +369,7 @@ class B24CommerceSubscriber implements EventSubscriberInterface {
+     }
+     $this->updateProducts($order);
+     $event = new B24CommerceEvent($order, 'lead', $update);
+-    $this->dispatcher->dispatch(B24CommerceEvent::ENTITY_UPDATE, $event);
++    $this->dispatcher->dispatch($event, B24CommerceEvent::ENTITY_UPDATE);
+     return $update;
+   }
+ 
+@@ -483,7 +481,7 @@ class B24CommerceSubscriber implements EventSubscriberInterface {
+       $this->moduleHandler->alter('b24_commerce_data', $fields, $context);
+       $contact_id = $this->restManager->addContact($fields);
+       $event = new B24CommerceEvent($order, 'contact', $contact_id);
+-      $this->dispatcher->dispatch(B24CommerceEvent::ENTITY_INSERT, $event);
++      $this->dispatcher->dispatch($event, B24CommerceEvent::ENTITY_INSERT);
+     }
+     if ($this->moduleHandler->moduleExists('b24_user')) {
+       $this->configFactory->getEditable('b24_user.settings')->set('enabled', $user_enabled);
+diff --git a/modules/b24_commerce/src/Form/MappingForm.php b/modules/b24_commerce/src/Form/MappingForm.php
+index 2023dd2..f943213 100644
+--- a/modules/b24_commerce/src/Form/MappingForm.php
++++ b/modules/b24_commerce/src/Form/MappingForm.php
+@@ -22,7 +22,7 @@ class MappingForm extends ConfigFormBase {
+   /**
+    * Drupal\b24\Service\RestManager definition.
+    *
+-   * @var \Drupal\b24\Service\RestManager
++   * @var RestManager
+    */
+   protected $b24RestManager;
+ 
+diff --git a/modules/b24_commerce/src/Form/ProductExportBatchForm.php b/modules/b24_commerce/src/Form/ProductExportBatchForm.php
+index c151c40..c4d4e35 100644
+--- a/modules/b24_commerce/src/Form/ProductExportBatchForm.php
++++ b/modules/b24_commerce/src/Form/ProductExportBatchForm.php
+@@ -23,28 +23,28 @@ class ProductExportBatchForm extends FormBase {
+   /**
+    * Drupal\Core\Entity\EntityTypeManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Drupal\Core\Entity\EntityFieldManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
++   * @var EntityFieldManagerInterface
+    */
+   protected $entityFieldManager;
+ 
+   /**
+    * Drupal\Core\Messenger\MessengerInterface definition.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+    * Batch Builder.
+    *
+-   * @var \Drupal\Core\Batch\BatchBuilder
++   * @var BatchBuilder
+    */
+   protected $batchBuilder;
+ 
+@@ -54,7 +54,7 @@ class ProductExportBatchForm extends FormBase {
+   protected $storeStorage;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeBundleInfoInterface
++   * @var EntityTypeBundleInfoInterface
+    */
+   protected $bundleInfo;
+ 
+@@ -66,12 +66,12 @@ class ProductExportBatchForm extends FormBase {
+   protected $entityMapping;
+ 
+   /**
+-   * @var \Drupal\b24\Service\RestManager
++   * @var RestManager
+    */
+   protected $restManager;
+ 
+   /**
+-   * @var \Drupal\b24_commerce\Service\CatalogManager
++   * @var CatalogManager
+    */
+   protected $catalogManager;
+ 
+@@ -227,7 +227,7 @@ class ProductExportBatchForm extends FormBase {
+         ->setInitMessage($this->t('Initializing.'))
+         ->setProgressMessage($this->t('Completed @current of @total.'))
+         ->setErrorMessage($this->t('An error has occurred.'))
+-        ->setFile(drupal_get_path('module', 'b24_commerce') . '/src/Form/ProductExportBatchForm.php');
++        ->setFile(\Drupal::service('extension.list.module')->getPath('b24_commerce') . '/src/Form/ProductExportBatchForm.php');
+ 
+       $stores = array_filter($form_state->getValue('stores'));
+       $stores = array_keys($stores);
+diff --git a/modules/b24_commerce/src/Service/CatalogManager.php b/modules/b24_commerce/src/Service/CatalogManager.php
+index 7ac5d95..77d4f68 100644
+--- a/modules/b24_commerce/src/Service/CatalogManager.php
++++ b/modules/b24_commerce/src/Service/CatalogManager.php
+@@ -1,6 +1,8 @@
+ <?php
+ 
+ namespace Drupal\b24_commerce\Service;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
++use Drupal\field\Entity\FieldConfig;
+ use Drupal\b24\Service\RestManager;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManager;
+@@ -13,20 +15,20 @@ class CatalogManager {
+   /**
+    * Drupal\Core\Entity\EntityTypeManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Drupal\b24\Service\RestManager definition.
+    *
+-   * @var \Drupal\b24\Service\RestManager
++   * @var RestManager
+    */
+   protected $restManager;
+   /**
+    * Drupal\Core\Config\ConfigFactoryInterface definition.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+@@ -94,7 +96,7 @@ class CatalogManager {
+     $section_fields = $settings['section_fields'] ?? [];
+     $vocabularies = [];
+     foreach ($section_fields as $section_field) {
+-      /** @var Drupal\field\Entity\FieldConfig $field */
++      /** @var FieldConfig $field */
+       $field = $this->entityTypeManager->getStorage('field_config')->load($section_field);
+       $vocabularies = array_merge($vocabularies, $field->getSettings()['handler_settings']['target_bundles']);
+     }
+diff --git a/modules/b24_contact/b24_contact.module b/modules/b24_contact/b24_contact.module
+index 4cdc28c..64a3c54 100644
+--- a/modules/b24_contact/b24_contact.module
++++ b/modules/b24_contact/b24_contact.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\contact\Entity\Message;
+ /**
+  * @file
+  * Primary module hooks for b24_contact module.
+@@ -33,7 +34,7 @@ function b24_contact_mail_alter(&$message) {
+     return;
+   }
+ 
+-  /** @var \Drupal\contact\Entity\Message $submission */
++  /** @var Message $submission */
+   $submission = $message['params']['contact_message'];
+ 
+   if ($config->get("{$submission->getContactForm()->id()}.status")) {
+diff --git a/modules/b24_contact/src/Form/SettingsForm.php b/modules/b24_contact/src/Form/SettingsForm.php
+index cc83ab7..52cac72 100644
+--- a/modules/b24_contact/src/Form/SettingsForm.php
++++ b/modules/b24_contact/src/Form/SettingsForm.php
+@@ -17,7 +17,7 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Drupal\b24\Service\RestManager definition.
+    *
+-   * @var \Drupal\b24\Service\RestManager
++   * @var RestManager
+    */
+   protected $b24RestManager;
+ 
+@@ -65,7 +65,7 @@ class SettingsForm extends ConfigFormBase {
+       '#title' => $this->t('Contact form submissions exporting rules'),
+     ];
+ 
+-    /** @var \Drupal\contact\Entity\ContactForm[] $contact_forms */
++    /** @var ContactForm[] $contact_forms */
+     $contact_forms = ContactForm::loadMultiple();
+ 
+     foreach ($contact_forms as $contact_form_id => $contact_form) {
+diff --git a/modules/b24_user/src/EventSubscriber/B24UserEventSubscriber.php b/modules/b24_user/src/EventSubscriber/B24UserEventSubscriber.php
+index 15c785f..ed4293c 100644
+--- a/modules/b24_user/src/EventSubscriber/B24UserEventSubscriber.php
++++ b/modules/b24_user/src/EventSubscriber/B24UserEventSubscriber.php
+@@ -12,7 +12,7 @@ use Drupal\Core\Database\Connection;
+ class B24UserEventSubscriber implements EventSubscriberInterface {
+ 
+   /**
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+diff --git a/modules/b24_user/src/Form/MappingForm.php b/modules/b24_user/src/Form/MappingForm.php
+index 2c209c9..49a14a6 100644
+--- a/modules/b24_user/src/Form/MappingForm.php
++++ b/modules/b24_user/src/Form/MappingForm.php
+@@ -17,7 +17,7 @@ class MappingForm extends ConfigFormBase {
+   /**
+    * Drupal\b24\Service\RestManager definition.
+    *
+-   * @var \Drupal\b24\Service\RestManager
++   * @var RestManager
+    */
+   protected $b24RestManager;
+ 
+diff --git a/modules/b24_user/src/Form/UserExportBatchForm.php b/modules/b24_user/src/Form/UserExportBatchForm.php
+index 6a37898..466ecf5 100644
+--- a/modules/b24_user/src/Form/UserExportBatchForm.php
++++ b/modules/b24_user/src/Form/UserExportBatchForm.php
+@@ -18,19 +18,19 @@ class UserExportBatchForm extends FormBase {
+   /**
+    * Drupal\Core\Entity\EntityTypeManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Batch Builder.
+    *
+-   * @var \Drupal\Core\Batch\BatchBuilder
++   * @var BatchBuilder
+    */
+   protected $batchBuilder;
+ 
+   /**
+-   * @var \Drupal\b24_user\Service\UserManager
++   * @var UserManager
+    */
+   protected $userManager;
+ 
+@@ -105,7 +105,7 @@ class UserExportBatchForm extends FormBase {
+       ->setInitMessage($this->t('Initializing.'))
+       ->setProgressMessage($this->t('Completed @current of @total.'))
+       ->setErrorMessage($this->t('An error has occurred.'))
+-      ->setFile(drupal_get_path('module', 'b24_user') . '/src/Form/UserExportBatchForm.php');
++      ->setFile(\Drupal::service('extension.list.module')->getPath('b24_user') . '/src/Form/UserExportBatchForm.php');
+ 
+     $this->existingUsers = $this->userManager->getExistingUsers();
+ 
+diff --git a/modules/b24_user/src/Form/UserImportBatchForm.php b/modules/b24_user/src/Form/UserImportBatchForm.php
+index 08eaf46..ae6a8d7 100644
+--- a/modules/b24_user/src/Form/UserImportBatchForm.php
++++ b/modules/b24_user/src/Form/UserImportBatchForm.php
+@@ -16,24 +16,24 @@ use Drupal\Core\Batch\BatchBuilder;
+ class UserImportBatchForm extends FormBase {
+ 
+   /**
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+-   * @var \Drupal\b24\Service\RestManager
++   * @var RestManager
+    */
+   protected $b24restManager;
+ 
+   /**
+    * Batch Builder.
+    *
+-   * @var \Drupal\Core\Batch\BatchBuilder
++   * @var BatchBuilder
+    */
+   protected $batchBuilder;
+ 
+   /**
+-   * @var \Drupal\b24_user\Service\UserManager
++   * @var UserManager
+    */
+   protected $userManager;
+ 
+@@ -122,7 +122,7 @@ class UserImportBatchForm extends FormBase {
+       ->setInitMessage($this->t('Initializing users import.'))
+       ->setProgressMessage($this->t('Completed @current of @total.'))
+       ->setErrorMessage($this->t('An error has occurred.'))
+-      ->setFile(drupal_get_path('module', 'b24_user') . '/src/Form/UserImportBatchForm.php');
++      ->setFile(\Drupal::service('extension.list.module')->getPath('b24_user') . '/src/Form/UserImportBatchForm.php');
+ 
+     $this->existingUsers = $this->userManager->getExistingUsers();
+ 
+diff --git a/modules/b24_user/src/Service/UserManager.php b/modules/b24_user/src/Service/UserManager.php
+index 2e2a0fd..ee3e0a6 100644
+--- a/modules/b24_user/src/Service/UserManager.php
++++ b/modules/b24_user/src/Service/UserManager.php
+@@ -17,7 +17,7 @@ class UserManager {
+   /**
+    * Drupal\Core\Config\ConfigFactoryInterface definition.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+@@ -37,24 +37,24 @@ class UserManager {
+   /**
+    * Drupal\b24\Service\RestManager definition.
+    *
+-   * @var \Drupal\b24\Service\RestManager
++   * @var RestManager
+    */
+   protected $restManager;
+ 
+   /**
+    * Drupal\Core\Entity\EntityTypeManagerInterface definition.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $token;
+ 
+   /**
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+@@ -89,7 +89,7 @@ class UserManager {
+ 
+   public function processUser($id, $update = FALSE) {
+     $storage = $this->entityTypeManager->getStorage('user');
+-    /** @var \Drupal\user\Entity\User $user */
++    /** @var User $user */
+     $user = $storage->load($id);
+     if (array_key_exists($user->id(), $this->existing) && !$update) {
+       return;
+diff --git a/modules/b24_webform/b24_webform.module b/modules/b24_webform/b24_webform.module
+index c14e3ac..365f641 100644
+--- a/modules/b24_webform/b24_webform.module
++++ b/modules/b24_webform/b24_webform.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\webform\Entity\WebformSubmission;
+ /**
+  * @file
+  * Contains b24_webform.module.
+@@ -26,7 +27,7 @@ function b24_webform_help($route_name, RouteMatchInterface $route_match) {
+ /**
+  * Implements hook_ENTITY_TYPE_insert().
+  */
+-function b24_webform_webform_submission_insert(Drupal\webform\Entity\WebformSubmission $submission) {
++function b24_webform_webform_submission_insert(WebformSubmission $submission) {
+   $webform = $submission->getWebform();
+   $config = \Drupal::config('b24_webform.settings');
+   if ($config->get("{$webform->id()}.status")) {
+diff --git a/modules/b24_webform/src/Form/SettingsForm.php b/modules/b24_webform/src/Form/SettingsForm.php
+index 21f3487..bc2a6d9 100644
+--- a/modules/b24_webform/src/Form/SettingsForm.php
++++ b/modules/b24_webform/src/Form/SettingsForm.php
+@@ -17,7 +17,7 @@ class SettingsForm extends ConfigFormBase {
+   /**
+    * Drupal\b24\Service\RestManager definition.
+    *
+-   * @var \Drupal\b24\Service\RestManager
++   * @var RestManager
+    */
+   protected $b24RestManager;
+ 
+diff --git a/src/Controller/Auth.php b/src/Controller/Auth.php
+index 433ba76..e869162 100644
+--- a/src/Controller/Auth.php
++++ b/src/Controller/Auth.php
+@@ -18,19 +18,19 @@ class Auth extends ControllerBase {
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $config;
+ 
+   protected $config_editable;
+ 
+   /**
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+diff --git a/src/Event/B24Event.php b/src/Event/B24Event.php
+index fc65775..a2f9f9c 100644
+--- a/src/Event/B24Event.php
++++ b/src/Event/B24Event.php
+@@ -2,12 +2,10 @@
+ 
+ namespace Drupal\b24\Event;
+ 
+-use Symfony\Component\EventDispatcher\Event;
+-
+ /**
+  * Defines the Bitrix24 entity event.
+  */
+-class B24Event extends Event {
++class B24Event extends \Symfony\Contracts\EventDispatcher\Event {
+ 
+   /**
+    * Name of the event fired after adding a new Bitrix24 entity.
+diff --git a/src/Form/CredentialsForm.php b/src/Form/CredentialsForm.php
+index 1b3e40e..6a06275 100644
+--- a/src/Form/CredentialsForm.php
++++ b/src/Form/CredentialsForm.php
+@@ -17,12 +17,12 @@ use Drupal\Core\State\State;
+ class CredentialsForm extends ConfigFormBase {
+ 
+   /**
+-   * @var \Drupal\b24\Service\RestManager
++   * @var RestManager
+    */
+   protected $restManager;
+ 
+   /**
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+diff --git a/src/Form/DefaultSettingsForm.php b/src/Form/DefaultSettingsForm.php
+index 8f4cc07..b94e4d1 100644
+--- a/src/Form/DefaultSettingsForm.php
++++ b/src/Form/DefaultSettingsForm.php
+@@ -14,7 +14,7 @@ use Symfony\Component\HttpFoundation\RequestStack;
+ class DefaultSettingsForm extends ConfigFormBase {
+ 
+   /**
+-   * @var \Drupal\b24\Service\RestManager
++   * @var RestManager
+    */
+   protected $restManager;
+ 
+diff --git a/src/Service/RestManager.php b/src/Service/RestManager.php
+index 055f74b..60e6673 100644
+--- a/src/Service/RestManager.php
++++ b/src/Service/RestManager.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\b24\Service;
+ 
++use Drupal\Core\Messenger\MessengerInterface;
+ use GuzzleHttp\Exception\ClientException;
+ use Drupal\Core\Url;
+ use Drupal\user\Entity\User;
+@@ -42,36 +43,36 @@ class RestManager {
+   /**
+    * The messenger.
+    *
+-   * @var \Drupal\Core\Messenger\MessengerInterface
++   * @var MessengerInterface
+    */
+   protected $messenger;
+ 
+   /**
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $config;
+ 
+   /**
+    * The request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $requestStack;
+ 
+   /**
+-   * @var \Drupal\Core\State\State
++   * @var State
+    */
+   protected $state;
+ 
+   /**
+-   * @var \Drupal\Core\Logger\LoggerChannelFactory $logger
++   * @var LoggerChannelFactory $logger
+    */
+   protected $logger;
+ 
+   /**
+    * An http client.
+    *
+-   * @var \GuzzleHttp\ClientInterface
++   * @var ClientInterface
+    */
+   protected $httpClient;
+ 
+@@ -83,19 +84,19 @@ class RestManager {
+   /**
+    * The event dispatcher.
+    *
+-   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
++   * @var EventDispatcherInterface
+    */
+   protected $eventDispatcher;
+ 
+   /**
+-   * @var \Drupal\Core\Database\Connection
++   * @var Connection
+    */
+   protected $database;
+ 
+   /**
+    * Constructs a restmanager object.
+    *
+-   * @param \Drupal\Core\Messenger\MessengerInterface $messenger
++   * @param MessengerInterface $messenger
+    *   The messenger.
+    */
+   public function __construct(
+@@ -227,7 +228,7 @@ class RestManager {
+         ]
+       );
+       $event = new B24Event($b24_entity_name, 'insert', $response);
+-      $this->eventDispatcher->dispatch(B24Event::ENTITY_INSERT, $event);
++      $this->eventDispatcher->dispatch($event, B24Event::ENTITY_INSERT);
+     }
+     return $ext_id;
+   }
+@@ -264,7 +265,7 @@ class RestManager {
+     $this->moduleHandler->alter('b24_push', $fields, $context);
+     $response = $this->get("crm.{$b24_entity_name}.update", ['id' => $id,'fields' => $fields, 'params' => $params]);
+     $event = new B24Event($b24_entity_name, 'update', $response);
+-    $this->eventDispatcher->dispatch(B24Event::ENTITY_UPDATE, $event);
++    $this->eventDispatcher->dispatch($event, B24Event::ENTITY_UPDATE);
+     return $response;
+   }
+ 
+@@ -347,7 +348,7 @@ class RestManager {
+   }
+ 
+   /**
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *  A Drupal entity earlier exported to Bitrix24
+    * @param string $ext_type
+    *  Bitrix24 entity machine_name
+@@ -372,7 +373,7 @@ class RestManager {
+   }
+ 
+   /**
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *  A Drupal entity earlier exported to Bitrix24
+    * @param string $ext_type
+    *  Bitrix24 entity machine_name
+@@ -413,7 +414,7 @@ class RestManager {
+     }
+     $response = $this->get("crm.{$b24_entity_name}.delete", ['id' => $id]);
+     $event = new B24Event($b24_entity_name, 'delete', $response);
+-    $this->eventDispatcher->dispatch(B24Event::ENTITY_DELETE, $event);
++    $this->eventDispatcher->dispatch($event, B24Event::ENTITY_DELETE);
+     $result = $response['result'] ?? FALSE;
+     return $result;
+   }

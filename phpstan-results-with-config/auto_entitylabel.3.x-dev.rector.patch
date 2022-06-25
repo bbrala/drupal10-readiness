@@ -1,0 +1,873 @@
+diff --git a/auto_entitylabel.info.yml b/auto_entitylabel.info.yml
+index 281aab0..6aeb2b7 100644
+--- a/auto_entitylabel.info.yml
++++ b/auto_entitylabel.info.yml
+@@ -2,5 +2,4 @@ name: Automatic Entity Labels
+ description: Allows hiding of entity label fields and automatic label creation.
+ package: Entity
+ type: module
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.1 || ^10
+diff --git a/auto_entitylabel.install b/auto_entitylabel.install
+index 79e87a2..7034d75 100644
+--- a/auto_entitylabel.install
++++ b/auto_entitylabel.install
+@@ -1,5 +1,10 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityTypeManager;
++use Drupal\Core\Config\Config;
++use Drupal\Core\Config\Entity\ConfigEntityType;
++use Drupal\Core\Config\ConfigFactory;
++use Drupal\Core\Config\Entity\ConfigEntityTypeInterface;
+ /**
+  * @file
+  * Install, update and uninstall functions for the Automatic Entity Labels.
+@@ -22,16 +27,16 @@ function auto_entitylabel_update_8001() {
+  * Split a single configuration into separate configs.
+  */
+ function auto_entitylabel_update_8201() {
+-  /** @var \Drupal\Core\Entity\EntityTypeManager $entity_type_manager */
++  /** @var EntityTypeManager $entity_type_manager */
+   $entity_type_manager = \Drupal::entityTypeManager();
+ 
+-  /** @var \Drupal\Core\Config\Config $old_config */
++  /** @var Config $old_config */
+   $old_config = \Drupal::configFactory()
+     ->getEditable('auto_entitylabel.settings');
+   $raw = $old_config->getRawData();
+ 
+   $entity_types = [];
+-  /** @var \Drupal\Core\Config\Entity\ConfigEntityType $entity_type */
++  /** @var ConfigEntityType $entity_type */
+   foreach ($entity_type_manager->getDefinitions() as $entity_type_id => $entity_type) {
+     if ($entity_type->getLinkTemplate('auto-label')) {
+       $entity_types[] = $entity_type_id;
+@@ -59,11 +64,11 @@ function auto_entitylabel_update_8201() {
+     }
+   }
+ 
+-  /** @var \Drupal\Core\Config\ConfigFactory $config_interface */
++  /** @var ConfigFactory $config_interface */
+   $config_interface = \Drupal::service('config.factory');
+ 
+   foreach ($new_configs as $type => $type_configs) {
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityTypeInterface $entityType */
++    /** @var ConfigEntityTypeInterface $entityType */
+     $entityType = $entity_type_manager->getStorage($type)->getEntityType();
+     $prefix = $entityType->getConfigPrefix();
+     $type = $entity_type_manager->getStorage($type)->getEntityType()->getProvider();
+diff --git a/auto_entitylabel.module b/auto_entitylabel.module
+index 2d2b8d9..ce139fd 100644
+--- a/auto_entitylabel.module
++++ b/auto_entitylabel.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityTypeInterface;
+ /**
+  * @file
+  * Allows hiding of entity label fields and automatic label creation.
+@@ -40,7 +41,7 @@ function auto_entitylabel_help($route_name, RouteMatchInterface $route_match) {
+  * Adds the Auto Label tab to the entity configuration page.
+  */
+ function auto_entitylabel_entity_type_alter(array &$entity_types) {
+-  /** @var \Drupal\Core\Entity\EntityTypeInterface $entity_type */
++  /** @var EntityTypeInterface $entity_type */
+   foreach ($entity_types as $entity_type) {
+     if ($entity_type->getBundleOf() && $entity_type->hasLinkTemplate('edit-form')) {
+       $entity_type->setLinkTemplate('auto-label', $entity_type->getLinkTemplate('edit-form') . "/auto-label");
+@@ -52,7 +53,7 @@ function auto_entitylabel_entity_type_alter(array &$entity_types) {
+  * Implements hook_form_alter().
+  */
+ function auto_entitylabel_form_alter(&$form, FormStateInterface $form_state) {
+-  /** @var \Drupal\Core\Entity\EntityFormInterface $formObject */
++  /** @var EntityFormInterface $formObject */
+   $formObject = $form_state->getFormObject();
+   if ($formObject instanceof EntityFormInterface) {
+     $entity = $formObject->getEntity();
+@@ -88,7 +89,7 @@ function auto_entitylabel_inline_entity_label_callback($entity, $variables) {
+   $autolabel = $entity->label();
+   if ($entity instanceof ContentEntityInterface) {
+     $decorator = \Drupal::service('auto_entitylabel.entity_decorator');
+-    /** @var \Drupal\auto_entitylabel\AutoEntityLabelManager $decorated_entity */
++    /** @var AutoEntityLabelManager $decorated_entity */
+     $decorated_entity = $decorator->decorate($entity);
+     if ($decorated_entity->hasLabel() && $decorated_entity->autoLabelNeeded()) {
+       $autolabel = $decorated_entity->setLabel();
+@@ -104,13 +105,13 @@ function auto_entitylabel_inline_entity_label_callback($entity, $variables) {
+  *
+  * @param array $form
+  *   Form array.
+- * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++ * @param ContentEntityInterface $entity
+  *   The entity which title will be replaced.
+  */
+ function auto_entitylabel_prepare_entityform(array &$form, ContentEntityInterface $entity) {
+   if (empty($form['#auto_entitylabel_processed'])) {
+     $decorator = \Drupal::service('auto_entitylabel.entity_decorator');
+-    /** @var \Drupal\auto_entitylabel\AutoEntityLabelManager $entity */
++    /** @var AutoEntityLabelManager $entity */
+     $entity = $decorator->decorate($entity);
+     $label = $entity->getLabelName();
+     $widget = &$form[$label]['widget'][0];
+@@ -150,7 +151,7 @@ function auto_entitylabel_entity_prepare_view($entity_type_id, array $entities,
+   foreach ($entities as $entity) {
+     if (isset($entity->in_preview) && $entity->in_preview === TRUE && $entity instanceof ContentEntityInterface) {
+       $decorator = \Drupal::service('auto_entitylabel.entity_decorator');
+-      /** @var \Drupal\auto_entitylabel\AutoEntityLabelManager $decorated_entity */
++      /** @var AutoEntityLabelManager $decorated_entity */
+       $decorated_entity = $decorator->decorate($entity);
+ 
+       if ($decorated_entity->hasLabel() && $decorated_entity->autoLabelNeeded()) {
+@@ -166,7 +167,7 @@ function auto_entitylabel_entity_prepare_view($entity_type_id, array $entities,
+ function auto_entitylabel_entity_presave(EntityInterface $entity) {
+   if ($entity instanceof ContentEntityInterface) {
+     $decorator = \Drupal::service('auto_entitylabel.entity_decorator');
+-    /** @var \Drupal\auto_entitylabel\AutoEntityLabelManager $decorated_entity */
++    /** @var AutoEntityLabelManager $decorated_entity */
+     $decorated_entity = $decorator->decorate($entity);
+     if ($decorated_entity->hasLabel() && $decorated_entity->autoLabelNeeded()
+       && !$decorated_entity->isTitlePreserved()) {
+@@ -181,7 +182,7 @@ function auto_entitylabel_entity_presave(EntityInterface $entity) {
+ function auto_entitylabel_entity_insert(EntityInterface $entity) {
+   if ($entity instanceof ContentEntityInterface) {
+     $decorator = \Drupal::service('auto_entitylabel.entity_decorator');
+-    /** @var \Drupal\auto_entitylabel\AutoEntityLabelManager $decorated_entity */
++    /** @var AutoEntityLabelManager $decorated_entity */
+     $decorated_entity = $decorator->decorate($entity);
+     if ($decorated_entity->hasLabel()
+       && (
+diff --git a/src/AutoEntityLabelManager.php b/src/AutoEntityLabelManager.php
+index eb5ab60..a520204 100644
+--- a/src/AutoEntityLabelManager.php
++++ b/src/AutoEntityLabelManager.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\auto_entitylabel;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Drupal\Core\Entity\EntityTypeInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\Render\BubbleableMetadata;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+@@ -40,7 +42,7 @@ class AutoEntityLabelManager implements AutoEntityLabelManagerInterface {
+   /**
+    * The content entity.
+    *
+-   * @var \Drupal\Core\Entity\ContentEntityInterface
++   * @var ContentEntityInterface
+    */
+   protected $entity;
+ 
+@@ -75,50 +77,50 @@ class AutoEntityLabelManager implements AutoEntityLabelManagerInterface {
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Token service.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $token;
+ 
+   /**
+    * Module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+   /**
+    * Automatic label configuration.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   protected $config;
+ 
+   /**
+    * Constructs an AutoEntityLabelManager object.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   The entity to add the automatic label to.
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Configuration factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   Token manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   Module handler.
+    */
+   public function __construct(
+@@ -148,7 +150,7 @@ class AutoEntityLabelManager implements AutoEntityLabelManagerInterface {
+    *   True if the entity has a label property.
+    */
+   public function hasLabel() {
+-    /** @var \Drupal\Core\Entity\EntityTypeInterface $definition */
++    /** @var EntityTypeInterface $definition */
+     $definition = $this->entityTypeManager
+       ->getDefinition($this->entity->getEntityTypeId());
+     return $definition->hasKey('label');
+diff --git a/src/AutoEntityLabelPermissionController.php b/src/AutoEntityLabelPermissionController.php
+index 1e3479c..e608fb2 100644
+--- a/src/AutoEntityLabelPermissionController.php
++++ b/src/AutoEntityLabelPermissionController.php
+@@ -17,14 +17,14 @@ class AutoEntityLabelPermissionController implements ContainerInjectionInterface
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a new AutoEntityLabelPermissionController instance.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/EntityDecorator.php b/src/EntityDecorator.php
+index f368539..824fc28 100644
+--- a/src/EntityDecorator.php
++++ b/src/EntityDecorator.php
+@@ -16,28 +16,28 @@ class EntityDecorator implements EntityDecoratorInterface {
+   /**
+    * Config factory.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Token service.
+    *
+-   * @var \Drupal\Core\Utility\Token
++   * @var Token
+    */
+   protected $token;
+ 
+   /**
+    * Module handler service.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   protected $moduleHandler;
+ 
+@@ -51,13 +51,13 @@ class EntityDecorator implements EntityDecoratorInterface {
+   /**
+    * Constructs an EntityDecorator object.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Configuration factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   Entity type manager.
+-   * @param \Drupal\Core\Utility\Token $token
++   * @param Token $token
+    *   Token manager.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
++   * @param ModuleHandlerInterface $module_handler
+    *   Module handler service.
+    */
+   public function __construct(
+diff --git a/src/EntityDecoratorInterface.php b/src/EntityDecoratorInterface.php
+index 4f802f6..712781c 100644
+--- a/src/EntityDecoratorInterface.php
++++ b/src/EntityDecoratorInterface.php
+@@ -12,10 +12,10 @@ interface EntityDecoratorInterface {
+   /**
+    * Automatic entity label entity decorator.
+    *
+-   * @param \Drupal\Core\Entity\ContentEntityInterface $entity
++   * @param ContentEntityInterface $entity
+    *   Entity.
+    *
+-   * @return \Drupal\auto_entitylabel\AutoEntityLabelManager|\Drupal\Core\Entity\ContentEntityInterface
++   * @return AutoEntityLabelManager|ContentEntityInterface
+    *   Return Content Entity Interface.
+    */
+   public function decorate(ContentEntityInterface $entity);
+diff --git a/src/Form/AutoEntityLabelForm.php b/src/Form/AutoEntityLabelForm.php
+index 4a2ad58..c538230 100644
+--- a/src/Form/AutoEntityLabelForm.php
++++ b/src/Form/AutoEntityLabelForm.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\auto_entitylabel\Form;
+ 
++use Drupal\Core\Config\Entity\ConfigEntityStorage;
++use Drupal\Core\Config\Entity\ConfigEntityType;
+ use Drupal\auto_entitylabel\AutoEntityLabelManager;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -25,35 +27,35 @@ class AutoEntityLabelForm extends ConfigFormBase {
+    * directly. See \Drupal\Core\Form\ConfigFormBase::config() for an example of
+    * this.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * The entity type manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * The route matcher.
+    *
+-   * @var \Drupal\Core\Routing\RouteMatchInterface
++   * @var RouteMatchInterface
+    */
+   protected $routeMatch;
+ 
+   /**
+    * Module handler.
+    *
+-   * @var \Drupal\Core\Extension\ModuleHandlerInterface
++   * @var ModuleHandlerInterface
+    */
+   private $moduleHandler;
+ 
+   /**
+    * User.
+    *
+-   * @var \Drupal\Core\Session\AccountInterface
++   * @var AccountInterface
+    */
+   private $user;
+ 
+@@ -81,15 +83,15 @@ class AutoEntityLabelForm extends ConfigFormBase {
+   /**
+    * AutoEntityLabelController constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   Config Factory.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+-   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
++   * @param RouteMatchInterface $route_match
+    *   Route Match.
+-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $moduleHandler
++   * @param ModuleHandlerInterface $moduleHandler
+    *   Module Handler.
+-   * @param \Drupal\Core\Session\AccountInterface $user
++   * @param AccountInterface $user
+    *   Account Interface.
+    */
+   public function __construct(
+@@ -296,9 +298,9 @@ class AutoEntityLabelForm extends ConfigFormBase {
+       $config->set($key, $form_state->getValue($key));
+     }
+ 
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityStorage $storage */
++    /** @var ConfigEntityStorage $storage */
+     $storage = $this->entityTypeManager->getStorage($this->entityType);
+-    /** @var \Drupal\Core\Config\Entity\ConfigEntityType $entity_type */
++    /** @var ConfigEntityType $entity_type */
+     $entity_type = $storage->getEntityType();
+     $prefix = $entity_type->getConfigPrefix();
+     $bundle = $entity_type->getBundleOf();
+diff --git a/src/Plugin/Derivative/AutoEntityLabelConfigTask.php b/src/Plugin/Derivative/AutoEntityLabelConfigTask.php
+index d5f4f41..4e8e3ec 100644
+--- a/src/Plugin/Derivative/AutoEntityLabelConfigTask.php
++++ b/src/Plugin/Derivative/AutoEntityLabelConfigTask.php
+@@ -18,14 +18,14 @@ class AutoEntityLabelConfigTask extends DeriverBase implements ContainerDeriverI
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Creates an FieldUiLocalTask object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Plugin/Validation/EntityLabelNotNullConstraintValidator.php b/src/Plugin/Validation/EntityLabelNotNullConstraintValidator.php
+index 50d3e15..21d406b 100644
+--- a/src/Plugin/Validation/EntityLabelNotNullConstraintValidator.php
++++ b/src/Plugin/Validation/EntityLabelNotNullConstraintValidator.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\auto_entitylabel\Plugin\Validation;
+ 
++use Drupal\auto_entitylabel\AutoEntityLabelManager;
+ use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Drupal\Core\Validation\Plugin\Validation\Constraint\NotNullConstraintValidator;
+ use Drupal\Core\Field\FieldItemList;
+@@ -20,14 +21,14 @@ class EntityLabelNotNullConstraintValidator extends NotNullConstraintValidator i
+   /**
+    * The entity decorator service.
+    *
+-   * @var \Drupal\auto_entitylabel\EntityDecorator
++   * @var EntityDecorator
+    */
+   protected $entityDecorator;
+ 
+   /**
+    * Creates an EntityLabelNotNullConstraintValidator object.
+    *
+-   * @param \Drupal\auto_entitylabel\EntityDecorator $entityDecorator
++   * @param EntityDecorator $entityDecorator
+    *   The entity decorator service.
+    */
+   public function __construct(EntityDecorator $entityDecorator) {
+@@ -48,7 +49,7 @@ class EntityLabelNotNullConstraintValidator extends NotNullConstraintValidator i
+     $typed_data = $this->getTypedData();
+     if ($typed_data instanceof FieldItemList && $typed_data->isEmpty()) {
+       $entity = $typed_data->getEntity();
+-      /** @var \Drupal\auto_entitylabel\AutoEntityLabelManager $decorated_entity */
++      /** @var AutoEntityLabelManager $decorated_entity */
+       $decorated_entity = $this->entityDecorator->decorate($entity);
+ 
+       if ($decorated_entity->hasLabel() && $decorated_entity->autoLabelNeeded()) {
+diff --git a/src/Routing/RouteEnhancer.php b/src/Routing/RouteEnhancer.php
+index 3ecabcc..98c06d3 100644
+--- a/src/Routing/RouteEnhancer.php
++++ b/src/Routing/RouteEnhancer.php
+@@ -19,14 +19,14 @@ class RouteEnhancer implements EnhancerInterface {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a RouteEnhancer object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager service.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+diff --git a/src/Routing/RouteSubscriber.php b/src/Routing/RouteSubscriber.php
+index 7312548..c33cc87 100644
+--- a/src/Routing/RouteSubscriber.php
++++ b/src/Routing/RouteSubscriber.php
+@@ -17,14 +17,14 @@ class RouteSubscriber extends RouteSubscriberBase {
+   /**
+    * The entity type manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * Constructs a new RouteSubscriber object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+@@ -45,10 +45,10 @@ class RouteSubscriber extends RouteSubscriberBase {
+   /**
+    * Gets the Entity Auto Label route.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type.
+    *
+-   * @return \Symfony\Component\Routing\Route|null
++   * @return Route|null
+    *   The generated route, if available.
+    */
+   protected function getEntityLabelRoute(EntityTypeInterface $entity_type) {
+diff --git a/tests/src/Functional/PrefilledOptionTest.php b/tests/src/Functional/PrefilledOptionTest.php
+index fce3f7c..943c7d2 100644
+--- a/tests/src/Functional/PrefilledOptionTest.php
++++ b/tests/src/Functional/PrefilledOptionTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\auto_entitylabel\Functional;
+ 
++use Drupal\node\Entity\NodeType;
++use Drupal\Core\Config\ConfigFactoryInterface;
++use Drupal\user\Entity\User;
+ use Drupal\auto_entitylabel\AutoEntityLabelManager;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -16,21 +19,21 @@ class PrefilledOptionTest extends BrowserTestBase {
+   /**
+    * Node type.
+    *
+-   * @var \Drupal\node\Entity\NodeType
++   * @var NodeType
+    */
+   protected $nodeType;
+ 
+   /**
+    * Config factory service variable.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * User variable.
+    *
+-   * @var bool|\Drupal\user\Entity\User|false
++   * @var bool|User|false
+    */
+   protected $user;
+ 
+@@ -56,7 +59,7 @@ class PrefilledOptionTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->user = $this->drupalCreateUser([], '', TRUE);
+diff --git a/tests/src/Functional/PreserveTitlesOptionTest.php b/tests/src/Functional/PreserveTitlesOptionTest.php
+index 684b036..6417983 100644
+--- a/tests/src/Functional/PreserveTitlesOptionTest.php
++++ b/tests/src/Functional/PreserveTitlesOptionTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\auto_entitylabel\Functional;
+ 
++use Drupal\node\Entity\NodeType;
++use Drupal\Core\Config\ConfigFactoryInterface;
++use Drupal\user\Entity\User;
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\auto_entitylabel\AutoEntityLabelManager;
+ use Drupal\Tests\BrowserTestBase;
+ 
+@@ -16,28 +20,28 @@ class PreserveTitlesOptionTest extends BrowserTestBase {
+   /**
+    * Node type.
+    *
+-   * @var \Drupal\node\Entity\NodeType
++   * @var NodeType
+    */
+   protected $nodeType;
+ 
+   /**
+    * Config factory service variable.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * User variable.
+    *
+-   * @var bool|\Drupal\user\Entity\User|false
++   * @var bool|User|false
+    */
+   protected $user;
+ 
+   /**
+    * Node storage variable.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $nodeStorage;
+ 
+@@ -63,7 +67,7 @@ class PreserveTitlesOptionTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->user = $this->drupalCreateUser([], '', TRUE);
+diff --git a/tests/src/FunctionalJavascript/AutoEntityLabelBatchTest.php b/tests/src/FunctionalJavascript/AutoEntityLabelBatchTest.php
+index 3fe2c82..290b9d4 100644
+--- a/tests/src/FunctionalJavascript/AutoEntityLabelBatchTest.php
++++ b/tests/src/FunctionalJavascript/AutoEntityLabelBatchTest.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Drupal\Tests\auto_entitylabel\FunctionalJavascript;
+ 
++use Drupal\node\Entity\NodeType;
++use Drupal\Core\Config\ConfigFactoryInterface;
++use Drupal\user\Entity\User;
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\FunctionalJavascriptTests\WebDriverTestBase;
+ 
+ /**
+@@ -16,28 +20,28 @@ class AutoEntityLabelBatchTest extends WebDriverTestBase {
+   /**
+    * Node type.
+    *
+-   * @var \Drupal\node\Entity\NodeType
++   * @var NodeType
+    */
+   protected $nodeType;
+ 
+   /**
+    * Config factory service variable.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+   /**
+    * User variable.
+    *
+-   * @var bool|\Drupal\user\Entity\User|false
++   * @var bool|User|false
+    */
+   protected $user;
+ 
+   /**
+    * Node storage variable.
+    *
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $nodeStorage;
+ 
+@@ -63,7 +67,7 @@ class AutoEntityLabelBatchTest extends WebDriverTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->user = $this->drupalCreateUser([], '', TRUE);
+@@ -102,7 +106,7 @@ class AutoEntityLabelBatchTest extends WebDriverTestBase {
+       'save' => TRUE,
+       'chunk' => 5,
+     ];
+-    $this->drupalPostForm(NULL, $edit, 'Save configuration');
++    $this->submitForm($edit, 'Save configuration');
+     $webAssert->assertWaitOnAjaxRequest();
+     $webAssert->pageTextContains('The configuration options have been saved.');
+     $webAssert->pageTextContains('Resaved 10 labels.');
+diff --git a/tests/src/Kernel/AutoEntityLabelFormTest.php b/tests/src/Kernel/AutoEntityLabelFormTest.php
+index 904bae1..c69af8b 100644
+--- a/tests/src/Kernel/AutoEntityLabelFormTest.php
++++ b/tests/src/Kernel/AutoEntityLabelFormTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\auto_entitylabel\Kernel;
+ 
++use PHPUnit\Framework\MockObject\MockObject;
++use Drupal\node\Entity\NodeType;
++use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\auto_entitylabel\AutoEntityLabelManager;
+ use Drupal\auto_entitylabel\Form\AutoEntityLabelForm;
+ use Drupal\Core\Form\FormState;
+@@ -31,21 +34,21 @@ class AutoEntityLabelFormTest extends EntityKernelTestBase {
+   /**
+    * Mocked RouteMatch service.
+    *
+-   * @var \PHPUnit\Framework\MockObject\MockObject
++   * @var MockObject
+    */
+   protected $mockRouteMatch;
+ 
+   /**
+    * Node type.
+    *
+-   * @var \Drupal\node\Entity\NodeType
++   * @var NodeType
+    */
+   protected $nodeType;
+ 
+   /**
+    * Config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+@@ -64,7 +67,7 @@ class AutoEntityLabelFormTest extends EntityKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->configFactory = $this->container->get('config.factory');
+@@ -76,7 +79,7 @@ class AutoEntityLabelFormTest extends EntityKernelTestBase {
+ 
+     $this->installConfig(self::$modules);
+ 
+-    $this->mockRouteMatch = $this->getMockBuilder(RouteMatchInterface::class)->disableOriginalConstructor()->getMock();
++    $this->mockRouteMatch = $this->createMock(RouteMatchInterface::class);
+     $this->mockRouteMatch->method('getRouteObject')->willReturn(new Route(
+       '/admin/structure/types/manage/{node_type}/auto-label',
+       [
+diff --git a/tests/src/Kernel/AutoEntityLabelManagerTest.php b/tests/src/Kernel/AutoEntityLabelManagerTest.php
+index 031e3ff..02c73c1 100644
+--- a/tests/src/Kernel/AutoEntityLabelManagerTest.php
++++ b/tests/src/Kernel/AutoEntityLabelManagerTest.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\Tests\auto_entitylabel\Kernel;
+ 
++use Drupal\node\Entity\NodeType;
++use Drupal\Core\Config\ConfigFactoryInterface;
++use Drupal\node\NodeInterface;
+ use Drupal\auto_entitylabel\AutoEntityLabelManager;
+ use Drupal\KernelTests\Core\Entity\EntityKernelTestBase;
+ use Drupal\Tests\node\Traits\ContentTypeCreationTrait;
+@@ -22,14 +25,14 @@ class AutoEntityLabelManagerTest extends EntityKernelTestBase {
+   /**
+    * Node type.
+    *
+-   * @var \Drupal\node\Entity\NodeType
++   * @var NodeType
+    */
+   protected $nodeType;
+ 
+   /**
+    * Config factory service.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+@@ -43,7 +46,7 @@ class AutoEntityLabelManagerTest extends EntityKernelTestBase {
+   /**
+    * Node entity.
+    *
+-   * @var \Drupal\node\NodeInterface
++   * @var NodeInterface
+    */
+   protected $entity;
+ 
+@@ -64,7 +67,7 @@ class AutoEntityLabelManagerTest extends EntityKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installEntitySchema('node');
+diff --git a/tests/src/Kernel/AutoEntityLabelPermissionControllerTest.php b/tests/src/Kernel/AutoEntityLabelPermissionControllerTest.php
+index 1c86bbc..e87c983 100644
+--- a/tests/src/Kernel/AutoEntityLabelPermissionControllerTest.php
++++ b/tests/src/Kernel/AutoEntityLabelPermissionControllerTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\auto_entitylabel\Kernel;
+ 
++use Drupal\node\Entity\NodeType;
+ use Drupal\auto_entitylabel\AutoEntityLabelPermissionController;
+ use Drupal\KernelTests\Core\Entity\EntityKernelTestBase;
+ use Drupal\Tests\node\Traits\ContentTypeCreationTrait;
+@@ -18,7 +19,7 @@ class AutoEntityLabelPermissionControllerTest extends EntityKernelTestBase {
+   /**
+    * Node type.
+    *
+-   * @var \Drupal\node\Entity\NodeType
++   * @var NodeType
+    */
+   protected $nodeType;
+ 
+@@ -44,7 +45,7 @@ class AutoEntityLabelPermissionControllerTest extends EntityKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installEntitySchema('node');
+diff --git a/tests/src/Kernel/AutoEntityLabelTest.php b/tests/src/Kernel/AutoEntityLabelTest.php
+index 0816733..1c84236 100644
+--- a/tests/src/Kernel/AutoEntityLabelTest.php
++++ b/tests/src/Kernel/AutoEntityLabelTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\auto_entitylabel\Kernel;
+ 
++use Drupal\node\Entity\NodeType;
++use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\auto_entitylabel\AutoEntityLabelManager;
+ use Drupal\KernelTests\Core\Entity\EntityKernelTestBase;
+ use Drupal\Tests\node\Traits\ContentTypeCreationTrait;
+@@ -22,14 +24,14 @@ class AutoEntityLabelTest extends EntityKernelTestBase {
+   /**
+    * Node type.
+    *
+-   * @var \Drupal\node\Entity\NodeType
++   * @var NodeType
+    */
+   protected $nodeType;
+ 
+   /**
+    * Config factory service variable.
+    *
+-   * @var \Drupal\Core\Config\ConfigFactoryInterface
++   * @var ConfigFactoryInterface
+    */
+   protected $configFactory;
+ 
+@@ -50,7 +52,7 @@ class AutoEntityLabelTest extends EntityKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installEntitySchema('node');

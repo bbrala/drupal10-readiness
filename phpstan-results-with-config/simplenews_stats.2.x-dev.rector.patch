@@ -1,0 +1,860 @@
+diff --git a/simplenews_stats.install b/simplenews_stats.install
+index 684a488..eeccb9a 100644
+--- a/simplenews_stats.install
++++ b/simplenews_stats.install
+@@ -1,5 +1,9 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityFieldManager;
++use Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface;
++use Drupal\Core\Database\Database;
++use Drupal\views\Entity\View;
+ /**
+  * @file
+  * Install file of simplenews stats module.
+@@ -59,10 +63,10 @@ function simplenews_stats_update_8101() {
+   $field_name = 'entity_type';
+   $length = 64;
+ 
+-  /** @var \Drupal\Core\Entity\EntityFieldManager $entity_field_manager */
++  /** @var EntityFieldManager $entity_field_manager */
+   $entity_field_manager = \Drupal::service('entity_field.manager');
+   $entity_field_manager->useCaches(FALSE);
+-  /** @var \Drupal\Core\Entity\EntityLastInstalledSchemaRepositoryInterface $schema_repository */
++  /** @var EntityLastInstalledSchemaRepositoryInterface $schema_repository */
+   $schema_repository = \Drupal::service('entity.last_installed_schema.repository');
+   $base_field_definitions = $entity_field_manager->getBaseFieldDefinitions($entity_type_id);
+ 
+@@ -81,7 +85,7 @@ function simplenews_stats_update_8101() {
+   $key_value->set($key_name, $storage_schema);
+ 
+   // Updates the base database field.
+-  $db_schema = \Drupal\Core\Database\Database::getConnection()->schema();
++  $db_schema = Database::getConnection()->schema();
+   $db_schema->changeField($entity_type_id, $field_name, $field_name, [
+     'type'     => 'varchar',
+     'length'   => $length,
+@@ -106,8 +110,8 @@ function simplenews_stats_update_8102() {
+     ];
+ 
+     foreach ($views as $view_name => $conf_name) {
+-      if (!\Drupal\views\Entity\View::load($view_name)) {
+-        $config_path = drupal_get_path('module', 'simplenews_stats') . "/config/optional/{$conf_name}.yml";
++      if (!View::load($view_name)) {
++        $config_path = \Drupal::service('extension.list.module')->getPath('simplenews_stats') . "/config/optional/{$conf_name}.yml";
+         $data = ['uuid' => (new Uuid())->generate()] + Yaml::decode(file_get_contents($config_path));
+         \Drupal::configFactory()
+           ->getEditable($conf_name)
+diff --git a/src/Controller/SimplenewsStatsAdminController.php b/src/Controller/SimplenewsStatsAdminController.php
+index 6e8c0ea..9b35dcb 100644
+--- a/src/Controller/SimplenewsStatsAdminController.php
++++ b/src/Controller/SimplenewsStatsAdminController.php
+@@ -3,6 +3,7 @@
+ 
+ namespace Drupal\simplenews_stats\Controller;
+ 
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Entity\EntityInterface;
+@@ -21,12 +22,12 @@ class SimplenewsStatsAdminController extends ControllerBase {
+    * Access callback: Check if the node is a simplenews and if the user has
+    * access.
+    *
+-   * @param \Drupal\Core\Session\AccountInterface $account
++   * @param AccountInterface $account
+    *   The account.
+-   * @param \Drupal\node\NodeInterface $node
++   * @param NodeInterface $node
+    *   The node object.
+    *
+-   * @return \Drupal\Core\Access\AccessResult
++   * @return AccessResult
+    */
+   public static function simplenewsStatsAccess(AccountInterface $account, NodeInterface $node) {
+     if ($node->hasField('simplenews_issue') && !$node->get('simplenews_issue')->isEmpty()) {
+@@ -44,11 +45,11 @@ class SimplenewsStatsAdminController extends ControllerBase {
+   /**
+    * Stats page callback.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $node
++   * @param EntityInterface $node
+    *   The node used by simplenews.
+    *
+    * @return array
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws EntityMalformedException
+    */
+   public function stats(EntityInterface $node) {
+     $simplenewsStatPage = new SimplenewsStatsPage($node);
+diff --git a/src/Controller/SimplenewsStatsAutocompleteController.php b/src/Controller/SimplenewsStatsAutocompleteController.php
+index 7846e5a..2010731 100644
+--- a/src/Controller/SimplenewsStatsAutocompleteController.php
++++ b/src/Controller/SimplenewsStatsAutocompleteController.php
+@@ -3,6 +3,10 @@
+ 
+ namespace Drupal\simplenews_stats\Controller;
+ 
++use Drupal\Core\Database\Database;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\node\NodeStorageInterface;
+ use Drupal\Component\Utility\Tags;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Database\Connection;
+@@ -21,25 +25,25 @@ use Symfony\Component\HttpFoundation\Request;
+ class SimplenewsStatsAutocompleteController extends ControllerBase {
+ 
+   /**
+-   * @var \Drupal\Core\Database\Database
++   * @var Database
+    */
+   protected $database;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+   /**
+-   * @var \Drupal\simplenews_stats\SimplenewsStatsTools
++   * @var SimplenewsStatsTools
+    */
+   protected $simplenewsStatsTools;
+ 
+   /**
+    * SimplenewsStatsAdminController constructor.
+    *
+-   * @param \Drupal\Core\Database\Connection $database
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entityRepository
++   * @param Connection $database
++   * @param EntityRepositoryInterface $entityRepository
+    */
+   public function __construct(Connection $database, EntityRepositoryInterface $entityRepository, SimplenewsStatsTools $simplenewsStatsTools) {
+     $this->database = $database;
+@@ -61,11 +65,11 @@ class SimplenewsStatsAutocompleteController extends ControllerBase {
+   /**
+    * Route Callback: Autocomplete callback.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return JsonResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function autocompleteEntityAssociated(Request $request) {
+ 
+@@ -77,7 +81,7 @@ class SimplenewsStatsAutocompleteController extends ControllerBase {
+       return new JsonResponse([]);
+     }
+ 
+-    /** @var \Drupal\node\NodeStorageInterface $nodeStorage */
++    /** @var NodeStorageInterface $nodeStorage */
+     $nodeStorage = $this->entityTypeManager()->getStorage('node');
+ 
+     $query = $nodeStorage->getQuery();
+@@ -101,11 +105,11 @@ class SimplenewsStatsAutocompleteController extends ControllerBase {
+   /**
+    * Route Callback: Autocomplete callback.
+    *
+-   * @param \Symfony\Component\HttpFoundation\Request $request
++   * @param Request $request
+    *
+-   * @return \Symfony\Component\HttpFoundation\JsonResponse
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @return JsonResponse
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function autocompleteUser(Request $request) {
+     $string = $request->query->get('q');
+diff --git a/src/Controller/SimplenewsStatsController.php b/src/Controller/SimplenewsStatsController.php
+index bfca3cd..95e6bc5 100644
+--- a/src/Controller/SimplenewsStatsController.php
++++ b/src/Controller/SimplenewsStatsController.php
+@@ -20,32 +20,32 @@ class SimplenewsStatsController extends ControllerBase {
+   /**
+    * SimplenewsStatsEngine.
+    *
+-   * @var \Drupal\simplenews_stats\SimplenewsStatsEngine
++   * @var SimplenewsStatsEngine
+    */
+   protected $simplenewsStatsEngine;
+ 
+   /**
+    * SimplenewsStatsAllowedLinks.
+    *
+-   * @var \Drupal\simplenews_stats\SimplenewsStatsAllowedLinks
++   * @var SimplenewsStatsAllowedLinks
+    */
+   protected $simplenewsStatsAllowedLinks;
+ 
+   /**
+    * Request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $request;
+ 
+   /**
+    * SimplenewsStatsController constructor.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request
++   * @param RequestStack $request
+    *   The request stack.
+-   * @param \Drupal\simplenews_stats\SimplenewsStatsEngine $simplenewsStatsEngine
++   * @param SimplenewsStatsEngine $simplenewsStatsEngine
+    *   The simplenews stats engine.
+-   * @param \Drupal\simplenews_stats\SimplenewsStatsAllowedLinks $simplenewsStatsAllowedLinks
++   * @param SimplenewsStatsAllowedLinks $simplenewsStatsAllowedLinks
+    *   The simplenews stats Allowed links manager.
+    */
+   public function __construct(RequestStack $request, SimplenewsStatsEngine $simplenewsStatsEngine, SimplenewsStatsAllowedLinks $simplenewsStatsAllowedLinks) {
+@@ -68,11 +68,11 @@ class SimplenewsStatsController extends ControllerBase {
+   /**
+    * Route callback: Send image to log view action.
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    */
+   public function hitView() {
+     $response = new Response();
+-    $image = file_get_contents(drupal_get_path('module', 'simplenews_stats') . '/assets/image/simple.png');
++    $image = file_get_contents(\Drupal::service('extension.list.module')->getPath('simplenews_stats') . '/assets/image/simple.png');
+     $response->setContent($image);
+     $response->headers->set('Content-Type', 'image/png');
+     $response->headers->set('Content-Transfer-Encoding', 'binary');
+@@ -85,7 +85,7 @@ class SimplenewsStatsController extends ControllerBase {
+    * @param string $tag
+    *   The tag.
+    *
+-   * @return \Drupal\Core\Routing\TrustedRedirectResponse|\Symfony\Component\HttpFoundation\RedirectResponse
++   * @return TrustedRedirectResponse|RedirectResponse
+    */
+   public function hitClick($tag) {
+ 
+@@ -115,9 +115,9 @@ class SimplenewsStatsController extends ControllerBase {
+   /**
+    * Custom redirect. This is a workaround for Drupal 8 bug.
+    *
+-   * @param \Drupal\Core\Url $url
++   * @param Url $url
+    *
+-   * @return \Symfony\Component\HttpFoundation\Response
++   * @return Response
+    */
+   protected function customTrustedRedirect(Url $url) {
+     $response = new Response('', 302, []);
+diff --git a/src/EventSubscriber/SimplenewsStatsEventSubscriber.php b/src/EventSubscriber/SimplenewsStatsEventSubscriber.php
+index c977a9b..797c69f 100644
+--- a/src/EventSubscriber/SimplenewsStatsEventSubscriber.php
++++ b/src/EventSubscriber/SimplenewsStatsEventSubscriber.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\simplenews_stats\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ 
+ /**
+@@ -22,9 +22,9 @@ class SimplenewsStatsEventSubscriber implements EventSubscriberInterface {
+   /**
+    * Catch and log new newsletter hit.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param RequestEvent $event
+    */
+-  public function simplenewsLog(GetResponseEvent $event) {
++  public function simplenewsLog(RequestEvent $event) {
+     $value = $event->getRequest()->query->get('sstc');
+     if (!$value) {
+       return;
+diff --git a/src/SimplenewsStatsAllowedLinks.php b/src/SimplenewsStatsAllowedLinks.php
+index 96eac90..8273918 100644
+--- a/src/SimplenewsStatsAllowedLinks.php
++++ b/src/SimplenewsStatsAllowedLinks.php
+@@ -22,7 +22,7 @@ class SimplenewsStatsAllowedLinks {
+   /**
+    * Construct a repository object.
+    *
+-   * @param \Drupal\Core\Database\Driver\mysql\Connection $connection
++   * @param Connection $connection
+    *   The database connection.
+    */
+   public function __construct(Connection $connection) {
+@@ -32,7 +32,7 @@ class SimplenewsStatsAllowedLinks {
+   /**
+    * Add link to the database.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity used as simplenews.
+    * @param string $link
+    *   The link to add.
+@@ -136,7 +136,7 @@ class SimplenewsStatsAllowedLinks {
+   /**
+    * Check if link is already stored.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity used as simplenews.
+    * @param string $link
+    *   The link to test.
+diff --git a/src/SimplenewsStatsEngine.php b/src/SimplenewsStatsEngine.php
+index 468ad6f..32d4915 100644
+--- a/src/SimplenewsStatsEngine.php
++++ b/src/SimplenewsStatsEngine.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\simplenews_stats;
+ 
++use Drupal\Core\Entity\EntityTypeManager;
++use Drupal\simplenews_stats\Entity\SimplenewsStats;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Symfony\Component\HttpFoundation\RequestStack;
+ use Drupal\Core\Routing\CurrentRouteMatch;
+@@ -16,32 +18,32 @@ class SimplenewsStatsEngine {
+   /**
+    * Request stack.
+    *
+-   * @var \Symfony\Component\HttpFoundation\RequestStack
++   * @var RequestStack
+    */
+   protected $request;
+ 
+   /**
+    * Current route match.
+    *
+-   * @var \Drupal\Core\Routing\CurrentRouteMatch
++   * @var CurrentRouteMatch
+    */
+   protected $currentRouteMatch;
+ 
+   /**
+    * Entity Type Manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManager
++   * @var EntityTypeManager
+    */
+   protected $entityTypeManager;
+ 
+   /**
+    * SimplenewsStatsEngine constructor.
+    *
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request
++   * @param RequestStack $request
+    *   The request stack.
+-   * @param \Drupal\Core\Routing\CurrentRouteMatch $current_route_match
++   * @param CurrentRouteMatch $current_route_match
+    *   The current route match.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The Entity type manager.
+    */
+   public function __construct(RequestStack $request, CurrentRouteMatch $current_route_match, EntityTypeManagerInterface $entity_type_manager) {
+@@ -112,9 +114,9 @@ class SimplenewsStatsEngine {
+   /**
+    * Store in data base the newsletter hit (click or view).
+    *
+-   * @param \Drupal\simplenews\SubscriberInterface $subscriber
++   * @param SubscriberInterface $subscriber
+    *   The simplenews subscriber who has just done an action.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The Entity used as simplenews.
+    * @param string $route_name
+    *   The route name.
+@@ -146,9 +148,9 @@ class SimplenewsStatsEngine {
+   /**
+    * Increase the sent counter of the given Entity.
+    *
+-   * @param \Drupal\simplenews\SubscriberInterface $subscriber
++   * @param SubscriberInterface $subscriber
+    *   The simplenews subscriber.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The Entity used as simplenews.
+    */
+   public function logHitSent(SubscriberInterface $subscriber, EntityInterface $entity) {
+@@ -160,9 +162,9 @@ class SimplenewsStatsEngine {
+   /**
+    * Update the global stat entry.
+    *
+-   * @param \Drupal\simplenews\SubscriberInterface $subscriber
++   * @param SubscriberInterface $subscriber
+    *   The simplenews subscriber.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The Entity used as simplenews.
+    * @param string $action
+    *   The action (click or view).
+@@ -182,12 +184,12 @@ class SimplenewsStatsEngine {
+   /**
+    * Return the simplenews stats entities.
+    *
+-   * @param \Drupal\simplenews\SubscriberInterface $subscriber
++   * @param SubscriberInterface $subscriber
+    *   The simplenews subscriber.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The Entity used as simplenews.
+    *
+-   * @return \Drupal\simplenews_stats\Entity\SimplenewsStats
++   * @return SimplenewsStats
+    *   The simplenews stats entity.
+    */
+   protected function getSimplenewsStats(SubscriberInterface $subscriber, EntityInterface $entity) {
+diff --git a/src/SimplenewsStatsEntityStorage.php b/src/SimplenewsStatsEntityStorage.php
+index 0d98891..c0efaac 100644
+--- a/src/SimplenewsStatsEntityStorage.php
++++ b/src/SimplenewsStatsEntityStorage.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simplenews_stats;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Cache\CacheBackendInterface;
+ use Drupal\Core\Cache\MemoryCache\MemoryCacheInterface;
+ use Drupal\Core\Database\Connection;
+@@ -20,28 +21,28 @@ use Drupal\simplenews\SubscriberInterface;
+ class SimplenewsStatsEntityStorage extends SqlContentEntityStorage implements SimplenewsStatsEntityStorageInterface {
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   protected $simplenewsStatsItemStorage;
+ 
+   /**
+    * SimplenewsStatsEntityStorage constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Database\Connection $database
++   * @param Connection $database
+    *   The database connection to be used.
+-   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
++   * @param EntityFieldManagerInterface $entity_field_manager
+    *   The entity field manager.
+-   * @param \Drupal\Core\Cache\CacheBackendInterface $cache
++   * @param CacheBackendInterface $cache
+    *   The cache backend to be used.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\Core\Cache\MemoryCache\MemoryCacheInterface|null $memory_cache
++   * @param MemoryCacheInterface|null $memory_cache
+    *   The memory cache backend to be used.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface $entity_type_bundle_info
+    *   The entity type bundle info.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity type manager.
+    */
+   public function __construct(EntityTypeInterface $entity_type, Connection $database, EntityFieldManagerInterface $entity_field_manager, CacheBackendInterface $cache, LanguageManagerInterface $language_manager, MemoryCacheInterface $memory_cache = NULL, EntityTypeBundleInfoInterface $entity_type_bundle_info = NULL, EntityTypeManagerInterface $entity_type_manager = NULL) {
+diff --git a/src/SimplenewsStatsEntityStorageInterface.php b/src/SimplenewsStatsEntityStorageInterface.php
+index 55d06cf..158e1a5 100644
+--- a/src/SimplenewsStatsEntityStorageInterface.php
++++ b/src/SimplenewsStatsEntityStorageInterface.php
+@@ -4,6 +4,7 @@
+ namespace Drupal\simplenews_stats;
+ 
+ 
++use Drupal\simplenews_stats\Entity\SimplenewsStats;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\simplenews\SubscriberInterface;
+ 
+@@ -12,10 +13,10 @@ interface SimplenewsStatsEntityStorageInterface {
+   /**
+    * Return the global newsletter stat from related entity (node).
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity use as simplenews.
+    *
+-   * @return \Drupal\simplenews_stats\Entity\SimplenewsStats
++   * @return SimplenewsStats
+    *   The simplenews stats entity.
+    */
+   public function getFromRelatedEntity(EntityInterface $entity);
+@@ -24,13 +25,13 @@ interface SimplenewsStatsEntityStorageInterface {
+    * Create an entity from subscriber provide by simplenews and the related
+    * entity.
+    *
+-   * @param \Drupal\simplenews\SubscriberInterface $subscriber
++   * @param SubscriberInterface $subscriber
+    *   The simplenews subscriber.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity use as simplenews.
+    *
+-   * @return \Drupal\simplenews_stats\SimplenewsStatsInterface
++   * @return SimplenewsStatsInterface
+    *   The simplenews stats entity.
+    */
+   public function createFromSubscriberAndEntity(SubscriberInterface $subscriber, EntityInterface $entity);
+diff --git a/src/SimplenewsStatsInterface.php b/src/SimplenewsStatsInterface.php
+index 2477765..0659f03 100644
+--- a/src/SimplenewsStatsInterface.php
++++ b/src/SimplenewsStatsInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simplenews_stats;
+ 
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\user\EntityOwnerInterface;
+ 
+@@ -111,7 +112,7 @@ interface SimplenewsStatsInterface extends ContentEntityInterface, EntityOwnerIn
+   /**
+    * Returns the associated newsletter entity.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null
++   * @return EntityInterface|null
+    */
+   public function getAssociatedEntity();
+ 
+diff --git a/src/SimplenewsStatsItemInterface.php b/src/SimplenewsStatsItemInterface.php
+index 7af820f..e69888c 100644
+--- a/src/SimplenewsStatsItemInterface.php
++++ b/src/SimplenewsStatsItemInterface.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\simplenews_stats;
+ 
++use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+ use Drupal\user\EntityOwnerInterface;
+ 
+@@ -24,7 +25,7 @@ interface SimplenewsStatsItemInterface extends ContentEntityInterface, EntityOwn
+    * @param string $title
+    *   The simplenews stats title.
+    *
+-   * @return \Drupal\simplenews_stats\SimplenewsStatsInterface
++   * @return SimplenewsStatsInterface
+    *   The called simplenews stats entity.
+    */
+   public function setTitle($title);
+@@ -43,7 +44,7 @@ interface SimplenewsStatsItemInterface extends ContentEntityInterface, EntityOwn
+    * @param int $timestamp
+    *   The simplenews stats creation timestamp.
+    *
+-   * @return \Drupal\simplenews_stats\SimplenewsStatsInterface
++   * @return SimplenewsStatsInterface
+    *   The called simplenews stats entity.
+    */
+   public function setCreatedTime($timestamp);
+@@ -62,7 +63,7 @@ interface SimplenewsStatsItemInterface extends ContentEntityInterface, EntityOwn
+    * @param bool $status
+    *   TRUE to enable this simplenews stats, FALSE to disable.
+    *
+-   * @return \Drupal\simplenews_stats\SimplenewsStatsInterface
++   * @return SimplenewsStatsInterface
+    *   The called simplenews stats entity.
+    */
+   public function setStatus($status);
+@@ -70,7 +71,7 @@ interface SimplenewsStatsItemInterface extends ContentEntityInterface, EntityOwn
+   /**
+    * Returns the associated newsletter entity.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface|null
++   * @return EntityInterface|null
+    */
+   public function getAssociatedEntity();
+ 
+diff --git a/src/SimplenewsStatsItemListBuilder.php b/src/SimplenewsStatsItemListBuilder.php
+index 58413c1..713ceb3 100644
+--- a/src/SimplenewsStatsItemListBuilder.php
++++ b/src/SimplenewsStatsItemListBuilder.php
+@@ -18,27 +18,27 @@ class SimplenewsStatsItemListBuilder extends EntityListBuilder {
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The redirect destination service.
+    *
+-   * @var \Drupal\Core\Routing\RedirectDestinationInterface
++   * @var RedirectDestinationInterface
+    */
+   protected $redirectDestination;
+ 
+   /**
+    * Constructs a new SimplenewsStatsListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Routing\RedirectDestinationInterface $redirect_destination
++   * @param RedirectDestinationInterface $redirect_destination
+    *   The redirect destination service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, DateFormatterInterface $date_formatter, RedirectDestinationInterface $redirect_destination) {
+diff --git a/src/SimplenewsStatsListBuilder.php b/src/SimplenewsStatsListBuilder.php
+index 4b4431a..35bcc16 100644
+--- a/src/SimplenewsStatsListBuilder.php
++++ b/src/SimplenewsStatsListBuilder.php
+@@ -18,27 +18,27 @@ class SimplenewsStatsListBuilder extends EntityListBuilder {
+   /**
+    * The date formatter service.
+    *
+-   * @var \Drupal\Core\Datetime\DateFormatterInterface
++   * @var DateFormatterInterface
+    */
+   protected $dateFormatter;
+ 
+   /**
+    * The redirect destination service.
+    *
+-   * @var \Drupal\Core\Routing\RedirectDestinationInterface
++   * @var RedirectDestinationInterface
+    */
+   protected $redirectDestination;
+ 
+   /**
+    * Constructs a new SimplenewsStatsListBuilder object.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeInterface $entity_type
++   * @param EntityTypeInterface $entity_type
+    *   The entity type definition.
+-   * @param \Drupal\Core\Entity\EntityStorageInterface $storage
++   * @param EntityStorageInterface $storage
+    *   The entity storage class.
+-   * @param \Drupal\Core\Datetime\DateFormatterInterface $date_formatter
++   * @param DateFormatterInterface $date_formatter
+    *   The date formatter service.
+-   * @param \Drupal\Core\Routing\RedirectDestinationInterface $redirect_destination
++   * @param RedirectDestinationInterface $redirect_destination
+    *   The redirect destination service.
+    */
+   public function __construct(EntityTypeInterface $entity_type, EntityStorageInterface $storage, DateFormatterInterface $date_formatter, RedirectDestinationInterface $redirect_destination) {
+@@ -80,8 +80,9 @@ class SimplenewsStatsListBuilder extends EntityListBuilder {
+    */
+   public function buildRow(EntityInterface $entity) {
+     /* @var $entity \Drupal\simplenews_stats\Entity\SimplenewsStats */
+-
+-    $row['title']       = $entity->link();
++    // TODO: Drupal Rector Notice: Please delete the following comment after you've made any necessary changes.
++    // Please confirm that `$entity` is an instance of `\Drupal\Core\Entity\EntityInterface`. Only the method name and not the class name was checked for this replacement, so this may be a false positive.
++    $row['title']       = $entity->toLink()->toString();
+     $row['views']       = $entity->views->first()->getValue()['value'];
+     $row['clicks']      = $entity->clicks->first()->getValue()['value'];
+     $row['total_mails'] = $entity->total_emails->first()->getValue()['value'];
+diff --git a/src/SimplenewsStatsMail.php b/src/SimplenewsStatsMail.php
+index 5b8c27d..ba4289b 100644
+--- a/src/SimplenewsStatsMail.php
++++ b/src/SimplenewsStatsMail.php
+@@ -23,30 +23,30 @@ class SimplenewsStatsMail {
+   /**
+    * The simplenews mail object.
+    *
+-   * @var \Drupal\simplenews\Mail\MailEntity
++   * @var MailEntity
+    */
+   protected $simpleNewsMail;
+ 
+   /**
+    * The simplenews stats engine.
+    *
+-   * @var \Drupal\simplenews_stats\SimplenewsStatsEngine
++   * @var SimplenewsStatsEngine
+    */
+   protected $simplenewsStatsEngine;
+ 
+   /**
+    * The Allowed link manager.
+    *
+-   * @var \Drupal\simplenews_stats\SimplenewsStatsAllowedLinks
++   * @var SimplenewsStatsAllowedLinks
+    */
+   protected $simplenewsStatsAllowedLinks;
+ 
+   /**
+    * SimplenewsStatsMail constructor.
+    *
+-   * @param \Drupal\simplenews_stats\SimplenewsStatsEngine $simplenewsStatsEngine
++   * @param SimplenewsStatsEngine $simplenewsStatsEngine
+    *   The simplenews stats engine.
+-   * @param \Drupal\simplenews_stats\SimplenewsStatsAllowedLinks $simplenewsStatsAllowedLinks
++   * @param SimplenewsStatsAllowedLinks $simplenewsStatsAllowedLinks
+    *   The simplenews allowed links manager.
+    */
+   public function __construct(SimplenewsStatsEngine $simplenewsStatsEngine, SimplenewsStatsAllowedLinks $simplenewsStatsAllowedLinks) {
+@@ -75,7 +75,7 @@ class SimplenewsStatsMail {
+   /**
+    * Get the body.
+    *
+-   * @return \Drupal\Core\Render\Markup
++   * @return Markup
+    *   The body markup.
+    */
+   protected function getBody() {
+@@ -85,7 +85,7 @@ class SimplenewsStatsMail {
+   /**
+    * Return the context (Simplenews source object).
+    *
+-   * @return \Drupal\simplenews\Mail\MailEntity
++   * @return MailEntity
+    *   The simplenews mail object used as context.
+    */
+   protected function getContext() {
+@@ -95,7 +95,7 @@ class SimplenewsStatsMail {
+   /**
+    * Return the context (Simplenews source object).
+    *
+-   * @return \Drupal\simplenews\SubscriberInterface
++   * @return SubscriberInterface
+    *   The simplenews subscriber.
+    */
+   protected function getSubscriber() {
+@@ -106,9 +106,9 @@ class SimplenewsStatsMail {
+   /**
+    * Get a tag.
+    *
+-   * @param \Drupal\simplenews\SubscriberInterface $subscriber
++   * @param SubscriberInterface $subscriber
+    *   The simplenews subscriber.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity use as simplenews.
+    *
+    * @return string
+@@ -121,7 +121,7 @@ class SimplenewsStatsMail {
+   /**
+    * Return the entity from simplenews object.
+    *
+-   * @return \Drupal\Core\Entity\EntityInterface
++   * @return EntityInterface
+    *   The entity referenced in the simplenews mail object.
+    */
+   protected function getEntity() {
+@@ -166,7 +166,7 @@ class SimplenewsStatsMail {
+       ],
+     ];
+ 
+-    $this->setBody($this->getBody() . render($image));
++    $this->setBody($this->getBody() . \Drupal::service('renderer')->render($image));
+     return $this;
+   }
+ 
+@@ -255,9 +255,9 @@ class SimplenewsStatsMail {
+   /**
+    * Return a link for external link reference.
+    *
+-   * @param \Drupal\simplenews\SubscriberInterface $subscriber
++   * @param SubscriberInterface $subscriber
+    *   The simplenews subscriber.
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity use as simplenews.
+    * @param string $link
+    *   The link to generate.
+diff --git a/src/SimplenewsStatsPage.php b/src/SimplenewsStatsPage.php
+index a4834af..f62463a 100644
+--- a/src/SimplenewsStatsPage.php
++++ b/src/SimplenewsStatsPage.php
+@@ -2,6 +2,9 @@
+ 
+ namespace Drupal\simplenews_stats;
+ 
++use Drupal\simplenews\Entity\Newsletter;
++use Drupal\simplenews_stats\Entity\SimplenewsStats;
++use Drupal\Core\Entity\EntityMalformedException;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Link;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+@@ -22,14 +25,14 @@ class SimplenewsStatsPage {
+   /**
+    * The entity SimpleNews.
+    *
+-   * @var \Drupal\Core\Entity\EntityInterface
++   * @var EntityInterface
+    */
+   protected $entity;
+ 
+   /**
+    * The entity Newsletter from simplenews.
+    *
+-   * @var \Drupal\simplenews\Entity\Newsletter
++   * @var Newsletter
+    */
+   protected $simplenews;
+ 
+@@ -71,14 +74,14 @@ class SimplenewsStatsPage {
+   /**
+    * The global simplenews stats.
+    *
+-   * @var \Drupal\simplenews_stats\Entity\SimplenewsStats
++   * @var SimplenewsStats
+    */
+   protected $simplenewsStats;
+ 
+   /**
+    * SimplenewsStatsPage Constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface|null $entity
++   * @param EntityInterface|null $entity
+    *   The entity used as simplenews.
+    */
+   public function __construct($entity) {
+@@ -219,7 +222,7 @@ class SimplenewsStatsPage {
+    *
+    * @return array
+    *   Array renderable of the page.
+-   * @throws \Drupal\Core\Entity\EntityMalformedException
++   * @throws EntityMalformedException
+    */
+   public function getpage() {
+ 
+diff --git a/src/SimplenewsStatsTools.php b/src/SimplenewsStatsTools.php
+index 13083c0..1b7333d 100644
+--- a/src/SimplenewsStatsTools.php
++++ b/src/SimplenewsStatsTools.php
+@@ -19,14 +19,14 @@ class SimplenewsStatsTools {
+   use StringTranslationTrait;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityRepositoryInterface
++   * @var EntityRepositoryInterface
+    */
+   protected $entityRepository;
+ 
+   /**
+    * SimplenewsStatsTools constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entityRepository
++   * @param EntityRepositoryInterface $entityRepository
+    */
+   public function __construct(EntityRepositoryInterface $entityRepository) {
+     $this->entityRepository = $entityRepository;
+@@ -35,7 +35,7 @@ class SimplenewsStatsTools {
+   /**
+    * Returns the entity label.
+    *
+-   * @param \Drupal\Core\Entity\EntityInterface $entity
++   * @param EntityInterface $entity
+    *   The entity that need a label.
+    * @param bool $with_entity_type
+    *   Add the entity type in the label.

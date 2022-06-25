@@ -1,0 +1,692 @@
+diff --git a/composer.json b/composer.json
+index 7a7dbaf..4c5d5b6 100644
+--- a/composer.json
++++ b/composer.json
+@@ -22,8 +22,8 @@
+         "apcu-autoloader": true
+     },
+     "require": {
+-        "drupal/core": "^8.9 || ^9.0",
+         "nyholm/psr7": "^1.3",
+-        "web-auth/webauthn-lib": "^3.2"
++        "web-auth/webauthn-lib": "^3.2",
++        "drupal/core": "^9.1 || ^10"
+     }
+ }
+diff --git a/src/Entity/Handlers/PublicKeyCredentialSourceAccessControlHandler.php b/src/Entity/Handlers/PublicKeyCredentialSourceAccessControlHandler.php
+index b06c0fa..91c0f3f 100644
+--- a/src/Entity/Handlers/PublicKeyCredentialSourceAccessControlHandler.php
++++ b/src/Entity/Handlers/PublicKeyCredentialSourceAccessControlHandler.php
+@@ -5,6 +5,7 @@
+ 
+ namespace Drupal\webauthn\Entity\Handlers;
+ 
++use Drupal\webauthn\Entity\PublicKeyCredentialSourceInterface;
+ use Drupal\Core\Entity\EntityAccessControlHandler;
+ use Drupal\Core\Entity\EntityInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -21,7 +22,7 @@ class PublicKeyCredentialSourceAccessControlHandler extends EntityAccessControlH
+    * {@inheritdoc}
+    */
+   protected function checkAccess(EntityInterface $entity, $operation, AccountInterface $account) {
+-    /** @var \Drupal\webauthn\Entity\PublicKeyCredentialSourceInterface $entity */
++    /** @var PublicKeyCredentialSourceInterface $entity */
+     switch ($operation) {
+       case 'view':
+         $has_permission = $account->hasPermission('view public key credential source entities');
+diff --git a/src/Entity/PublicKeyCredentialSource.php b/src/Entity/PublicKeyCredentialSource.php
+index 4eb1300..9d7fd86 100644
+--- a/src/Entity/PublicKeyCredentialSource.php
++++ b/src/Entity/PublicKeyCredentialSource.php
+@@ -4,6 +4,7 @@
+ 
+ namespace Drupal\webauthn\Entity;
+ 
++use Drupal\Component\Uuid\UuidInterface;
+ use Base64Url\Base64Url;
+ use Drupal\Core\Entity\ContentEntityBase;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -85,7 +86,7 @@ public static function preCreate(EntityStorageInterface $storage_controller, arr
+    */
+   public static function createFromSourceObject(PKCredentialSource $source): PublicKeyCredentialSourceInterface {
+     $values = $source->jsonSerialize();
+-    /** @var \Drupal\Component\Uuid\UuidInterface $uuid */
++    /** @var UuidInterface $uuid */
+     $uuid = \Drupal::service('uuid');
+     $values += [
+       'uuid' => $uuid->generate(),
+diff --git a/src/Entity/PublicKeyCredentialSourceRepository.php b/src/Entity/PublicKeyCredentialSourceRepository.php
+index c9cb082..a56b0e9 100644
+--- a/src/Entity/PublicKeyCredentialSourceRepository.php
++++ b/src/Entity/PublicKeyCredentialSourceRepository.php
+@@ -5,6 +5,10 @@
+ 
+ namespace Drupal\webauthn\Entity;
+ 
++use Drupal\Core\Entity\EntityStorageInterface;
++use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
++use Drupal\Component\Plugin\Exception\PluginNotFoundException;
++use Drupal\user\UserInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Webauthn\PublicKeyCredentialSource as PKCredentialSource;
+@@ -19,23 +23,23 @@ class PublicKeyCredentialSourceRepository implements BasePublicKeyCredentialSour
+   use StringTranslationTrait;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityStorageInterface
++   * @var EntityStorageInterface
+    */
+   private $storage;
+ 
+   /**
+    * PublicKeyCredentialSourceRepository constructor.
+    *
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity-type manager.
+    *
+-   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+-   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
++   * @throws InvalidPluginDefinitionException
++   * @throws PluginNotFoundException
+    */
+   public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+     $this->entityTypeManager = $entity_type_manager;
+@@ -46,7 +50,7 @@ public function __construct(EntityTypeManagerInterface $entity_type_manager) {
+    * {@inheritdoc}
+    */
+   public function findOneByCredentialId(string $publicKeyCredentialId): ?PKCredentialSource {
+-    /** @var \Drupal\webauthn\Entity\PublicKeyCredentialSourceInterface[] $entity */
++    /** @var PublicKeyCredentialSourceInterface[] $entity */
+     $entity = $this->storage->loadByProperties(['publicKeyCredentialId' => $publicKeyCredentialId]);
+ 
+     if (empty($entity)) {
+@@ -81,7 +85,7 @@ public function findAllForUserEntity(PublicKeyCredentialUserEntity $publicKeyCre
+   public function saveCredentialSource(PKCredentialSource $publicKeyCredentialSource): void {
+     $entity = PublicKeyCredentialSource::createFromSourceObject($publicKeyCredentialSource);
+     $storage = $this->entityTypeManager->getStorage('user');
+-    /** @var \Drupal\user\UserInterface[] $user */
++    /** @var UserInterface[] $user */
+     $user = $storage->loadByProperties(['uuid' => $publicKeyCredentialSource->getUserHandle()]);
+ 
+     if (empty($user)) {
+diff --git a/src/EventSubscriber/UserRouteAlterSubscriber.php b/src/EventSubscriber/UserRouteAlterSubscriber.php
+index 1985095..81a99dc 100644
+--- a/src/EventSubscriber/UserRouteAlterSubscriber.php
++++ b/src/EventSubscriber/UserRouteAlterSubscriber.php
+@@ -4,6 +4,7 @@
+ 
+ namespace Drupal\webauthn\EventSubscriber;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Routing\RouteBuildEvent;
+ use Drupal\Core\Routing\RoutingEvents;
+@@ -18,14 +19,14 @@ class UserRouteAlterSubscriber implements EventSubscriberInterface {
+   /**
+    * The webauthn settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   private $config;
+ 
+   /**
+    * UserRouteAlterSubscriber constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory) {
+@@ -44,7 +45,7 @@ public static function getSubscribedEvents() {
+   /**
+    * Replace login form.
+    *
+-   * @param \Drupal\Core\Routing\RouteBuildEvent $event
++   * @param RouteBuildEvent $event
+    *   The event to process.
+    */
+   public function onRoutingAlterReplaceLogin(RouteBuildEvent $event) {
+diff --git a/src/Form/AccountForm.php b/src/Form/AccountForm.php
+index 4e35429..44511d4 100644
+--- a/src/Form/AccountForm.php
++++ b/src/Form/AccountForm.php
+@@ -36,20 +36,20 @@ abstract class AccountForm extends ContentEntityForm implements TrustedCallbackI
+   /**
+    * The language manager.
+    *
+-   * @var \Drupal\Core\Language\LanguageManagerInterface
++   * @var LanguageManagerInterface
+    */
+   protected $languageManager;
+ 
+   /**
+    * Constructs a new AccountForm object.
+    *
+-   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
++   * @param EntityRepositoryInterface $entity_repository
+    *   The entity repository.
+-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
++   * @param LanguageManagerInterface $language_manager
+    *   The language manager.
+-   * @param \Drupal\Core\Entity\EntityTypeBundleInfoInterface|null $entity_type_bundle_info
++   * @param EntityTypeBundleInfoInterface|null $entity_type_bundle_info
+    *   The entity type bundle service.
+-   * @param \Drupal\Component\Datetime\TimeInterface|null $time
++   * @param TimeInterface|null $time
+    *   The time service.
+    */
+   public function __construct(EntityRepositoryInterface $entity_repository, LanguageManagerInterface $language_manager, EntityTypeBundleInfoInterface $entity_type_bundle_info = NULL, TimeInterface $time = NULL) {
+@@ -83,7 +83,7 @@ public static function trustedCallbacks() {
+    * @uses \Drupal\webauthn\Form\AccountForm::syncUserLangcode
+    */
+   public function form(array $form, FormStateInterface $form_state) {
+-    /** @var \Drupal\user\UserInterface $account */
++    /** @var UserInterface $account */
+     $account = $this->entity;
+     $user = $this->currentUser();
+     $config = \Drupal::config('user.settings');
+@@ -290,11 +290,11 @@ public function alterPreferredLangcodeDescription(array $element) {
+    *
+    * @param string $entity_type_id
+    *   The entity type identifier.
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The entity updated with the submitted values.
+    * @param array $form
+    *   The complete form array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The current state of the form.
+    */
+   public function syncUserLangcode($entity_type_id, UserInterface $user, array &$form, FormStateInterface $form_state) {
+@@ -315,7 +315,7 @@ public function buildEntity(array $form, FormStateInterface $form_state) {
+       $form_state->setValue('roles', array_keys(array_filter($form_state->getValue('roles'))));
+     }
+ 
+-    /** @var \Drupal\user\UserInterface $account */
++    /** @var UserInterface $account */
+     $account = parent::buildEntity($form, $form_state);
+ 
+     // Translate the empty value '' of language selects to an unset field.
+diff --git a/src/Form/PublicKeyCredentialCreationForm.php b/src/Form/PublicKeyCredentialCreationForm.php
+index df9a889..5b6a96d 100644
+--- a/src/Form/PublicKeyCredentialCreationForm.php
++++ b/src/Form/PublicKeyCredentialCreationForm.php
+@@ -4,6 +4,8 @@
+ 
+ namespace Drupal\webauthn\Form;
+ 
++use Drupal\user\UserInterface;
++use Webauthn\PublicKeyCredentialSource;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Entity\EntityConstraintViolationListInterface;
+ use Drupal\Core\Entity\EntityRepositoryInterface;
+@@ -26,7 +28,7 @@ class PublicKeyCredentialCreationForm extends AccountForm {
+   /**
+    * The WebAuthn server instance.
+    *
+-   * @var \Drupal\webauthn\ServerInterface
++   * @var ServerInterface
+    */
+   protected $server;
+ 
+@@ -125,7 +127,7 @@ public function buildEntity(array $form, FormStateInterface $form_state) {
+       $entity = parent::buildEntity($form, $form_state);
+       $entity->set('name', $form_state->getValue('name'));
+       $entity->set('mail', $form_state->getValue('mail'));
+-      $entity->set('pass', user_password());
++      $entity->set('pass', \Drupal::service('password_generator')->generate());
+       $entity->set('init', $form_state->getValue('mail'));
+     }
+ 
+@@ -136,7 +138,7 @@ public function buildEntity(array $form, FormStateInterface $form_state) {
+    * {@inheritdoc}
+    */
+   public function validateForm(array &$form, FormStateInterface $form_state) {
+-    /** @var \Drupal\user\UserInterface|null $entity */
++    /** @var UserInterface|null $entity */
+     $entity = parent::validateForm($form, $form_state);
+ 
+     if ($entity && $this->step === self::ATTESTATION_HANDLE) {
+@@ -169,7 +171,7 @@ public function validateForm(array &$form, FormStateInterface $form_state) {
+   public function submitForm(array &$form, FormStateInterface $form_state): void {
+     parent::submitForm($form, $form_state);
+     if ($this->step === self::ATTESTATION_PREPARE) {
+-      /** @var \Drupal\user\UserInterface $user */
++      /** @var UserInterface $user */
+       $user = $this->entity;
+       $options = $this->server->attestation($user);
+       $form_state->set('user', $user);
+@@ -185,9 +187,9 @@ public function submitForm(array &$form, FormStateInterface $form_state): void {
+   public function save(array $form, FormStateInterface $form_state) {
+     if (!$this->getRequest()->isXmlHttpRequest()) {
+       // The `credential_source` is stored during ::validateForm.
+-      /** @var \Webauthn\PublicKeyCredentialSource $source */
++      /** @var PublicKeyCredentialSource $source */
+       $source = $form_state->get('credential_source');
+-      /** @var \Drupal\user\UserInterface $account */
++      /** @var UserInterface $account */
+       $account = $this->entity;
+       $account->set('uuid', $source->getUserHandle());
+       parent::save($form, $form_state);
+diff --git a/src/Form/PublicKeyCredentialRequestForm.php b/src/Form/PublicKeyCredentialRequestForm.php
+index f30b7e3..f9524a3 100644
+--- a/src/Form/PublicKeyCredentialRequestForm.php
++++ b/src/Form/PublicKeyCredentialRequestForm.php
+@@ -25,28 +25,28 @@ class PublicKeyCredentialRequestForm extends FormBase {
+   /**
+    * The flood service.
+    *
+-   * @var \Drupal\Core\Flood\FloodInterface
++   * @var FloodInterface
+    */
+   protected $flood;
+ 
+   /**
+    * The user storage.
+    *
+-   * @var \Drupal\user\UserStorageInterface
++   * @var UserStorageInterface
+    */
+   protected $userStorage;
+ 
+   /**
+    * The WebAuthn server instance.
+    *
+-   * @var \Drupal\webauthn\ServerInterface
++   * @var ServerInterface
+    */
+   protected $server;
+ 
+   /**
+    * The renderer.
+    *
+-   * @var \Drupal\Core\Render\RendererInterface
++   * @var RendererInterface
+    */
+   protected $renderer;
+ 
+@@ -153,7 +153,7 @@ public function buildForm(array $form, FormStateInterface $form_state) {
+    *
+    * @param array $form
+    *   The form render array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form-state instance.
+    */
+   public function validateName(array &$form, FormStateInterface $form_state): void {
+@@ -195,7 +195,7 @@ public function validateName(array &$form, FormStateInterface $form_state): void
+    *
+    * @param array $form
+    *   The form render array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form-state instance.
+    */
+   public function validateAuthentication(array &$form, FormStateInterface $form_state): void {
+@@ -261,7 +261,7 @@ public function validateAuthentication(array &$form, FormStateInterface $form_st
+    *
+    * @param array $form
+    *   The form render array.
+-   * @param \Drupal\Core\Form\FormStateInterface $form_state
++   * @param FormStateInterface $form_state
+    *   The form-state instance.
+    */
+   public function validateFinal(array &$form, FormStateInterface $form_state): void {
+@@ -303,7 +303,7 @@ public function validateFinal(array &$form, FormStateInterface $form_state): voi
+    */
+   public function submitForm(array &$form, FormStateInterface $form_state) {
+     if ($this->step === self::ASSERTION_PREPARE) {
+-      /** @var \Drupal\user\UserInterface $user */
++      /** @var UserInterface $user */
+       $user = $form_state->get('user');
+       $options = $this->server->assertion($user);
+       $form_state->set('assertion_options', $options);
+diff --git a/src/Form/SettingsForm.php b/src/Form/SettingsForm.php
+index 4f049bc..58231d7 100644
+--- a/src/Form/SettingsForm.php
++++ b/src/Form/SettingsForm.php
+@@ -109,7 +109,7 @@ public function validateForm(array &$form, FormStateInterface $form_state) {
+   /**
+    * Process uploaded file and store it as base64 encoded data.
+    *
+-   * @param \Symfony\Component\HttpFoundation\File\UploadedFile $file_upload
++   * @param UploadedFile $file_upload
+    *   Uploaded file.
+    *
+    * @return string
+diff --git a/src/Plugin/Validation/Constraint/UserMailRequiredValidator.php b/src/Plugin/Validation/Constraint/UserMailRequiredValidator.php
+index 209b414..9e33915 100644
+--- a/src/Plugin/Validation/Constraint/UserMailRequiredValidator.php
++++ b/src/Plugin/Validation/Constraint/UserMailRequiredValidator.php
+@@ -4,6 +4,7 @@
+ 
+ namespace Drupal\webauthn\Plugin\Validation\Constraint;
+ 
++use Drupal\Core\Field\FieldItemListInterface;
+ use Drupal\user\Plugin\Validation\Constraint\UserMailRequiredValidator as BaseValidator;
+ use Symfony\Component\Validator\Constraint;
+ 
+@@ -23,7 +24,7 @@ class UserMailRequiredValidator extends BaseValidator {
+    * {@inheritdoc}
+    */
+   public function validate($items, Constraint $constraint) {
+-    /** @var \Drupal\Core\Field\FieldItemListInterface $items */
++    /** @var FieldItemListInterface $items */
+     /* @var \Drupal\user\UserInterface $account */
+     $account = $items->getEntity();
+     if (!isset($account) || !empty($account->_skipUserMailRequiredConstraint)) {
+diff --git a/src/Routing/RouteProvider.php b/src/Routing/RouteProvider.php
+index 9c9803f..1cd1f60 100644
+--- a/src/Routing/RouteProvider.php
++++ b/src/Routing/RouteProvider.php
+@@ -4,6 +4,7 @@
+ 
+ namespace Drupal\webauthn\Routing;
+ 
++use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\webauthn\Form\PublicKeyCredentialRequestForm;
+ use Symfony\Component\Routing\Route;
+@@ -17,14 +18,14 @@ class RouteProvider {
+   /**
+    * The webauthn settings.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   private $config;
+ 
+   /**
+    * RouteProvider constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   * @param ConfigFactoryInterface $config_factory
+    *   The config factory service.
+    */
+   public function __construct(ConfigFactoryInterface $config_factory) {
+diff --git a/src/Server.php b/src/Server.php
+index 485f5c7..ebafdc2 100644
+--- a/src/Server.php
++++ b/src/Server.php
+@@ -5,6 +5,8 @@
+ 
+ namespace Drupal\webauthn;
+ 
++use Drupal\Core\Config\ImmutableConfig;
++use Symfony\Component\HttpFoundation\Request;
+ use Drupal\Component\Serialization\Json;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -37,41 +39,41 @@ class Server implements ServerInterface {
+   /**
+    * The site configuration.
+    *
+-   * @var \Drupal\Core\Config\ImmutableConfig
++   * @var ImmutableConfig
+    */
+   private $config;
+ 
+   /**
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   * @var EntityTypeManagerInterface
+    */
+   private $entityTypeManager;
+ 
+   /**
+-   * @var \Drupal\Core\TempStore\PrivateTempStoreFactory
++   * @var PrivateTempStoreFactory
+    */
+   private $privateTempStore;
+ 
+   /**
+-   * @var \Webauthn\PublicKeyCredentialSourceRepository
++   * @var PublicKeyCredentialSourceRepository
+    */
+   private $pkCredentialSourceRepository;
+ 
+   /**
+-   * @var \Symfony\Component\HttpFoundation\Request
++   * @var Request
+    */
+   private $request;
+ 
+   /**
+    * Server constructor.
+    *
+-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
++   * @param ConfigFactoryInterface $configFactory
+    *   The config factory service.
+-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   * @param EntityTypeManagerInterface $entity_type_manager
+    *   The entity-type manager service.
+-   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $private_temp_store
++   * @param PrivateTempStoreFactory $private_temp_store
+    *   The private temp-store service.
+-   * @param \Webauthn\PublicKeyCredentialSourceRepository $pk_credential_source_repository
+-   * @param \Symfony\Component\HttpFoundation\RequestStack $request
++   * @param PublicKeyCredentialSourceRepository $pk_credential_source_repository
++   * @param RequestStack $request
+    */
+   public function __construct(ConfigFactoryInterface $configFactory, EntityTypeManagerInterface $entity_type_manager, PrivateTempStoreFactory $private_temp_store, PublicKeyCredentialSourceRepository $pk_credential_source_repository, RequestStack $request) {
+     $this->config = $configFactory->get('webauthn.settings');
+@@ -143,7 +145,7 @@ public function createUserEntity(UserInterface $user): PublicKeyCredentialUserEn
+   /**
+    * {@inheritdoc}
+    */
+-  public function handleAttestation(UserInterface $user, string $response): ?\Webauthn\PublicKeyCredentialSource {
++  public function handleAttestation(UserInterface $user, string $response): ?PublicKeyCredentialSource {
+     try {
+       // Convert Symfony request into PSR-7 compatible request.
+       // @link https://symfony.com/doc/3.4/components/psr7.html
+@@ -152,7 +154,7 @@ public function handleAttestation(UserInterface $user, string $response): ?\Weba
+       $request = $psrHttpFactory->createRequest($this->request);
+ 
+       $data = Json::decode($this->privateTempStore->get('attestation'));
+-      /** @var \Webauthn\PublicKeyCredentialCreationOptions $options */
++      /** @var PublicKeyCredentialCreationOptions $options */
+       $options = PublicKeyCredentialCreationOptions::createFromArray($data);
+ 
+       if ($options === NULL) {
+@@ -176,7 +178,7 @@ public function handleAttestation(UserInterface $user, string $response): ?\Weba
+    */
+   public function findUserEntityByUsername(string $name): ?PublicKeyCredentialUserEntity {
+     $storage = $this->entityTypeManager->getStorage('user');
+-    /** @var \Drupal\user\UserInterface[] $user */
++    /** @var UserInterface[] $user */
+     $user = $storage->loadByProperties(['name' => $name]);
+ 
+     if (empty($user)) {
+@@ -191,7 +193,7 @@ public function findUserEntityByUsername(string $name): ?PublicKeyCredentialUser
+    */
+   public function findUserEntityByUserHandle(string $userHandle): ?PublicKeyCredentialUserEntity {
+     $storage = $this->entityTypeManager->getStorage('user');
+-    /** @var \Drupal\user\UserInterface[] $user */
++    /** @var UserInterface[] $user */
+     $user = $storage->loadByProperties(['uuid' => $userHandle]);
+ 
+     if (empty($user)) {
+@@ -234,7 +236,7 @@ public function handleAssertion(UserInterface $user, string $response): ?PublicK
+       $request = $psrHttpFactory->createRequest($this->request);
+ 
+       $data = Json::decode($this->privateTempStore->get('attestation'));
+-      /** @var \Webauthn\PublicKeyCredentialRequestOptions $options */
++      /** @var PublicKeyCredentialRequestOptions $options */
+       $options = PublicKeyCredentialRequestOptions::createFromArray($data);
+ 
+       if ($options === NULL) {
+diff --git a/src/ServerInterface.php b/src/ServerInterface.php
+index d104aca..1ebf016 100644
+--- a/src/ServerInterface.php
++++ b/src/ServerInterface.php
+@@ -5,6 +5,7 @@
+ 
+ namespace Drupal\webauthn;
+ 
++use Drupal\Core\Session\AccountInterface;
+ use Drupal\user\UserInterface;
+ use Webauthn\PublicKeyCredentialCreationOptions;
+ use Webauthn\PublicKeyCredentialRequestOptions;
+@@ -21,10 +22,10 @@ interface ServerInterface {
+   /**
+    * Start the attestation ceremony for a given user.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The Drupal user.
+    *
+-   * @return \Webauthn\PublicKeyCredentialCreationOptions
++   * @return PublicKeyCredentialCreationOptions
+    *   The credential creation options.
+    */
+   public function attestation(UserInterface $user): PublicKeyCredentialCreationOptions;
+@@ -32,12 +33,12 @@ public function attestation(UserInterface $user): PublicKeyCredentialCreationOpt
+   /**
+    * Handle attestation response.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user instance.
+    * @param string $response
+    *   The authenticator response (JSON encoded).
+    *
+-   * @return \Webauthn\PublicKeyCredentialSource|null
++   * @return PublicKeyCredentialSource|null
+    *   Returns the credential source on success or NULL on error.
+    */
+   public function handleAttestation(UserInterface $user, string $response): ?PublicKeyCredentialSource;
+@@ -45,10 +46,10 @@ public function handleAttestation(UserInterface $user, string $response): ?Publi
+   /**
+    * Start the assertion ceremony for a given user.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The drupal user.
+    *
+-   * @return \Webauthn\PublicKeyCredentialRequestOptions
++   * @return PublicKeyCredentialRequestOptions
+    *   The credential request options.
+    */
+   public function assertion(UserInterface $user): PublicKeyCredentialRequestOptions;
+@@ -56,12 +57,12 @@ public function assertion(UserInterface $user): PublicKeyCredentialRequestOption
+   /**
+    * Handle assertion response.
+    *
+-   * @param \Drupal\user\UserInterface $user
++   * @param UserInterface $user
+    *   The user instance.
+    * @param string $response
+    *   The authenticator response (JSON encoded).
+    *
+-   * @return \Webauthn\PublicKeyCredentialSource|null
++   * @return PublicKeyCredentialSource|null
+    *   Returns the credential source on success or NULL on error.
+    */
+   public function handleAssertion(UserInterface $user, string $response): ?PublicKeyCredentialSource;
+@@ -69,7 +70,7 @@ public function handleAssertion(UserInterface $user, string $response): ?PublicK
+   /**
+    * Get a relying party object.
+    *
+-   * @return \Webauthn\PublicKeyCredentialRpEntity
++   * @return PublicKeyCredentialRpEntity
+    *   THe relying party object.
+    */
+   public function getRp(): PublicKeyCredentialRpEntity;
+@@ -80,7 +81,7 @@ public function getRp(): PublicKeyCredentialRpEntity;
+    * @param string $name
+    *   The user name.
+    *
+-   * @return \Webauthn\PublicKeyCredentialUserEntity|null
++   * @return PublicKeyCredentialUserEntity|null
+    *   The user entity if found, NULL otherwise.
+    */
+   public function findUserEntityByUsername(string $name): ?PublicKeyCredentialUserEntity;
+@@ -91,7 +92,7 @@ public function findUserEntityByUsername(string $name): ?PublicKeyCredentialUser
+    * @param string $userHandle
+    *   The user handle (uuid).
+    *
+-   * @return \Webauthn\PublicKeyCredentialUserEntity|null
++   * @return PublicKeyCredentialUserEntity|null
+    *   The user entity if found, NULL otherwise.
+    */
+   public function findUserEntityByUserHandle(string $userHandle): ?PublicKeyCredentialUserEntity;
+@@ -99,16 +100,16 @@ public function findUserEntityByUserHandle(string $userHandle): ?PublicKeyCreden
+   /**
+    * Create user entity from a Drupal user.
+    *
+-   * @param \Drupal\user\UserInterface|\Drupal\Core\Session\AccountInterface $user
++   * @param UserInterface|AccountInterface $user
+    *
+-   * @return \Webauthn\PublicKeyCredentialUserEntity
++   * @return PublicKeyCredentialUserEntity
+    */
+   public function createUserEntity(UserInterface $user): PublicKeyCredentialUserEntity;
+ 
+   /**
+    * Get the credential source repository.
+    *
+-   * @return \Webauthn\PublicKeyCredentialSourceRepository
++   * @return PublicKeyCredentialSourceRepository
+    *   The credential source repository.
+    */
+   public function getPublicKeyCredentialSourceRepository(): PublicKeyCredentialSourceRepository;
+diff --git a/webauthn.info.yml b/webauthn.info.yml
+index c3b78d4..381ef34 100644
+--- a/webauthn.info.yml
++++ b/webauthn.info.yml
+@@ -2,5 +2,5 @@ name: WebAuthn
+ type: module
+ description: This module aims to support the upcoming "Web Authentication" protocol, that leverages Public Key Credentials to provide password-less login along with stronger security.
+ package: Security
+-core_version_requirement: ^8.9 || ^9
++core_version_requirement: ^9.1 || ^10
+ configure: webauthn.settings_form
+diff --git a/webauthn.module b/webauthn.module
+index fdc16b4..299d069 100644
+--- a/webauthn.module
++++ b/webauthn.module
+@@ -1,6 +1,8 @@
+ <?php
+ 
+ declare(strict_types=1);
++use Drupal\Core\Field\FieldDefinitionInterface;
++use Drupal\webauthn\Entity\PublicKeyCredentialSource;
+ 
+ /**
+  * @file
+@@ -23,7 +25,7 @@ function webauthn_entity_type_build(&$entity_types) {
+     return;
+   }
+ 
+-  /** @var \Drupal\Core\Entity\EntityTypeInterface $user_type */
++  /** @var EntityTypeInterface $user_type */
+   $user_type = $entity_types['user'];
+   $config = \Drupal::config('webauthn.settings');
+   // By default, create a new operation for registering.
+@@ -44,7 +46,7 @@ function webauthn_entity_type_build(&$entity_types) {
+  * @see \Drupal\webauthn\Plugin\Validation\Constraint\UserMailRequired
+  */
+ function webauthn_entity_base_field_info_alter(&$fields, EntityTypeInterface $entity_type) {
+-  /** @var \Drupal\Core\Field\FieldDefinitionInterface[] $fields */
++  /** @var FieldDefinitionInterface[] $fields */
+   if (!empty($fields['mail']) && $entity_type->id() === 'user') {
+     $constraints = $fields['mail']->getConstraints();
+     unset($constraints['UserMailRequired']);
+@@ -86,7 +88,7 @@ function webauthn_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+  *   - attributes: HTML attributes for the containing element.
+  */
+ function template_preprocess_public_key_credential_source(array &$variables) {
+-  /** @var \Drupal\webauthn\Entity\PublicKeyCredentialSource $public_key_credential_source */
++  /** @var PublicKeyCredentialSource $public_key_credential_source */
+   $public_key_credential_source = $variables['elements']['#public_key_credential_source'];
+ 
+   foreach (Element::children($variables['elements']) as $key) {
