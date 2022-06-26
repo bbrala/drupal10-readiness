@@ -1,0 +1,316 @@
+diff --git a/modules/tupas_registration/src/Controller/RegistrationController.php b/modules/tupas_registration/src/Controller/RegistrationController.php
+index 49ce5a0..6f7f27d 100644
+--- a/modules/tupas_registration/src/Controller/RegistrationController.php
++++ b/modules/tupas_registration/src/Controller/RegistrationController.php
+@@ -156,7 +156,7 @@ class RegistrationController extends SessionController {
+     if ($account = $this->sessionManager->loginRegister($this->auth)) {
+       // Save user details.
+       $account->setUsername($name)
+-        ->setPassword(user_password(20));
++        ->setPassword(\Drupal::service('password_generator')->generate(20));
+       $account->save();
+     }
+ 
+diff --git a/modules/tupas_registration/tests/src/Functional/TupasRegistrationFunctionalTest.php b/modules/tupas_registration/tests/src/Functional/TupasRegistrationFunctionalTest.php
+index e9281a1..6b5d2c8 100644
+--- a/modules/tupas_registration/tests/src/Functional/TupasRegistrationFunctionalTest.php
++++ b/modules/tupas_registration/tests/src/Functional/TupasRegistrationFunctionalTest.php
+@@ -70,7 +70,7 @@ class TupasRegistrationFunctionalTest extends TupasSessionFunctionalBase {
+     // Fill registration form.
+     $this->getSession()->getPage()->fillField('name', 'Testaccount');
+     $this->getSession()->getPage()->fillField('mail', 'test@example.com');
+-    $this->drupalPostForm(NULL, [], 'Create new account');
++    $this->submitForm([], 'Create new account');
+     $this->assertSession()->pageTextContains('Registration successful. You are now logged in.');
+     $this->assertSession()->addressEquals('/user/3');
+ 
+@@ -91,7 +91,7 @@ class TupasRegistrationFunctionalTest extends TupasSessionFunctionalBase {
+     // Make sure username is hidden.
+     $this->assertSession()->fieldNotExists('name');
+     $this->getSession()->getPage()->fillField('mail', 'test123@example.com');
+-    $this->drupalPostForm(NULL, [], 'Create new account');
++    $this->submitForm([], 'Create new account');
+     $this->assertSession()->pageTextContains('Registration successful. You are now logged in.');
+     $this->assertSession()->addressEquals('/user/4');
+     // Make sure user has same username as the one provided by
+@@ -114,7 +114,7 @@ class TupasRegistrationFunctionalTest extends TupasSessionFunctionalBase {
+     $this->loginUsingTupas();
+ 
+     $this->assertSession()->addressEquals('/user/tupas/register');
+-    $this->drupalPostForm(NULL, [], 'Confirm');
++    $this->submitForm([], 'Confirm');
+     $this->assertSession()->pageTextContains('Account connected succesfully.');
+ 
+     // Log current user out and test that user can log with previously
+diff --git a/modules/tupas_registration/tests/src/Unit/UniqueUsernameTest.php b/modules/tupas_registration/tests/src/Unit/UniqueUsernameTest.php
+index 5360726..667a5e7 100644
+--- a/modules/tupas_registration/tests/src/Unit/UniqueUsernameTest.php
++++ b/modules/tupas_registration/tests/src/Unit/UniqueUsernameTest.php
+@@ -16,14 +16,14 @@ class UniqueUsernameTest extends UnitTestCase {
+   /**
+    * The mocked entity storage.
+    *
+-   * @var \PHPUnit_Framework_MockObject_MockObject
++   * @var \PHPUnit\Framework\MockObject\MockObject
+    */
+   protected $entityStorage;
+ 
+   /**
+    * The mocked entity manager.
+    *
+-   * @var \PHPUnit_Framework_MockObject_MockObject
++   * @var \PHPUnit\Framework\MockObject\MockObject
+    */
+   protected $entityManager;
+ 
+@@ -40,11 +40,9 @@ class UniqueUsernameTest extends UnitTestCase {
+   protected function setUp() : void {
+     parent::setUp();
+ 
+-    $this->entityManager = $this->getMockBuilder('\Drupal\Core\Entity\EntityTypeManagerInterface')
+-      ->getMock();
++    $this->entityManager = $this->createMock('\Drupal\Core\Entity\EntityTypeManagerInterface');
+ 
+-    $this->entityStorage = $this->getMockBuilder('Drupal\Core\Entity\EntityStorageInterface')
+-      ->getMock();
++    $this->entityStorage = $this->createMock('Drupal\Core\Entity\EntityStorageInterface');
+     $this->entityManager->expects($this->any())
+       ->method('getStorage')
+       ->will($this->returnValue($this->entityStorage));
+diff --git a/modules/tupas_session/src/Controller/SessionController.php b/modules/tupas_session/src/Controller/SessionController.php
+index 27377b0..82a7672 100644
+--- a/modules/tupas_session/src/Controller/SessionController.php
++++ b/modules/tupas_session/src/Controller/SessionController.php
+@@ -185,9 +185,10 @@ class SessionController extends ControllerBase {
+       // Allow customer id to be altered.
+       /** @var \Drupal\tupas_session\Event\CustomerIdAlterEvent $dispatched_data */
+       $dispatched_data = $this->eventDispatcher
+-        ->dispatch(SessionEvents::CUSTOMER_ID_ALTER, new CustomerIdAlterEvent($hashed_id, [
++        ->dispatch(new CustomerIdAlterEvent($hashed_id, [
+           'raw' => $request->query->all(),
+-        ]));
++        ]),
++        SessionEvents::CUSTOMER_ID_ALTER);
+       // Name will be sent Latin1 encoded and urlencoded.
+       $name = Unicode::convertToUtf8(urldecode($request->query->get('B02K_CUSTNAME')), 'ISO-8859-1');
+       // Start tupas session.
+@@ -198,7 +199,7 @@ class SessionController extends ControllerBase {
+       // Allow redirect path to be customized.
+       $redirect_data = new RedirectAlterEvent('<front>', $request->query->all(), $this->t('TUPAS authentication succesful.'));
+       /** @var \Drupal\tupas_session\Event\RedirectAlterEvent $redirect */
+-      $redirect = $this->eventDispatcher->dispatch(SessionEvents::REDIRECT_ALTER, $redirect_data);
++      $redirect = $this->eventDispatcher->dispatch($redirect_data, SessionEvents::REDIRECT_ALTER);
+ 
+       // Show message only if message is set.
+       if ($message = $redirect->getMessage()) {
+diff --git a/modules/tupas_session/src/Event/CustomerIdAlterEvent.php b/modules/tupas_session/src/Event/CustomerIdAlterEvent.php
+index ca0ea20..eda0ebd 100644
+--- a/modules/tupas_session/src/Event/CustomerIdAlterEvent.php
++++ b/modules/tupas_session/src/Event/CustomerIdAlterEvent.php
+@@ -9,7 +9,7 @@ use Symfony\Component\EventDispatcher\Event;
+  *
+  * @package Drupal\tupas_session\Event
+  */
+-class CustomerIdAlterEvent extends Event {
++class CustomerIdAlterEvent extends \Symfony\Contracts\EventDispatcher\Event {
+ 
+   /**
+    * Customer id.
+diff --git a/modules/tupas_session/src/Event/RedirectAlterEvent.php b/modules/tupas_session/src/Event/RedirectAlterEvent.php
+index 95f41bb..c207b36 100644
+--- a/modules/tupas_session/src/Event/RedirectAlterEvent.php
++++ b/modules/tupas_session/src/Event/RedirectAlterEvent.php
+@@ -9,7 +9,7 @@ use Symfony\Component\EventDispatcher\Event;
+  *
+  * @package Drupal\tupas_session\Event
+  */
+-class RedirectAlterEvent extends Event {
++class RedirectAlterEvent extends \Symfony\Contracts\EventDispatcher\Event {
+ 
+   /**
+    * Redirect path.
+diff --git a/modules/tupas_session/src/Event/SessionAuthenticationEvent.php b/modules/tupas_session/src/Event/SessionAuthenticationEvent.php
+index cec8eb1..ac38671 100644
+--- a/modules/tupas_session/src/Event/SessionAuthenticationEvent.php
++++ b/modules/tupas_session/src/Event/SessionAuthenticationEvent.php
+@@ -8,7 +8,7 @@ use Symfony\Component\EventDispatcher\Event;
+ /**
+  * Class SessionAuthenticationEvent.
+  */
+-final class SessionAuthenticationEvent extends Event {
++final class SessionAuthenticationEvent extends \Symfony\Contracts\EventDispatcher\Event {
+ 
+   /**
+    * The current account.
+diff --git a/modules/tupas_session/src/Event/SessionData.php b/modules/tupas_session/src/Event/SessionData.php
+index 432160b..2a8ef72 100644
+--- a/modules/tupas_session/src/Event/SessionData.php
++++ b/modules/tupas_session/src/Event/SessionData.php
+@@ -9,7 +9,7 @@ use Symfony\Component\EventDispatcher\Event;
+  *
+  * @package Drupal\tupas_session\Event
+  */
+-class SessionData extends Event {
++class SessionData extends \Symfony\Contracts\EventDispatcher\Event {
+ 
+   /**
+    * Unique id for session.
+diff --git a/modules/tupas_session/src/EventSubscriber/TupasSessionEventSubscriber.php b/modules/tupas_session/src/EventSubscriber/TupasSessionEventSubscriber.php
+index 89ecf0a..4e8bc79 100644
+--- a/modules/tupas_session/src/EventSubscriber/TupasSessionEventSubscriber.php
++++ b/modules/tupas_session/src/EventSubscriber/TupasSessionEventSubscriber.php
+@@ -87,10 +87,10 @@ class TupasSessionEventSubscriber implements EventSubscriberInterface {
+   /**
+    * This method is called whenever the kernel.request event is dispatched.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
+    *   Event to dispatch.
+    */
+-  public function handleTupasSession(GetResponseEvent $event) {
++  public function handleTupasSession(\Symfony\Component\HttpKernel\Event\RequestEvent $event) {
+     // User has access to bypass session expiration. Do nothing.
+     if ($this->currentUser->hasPermission('bypass tupas session expiration')) {
+       return;
+diff --git a/modules/tupas_session/src/TupasSessionManager.php b/modules/tupas_session/src/TupasSessionManager.php
+index 2ed6c9d..b4966ca 100644
+--- a/modules/tupas_session/src/TupasSessionManager.php
++++ b/modules/tupas_session/src/TupasSessionManager.php
+@@ -143,7 +143,7 @@ class TupasSessionManager implements TupasSessionManagerInterface {
+     // Allow session data to be altered.
+     $session_data = new SessionData($transaction_id, $unique_id, $this->getTime(), $data);
+     /** @var \Drupal\tupas_session\Event\SessionData $session */
+-    $session = $this->eventDispatcher->dispatch(SessionEvents::SESSION_ALTER, $session_data);
++    $session = $this->eventDispatcher->dispatch($session_data, SessionEvents::SESSION_ALTER);
+ 
+     return $this->storage->save($session);
+   }
+@@ -170,7 +170,7 @@ class TupasSessionManager implements TupasSessionManagerInterface {
+     }
+     $this->recreate($session);
+ 
+-    $this->eventDispatcher->dispatch(SessionEvents::SESSION_LOGIN, new SessionAuthenticationEvent($account, $session));
++    $this->eventDispatcher->dispatch(new SessionAuthenticationEvent($account, $session), SessionEvents::SESSION_LOGIN);
+ 
+     return $account;
+   }
+@@ -185,7 +185,7 @@ class TupasSessionManager implements TupasSessionManagerInterface {
+     $auth->linkExistingAccount($session->getUniqueId(), 'tupas_registration', $account);
+     $this->recreate($session);
+ 
+-    $this->eventDispatcher->dispatch(SessionEvents::SESSION_REGISTER, new SessionAuthenticationEvent($account, $session));
++    $this->eventDispatcher->dispatch(new SessionAuthenticationEvent($account, $session), SessionEvents::SESSION_REGISTER);
+ 
+     return $account;
+   }
+@@ -203,7 +203,7 @@ class TupasSessionManager implements TupasSessionManagerInterface {
+     }
+     $this->recreate($session);
+ 
+-    $this->eventDispatcher->dispatch(SessionEvents::SESSION_REGISTER, new SessionAuthenticationEvent($account, $session));
++    $this->eventDispatcher->dispatch(new SessionAuthenticationEvent($account, $session), SessionEvents::SESSION_REGISTER);
+ 
+     return $account;
+   }
+@@ -213,7 +213,7 @@ class TupasSessionManager implements TupasSessionManagerInterface {
+    */
+   public function destroy() {
+     if ($session_data = $this->getSession()) {
+-      $this->eventDispatcher->dispatch(SessionEvents::SESSION_LOGOUT, $session_data);
++      $this->eventDispatcher->dispatch($session_data, SessionEvents::SESSION_LOGOUT);
+     }
+     return $this->storage->delete();
+   }
+diff --git a/modules/tupas_session/tests/src/Kernel/TupasSessionTest.php b/modules/tupas_session/tests/src/Kernel/TupasSessionTest.php
+index 543608f..2559a96 100644
+--- a/modules/tupas_session/tests/src/Kernel/TupasSessionTest.php
++++ b/modules/tupas_session/tests/src/Kernel/TupasSessionTest.php
+@@ -70,8 +70,7 @@ class TupasSessionTest extends KernelTestBase {
+   public function testExpirableSessionStart() {
+     $timestamp = time();
+ 
+-    $time = $this->getMockBuilder(TimeInterface::class)
+-      ->getMock();
++    $time = $this->createMock(TimeInterface::class);
+     $time
+       ->expects($this->at(0))
+       ->method('getRequestTime')
+@@ -129,8 +128,7 @@ class TupasSessionTest extends KernelTestBase {
+   public function testGarbageCollection() {
+     $timestamp = time();
+ 
+-    $time = $this->getMockBuilder(TimeInterface::class)
+-      ->getMock();
++    $time = $this->createMock(TimeInterface::class);
+     $time
+       ->expects($this->at(0))
+       ->method('getRequestTime')
+diff --git a/modules/tupas_session/tests/src/Unit/TupasSessionManagerTest.php b/modules/tupas_session/tests/src/Unit/TupasSessionManagerTest.php
+index 1bfe0ac..2fc4c6d 100644
+--- a/modules/tupas_session/tests/src/Unit/TupasSessionManagerTest.php
++++ b/modules/tupas_session/tests/src/Unit/TupasSessionManagerTest.php
+@@ -21,14 +21,14 @@ class TupasSessionManagerTest extends UnitTestCase {
+   /**
+    * The stubbed config factory object.
+    *
+-   * @var \PHPUnit_Framework_MockObject_MockBuilder
++   * @var \PHPUnit\Framework\MockObject\MockBuilder
+    */
+   protected $configFactory;
+ 
+   /**
+    * The mocked tupas session storage.
+    *
+-   * @var \PHPUnit_Framework_MockObject_MockObject
++   * @var \PHPUnit\Framework\MockObject\MockObject
+    */
+   protected $storage;
+ 
+@@ -42,14 +42,14 @@ class TupasSessionManagerTest extends UnitTestCase {
+   /**
+    * The mocked session manager.
+    *
+-   * @var \PHPUnit_Framework_MockObject_MockObject
++   * @var \PHPUnit\Framework\MockObject\MockObject
+    */
+   protected $sessionManager;
+ 
+   /**
+    * The mocked event dispatcher.
+    *
+-   * @var \PHPUnit_Framework_MockObject_MockObject
++   * @var \PHPUnit\Framework\MockObject\MockObject
+    */
+   protected $eventDispatcher;
+ 
+@@ -78,25 +78,17 @@ class TupasSessionManagerTest extends UnitTestCase {
+         'tupas_session_length' => 30,
+       ],
+     ]);
+-    $this->storage = $this->getMockBuilder(TupasSessionStorageInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->storage = $this->createMock(TupasSessionStorageInterface::class);
+ 
+-    $this->sessionManager = $this->getMockBuilder(SessionManagerInterface::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->sessionManager = $this->createMock(SessionManagerInterface::class);
+ 
+-    $this->eventDispatcher = $this->getMockBuilder(EventDispatcherInterface::class)
+-      ->getMock();
++    $this->eventDispatcher = $this->createMock(EventDispatcherInterface::class);
+ 
+     $this->session = new SessionData(123456, $this->randomMachineName(), time(), []);
+ 
+-    $dispatched_event = $this->getMockBuilder(SessionData::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $dispatched_event = $this->createMock(SessionData::class);
+ 
+-    $this->time = $this->getMockBuilder(TimeInterface::class)
+-      ->getMock();
++    $this->time = $this->createMock(TimeInterface::class);
+ 
+     $this->eventDispatcher->expects($this->any())
+       ->method('dispatch')

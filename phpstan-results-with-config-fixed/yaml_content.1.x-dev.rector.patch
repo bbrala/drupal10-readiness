@@ -1,0 +1,336 @@
+diff --git a/src/ContentLoader/ContentLoader.php b/src/ContentLoader/ContentLoader.php
+index 570a357..78a1d23 100644
+--- a/src/ContentLoader/ContentLoader.php
++++ b/src/ContentLoader/ContentLoader.php
+@@ -291,7 +291,7 @@ class ContentLoader implements ContentLoaderInterface {
+ 
+     // Dispatch the event notification.
+     $content_parsed_event = new ContentParsedEvent($this, $this->contentFile, $this->parsedContent);
+-    $this->getEventDispatcher()->dispatch(YamlContentEvents::CONTENT_PARSED, $content_parsed_event);
++    $this->getEventDispatcher()->dispatch($content_parsed_event, YamlContentEvents::CONTENT_PARSED);
+ 
+     return $this->parsedContent;
+   }
+@@ -311,13 +311,13 @@ class ContentLoader implements ContentLoaderInterface {
+ 
+       // Dispatch the pre-save event.
+       $entity_pre_save_event = new EntityPreSaveEvent($this, $entity, $content_item);
+-      $this->getEventDispatcher()->dispatch(YamlContentEvents::ENTITY_PRE_SAVE, $entity_pre_save_event);
++      $this->getEventDispatcher()->dispatch($entity_pre_save_event, YamlContentEvents::ENTITY_PRE_SAVE);
+ 
+       $entity->save();
+ 
+       // Dispatch the post-save event.
+       $entity_post_save_event = new EntityPostSaveEvent($this, $entity, $content_item);
+-      $this->getEventDispatcher()->dispatch(YamlContentEvents::ENTITY_POST_SAVE, $entity_post_save_event);
++      $this->getEventDispatcher()->dispatch($entity_post_save_event, YamlContentEvents::ENTITY_POST_SAVE);
+ 
+       $loaded_content[] = $entity;
+     }
+@@ -348,7 +348,7 @@ class ContentLoader implements ContentLoaderInterface {
+ 
+     // Dispatch the entity import event.
+     $entity_import_event = new EntityImportEvent($this, $entity_definition, $content_data);
+-    $this->getEventDispatcher()->dispatch(YamlContentEvents::IMPORT_ENTITY, $entity_import_event);
++    $this->getEventDispatcher()->dispatch($entity_import_event, YamlContentEvents::IMPORT_ENTITY);
+ 
+     // Parse properties for creation and fields for processing.
+     $attributes = $this->getContentAttributes($entity_type, $content_data);
+@@ -452,7 +452,7 @@ class ContentLoader implements ContentLoaderInterface {
+ 
+           // Dispatch field import event prior to populating fields.
+           $field_import_event = new FieldImportEvent($this, $entity, $field_instance, $field_data);
+-          $this->getEventDispatcher()->dispatch(YamlContentEvents::IMPORT_FIELD, $field_import_event);
++          $this->getEventDispatcher()->dispatch($field_import_event, YamlContentEvents::IMPORT_FIELD);
+ 
+           $this->populateField($field_instance, $field_data);
+         }
+diff --git a/src/Event/EventBase.php b/src/Event/EventBase.php
+index d145ab7..1105fdb 100644
+--- a/src/Event/EventBase.php
++++ b/src/Event/EventBase.php
+@@ -8,7 +8,7 @@ use Drupal\yaml_content\ContentLoader\ContentLoaderInterface;
+ /**
+  * Base implementation of yaml_content events.
+  */
+-class EventBase extends Event {
++class EventBase extends \Symfony\Contracts\EventDispatcher\Event {
+ 
+   /**
+    * The ContentLoader being actively executed and triggering the event.
+diff --git a/src/Plugin/yaml_content/process/File.php b/src/Plugin/yaml_content/process/File.php
+index 8cf5d2a..0a955d6 100644
+--- a/src/Plugin/yaml_content/process/File.php
++++ b/src/Plugin/yaml_content/process/File.php
+@@ -50,7 +50,7 @@ class File extends YamlContentProcessBase implements YamlContentProcessInterface
+         ->prepareDirectory($destination, FileSystemInterface::CREATE_DIRECTORY);
+ 
+       // Save the file data or return an existing file.
+-      $file = file_save_data($output, $destination . $filename, FileSystemInterface::EXISTS_REPLACE);
++      $file = \Drupal::service('file.repository')->writeData($output, $destination . $filename, FileSystemInterface::EXISTS_REPLACE);
+ 
+       // Use the newly created file id as the value.
+       $field_data['target_id'] = $file->id();
+diff --git a/src/Service/LoadHelper.php b/src/Service/LoadHelper.php
+index 6ae48a4..c20e7e6 100644
+--- a/src/Service/LoadHelper.php
++++ b/src/Service/LoadHelper.php
+@@ -81,7 +81,7 @@ class LoadHelper {
+    *   matching `*.content.yml` are queued for import.
+    */
+   public function importModule($module, $file = NULL) {
+-    $path = drupal_get_path('module', $module);
++    $path = \Drupal::service('extension.list.module')->getPath($module);
+ 
+     $this->loader->setContentPath($path);
+ 
+@@ -107,7 +107,7 @@ class LoadHelper {
+    *   matching `*.content.yml` are queued for import.
+    */
+   public function importProfile($profile, $file = NULL) {
+-    $path = drupal_get_path('profile', $profile);
++    $path = \Drupal::service('extension.list.profile')->getPath($profile);
+ 
+     $this->loader->setContentPath($path);
+ 
+diff --git a/tests/src/Functional/NodeImportTest.php b/tests/src/Functional/NodeImportTest.php
+index eb86cd7..0d8a0a4 100644
+--- a/tests/src/Functional/NodeImportTest.php
++++ b/tests/src/Functional/NodeImportTest.php
+@@ -55,7 +55,7 @@ class NodeImportTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Create our article content type.
+@@ -67,7 +67,7 @@ class NodeImportTest extends BrowserTestBase {
+     // Prepare the content loader.
+     $this->contentLoader = \Drupal::service('yaml_content.content_loader');
+     // Look for content files in the tests directory.
+-    $this->contentLoader->setContentPath(drupal_get_path('module', 'yaml_content') . '/tests');
++    $this->contentLoader->setContentPath(\Drupal::service('extension.list.module')->getPath('yaml_content') . '/tests');
+   }
+ 
+   /**
+diff --git a/tests/src/Functional/Plugin/yaml_content/process/FileTest.php b/tests/src/Functional/Plugin/yaml_content/process/FileTest.php
+index 19e7898..1aca981 100644
+--- a/tests/src/Functional/Plugin/yaml_content/process/FileTest.php
++++ b/tests/src/Functional/Plugin/yaml_content/process/FileTest.php
+@@ -25,6 +25,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+  */
+ class FileTest extends BrowserTestBase {
+ 
++  use \Prophecy\PhpUnit\ProphecyTrait;
+   use LoadFixturesTrait;
+ 
+   protected static $modules = ['file'];
+diff --git a/tests/src/Functional/TaxonomyImportTest.php b/tests/src/Functional/TaxonomyImportTest.php
+index e985ff6..5fc260c 100644
+--- a/tests/src/Functional/TaxonomyImportTest.php
++++ b/tests/src/Functional/TaxonomyImportTest.php
+@@ -47,13 +47,13 @@ class TaxonomyImportTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Prepare the content loader.
+     $this->contentLoader = \Drupal::service('yaml_content.content_loader');
+     // Look for content files in the tests directory.
+-    $this->contentLoader->setContentPath(drupal_get_path('module', 'yaml_content') . '/tests');
++    $this->contentLoader->setContentPath(\Drupal::service('extension.list.module')->getPath('yaml_content') . '/tests');
+   }
+ 
+   /**
+diff --git a/tests/src/Unit/ContentLoader/ContentLoaderTest.php b/tests/src/Unit/ContentLoader/ContentLoaderTest.php
+index 1a4f200..59cb605 100644
+--- a/tests/src/Unit/ContentLoader/ContentLoaderTest.php
++++ b/tests/src/Unit/ContentLoader/ContentLoaderTest.php
+@@ -36,6 +36,7 @@ class ContentLoaderTest extends ContentLoaderTestBase {
+    * @todo Handle parse failure
+    * @todo Test no array at top level of content
+    * @todo Confirm array structure loaded
++   * @doesNotPerformAssertions
+    */
+   public function testParseContent() {
+     $this->markTestIncomplete();
+@@ -88,6 +89,7 @@ class ContentLoaderTest extends ContentLoaderTestBase {
+    * Test the entry point content loading behavior.
+    *
+    * @covers ::loadContent
++   * @doesNotPerformAssertions
+    */
+   public function testLoadContent() {
+     $this->markTestIncomplete();
+@@ -121,6 +123,7 @@ class ContentLoaderTest extends ContentLoaderTestBase {
+ 
+   /**
+    * @covers ::populateField
++   * @doesNotPerformAssertions
+    */
+   public function testPopulateFieldProcess() {
+     $field_definition = new BaseFieldDefinition();
+diff --git a/tests/src/Unit/ContentLoader/ContentLoaderTestBase.php b/tests/src/Unit/ContentLoader/ContentLoaderTestBase.php
+index 5678fcf..b8e09b8 100644
+--- a/tests/src/Unit/ContentLoader/ContentLoaderTestBase.php
++++ b/tests/src/Unit/ContentLoader/ContentLoaderTestBase.php
+@@ -63,7 +63,7 @@ abstract class ContentLoaderTestBase extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Prepare the directory structure.
+diff --git a/tests/src/Unit/ContentLoader/ExistenceCheckingTest.php b/tests/src/Unit/ContentLoader/ExistenceCheckingTest.php
+index 5b8ca96..6c9521c 100644
+--- a/tests/src/Unit/ContentLoader/ExistenceCheckingTest.php
++++ b/tests/src/Unit/ContentLoader/ExistenceCheckingTest.php
+@@ -112,6 +112,7 @@ class ExistenceCheckingTest extends ContentLoaderTestBase {
+    *
+    * @covers ::buildEntity
+    * @covers ::createEntity
++   * @doesNotPerformAssertions
+    */
+   public function testBuildEntityCallsCreateEntity($entity_type, array $test_content) {
+     $this->markTestSkipped('Enable this test once event dispatching is consolidated.');
+@@ -247,6 +248,7 @@ class ExistenceCheckingTest extends ContentLoaderTestBase {
+    * Confirm `createEntity()` does not create a new entity if a match is found.
+    *
+    * @covers ::createEntity
++   * @doesNotPerformAssertions
+    */
+   public function testCreateEntityLoadsMatchingEntityWhenFound() {
+     $this->markTestIncomplete();
+@@ -254,6 +256,7 @@ class ExistenceCheckingTest extends ContentLoaderTestBase {
+ 
+   /**
+    * Confirm `createEntity()` creates a new entity if a match is not found.
++   * @doesNotPerformAssertions
+    */
+   public function testCreateEntityCreatesNewEntityWhenMatchNotFound() {
+     $this->markTestIncomplete();
+@@ -261,6 +264,7 @@ class ExistenceCheckingTest extends ContentLoaderTestBase {
+ 
+   /**
+    * Confirm `createEntity()` does not change an existing entity if loaded.
++   * @doesNotPerformAssertions
+    */
+   public function testCreateEntityDoesNotChangeExistingEntities() {
+     $this->markTestIncomplete();
+diff --git a/tests/src/Unit/EntityLoadHelper/EntityLoadHelperTest.php b/tests/src/Unit/EntityLoadHelper/EntityLoadHelperTest.php
+index ede40ad..e9504e4 100644
+--- a/tests/src/Unit/EntityLoadHelper/EntityLoadHelperTest.php
++++ b/tests/src/Unit/EntityLoadHelper/EntityLoadHelperTest.php
+@@ -54,6 +54,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test the entity type manager is lazy loaded upon request.
+    *
+    * @covers ::getEntityTypeManager
++   * @doesNotPerformAssertions
+    */
+   public function testEntityTypeManagerIsLazyLoaded() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -63,6 +64,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test the entity field manager is lazy loaded upon request.
+    *
+    * @covers ::getEntityFieldManager
++   * @doesNotPerformAssertions
+    */
+   public function testEntityFieldManagerIsLazyLoaded() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -367,6 +369,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test that UUID search only includes the UUID and entity type.
+    *
+    * @covers ::loadByUuid
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByUuidSearchesByUuidOnly() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -376,6 +379,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test loadByUuid returns only the first match.
+    *
+    * @covers ::loadByUuid
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByUuidReturnsOnlyOneMatch() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -385,6 +389,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test loadByUuid returns false if no match is found.
+    *
+    * @covers ::loadByUuid
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByUuidReturnsFalseIfNoMatchIsFound() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -394,6 +399,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test that property search only includes content property values.
+    *
+    * @covers ::loadByProperties
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByPropertiesSearchesByPropertiesOnly() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -403,6 +409,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test loadByProperties returns only the first match.
+    *
+    * @covers ::loadByProperties
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByPropertiesReturnsOnlyOneMatch() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+@@ -412,6 +419,7 @@ class EntityLoadHelperTest extends UnitTestCase {
+    * Test loadByUuid returns false if no match is found.
+    *
+    * @covers ::loadByProperties
++   * @doesNotPerformAssertions
+    */
+   public function testLoadByPropertiesReturnsFalseIfNoMatchIsFound() {
+     $this->markTestIncomplete('This test has not been implemented yet.');
+diff --git a/tests/src/Unit/Plugin/yaml_content/process/FileTest.php b/tests/src/Unit/Plugin/yaml_content/process/FileTest.php
+index 7f9436a..60b63f4 100644
+--- a/tests/src/Unit/Plugin/yaml_content/process/FileTest.php
++++ b/tests/src/Unit/Plugin/yaml_content/process/FileTest.php
+@@ -21,6 +21,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
+  */
+ class FileTest extends UnitTestCase {
+ 
++  use \Prophecy\PhpUnit\ProphecyTrait;
+   use LoadFixturesTrait;
+ 
+   /**
+@@ -33,7 +34,7 @@ class FileTest extends UnitTestCase {
+   /**
+    * Setup the file process plugin for all tests.
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+     $args = [
+       'my_entity',
+diff --git a/tests/src/Unit/Plugin/yaml_content/process/ReferenceTest.php b/tests/src/Unit/Plugin/yaml_content/process/ReferenceTest.php
+index b4a2848..3acc411 100644
+--- a/tests/src/Unit/Plugin/yaml_content/process/ReferenceTest.php
++++ b/tests/src/Unit/Plugin/yaml_content/process/ReferenceTest.php
+@@ -21,6 +21,7 @@ use Prophecy\Argument;
+  */
+ class ReferenceTest extends UnitTestCase {
+ 
++  use \Prophecy\PhpUnit\ProphecyTrait;
+   /**
+    * The entity type manager service mock.
+    *
+@@ -45,7 +46,7 @@ class ReferenceTest extends UnitTestCase {
+   /**
+    * Setup mocks and a reference plugin for all tests.
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+     $this->entityTypeManager = $this->prophesize(EntityTypeManagerInterface::class);
+     $this->entityStorageHandler = $this->prophesize(EntityStorageInterface::class);
