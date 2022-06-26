@@ -1,0 +1,227 @@
+diff --git a/ics_field.info.yml b/ics_field.info.yml
+index 2b7c415..8d60fed 100644
+--- a/ics_field.info.yml
++++ b/ics_field.info.yml
+@@ -1,7 +1,7 @@
+ name: ics_field
+ type: module
+ description: A module providing a calendar download as an .ics file
+-core_version_requirement: ^8.8 || ^9
++core_version_requirement: ^9.3 || ^10
+ package: PwC's Experience Center Zurich
+ dependencies:
+   - datetime
+diff --git a/src/IcsFileManager.php b/src/IcsFileManager.php
+index 2ef2e5d..9ba7acf 100644
+--- a/src/IcsFileManager.php
++++ b/src/IcsFileManager.php
+@@ -226,7 +226,7 @@ class IcsFileManager {
+ 
+     $file = File::load($fileId);
+     $fileUri = $file->getFileUri();
+-    if (!file_save_data($icsFileStr, $fileUri, FileSystemInterface::EXISTS_REPLACE)) {
++    if (!\Drupal::service('file.repository')->writeData($icsFileStr, $fileUri, FileSystemInterface::EXISTS_REPLACE)) {
+       $this->handleFileSaveError($fileUri);
+     }
+     // Always return the file id, so that it retains the reference to the
+@@ -269,9 +269,7 @@ class IcsFileManager {
+                         ->uuid()) .
+                   '_event.ics';
+       $fileUri = $uploadLocation . '/' . $fileName;
+-      $file = file_save_data($icsFileStr,
+-                             $fileUri,
+-                             FileSystemInterface::EXISTS_REPLACE);
++      $file = \Drupal::service('file.repository')->writeData($icsFileStr, $fileUri, FileSystemInterface::EXISTS_REPLACE);
+       if ($file) {
+         return $file->id();
+       }
+diff --git a/src/Plugin/Field/FieldFormatter/CalendarDownloadDefaultFormatter.php b/src/Plugin/Field/FieldFormatter/CalendarDownloadDefaultFormatter.php
+index efad466..785d607 100644
+--- a/src/Plugin/Field/FieldFormatter/CalendarDownloadDefaultFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/CalendarDownloadDefaultFormatter.php
+@@ -53,7 +53,7 @@ class CalendarDownloadDefaultFormatter extends FormatterBase {
+     $fileRef = $item->get('fileref')->getValue();
+     $file = File::load($fileRef);//TODO - once formatter classes get container access replace with DI
+     if ($file) {
+-      $fileUrlObj = Url::fromUri(file_create_url($file->getFileUri()));
++      $fileUrlObj = \Drupal::service('file_url_generator')->generate($file->getFileUri());
+       $build = [
+         '#type'  => 'link',
+         '#title' => $this->t('iCal Download'),
+diff --git a/tests/src/Functional/CalendarDownloadNodeFormTest.php b/tests/src/Functional/CalendarDownloadNodeFormTest.php
+index 6c09e5f..af10cca 100644
+--- a/tests/src/Functional/CalendarDownloadNodeFormTest.php
++++ b/tests/src/Functional/CalendarDownloadNodeFormTest.php
+@@ -60,10 +60,9 @@ class CalendarDownloadNodeFormTest extends BrowserTestBase {
+ 
+   /**
+    * {@inheritdoc}
+-   *
+-   * @expectedException \Drupal\Core\Config\Schema\SchemaIncompleteException
+    */
+   public function setUp(): void {
++    $this->expectException(\Drupal\Core\Config\Schema\SchemaIncompleteException::class);
+     parent::setUp();
+ 
+     $this->adminUser = $this->drupalCreateUser([], NULL, 1);
+diff --git a/tests/src/Unit/CalendarProperty/CalendarPropertyProcessorFactoryTest.php b/tests/src/Unit/CalendarProperty/CalendarPropertyProcessorFactoryTest.php
+index 50e5fca..036d784 100644
+--- a/tests/src/Unit/CalendarProperty/CalendarPropertyProcessorFactoryTest.php
++++ b/tests/src/Unit/CalendarProperty/CalendarPropertyProcessorFactoryTest.php
+@@ -17,11 +17,8 @@ class CalendarPropertyProcessorFactoryTest extends UnitTestCase {
+    */
+   public function testInstantiation() {
+ 
+-    $tpi = $this->getMockBuilder('Drupal\ics_field\Timezone\TimezoneProviderInterface')
+-      ->getMock();
+-    $t = $this->getMockBuilder('Drupal\Core\Utility\Token')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $tpi = $this->createMock('Drupal\ics_field\Timezone\TimezoneProviderInterface');
++    $t = $this->createMock('Drupal\Core\Utility\Token');
+     $f = new CalendarPropertyProcessorFactory($tpi, $t);
+ 
+     $this->assertInstanceOf('Drupal\ics_field\CalendarProperty\CalendarPropertyProcessorFactory',
+@@ -34,23 +31,16 @@ class CalendarPropertyProcessorFactoryTest extends UnitTestCase {
+    */
+   public function testGeneration() {
+ 
+-    $tpi = $this->getMockBuilder('Drupal\ics_field\Timezone\TimezoneProviderInterface')
+-      ->getMock();
+-    $t = $this->getMockBuilder('Drupal\Core\Utility\Token')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $tpi = $this->createMock('Drupal\ics_field\Timezone\TimezoneProviderInterface');
++    $t = $this->createMock('Drupal\Core\Utility\Token');
+     $f = new CalendarPropertyProcessorFactory($tpi, $t);
+ 
+-    $fdi = $this->getMockBuilder('Drupal\Core\Field\FieldDefinitionInterface')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $fdi = $this->createMock('Drupal\Core\Field\FieldDefinitionInterface');
+     $fdi->expects($this->once())
+       ->method('getSetting')
+       ->will($this->returnValue('I am the reference'));
+ 
+-    $fci = $this->getMockBuilder('Drupal\Core\Field\FieldConfigInterface')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $fci = $this->createMock('Drupal\Core\Field\FieldConfigInterface');
+     $fci->expects($this->once())
+       ->method('uuid')
+       ->will($this->returnValue('i am the uuid'));
+diff --git a/tests/src/Unit/CalendarProperty/CalendarPropertyProcessorTest.php b/tests/src/Unit/CalendarProperty/CalendarPropertyProcessorTest.php
+index 3df07f1..b4128be 100644
+--- a/tests/src/Unit/CalendarProperty/CalendarPropertyProcessorTest.php
++++ b/tests/src/Unit/CalendarProperty/CalendarPropertyProcessorTest.php
+@@ -158,12 +158,10 @@ class CalendarPropertyProcessorTest extends UnitTestCase {
+   }
+ 
+   /**
+-   * @return \PHPUnit_Framework_MockObject_MockObject
++   * @return \PHPUnit\Framework\MockObject\MockObject
+    */
+   private function getTokenMock() {
+-    $token = $this->getMockBuilder('Drupal\Core\Utility\Token')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $token = $this->createMock('Drupal\Core\Utility\Token');
+     $token->expects($this->any())
+       ->method('replace')
+       ->will($this->returnArgument(0));
+@@ -175,8 +173,7 @@ class CalendarPropertyProcessorTest extends UnitTestCase {
+    * Get TimezoneProviderInterface mock.
+    */
+   private function getTzpMock() {
+-    $tzp = $this->getMockBuilder('Drupal\ics_field\Timezone\TimezoneProviderInterface')
+-      ->getMock();
++    $tzp = $this->createMock('Drupal\ics_field\Timezone\TimezoneProviderInterface');
+     $tzp->expects($this->any())
+       ->method('getTimezoneString')
+       ->will($this->returnValue('Europe/Zurich'));
+@@ -185,13 +182,11 @@ class CalendarPropertyProcessorTest extends UnitTestCase {
+   }
+ 
+   /**
+-   * @return \PHPUnit_Framework_MockObject_MockObject
++   * @return \PHPUnit\Framework\MockObject\MockObject
+    */
+   private function getTranslationManagerMock() {
+ 
+-    $tr = $this->getMockBuilder('Drupal\Core\StringTranslation\TranslationManager')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $tr = $this->createMock('Drupal\Core\StringTranslation\TranslationManager');
+     $tr->expects($this->any())
+       ->method('translate')
+       ->will($this->returnArgument(0));
+@@ -200,12 +195,11 @@ class CalendarPropertyProcessorTest extends UnitTestCase {
+   }
+ 
+   /**
+-   * @return \PHPUnit_Framework_MockObject_MockObject
++   * @return \PHPUnit\Framework\MockObject\MockObject
+    */
+   private function getContentEntityMock() {
+ 
+-    $ce = $this->getMockBuilder('Drupal\Core\Entity\ContentEntityInterface')
+-      ->getMock();
++    $ce = $this->createMock('Drupal\Core\Entity\ContentEntityInterface');
+     $ce->expects($this->any())
+       ->method('uuid')
+       ->will($this->returnValue('i_am_the_uuid'));
+@@ -214,9 +208,7 @@ class CalendarPropertyProcessorTest extends UnitTestCase {
+       ->will($this->returnValue('node'));
+ 
+     // Method get needs to return some mocks.
+-    $il = $this->getMockBuilder('Drupal\datetime\Plugin\Field\FieldType\DateTimeFieldItemList')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $il = $this->createMock('Drupal\datetime\Plugin\Field\FieldType\DateTimeFieldItemList');
+     // Returning a value that is not a instanceof DrupalDateTime will result in the datetime being skipped
+     // this is enough to get our tests working here.
+     $il->expects($this->any())
+@@ -231,12 +223,11 @@ class CalendarPropertyProcessorTest extends UnitTestCase {
+   }
+ 
+   /**
+-   * @return \PHPUnit_Framework_MockObject_MockObject
++   * @return \PHPUnit\Framework\MockObject\MockObject
+    */
+   private function getContentEntityWithDateTimeMock($datetimeString = '2020-11-17T00:00:00') {
+ 
+-    $ce = $this->getMockBuilder('Drupal\Core\Entity\ContentEntityInterface')
+-      ->getMock();
++    $ce = $this->createMock('Drupal\Core\Entity\ContentEntityInterface');
+     $ce->expects($this->any())
+       ->method('uuid')
+       ->will($this->returnValue('i_am_the_uuid'));
+@@ -245,13 +236,9 @@ class CalendarPropertyProcessorTest extends UnitTestCase {
+       ->will($this->returnValue('node'));
+ 
+     // Method get needs to return some mocks.
+-    $il = $this->getMockBuilder('Drupal\datetime\Plugin\Field\FieldType\DateTimeFieldItemList')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $il = $this->createMock('Drupal\datetime\Plugin\Field\FieldType\DateTimeFieldItemList');
+ 
+-    $dt = $this->getMockBuilder('Drupal\Core\Datetime\DrupalDateTime')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $dt = $this->createMock('Drupal\Core\Datetime\DrupalDateTime');
+     $dt->expects($this->any())
+       ->method('render')
+       ->will($this->returnValue($datetimeString));
+diff --git a/tests/src/Unit/ICalFactoryTest.php b/tests/src/Unit/ICalFactoryTest.php
+index d21e688..9c70c14 100644
+--- a/tests/src/Unit/ICalFactoryTest.php
++++ b/tests/src/Unit/ICalFactoryTest.php
+@@ -106,7 +106,7 @@ class ICalFactoryTest extends UnitTestCase {
+   /**
+    * A data provider.
+    *
+-   * @return \PHPUnit_Framework_MockObject_MockObject[]
++   * @return \PHPUnit\Framework\MockObject\MockObject[]
+    *   The mock object for Symfony\Component\HttpFoundation\Request.
+    */
+   public function schemeHttpHostProvider() {
