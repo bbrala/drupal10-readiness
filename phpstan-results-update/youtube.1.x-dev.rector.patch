@@ -1,0 +1,142 @@
+diff --git a/tests/src/Functional/YouTubeTest.php b/tests/src/Functional/YouTubeTest.php
+index f8b2a79..92e82b3 100644
+--- a/tests/src/Functional/YouTubeTest.php
++++ b/tests/src/Functional/YouTubeTest.php
+@@ -35,7 +35,7 @@ class YouTubeTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Create Basic page and Article node types.
+@@ -98,7 +98,7 @@ class YouTubeTest extends BrowserTestBase {
+ 
+     // Display creation form.
+     $this->drupalGet('node/add/article');
+-    $this->assertFieldByName("{$field_name}[0][input]", '', t('Video input field is displayed'));
++    $this->assertSession()->fieldValueEquals("{$field_name}[0][input]", '');
+ 
+     // Verify that a valid URL can be submitted.
+     $video_id = 'T5y3dJYHb_A';
+@@ -107,8 +107,8 @@ class YouTubeTest extends BrowserTestBase {
+       "title[0][value]" => "Test1",
+       "{$field_name}[0][input]" => $value,
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save'));
+-    $this->assertText(t('Article Test1 has been created.'));
++    $this->submitForm($edit, t('Save'));
++    $this->assertSession()->pageTextContains(t('Article Test1 has been created.'));
+ 
+     $video_id = 'T5y3dJYHb_A';
+ 
+@@ -117,12 +117,12 @@ class YouTubeTest extends BrowserTestBase {
+     $subject = $this->getSession()->getPage()->getContent();
+     $pattern = '/<img .*src="(.*?' . $video_id . '[\/\d+]*\.[jpg].*?)"/s';
+     preg_match($pattern, $subject, $matches);
+-    $this->assertPattern($pattern);
++    $this->assertSession()->responseMatches($pattern);
+     $img_url = $matches[1];
+ 
+     // Verify that the remote image is created.
+     $this->drupalGet($img_url);
+-    $this->assertResponse(200, 'Remote image downloaded');
++    $this->assertSession()->statusCodeEquals(200, 'Remote image downloaded');
+   }
+ 
+   /**
+@@ -161,7 +161,7 @@ class YouTubeTest extends BrowserTestBase {
+ 
+     // Display creation form.
+     $this->drupalGet('node/add/article');
+-    $this->assertFieldByName("{$field_name}[0][input]", '', t('Video input field is displayed'));
++    $this->assertSession()->fieldValueEquals("{$field_name}[0][input]", '');
+ 
+     // Verify that a valid URL can be submitted.
+     $video_id = 'T5y3dJYHb_A';
+@@ -171,15 +171,15 @@ class YouTubeTest extends BrowserTestBase {
+       "title[0][value]" => 'Test',
+       "{$field_name}[0][input]" => $value,
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save'));
+-    $this->assertText(t('Article Test has been created.'));
+-    $this->assertRaw($embed_value);
++    $this->submitForm($edit, t('Save'));
++    $this->assertSession()->pageTextContains(t('Article Test has been created.'));
++    $this->assertSession()->responseContains($embed_value);
+ 
+     // Verify that the video is displayed.
+     $pattern = '<iframe.*src="' . $embed_value;
+     $pattern = str_replace('/', '\/', $pattern);
+     $pattern = '/' . $pattern . '/s';
+-    $this->assertPattern($pattern);
++    $this->assertSession()->responseMatches($pattern);
+ 
+     // Verify that invalid URLs cannot be submitted.
+     $this->drupalGet('node/add/article');
+@@ -188,8 +188,8 @@ class YouTubeTest extends BrowserTestBase {
+       "title[0][value]" => 'Test1',
+       "{$field_name}[0][input]" => $value,
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save'));
+-    $this->assertText(t('Please provide a valid YouTube URL.'));
++    $this->submitForm($edit, t('Save'));
++    $this->assertSession()->pageTextContains(t('Please provide a valid YouTube URL.'));
+   }
+ 
+ }
+diff --git a/youtube.info.yml b/youtube.info.yml
+index 254004a..e23a5b3 100644
+--- a/youtube.info.yml
++++ b/youtube.info.yml
+@@ -3,8 +3,7 @@ type: module
+ description: 'Defines a YouTube video and thumbnail field type.'
+ package: Field types
+ version: VERSION
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+ dependencies:
+   - drupal:field
+   - drupal:image
+diff --git a/youtube.module b/youtube.module
+index baab095..d0c6c0c 100644
+--- a/youtube.module
++++ b/youtube.module
+@@ -353,7 +353,7 @@ function youtube_get_remote_image($video_id = NULL, $force_small = FALSE) {
+   $destination = youtube_build_thumbnail_uri($video_id);
+ 
+   // Save the thumbnail and add to Drupal managed files.
+-  $file = file_save_data($data, $destination, FileSystemInterface::EXISTS_REPLACE);
++  $file = \Drupal::service('file.repository')->writeData($data, $destination, FileSystemInterface::EXISTS_REPLACE);
+ 
+   if (!$file) {
+     \Drupal::service('logger.factory')->get('youtube')->error(
+@@ -416,7 +416,7 @@ function youtube_thumb_delete_all($form, &$form_state) {
+ function youtube_build_thumbnail_uri($video_id = NULL) {
+   $youtube_thumb_dir = \Drupal::config('youtube.settings')->get('youtube_thumb_dir');
+   $youtube_thumb_dir = empty($youtube_thumb_dir) ? 'youtube' : $youtube_thumb_dir;
+-  $youtube_thumb_uri = file_build_uri($youtube_thumb_dir);
++  $youtube_thumb_uri = \Drupal::service('stream_wrapper_manager')->normalizeUri(\Drupal::config('system.file')->get('default_scheme') . ('://' . $youtube_thumb_dir));
+ 
+   if ($video_id) {
+     return $youtube_thumb_uri . '/' . $video_id . '.jpg';
+@@ -563,7 +563,7 @@ function youtube_tokens($type, $tokens, array $data = [], array $options = []) {
+           if ($video_id = $field->video_id) {
+             $file_uri = youtube_build_thumbnail_uri($video_id);
+             if (file_exists($file_uri) || youtube_get_remote_image($video_id)) {
+-              $replacements[$original] = file_create_url($file_uri);
++              $replacements[$original] = \Drupal::service('file_url_generator')->generateAbsoluteString($file_uri);
+ 
+               if ($style_name = \Drupal::config('youtube.settings')->get('youtube_thumb_token_image_style')) {
+                 $image_style = ImageStyle::load($style_name);
+@@ -571,7 +571,7 @@ function youtube_tokens($type, $tokens, array $data = [], array $options = []) {
+                 if (!file_exists($derivative_uri)) {
+                   $image_style->createDerivative($file_uri, $derivative_uri);
+                 }
+-                $replacements[$original] = file_create_url($derivative_uri);
++                $replacements[$original] = \Drupal::service('file_url_generator')->generateAbsoluteString($derivative_uri);
+               }
+             }
+           }

@@ -1,0 +1,120 @@
+diff --git a/photo_albums.info.yml b/photo_albums.info.yml
+index 282fd35..6a499a7 100644
+--- a/photo_albums.info.yml
++++ b/photo_albums.info.yml
+@@ -1,8 +1,7 @@
+ name: 'Photo Albums'
+ type: module
+ description: 'Provide photo album content.'
+-core: 8.x
+-core_version_requirement: '^8 || ^9'
++core_version_requirement: ^9.3 || ^10
+ package: Custom
+ dependencies:
+   - menu_ui
+diff --git a/photo_albums.module b/photo_albums.module
+index ed7a2b4..79dd92e 100644
+--- a/photo_albums.module
++++ b/photo_albums.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\node\NodeInterface;
+ /**
+  * @file
+  * Contains photo_albums.module.
+@@ -52,8 +53,8 @@ function photo_albums_views_pre_render(ViewExecutable $view) {
+  *
+  * { @inheritdoc }
+  */
+-function photo_albums_node_presave(Drupal\Core\Entity\EntityInterface $entity) {
+-  if ($entity instanceof \Drupal\node\NodeInterface && $entity->bundle() == 'album') {
++function photo_albums_node_presave(EntityInterface $entity) {
++  if ($entity instanceof NodeInterface && $entity->bundle() == 'album') {
+     $nid = $entity->id();
+     $reset = $entity->field_reset_password->value;
+     if ($reset) {
+@@ -89,7 +90,7 @@ function photo_albums_node_update(EntityInterface $entity) {
+  * {@inheritdoc}
+  */
+ function photo_albums_node_delete(EntityInterface $entity) {
+-  if ($entity instanceof \Drupal\node\NodeInterface && $entity->bundle() == 'album') {
++  if ($entity instanceof NodeInterface && $entity->bundle() == 'album') {
+     $results = \Drupal::database()->delete('photo_albums_protected')
+       ->condition('nid', $entity->id(), '=')
+       ->execute();
+@@ -133,7 +134,7 @@ function photo_albums_form_alter(&$form, &$form_state, $form_id) {
+  * Helper function for insert and update nodes of type album.
+  */
+ function _photo_albums_insert_update(EntityInterface $entity) {
+-  if ($entity instanceof \Drupal\node\NodeInterface && $entity->bundle() == 'album') {
++  if ($entity instanceof NodeInterface && $entity->bundle() == 'album') {
+ 
+     $nid = $entity->id();
+     $protected = $entity->field_protect_album->value;
+@@ -156,7 +157,7 @@ function _photo_albums_insert_update(EntityInterface $entity) {
+     }
+ 
+     if (!count($results) && $protected) {
+-      $pass = user_password(8);
++      $pass = \Drupal::service('password_generator')->generate(8);
+ 
+       // use the two-way hashing service to hash the password
+       $tw_hash = \Drupal::service('photo_albums.twowayhash');
+@@ -225,12 +226,12 @@ function photo_albums_preprocess_image(&$variables) {
+     }
+ 
+     if (isset($variables['attributes']['protected']) && $variables['attributes']['protected'] == '1' && !$cookie_pass_ok) {
+-      $variables['uri'] = drupal_get_path('module', 'photo_albums') . '/images/protected.png';
++      $variables['uri'] = \Drupal::service('extension.list.module')->getPath('photo_albums') . '/images/protected.png';
+     }
+   }
+ 
+   if (!empty($variables['uri'])) {
+-    $variables['attributes']['src'] = file_url_transform_relative(file_create_url($variables['uri']));
++    $variables['attributes']['src'] = \Drupal::service('file_url_generator')->generateString($variables['uri']);
+   }
+   // Generate a srcset attribute conforming to the spec at
+   // http://www.w3.org/html/wg/drafts/html/master/embedded-content.html#attr-img-srcset
+@@ -238,7 +239,7 @@ function photo_albums_preprocess_image(&$variables) {
+     $srcset = [];
+     foreach ($variables['srcset'] as $src) {
+       // URI is mandatory.
+-      $source = file_url_transform_relative(file_create_url($src['uri']));
++      $source = \Drupal::service('file_url_generator')->generateString($src['uri']);
+       if (isset($src['width']) && !empty($src['width'])) {
+         $source .= ' ' . $src['width'];
+       }
+diff --git a/src/EventSubscriber/ProtectedAlbumSubscriber.php b/src/EventSubscriber/ProtectedAlbumSubscriber.php
+index f006fa6..e5e4e43 100644
+--- a/src/EventSubscriber/ProtectedAlbumSubscriber.php
++++ b/src/EventSubscriber/ProtectedAlbumSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\photo_albums\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\ResponseEvent;
+ use Drupal\Core\PageCache\ResponsePolicy\KillSwitch;
+ use Drupal\Core\Path\CurrentPathStack;
+ use Drupal\Core\Routing\RedirectDestination;
+@@ -11,7 +12,6 @@ use Drupal\path_alias\AliasManager;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+ use Symfony\Component\HttpFoundation\RequestStack;
+-use Symfony\Component\HttpKernel\Event\FilterResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -89,10 +89,10 @@ class ProtectedAlbumSubscriber implements EventSubscriberInterface {
+   /**
+    * Redirects user to protected page login screen.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\FilterResponseEvent $event
++   * @param \Symfony\Component\HttpKernel\Event\ResponseEvent $event
+    *   The event to process.
+    */
+-  public function checkProtectedAlbum(FilterResponseEvent $event) {
++  public function checkProtectedAlbum(ResponseEvent $event) {
+     if ($this->currentUser->hasPermission('bypass album password protection')) {
+       return;
+     }

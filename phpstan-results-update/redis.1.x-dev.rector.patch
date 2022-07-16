@@ -1,0 +1,209 @@
+diff --git a/redis.info.yml b/redis.info.yml
+index fbeef12..b62e271 100644
+--- a/redis.info.yml
++++ b/redis.info.yml
+@@ -2,6 +2,6 @@ name: Redis
+ description: Provide a module placeholder, for using as dependency for module that needs Redis.
+ package: Performance
+ type: module
+-core_version_requirement: ^8.8 || ^9
++core_version_requirement: ^9.3 || ^10
+ configure: redis.admin_display
+ php: 7.1.0
+diff --git a/src/Cache/CacheBase.php b/src/Cache/CacheBase.php
+index 61b2d74..b59441a 100644
+--- a/src/Cache/CacheBase.php
++++ b/src/Cache/CacheBase.php
+@@ -313,7 +313,7 @@ abstract class CacheBase implements CacheBackendInterface {
+     // Check expire time, allow to have a cache invalidated explicitly, don't
+     // check if already invalid.
+     if ($cache->valid) {
+-      $cache->valid = $cache->expire == Cache::PERMANENT || $cache->expire >= REQUEST_TIME;
++      $cache->valid = $cache->expire == Cache::PERMANENT || $cache->expire >= \Drupal::time()->getRequestTime();
+ 
+       // Check if invalidateTags() has been called with any of the items's tags.
+       if ($cache->valid && !$this->checksumProvider->isValid($cache->checksum, $cache->tags)) {
+diff --git a/src/Cache/Predis.php b/src/Cache/Predis.php
+index 3e75e95..342e741 100644
+--- a/src/Cache/Predis.php
++++ b/src/Cache/Predis.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\redis\Cache;
+ 
++use Predis\Client;
+ use Drupal\Component\Serialization\SerializationInterface;
+ use Drupal\Core\Cache\Cache;
+ use Drupal\Core\Cache\CacheTagsChecksumInterface;
+@@ -26,7 +27,7 @@ class Predis extends CacheBase {
+    * @param \Drupal\redis\Cache\SerializationInterface $serializer
+    *   The serialization class to use.
+    */
+-  public function __construct($bin, \Predis\Client $client, CacheTagsChecksumInterface $checksum_provider, SerializationInterface $serializer) {
++  public function __construct($bin, Client $client, CacheTagsChecksumInterface $checksum_provider, SerializationInterface $serializer) {
+     parent::__construct($bin, $serializer);
+     $this->client = $client;
+     $this->checksumProvider = $checksum_provider;
+diff --git a/src/Controller/ReportController.php b/src/Controller/ReportController.php
+index 9ff362a..7c26999 100755
+--- a/src/Controller/ReportController.php
++++ b/src/Controller/ReportController.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\redis\Controller;
+ 
++use Predis\Client;
+ use Drupal\Core\Controller\ControllerBase;
+ use Drupal\Core\Datetime\DateFormatterInterface;
+ use Drupal\Core\Url;
+@@ -296,7 +297,7 @@ class ReportController extends ControllerBase {
+         yield from $keys;
+       }
+     }
+-    elseif ($this->redis instanceof \Predis\Client) {
++    elseif ($this->redis instanceof Client) {
+       yield from new Keyspace($this->redis, $match, $count);
+     }
+   }
+diff --git a/src/Queue/Predis.php b/src/Queue/Predis.php
+index 4bc7c9d..52a998d 100644
+--- a/src/Queue/Predis.php
++++ b/src/Queue/Predis.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\redis\Queue;
+ 
++use Predis\Client;
+ /**
+  * Redis queue implementation using Predis library backend.
+  *
+@@ -26,7 +27,7 @@ class Predis extends QueueBase {
+    * @param \Predis\Client $client
+    *   The Predis client.
+    */
+-  public function __construct($name, array $settings, \Predis\Client $client) {
++  public function __construct($name, array $settings, Client $client) {
+     parent::__construct($name, $settings);
+     $this->client = $client;
+   }
+diff --git a/src/Queue/ReliablePredis.php b/src/Queue/ReliablePredis.php
+index 69fedcd..0d24e51 100644
+--- a/src/Queue/ReliablePredis.php
++++ b/src/Queue/ReliablePredis.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\redis\Queue;
+ 
++use Predis\Client;
+ /**
+  * Redis queue implementation using Predis library backend.
+  *
+@@ -26,7 +27,7 @@ class ReliablePredis extends ReliableQueueBase {
+    * @param \Predis\Client $client
+    *   The Predis client.
+    */
+-  public function __construct($name, array $settings, \Predis\Client $client) {
++  public function __construct($name, array $settings, Client $client) {
+     parent::__construct($name, $settings);
+     $this->client = $client;
+   }
+diff --git a/tests/src/Functional/Lock/RedisLockFunctionalTest.php b/tests/src/Functional/Lock/RedisLockFunctionalTest.php
+index 14f3815..7273924 100644
+--- a/tests/src/Functional/Lock/RedisLockFunctionalTest.php
++++ b/tests/src/Functional/Lock/RedisLockFunctionalTest.php
+@@ -27,7 +27,7 @@ class RedisLockFunctionalTest extends LockFunctionalTest {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Write the containers_yaml update by hand, since writeSettings() doesn't
+@@ -36,7 +36,7 @@ class RedisLockFunctionalTest extends LockFunctionalTest {
+     chmod($filename, 0666);
+     $contents = file_get_contents($filename);
+     $redis_interface = self::getRedisInterfaceEnv();
+-    $module_path = drupal_get_path('module', 'redis');
++    $module_path = \Drupal::service('extension.list.module')->getPath('redis');
+     $contents .= "\n\n" . "\$settings['container_yamls'][] = '$module_path/example.services.yml';";
+     $contents .= "\n\n" . '$settings["redis.connection"]["interface"] = \'' . $redis_interface . '\';';
+     file_put_contents($filename, $contents);
+diff --git a/tests/src/Functional/WebTest.php b/tests/src/Functional/WebTest.php
+index 3858119..6245091 100644
+--- a/tests/src/Functional/WebTest.php
++++ b/tests/src/Functional/WebTest.php
+@@ -34,7 +34,7 @@ class WebTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->drupalPlaceBlock('system_breadcrumb_block');
+@@ -52,7 +52,7 @@ class WebTest extends BrowserTestBase {
+       'default' => 'cache.backend.redis',
+     ];
+ 
+-    $settings['container_yamls'][] = drupal_get_path('module', 'redis') . '/example.services.yml';
++    $settings['container_yamls'][] = \Drupal::service('extension.list.module')->getPath('redis') . '/example.services.yml';
+ 
+     $settings['bootstrap_container_definition'] = [
+       'parameters' => [],
+@@ -87,12 +87,12 @@ class WebTest extends BrowserTestBase {
+     $contents = file_get_contents($filename);
+ 
+     // Add the container_yaml and cache definition.
+-    $contents .= "\n\n" . '$settings["container_yamls"][] = "' . drupal_get_path('module', 'redis') . '/example.services.yml";';
++    $contents .= "\n\n" . '$settings["container_yamls"][] = "' . \Drupal::service('extension.list.module')->getPath('redis') . '/example.services.yml";';
+     $contents .= "\n\n" . '$settings["cache"] = ' . var_export($settings['cache'], TRUE) . ';';
+     $contents .= "\n\n" . '$settings["redis_compress_length"] = 100;';
+ 
+     // Add the classloader.
+-    $contents .= "\n\n" . '$class_loader->addPsr4(\'Drupal\\\\redis\\\\\', \'' . drupal_get_path('module', 'redis') . '/src\');';
++    $contents .= "\n\n" . '$class_loader->addPsr4(\'Drupal\\\\redis\\\\\', \'' . \Drupal::service('extension.list.module')->getPath('redis') . '/src\');';
+ 
+     // Add the bootstrap container definition.
+     $contents .= "\n\n" . '$settings["bootstrap_container_definition"] = ' . var_export($settings['bootstrap_container_definition'], TRUE) . ';';
+@@ -129,8 +129,9 @@ class WebTest extends BrowserTestBase {
+     $edit["modules[views][enable]"] = TRUE;
+     $edit["modules[field_ui][enable]"] = TRUE;
+     $edit["modules[text][enable]"] = TRUE;
+-    $this->drupalPostForm('admin/modules', $edit, t('Install'));
+-    $this->drupalPostForm(NULL, [], t('Continue'));
++    $this->drupalGet('admin/modules');
++    $this->submitForm($edit, t('Install'));
++    $this->submitForm([], t('Continue'));
+ 
+     $assert = $this->assertSession();
+ 
+@@ -150,7 +151,8 @@ class WebTest extends BrowserTestBase {
+       'name' => $this->randomString(),
+       'type' => $node_type = mb_strtolower($this->randomMachineName()),
+     ];
+-    $this->drupalPostForm('admin/structure/types/add', $edit, t('Save and manage fields'));
++    $this->drupalGet('admin/structure/types/add');
++    $this->submitForm($edit, t('Save and manage fields'));
+     $field_name = mb_strtolower($this->randomMachineName());
+     $this->fieldUIAddNewField('admin/structure/types/manage/' . $node_type, $field_name, NULL, 'text');
+ 
+@@ -160,7 +162,8 @@ class WebTest extends BrowserTestBase {
+       'body[0][value]' => $this->randomMachineName(),
+       'field_' . $field_name . '[0][value]' => $this->randomMachineName(),
+     ];
+-    $this->drupalPostForm('node/add/' . $node_type, $edit, t('Save'));
++    $this->drupalGet('node/add/' . $node_type);
++    $this->submitForm($edit, t('Save'));
+ 
+     // Test the output as anonymous user.
+     $this->drupalLogout();
+@@ -175,7 +178,7 @@ class WebTest extends BrowserTestBase {
+     $update = [
+       'title[0][value]' => $this->randomMachineName(),
+     ];
+-    $this->drupalPostForm(NULL, $update, t('Save'));
++    $this->submitForm($update, t('Save'));
+     $this->assertSession()->responseContains($update['title[0][value]']);
+     $this->drupalGet('node');
+     $this->assertSession()->responseContains($update['title[0][value]']);

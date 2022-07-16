@@ -1,0 +1,289 @@
+diff --git a/src/Events/PreviewNegotiationSubscriber.php b/src/Events/PreviewNegotiationSubscriber.php
+index 767e007..718e202 100644
+--- a/src/Events/PreviewNegotiationSubscriber.php
++++ b/src/Events/PreviewNegotiationSubscriber.php
+@@ -2,9 +2,9 @@
+ 
+ namespace Drupal\entity_reference_preview\Events;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\entity_reference_preview\PreviewDetectorPluginManager;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -48,10 +48,10 @@ class PreviewNegotiationSubscriber implements EventSubscriberInterface {
+   /**
+    * Sets a flag in the request object if it belongs to a "latest" route.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
+    *   The event.
+    */
+-  public function setPreview(GetResponseEvent $event): void {
++  public function setPreview(RequestEvent $event): void {
+     $request = $event->getRequest();
+     // Set the global request state in the request object for others to read.
+     $active_detector = $this->previewDetector->activeDetector($request);
+diff --git a/src/Form/PreviewActionsForm.php b/src/Form/PreviewActionsForm.php
+index 1fdf1a1..a8987a4 100644
+--- a/src/Form/PreviewActionsForm.php
++++ b/src/Form/PreviewActionsForm.php
+@@ -30,7 +30,7 @@ class PreviewActionsForm extends FormBase {
+    * @param \Drupal\entity_reference_preview\Plugin\PreviewDetector\CookiePreviewDetector $cookie_detector
+    *   The state detector plugin.
+    */
+-  public function __construct(CookiePreviewDetector $cookie_detector) {
++  public function __construct(CookiePreviewDetector $cookie_detector, private PreviewDetectorPluginManager $previewDetectorPluginManager) {
+     $this->cookieDetector = $cookie_detector;
+   }
+ 
+@@ -38,7 +38,7 @@ class PreviewActionsForm extends FormBase {
+    * {@inheritdoc}
+    */
+   public static function create(ContainerInterface $container) {
+-    $cookie_detector = $container->get(PreviewDetectorPluginManager::class)
++    $cookie_detector = $this->previewDetectorPluginManager
+       ->createInstance('cookie');
+     return new static($cookie_detector);
+   }
+diff --git a/src/Plugin/Field/FieldFormatter/EntityReferenceEntityPreviewFormatter.php b/src/Plugin/Field/FieldFormatter/EntityReferenceEntityPreviewFormatter.php
+index 401dd1d..56fb013 100644
+--- a/src/Plugin/Field/FieldFormatter/EntityReferenceEntityPreviewFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/EntityReferenceEntityPreviewFormatter.php
+@@ -83,7 +83,8 @@ class EntityReferenceEntityPreviewFormatter extends EntityReferenceEntityFormatt
+     EntityTypeManagerInterface $entity_type_manager,
+     EntityDisplayRepositoryInterface $entity_display_repository,
+     EntityStateManager $entity_state_manager,
+-    bool $can_see_indicator
++    bool $can_see_indicator,
++    EntityStateManager $entityStateManager
+   ) {
+     parent::__construct(
+       $plugin_id,
+@@ -99,6 +100,7 @@ class EntityReferenceEntityPreviewFormatter extends EntityReferenceEntityFormatt
+     );
+     $this->entityStateManager = $entity_state_manager;
+     $this->canSeeIndicator = $can_see_indicator;
++    $this->entityStateManager = $entityStateManager;
+   }
+ 
+   /**
+@@ -121,7 +123,7 @@ class EntityReferenceEntityPreviewFormatter extends EntityReferenceEntityFormatt
+       $container->get('logger.factory'),
+       $container->get('entity_type.manager'),
+       $container->get('entity_display.repository'),
+-      $container->get(EntityStateManager::class),
++      $this->entityStateManager,
+       $can_see_indicator && $indicator_enabled
+     );
+   }
+diff --git a/tests/src/Functional/EntityReferencePreviewFunctionalTestBase.php b/tests/src/Functional/EntityReferencePreviewFunctionalTestBase.php
+index 60af816..f9c441b 100644
+--- a/tests/src/Functional/EntityReferencePreviewFunctionalTestBase.php
++++ b/tests/src/Functional/EntityReferencePreviewFunctionalTestBase.php
+@@ -86,7 +86,7 @@ abstract class EntityReferencePreviewFunctionalTestBase extends ViewTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp($import_test_views = TRUE) {
++  protected function setUp($import_test_views = TRUE): void {
+     parent::setUp($import_test_views);
+     $this->workflow = $this->createEditorialWorkflow();
+     $this->adminUser = $this->drupalCreateUser($this->adminPermissions);
+@@ -119,7 +119,7 @@ abstract class EntityReferencePreviewFunctionalTestBase extends ViewTestBase {
+       'name' => $content_type_name,
+       'type' => $content_type_id,
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save content type'));
++    $this->submitForm($edit, t('Save content type'));
+ 
+     // Check the content type has been set to create new revisions.
+     $this->assertTrue(NodeType::load($content_type_id)->shouldCreateNewRevision());
+@@ -139,9 +139,10 @@ abstract class EntityReferencePreviewFunctionalTestBase extends ViewTestBase {
+    */
+   public function enableModerationThroughUi($content_type_id, $workflow_id = 'editorial') {
+     $this->drupalGet('/admin/config/workflow/workflows');
+-    $this->assertLinkByHref('admin/config/workflow/workflows/manage/' . $workflow_id);
++    $this->assertSession()->linkByHrefExists('admin/config/workflow/workflows/manage/' . $workflow_id);
+     $edit['bundles[' . $content_type_id . ']'] = TRUE;
+-    $this->drupalPostForm('admin/config/workflow/workflows/manage/' . $workflow_id . '/type/node', $edit, t('Save'));
++    $this->drupalGet('admin/config/workflow/workflows/manage/' . $workflow_id . '/type/node');
++    $this->submitForm($edit, t('Save'));
+     // Ensure the parent environment is up-to-date.
+     // @see content_moderation_workflow_insert()
+     \Drupal::service('entity_type.bundle.info')->clearCachedBundles();
+@@ -176,7 +177,8 @@ abstract class EntityReferencePreviewFunctionalTestBase extends ViewTestBase {
+   protected function enableIndicatorThroughUi() {
+     $edit = ['draft_indicator' => '1'];
+     $url = Url::fromRoute('entity_reference_preview.settings');
+-    $this->drupalPostForm($url, $edit, t('Save configuration'));
++    $this->drupalGet($url);
++    $this->submitForm($edit, t('Save configuration'));
+   }
+ 
+   /**
+@@ -185,7 +187,8 @@ abstract class EntityReferencePreviewFunctionalTestBase extends ViewTestBase {
+   protected function disableIndicatorThroughUi() {
+     $edit = ['draft_indicator' => '0'];
+     $url = Url::fromRoute('entity_reference_preview.settings');
+-    $this->drupalPostForm($url, $edit, t('Save configuration'));
++    $this->drupalGet($url);
++    $this->submitForm($edit, t('Save configuration'));
+   }
+ 
+   /**
+@@ -193,7 +196,8 @@ abstract class EntityReferencePreviewFunctionalTestBase extends ViewTestBase {
+    */
+   protected function enablePreviewModeThroughUi() {
+     $url = Url::fromRoute('entity_reference_preview.controls');
+-    $this->drupalPostForm($url, [], t('Start'));
++    $this->drupalGet($url);
++    $this->submitForm([], t('Start'));
+   }
+ 
+   /**
+@@ -201,7 +205,8 @@ abstract class EntityReferencePreviewFunctionalTestBase extends ViewTestBase {
+    */
+   protected function disablePreviewModeThroughUi() {
+     $url = Url::fromRoute('entity_reference_preview.controls');
+-    $this->drupalPostForm($url, [], t('Stop'));
++    $this->drupalGet($url);
++    $this->submitForm([], t('Stop'));
+   }
+ 
+ }
+diff --git a/tests/src/Functional/EntityReferencePreviewTest.php b/tests/src/Functional/EntityReferencePreviewTest.php
+index 7824d83..8519695 100644
+--- a/tests/src/Functional/EntityReferencePreviewTest.php
++++ b/tests/src/Functional/EntityReferencePreviewTest.php
+@@ -16,7 +16,7 @@ class EntityReferencePreviewTest extends EntityReferencePreviewFunctionalTestBas
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp($import_test_views = TRUE) {
++  protected function setUp($import_test_views = TRUE): void {
+     parent::setUp($import_test_views);
+     $this->drupalLogin($this->adminUser);
+ 
+diff --git a/tests/src/Functional/EntityReferencePreviewViewsTest.php b/tests/src/Functional/EntityReferencePreviewViewsTest.php
+index 88ea47d..92b2790 100644
+--- a/tests/src/Functional/EntityReferencePreviewViewsTest.php
++++ b/tests/src/Functional/EntityReferencePreviewViewsTest.php
+@@ -22,7 +22,7 @@ class EntityReferencePreviewViewsTest extends EntityReferencePreviewFunctionalTe
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp($import_test_views = TRUE) {
++  protected function setUp($import_test_views = TRUE): void {
+     parent::setUp($import_test_views);
+     $this->drupalLogin($this->adminUser);
+ 
+diff --git a/tests/src/Kernel/Plugin/views/display_extender/EntityPreviewDisplayExtenderTest.php b/tests/src/Kernel/Plugin/views/display_extender/EntityPreviewDisplayExtenderTest.php
+index 8814454..a1c2c7f 100644
+--- a/tests/src/Kernel/Plugin/views/display_extender/EntityPreviewDisplayExtenderTest.php
++++ b/tests/src/Kernel/Plugin/views/display_extender/EntityPreviewDisplayExtenderTest.php
+@@ -113,7 +113,7 @@ class EntityPreviewDisplayExtenderTest extends KernelTestBase {
+     $extender = new EntityPreviewDisplayExtender([], 'entity_preview', []);
+     $sections = [];
+     $extender->defaultableSections($sections);
+-    $this->assertEqual([
++    $this->assertEquals([
+       'entity_reference_preview_enable' => ['entity_reference_preview_enable'],
+     ], $sections);
+   }
+diff --git a/tests/src/Unit/Events/PreviewNegotiationSubscriberTest.php b/tests/src/Unit/Events/PreviewNegotiationSubscriberTest.php
+index 851de79..05adbe9 100644
+--- a/tests/src/Unit/Events/PreviewNegotiationSubscriberTest.php
++++ b/tests/src/Unit/Events/PreviewNegotiationSubscriberTest.php
+@@ -2,12 +2,13 @@
+ 
+ namespace Drupal\Tests\entity_reference_preview\Unit\Events;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\entity_reference_preview\Events\PreviewNegotiationSubscriber;
+ use Drupal\entity_reference_preview\PreviewDetectorPluginManager;
+ use Drupal\Tests\UnitTestCase;
+ use Prophecy\Argument;
+ use Symfony\Component\HttpFoundation\Request;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ 
+ /**
+  * @coversDefaultClass \Drupal\entity_reference_preview\Events\PreviewNegotiationSubscriber
+@@ -17,6 +18,7 @@ use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+  */
+ class PreviewNegotiationSubscriberTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * The system under test.
+    *
+@@ -44,7 +46,7 @@ class PreviewNegotiationSubscriberTest extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     $this->previewDetector = $this->prophesize(PreviewDetectorPluginManager::class);
+     $this->eventSubscriber = new PreviewNegotiationSubscriber(
+       $this->previewDetector->reveal()
+@@ -64,7 +66,7 @@ class PreviewNegotiationSubscriberTest extends UnitTestCase {
+       ->willReturn($active_detector)
+       ->shouldBecalled($this->once());
+     $request = new Request();
+-    $event = $this->prophesize(GetResponseEvent::class);
++    $event = $this->prophesize(RequestEvent::class);
+     $event->getRequest()->willReturn($request)->shouldBeCalled($this->once());
+     $this->eventSubscriber->setPreview($event->reveal());
+     $flag = $request->attributes
+diff --git a/tests/src/Unit/Plugin/Block/PreviewDetectorBlockTest.php b/tests/src/Unit/Plugin/Block/PreviewDetectorBlockTest.php
+index 1a07dd9..42cb830 100644
+--- a/tests/src/Unit/Plugin/Block/PreviewDetectorBlockTest.php
++++ b/tests/src/Unit/Plugin/Block/PreviewDetectorBlockTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\entity_reference_preview\Unit\Plugin\Block;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Core\Form\FormBuilderInterface;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\entity_reference_preview\Form\PreviewActionsForm;
+@@ -17,6 +18,7 @@ use Prophecy\Argument;
+  */
+ class PreviewDetectorBlockTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * The system under test.
+    *
+@@ -48,7 +50,7 @@ class PreviewDetectorBlockTest extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     $this->formBuilder = $this->prophesize(FormBuilderInterface::class);
+     $this->isPreviewing = (bool) mt_rand(0, 1);
+     $this->previewingViaCookie = (bool) mt_rand(0, 1);
+diff --git a/tests/src/Unit/Plugin/PreviewDetector/RenderedEntityPreviewDetectorTest.php b/tests/src/Unit/Plugin/PreviewDetector/RenderedEntityPreviewDetectorTest.php
+index 4d8b96f..05cc1b5 100644
+--- a/tests/src/Unit/Plugin/PreviewDetector/RenderedEntityPreviewDetectorTest.php
++++ b/tests/src/Unit/Plugin/PreviewDetector/RenderedEntityPreviewDetectorTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\entity_reference_preview\Unit\Plugin\PreviewDetector;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\entity_reference_preview\Plugin\PreviewDetector\RenderedEntityPreviewDetector;
+ use Drupal\node\NodeInterface;
+ use Drupal\Tests\UnitTestCase;
+@@ -13,6 +14,7 @@ use Symfony\Component\HttpFoundation\Request;
+  */
+ class RenderedEntityPreviewDetectorTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Data provider for testIsPreviewing.
+    *
