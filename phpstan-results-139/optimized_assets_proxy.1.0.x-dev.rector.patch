@@ -1,0 +1,88 @@
+diff --git a/optimized_assets_proxy.info.yml b/optimized_assets_proxy.info.yml
+index 5e0a08d..71dae79 100644
+--- a/optimized_assets_proxy.info.yml
++++ b/optimized_assets_proxy.info.yml
+@@ -1,5 +1,4 @@
+ name: CSS/JS Optimized Assets Proxy
+ type: module
+ description: Stores generated css/js optimized assets to the database, and recovers them to disk when missing.
+-core: 8.x
+-core_version_requirement: ^8 || ^9
++core_version_requirement: ^9.3 || ^10
+diff --git a/optimized_assets_proxy.module b/optimized_assets_proxy.module
+index 543bbc6..1edc138 100644
+--- a/optimized_assets_proxy.module
++++ b/optimized_assets_proxy.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\File\FileSystemInterface;
+ /**
+  * Implements hook_cache_flush().
+  */
+@@ -39,12 +40,12 @@ function optimized_assets_proxy_restore_file($uri, $asset_type) {
+   if ($data) {
+     /** @var \Drupal\Core\File\FileSystemInterface $file_system */
+     $file_system = \Drupal::service('file_system');
+-    $file_system->prepareDirectory($directory, \Drupal\Core\File\FileSystemInterface::CREATE_DIRECTORY);
++    $file_system->prepareDirectory($directory, FileSystemInterface::CREATE_DIRECTORY);
+     if ($result) {
+       // Regenerate compressed assets. See Drupal\Core\Asset\AssetDumper::dump().
+       if (extension_loaded('zlib') && \Drupal::config('system.performance')->get($asset_type . '.gzip')) {
+         $data_gz = gzencode($data, 9, FORCE_GZIP);
+-        if (!file_exists($uri . '.gz') && !$file_system->saveData($data_gz, $uri . '.gz', \Drupal\Core\File\FileSystemInterface::EXISTS_REPLACE)) {
++        if (!file_exists($uri . '.gz') && !$file_system->saveData($data_gz, $uri . '.gz', FileSystemInterface::EXISTS_REPLACE)) {
+           return FALSE;
+         }
+       }
+diff --git a/src/AssetDumper.php b/src/AssetDumper.php
+index aa5903c..da1b306 100644
+--- a/src/AssetDumper.php
++++ b/src/AssetDumper.php
+@@ -15,7 +15,7 @@ class AssetDumper extends CoreAssetDumper {
+       ->fields([
+         'file' => basename($uri),
+         'data' => $data,
+-        'timestamp' => REQUEST_TIME,
++        'timestamp' => \Drupal::time()->getRequestTime(),
+       ])
+       ->execute();
+ 
+diff --git a/src/EventSubscriber/MissingAsset.php b/src/EventSubscriber/MissingAsset.php
+index 21fdf2b..e1628de 100644
+--- a/src/EventSubscriber/MissingAsset.php
++++ b/src/EventSubscriber/MissingAsset.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\optimized_assets_proxy\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\File\FileSystemInterface;
+@@ -9,7 +10,6 @@ use Drupal\Core\Url;
+ use Psr\Log\LoggerInterface;
+ use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+ use Symfony\Component\HttpKernel\KernelEvents;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ 
+ class MissingAsset implements EventSubscriberInterface {
+@@ -52,7 +52,7 @@ class MissingAsset implements EventSubscriberInterface {
+     $this->eventDispatcher = $event_dispatcher;
+   }
+ 
+-  public function findAndWrite(GetResponseEvent $event) {
++  public function findAndWrite(RequestEvent $event) {
+     $request_path = $event->getRequest()->getPathInfo();
+ 
+     //$assets_path = file_url_transform_relative(file_create_url('assets://'));
+@@ -63,7 +63,7 @@ class MissingAsset implements EventSubscriberInterface {
+     else {
+       $stream_wrapper_uri = 'public://';
+     }
+-    $assets_path = file_url_transform_relative(file_create_url($stream_wrapper_uri));
++    $assets_path = \Drupal::service('file_url_generator')->generateString($stream_wrapper_uri);
+ 
+     $matches = [];
+     if (preg_match("@^$assets_path(css)/css_|(js)/js_@", $request_path, $matches)) {
