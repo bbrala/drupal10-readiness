@@ -1,0 +1,650 @@
+diff --git a/minisite.theme.inc b/minisite.theme.inc
+index b7d7564..0e917b7 100644
+--- a/minisite.theme.inc
++++ b/minisite.theme.inc
+@@ -97,7 +97,7 @@ function template_preprocess_minisite_link(array &$variables) {
+   if (isset($variables['asset_path'])) {
+     // Asset path is a file.
+     if (LegacyWrapper::isValidUri($variables['asset_path'])) {
+-      $url = file_create_url($variables['asset_path']);
++      $url = \Drupal::service('file_url_generator')->generateAbsoluteString($variables['asset_path']);
+     }
+     // Asset path is an alias to a path.
+     else {
+@@ -111,7 +111,7 @@ function template_preprocess_minisite_link(array &$variables) {
+   }
+   // Falling back to the archive file.
+   else {
+-    $url = file_create_url($file_entity->getFileUri());
++    $url = \Drupal::service('file_url_generator')->generateAbsoluteString($file_entity->getFileUri());
+ 
+     $mime_type = $file->getMimeType();
+     // Set options as per anchor format described at
+diff --git a/src/EventSubscriber/AliasSubscriber.php b/src/EventSubscriber/AliasSubscriber.php
+index 97ca5cb..bffe055 100644
+--- a/src/EventSubscriber/AliasSubscriber.php
++++ b/src/EventSubscriber/AliasSubscriber.php
+@@ -2,10 +2,10 @@
+ 
+ namespace Drupal\minisite\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Component\Utility\UrlHelper;
+ use Drupal\minisite\Asset;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -20,10 +20,10 @@ class AliasSubscriber implements EventSubscriberInterface {
+   /**
+    * Set Minisite delivery controller if request URI matches asset alias.
+    *
+-   * @param Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
+    *   Event that is created to create a response for a request.
+    */
+-  public function onRequestSetController(GetResponseEvent $event) {
++  public function onRequestSetController(RequestEvent $event) {
+     // Do not alter non-master request (this is a case when an exception is
+     // thrown in controller).
+     if (!$event->isMasterRequest()) {
+diff --git a/src/LegacyWrapper.php b/src/LegacyWrapper.php
+index 3b19f2b..03b0be1 100644
+--- a/src/LegacyWrapper.php
++++ b/src/LegacyWrapper.php
+@@ -31,7 +31,7 @@ class LegacyWrapper {
+     }
+ 
+     if (function_exists('file_scan_directory')) {
+-      return file_scan_directory($dir, $mask, $options);
++      return \Drupal::service('file_system')->scanDirectory($dir, $mask, $options);
+     }
+ 
+     throw new \RuntimeException('Unable to find compatible function');
+@@ -69,7 +69,7 @@ class LegacyWrapper {
+     }
+ 
+     if (function_exists('entity_get_display')) {
+-      return entity_get_display($entity_type, $bundle, $view_mode);
++      return \Drupal::service('entity_display.repository')->getViewDisplay($entity_type, $bundle, $view_mode);
+     }
+ 
+     throw new \RuntimeException('Unable to find compatible function');
+@@ -89,7 +89,7 @@ class LegacyWrapper {
+     }
+ 
+     if (function_exists('entity_get_display')) {
+-      return entity_get_form_display($entity_type, $bundle, $form_mode);
++      return \Drupal::service('entity_display.repository')->getFormDisplay($entity_type, $bundle, $form_mode);
+     }
+ 
+     throw new \RuntimeException('Unable to find compatible function');
+@@ -112,7 +112,7 @@ class LegacyWrapper {
+     }
+ 
+     if (function_exists('file_uri_target')) {
+-      return file_uri_target($uri);
++      return \Drupal::service('stream_wrapper_manager')->getTarget($uri);
+     }
+ 
+     throw new \RuntimeException('Unable to find compatible function');
+diff --git a/src/UrlBag.php b/src/UrlBag.php
+index 1aeb3c7..362c28d 100644
+--- a/src/UrlBag.php
++++ b/src/UrlBag.php
+@@ -84,7 +84,7 @@ class UrlBag {
+    * Get URL as a relative path.
+    */
+   public function getUrl() {
+-    return file_url_transform_relative(file_create_url($this->uri));
++    return \Drupal::service('file_url_generator')->generateString($this->uri);
+   }
+ 
+   /**
+@@ -278,7 +278,7 @@ class UrlBag {
+     if (!empty($parsed['scheme'])) {
+       if (in_array($parsed['scheme'], static::getLocalWrapperSchemas())) {
+         // Files never get their URLs aliased, so return as-is.
+-        return file_create_url($url);
++        return \Drupal::service('file_url_generator')->generateAbsoluteString($url);
+       }
+     }
+ 
+diff --git a/src/UrlValidator.php b/src/UrlValidator.php
+index 238f556..e479a37 100644
+--- a/src/UrlValidator.php
++++ b/src/UrlValidator.php
+@@ -91,7 +91,7 @@ class UrlValidator {
+     // path.
+     $url = str_replace('../', '', $url);
+     $url = rtrim($parent, '/') . '/' . ltrim($url, '/');
+-    $url = LegacyWrapper::isValidUri($url) ? file_url_transform_relative(file_create_url($url)) : $url;
++    $url = LegacyWrapper::isValidUri($url) ? \Drupal::service('file_url_generator')->generateString($url) : $url;
+     // Decode URL encoded in file_create_url().
+     $url = rawurldecode($url);
+     $url = '/' . ltrim($url, '/');
+diff --git a/tests/src/Functional/AssetTest.php b/tests/src/Functional/AssetTest.php
+index 1ca56e1..8303f73 100644
+--- a/tests/src/Functional/AssetTest.php
++++ b/tests/src/Functional/AssetTest.php
+@@ -32,14 +32,14 @@ class AssetTest extends MinisiteTestBase {
+     );
+ 
+     // Assert getters without alias set.
+-    $this->assertEqual('public://minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUri());
+-    $this->assertContains('minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUrl());
++    $this->assertEquals('public://minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUri());
++    $this->assertStringContainsString('minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUrl());
+ 
+     // Assert getters with alias set.
+     $asset->setAliasPrefix('some/alias');
+-    $this->assertEqual('public://minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUri());
+-    $this->assertContains('/some/alias/rootpath/subpath/page1.html', $asset->getUrl());
+-    $this->assertNotContains('minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5', $asset->getUrl());
++    $this->assertEquals('public://minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5/rootpath/subpath/page1.html', $asset->getUri());
++    $this->assertStringContainsString('/some/alias/rootpath/subpath/page1.html', $asset->getUrl());
++    $this->assertStringNotContainsString('minisite/static/24c22dd1-2cf1-47ae-ac8a-23a7ff8b86c5', $asset->getUrl());
+ 
+     // Assert other getters.
+     $this->assertEquals(Language::LANGCODE_DEFAULT, $asset->getLanguage());
+@@ -170,7 +170,7 @@ class AssetTest extends MinisiteTestBase {
+       $path
+     );
+ 
+-    $this->assertEqual($instance->isIndex(), $is_index);
++    $this->assertEquals($instance->isIndex(), $is_index);
+   }
+ 
+   /**
+@@ -225,7 +225,7 @@ class AssetTest extends MinisiteTestBase {
+     $alias_prefix = '/' . $randomizer->name(2048 - (strlen($file_path)) - 2);
+     $full_alias = $alias_prefix . '/' . $dir_path . $file_path;
+     $asset->setAliasPrefix($alias_prefix);
+-    $this->assertEqual($asset->getUrl(), $full_alias);
++    $this->assertEquals($asset->getUrl(), $full_alias);
+ 
+     $asset->save();
+ 
+diff --git a/tests/src/Functional/FieldCardinalityTest.php b/tests/src/Functional/FieldCardinalityTest.php
+index 31bd14f..6a84c8d 100644
+--- a/tests/src/Functional/FieldCardinalityTest.php
++++ b/tests/src/Functional/FieldCardinalityTest.php
+@@ -21,7 +21,7 @@ class FieldCardinalityTest extends MinisiteTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->drupalPlaceBlock('system_breadcrumb_block');
+@@ -41,10 +41,11 @@ class FieldCardinalityTest extends MinisiteTestBase {
+       'label' => $field_label,
+       'field_name' => $field_name,
+     ];
+-    $this->drupalPostForm("admin/structure/types/manage/$type_name/fields/add-field", $initial_edit, $this->t('Save and continue'));
+-    $this->assertRaw($this->t('These settings apply to the %label field everywhere it is used.', ['%label' => $field_label]), 'Storage settings page was displayed.');
++    $this->drupalGet("admin/structure/types/manage/$type_name/fields/add-field");
++    $this->submitForm($initial_edit, $this->t('Save and continue'));
++    $this->assertSession()->responseContains($this->t('These settings apply to the %label field everywhere it is used.', ['%label' => $field_label]));
+ 
+-    $this->assertRaw($this->t('This field cardinality is set to 1 and cannot be configured.'), 'Cardinality is restricted to 1.');
++    $this->assertSession()->responseContains($this->t('This field cardinality is set to 1 and cannot be configured.'));
+   }
+ 
+ }
+diff --git a/tests/src/Functional/FieldValidationTest.php b/tests/src/Functional/FieldValidationTest.php
+index 601d19f..bdd33ec 100644
+--- a/tests/src/Functional/FieldValidationTest.php
++++ b/tests/src/Functional/FieldValidationTest.php
+@@ -24,7 +24,7 @@ class FieldValidationTest extends MinisiteTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->drupalPlaceBlock('system_breadcrumb_block');
+@@ -43,8 +43,9 @@ class FieldValidationTest extends MinisiteTestBase {
+     // Try to post a new node without uploading a file.
+     $edit = [];
+     $edit['title[0][value]'] = $this->randomMachineName();
+-    $this->drupalPostForm('node/add/' . $this->contentType, $edit, $this->t('Save'));
+-    $this->assertRaw($this->t('@title field is required.', ['@title' => $field->getLabel()]));
++    $this->drupalGet('node/add/' . $this->contentType);
++    $this->submitForm($edit, $this->t('Save'));
++    $this->assertSession()->responseContains($this->t('@title field is required.', ['@title' => $field->getLabel()]));
+ 
+     // Create a new node with the uploaded file.
+     $test_file = $this->getTestArchiveValid();
+@@ -73,8 +74,8 @@ class FieldValidationTest extends MinisiteTestBase {
+     // Try uploading a file with correct extension, but invalid format.
+     $test_file = $this->getTestArchiveInvalidFormat();
+     $this->uploadNodeFile($test_file, $field_name, $this->contentType);
+-    $this->assertRaw($this->t('The specified file %filename could not be uploaded.', ['%filename' => $test_file->getFilename()]));
+-    $this->assertRaw($this->t('File @filename is not an archive file.', ['@filename' => $test_file->getFilename()]));
++    $this->assertSession()->responseContains($this->t('The specified file %filename could not be uploaded.', ['%filename' => $test_file->getFilename()]));
++    $this->assertSession()->responseContains($this->t('File @filename is not an archive file.', ['@filename' => $test_file->getFilename()]));
+   }
+ 
+   /**
+@@ -88,24 +89,27 @@ class FieldValidationTest extends MinisiteTestBase {
+     // Valid extensions.
+     $allowed_extensions = 'html, htm, js, css, png';
+     $edit['settings[minisite_extensions]'] = $allowed_extensions;
+-    $this->drupalPostForm($path, $edit, $this->t('Save settings'));
+-    $this->assertRaw($this->t('Saved %field configuration.', [
++    $this->drupalGet($path);
++    $this->submitForm($edit, $this->t('Save settings'));
++    $this->assertSession()->responseContains($this->t('Saved %field configuration.', [
+       '%field' => $field_name,
+     ]));
+ 
+     // Single denied extensions entered.
+     $denied_extensions = 'scr';
+     $edit['settings[minisite_extensions]'] = $allowed_extensions . ' ' . $denied_extensions;
+-    $this->drupalPostForm($path, $edit, $this->t('Save settings'));
+-    $this->assertRaw($this->t('The list of allowed extensions is not valid, be sure to not include %ext extension(s).', [
++    $this->drupalGet($path);
++    $this->submitForm($edit, $this->t('Save settings'));
++    $this->assertSession()->responseContains($this->t('The list of allowed extensions is not valid, be sure to not include %ext extension(s).', [
+       '%ext' => $denied_extensions,
+     ]));
+ 
+     // Multiple denied extensions entered.
+     $denied_extensions = 'scr exe';
+     $edit['settings[minisite_extensions]'] = $allowed_extensions . ' ' . $denied_extensions;
+-    $this->drupalPostForm($path, $edit, $this->t('Save settings'));
+-    $this->assertRaw($this->t('The list of allowed extensions is not valid, be sure to not include %ext extension(s).', [
++    $this->drupalGet($path);
++    $this->submitForm($edit, $this->t('Save settings'));
++    $this->assertSession()->responseContains($this->t('The list of allowed extensions is not valid, be sure to not include %ext extension(s).', [
+       '%ext' => str_replace(' ', ', ', $denied_extensions),
+     ]));
+   }
+diff --git a/tests/src/Functional/MinisiteTest.php b/tests/src/Functional/MinisiteTest.php
+index 47497b8..caf115c 100644
+--- a/tests/src/Functional/MinisiteTest.php
++++ b/tests/src/Functional/MinisiteTest.php
+@@ -66,7 +66,7 @@ class MinisiteTest extends MinisiteTestBase {
+     $this->assertEquals($index_uri, $minisite->getIndexAssetUri(), 'getIndexAssetUri() returns correct URI of the index asset');
+     $this->assertTrue(is_readable($index_uri), 'Asset file exists');
+ 
+-    $index_url = file_url_transform_relative(file_create_url($asset_dir2 . DIRECTORY_SEPARATOR . $test_archive_assets[0]));
++    $index_url = \Drupal::service('file_url_generator')->generateString($asset_dir2 . DIRECTORY_SEPARATOR . $test_archive_assets[0]);
+     $this->assertEquals($index_url, $minisite->getIndexAssetUrl(), 'getIndexAssetUrl() returns correct URI of the index asset');
+ 
+     // Idempotence tests.
+diff --git a/tests/src/Functional/MinisiteTestBase.php b/tests/src/Functional/MinisiteTestBase.php
+index c2c5c6d..bb4d5ec 100644
+--- a/tests/src/Functional/MinisiteTestBase.php
++++ b/tests/src/Functional/MinisiteTestBase.php
+@@ -82,7 +82,7 @@ abstract class MinisiteTestBase extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->fixtureSetUp();
+@@ -96,7 +96,7 @@ abstract class MinisiteTestBase extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function tearDown() {
++  protected function tearDown(): void {
+     parent::tearDown();
+ 
+     $this->fixtureTearDown();
+@@ -196,7 +196,7 @@ abstract class MinisiteTestBase extends BrowserTestBase {
+       $node->save();
+       $node_storage->resetCache([$nid]);
+       $node = $node_storage->load($nid);
+-      $this->assertNotEqual($nid, $node->getRevisionId(), 'Node revision exists.');
++      $this->assertNotEquals($nid, $node->getRevisionId(), 'Node revision exists.');
+     }
+     $this->drupalGet("node/$nid/edit");
+     $page = $this->getSession()->getPage();
+@@ -217,11 +217,11 @@ abstract class MinisiteTestBase extends BrowserTestBase {
+       }
+       else {
+         $page->attachFileToField($name, $file_path);
+-        $this->drupalPostForm(NULL, [], $this->t('Upload'));
++        $this->submitForm([], $this->t('Upload'));
+       }
+     }
+ 
+-    $this->drupalPostForm(NULL, $edit, $this->t('Save'));
++    $this->submitForm($edit, $this->t('Save'));
+ 
+     return $nid;
+   }
+@@ -250,7 +250,7 @@ abstract class MinisiteTestBase extends BrowserTestBase {
+     $this->container->get('entity_type.manager')->getStorage('file')->resetCache();
+     $db_file = File::load($file->id());
+     $message = isset($message) ? $message : new FormattableMarkup('File %file exists in database at the correct path.', ['%file' => $file->getFileUri()]);
+-    $this->assertEqual($db_file->getFileUri(), $file->getFileUri(), $message);
++    $this->assertEquals($db_file->getFileUri(), $file->getFileUri(), $message);
+   }
+ 
+   /**
+@@ -338,7 +338,7 @@ abstract class MinisiteTestBase extends BrowserTestBase {
+    */
+   public function assertArchiveFileNotExist(FileInterface $file) {
+     $this->assertFileEntryNotExists($file, 'Archive file entry does not');
+-    $this->assertFileNotExists(Minisite::getCommonArchiveDir() . DIRECTORY_SEPARATOR . $file->getFilename(), 'Archive file does not exist');
++    $this->assertFileDoesNotExist(Minisite::getCommonArchiveDir() . DIRECTORY_SEPARATOR . $file->getFilename(), 'Archive file does not exist');
+   }
+ 
+   /**
+@@ -410,7 +410,8 @@ abstract class MinisiteTestBase extends BrowserTestBase {
+     $edit1 = [
+       'files[field_' . $field_name . '_' . 0 . ']' => $test_archive->getFileUri(),
+     ];
+-    $this->drupalPostForm("node/add/$node_type", $edit1, $this->t('Save'));
++    $this->drupalGet("node/add/$node_type");
++    $this->submitForm($edit1, $this->t('Save'));
+     $edit2 = [
+       'title[0][value]' => $node_title,
+       'field_' . $field_name . '[' . 0 . '][options][alias_status]' => TRUE,
+@@ -422,7 +423,7 @@ abstract class MinisiteTestBase extends BrowserTestBase {
+       $edit['field_' . $field_name . '[' . 0 . '][description]'] = $description;
+     }
+ 
+-    $this->drupalPostForm(NULL, $edit, $this->t('Save'));
++    $this->submitForm($edit, $this->t('Save'));
+ 
+     return $field_name;
+   }
+@@ -473,22 +474,22 @@ abstract class MinisiteTestBase extends BrowserTestBase {
+   public function browseFixtureMinisite($node, $description) {
+     // Visit node and start browsing minisite.
+     $this->drupalGet('node/' . $node->id());
+-    $this->assertResponse(200);
+-    $this->assertLink($description);
++    $this->assertSession()->statusCodeEquals(200);
++    $this->assertSession()->linkExists($description);
+     $this->clickLink($description);
+ 
+     // Brose minisite pages starting from index page.
+-    $this->assertText('Index page');
+-    $this->assertLink('Go to Page 1');
++    $this->assertSession()->pageTextContains('Index page');
++    $this->assertSession()->linkExists('Go to Page 1');
+     $this->clickLink('Go to Page 1');
+ 
+-    $this->assertText('Page 1');
+-    $this->assertLink('Go to Page 2');
++    $this->assertSession()->pageTextContains('Page 1');
++    $this->assertSession()->linkExists('Go to Page 2');
+     $this->clickLink('Go to Page 2');
+-    $this->assertResponse(200);
+-    $this->assertHeader('Content-Type', 'text/html; charset=UTF-8');
++    $this->assertSession()->statusCodeEquals(200);
++    $this->assertSession()->responseHeaderEquals('Content-Type', 'text/html; charset=UTF-8');
+ 
+-    $this->assertText('Page 2');
++    $this->assertSession()->pageTextContains('Page 2');
+   }
+ 
+   /**
+@@ -496,37 +497,37 @@ abstract class MinisiteTestBase extends BrowserTestBase {
+    */
+   public function browseFixtureMinisiteAliased($alias, $description, $assets_paths) {
+     $this->drupalGet($alias);
+-    $this->assertResponse(200);
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     // Assert that a link to a minisite is present.
+-    $this->assertLink($description);
+-    $this->assertLinkByHref($alias . '/' . $assets_paths[0]);
++    $this->assertSession()->linkExists($description);
++    $this->assertSession()->linkByHrefExists($alias . '/' . $assets_paths[0]);
+ 
+     // Start browsing the minisite.
+     $this->clickLink($description);
+ 
+     // Assert first index path as aliased.
+-    $this->assertUrl($alias . '/' . $assets_paths[0]);
+-    $this->assertResponse(200);
+-    $this->assertHeader('Content-Type', 'text/html; charset=UTF-8');
++    $this->assertSession()->addressEquals($alias . '/' . $assets_paths[0]);
++    $this->assertSession()->statusCodeEquals(200);
++    $this->assertSession()->responseHeaderEquals('Content-Type', 'text/html; charset=UTF-8');
+ 
+     // Brose minisite pages starting from index page.
+-    $this->assertText('Index page');
+-    $this->assertLink('Go to Page 1');
++    $this->assertSession()->pageTextContains('Index page');
++    $this->assertSession()->linkExists('Go to Page 1');
+     $this->clickLink('Go to Page 1');
+-    $this->assertResponse(200);
+-    $this->assertHeader('Content-Type', 'text/html; charset=UTF-8');
++    $this->assertSession()->statusCodeEquals(200);
++    $this->assertSession()->responseHeaderEquals('Content-Type', 'text/html; charset=UTF-8');
+ 
+-    $this->assertText('Page 1');
+-    $this->assertUrl($alias . '/' . $assets_paths[1]);
++    $this->assertSession()->pageTextContains('Page 1');
++    $this->assertSession()->addressEquals($alias . '/' . $assets_paths[1]);
+ 
+-    $this->assertLink('Go to Page 2');
++    $this->assertSession()->linkExists('Go to Page 2');
+     $this->clickLink('Go to Page 2');
+-    $this->assertResponse(200);
+-    $this->assertHeader('Content-Type', 'text/html; charset=UTF-8');
++    $this->assertSession()->statusCodeEquals(200);
++    $this->assertSession()->responseHeaderEquals('Content-Type', 'text/html; charset=UTF-8');
+ 
+-    $this->assertText('Page 2');
+-    $this->assertUrl($alias . '/' . $assets_paths[2]);
++    $this->assertSession()->pageTextContains('Page 2');
++    $this->assertSession()->addressEquals($alias . '/' . $assets_paths[2]);
+ 
+     // Navigate to the page using URL with a query.
+     $this->drupalGet($alias . '/' . $assets_paths[1], [
+@@ -535,14 +536,14 @@ abstract class MinisiteTestBase extends BrowserTestBase {
+       ],
+       'fragment' => 'someid',
+     ]);
+-    $this->assertResponse(200);
+-    $this->assertHeader('Content-Type', 'text/html; charset=UTF-8');
++    $this->assertSession()->statusCodeEquals(200);
++    $this->assertSession()->responseHeaderEquals('Content-Type', 'text/html; charset=UTF-8');
+ 
+     // Get non-document file through an alias.
+     $this->drupalGet($alias . '/' . $assets_paths[3]);
+-    $this->assertResponse(200);
+-    $this->assertHeader('Content-Type', 'image/jpeg');
+-    $this->assertHeader('Content-Length', (string) filesize($this->getFixtureFileDir() . DIRECTORY_SEPARATOR . 'example.jpeg'));
++    $this->assertSession()->statusCodeEquals(200);
++    $this->assertSession()->responseHeaderEquals('Content-Type', 'image/jpeg');
++    $this->assertSession()->responseHeaderEquals('Content-Length', (string) filesize($this->getFixtureFileDir() . DIRECTORY_SEPARATOR . 'example.jpeg'));
+   }
+ 
+   /**
+diff --git a/tests/src/Functional/UploadBrowseAliasPathautoTest.php b/tests/src/Functional/UploadBrowseAliasPathautoTest.php
+index 0725dd4..dce8580 100644
+--- a/tests/src/Functional/UploadBrowseAliasPathautoTest.php
++++ b/tests/src/Functional/UploadBrowseAliasPathautoTest.php
+@@ -25,7 +25,7 @@ class UploadBrowseAliasPathautoTest extends MinisiteTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->drupalPlaceBlock('system_breadcrumb_block');
+@@ -72,7 +72,8 @@ class UploadBrowseAliasPathautoTest extends MinisiteTestBase {
+       'path[0][pathauto]' => FALSE,
+       'path[0][alias]' => $node_alias_updated,
+     ];
+-    $this->drupalPostForm("node/$nid/edit", $edit, $this->t('Save'));
++    $this->drupalGet("node/$nid/edit");
++    $this->submitForm($edit, $this->t('Save'));
+ 
+     // Browse fixture minisite using updated manual alias.
+     $this->browseFixtureMinisiteAliased($node_alias_updated, $minisite_description, $test_archive_assets);
+@@ -82,16 +83,18 @@ class UploadBrowseAliasPathautoTest extends MinisiteTestBase {
+     $edit = [
+       'path[0][pathauto]' => TRUE,
+     ];
+-    $this->drupalPostForm("node/$nid/edit", $edit, $this->t('Save'));
++    $this->drupalGet("node/$nid/edit");
++    $this->submitForm($edit, $this->t('Save'));
+     $node = Node::load($nid);
+     $this->assertEntityAliasExists($node);
+ 
+     // Browse fixture minisite using updated Pathauto-generated alias.
+     $this->browseFixtureMinisiteAliased($node_alias, $minisite_description, $test_archive_assets);
++    $this->drupalGet("node/$nid/delete");
+ 
+     // Delete node.
+-    $this->drupalPostForm("node/$nid/delete", [], $this->t('Delete'));
+-    $this->assertResponse(200);
++    $this->submitForm([], $this->t('Delete'));
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     // Assert that Minisite assets were removed.
+     $this->assertMinisiteRemoved($node, $field_name, $test_archive_assets);
+diff --git a/tests/src/Functional/UploadBrowseAliasTest.php b/tests/src/Functional/UploadBrowseAliasTest.php
+index 274f150..ef98c01 100644
+--- a/tests/src/Functional/UploadBrowseAliasTest.php
++++ b/tests/src/Functional/UploadBrowseAliasTest.php
+@@ -20,7 +20,7 @@ class UploadBrowseAliasTest extends MinisiteTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->drupalPlaceBlock('system_breadcrumb_block');
+@@ -61,7 +61,8 @@ class UploadBrowseAliasTest extends MinisiteTestBase {
+     $edit = [
+       'path[0][alias]' => $node_alias_updated,
+     ];
+-    $this->drupalPostForm("node/$nid/edit", $edit, $this->t('Save'));
++    $this->drupalGet("node/$nid/edit");
++    $this->submitForm($edit, $this->t('Save'));
+ 
+     // Browse fixture minisite using updated manually provided alias.
+     $this->browseFixtureMinisiteAliased($node_alias_updated, $minisite_description, $test_archive_assets);
+@@ -70,12 +71,14 @@ class UploadBrowseAliasTest extends MinisiteTestBase {
+     $edit = [
+       'path[0][alias]' => '',
+     ];
+-    $this->drupalPostForm("node/$nid/edit", $edit, $this->t('Save'));
++    $this->drupalGet("node/$nid/edit");
++    $this->submitForm($edit, $this->t('Save'));
+     $this->browseFixtureMinisite($node, $minisite_description);
++    $this->drupalGet("node/$nid/delete");
+ 
+     // Delete node.
+-    $this->drupalPostForm("node/$nid/delete", [], $this->t('Delete'));
+-    $this->assertResponse(200);
++    $this->submitForm([], $this->t('Delete'));
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     // Assert that Minisite assets were removed.
+     $this->assertMinisiteRemoved($node, $field_name, $test_archive_assets);
+diff --git a/tests/src/Functional/UploadBrowseTest.php b/tests/src/Functional/UploadBrowseTest.php
+index 38e3cdf..31418b8 100644
+--- a/tests/src/Functional/UploadBrowseTest.php
++++ b/tests/src/Functional/UploadBrowseTest.php
+@@ -20,7 +20,7 @@ class UploadBrowseTest extends MinisiteTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->drupalPlaceBlock('system_breadcrumb_block');
+@@ -48,10 +48,11 @@ class UploadBrowseTest extends MinisiteTestBase {
+ 
+     $test_archive = $this->getUploadedArchiveFile($node, $field_name);
+     $this->browseFixtureMinisite($node, $test_archive->getFilename());
++    $this->drupalGet("node/$nid/delete");
+ 
+     // Delete node.
+-    $this->drupalPostForm("node/$nid/delete", [], $this->t('Delete'));
+-    $this->assertResponse(200);
++    $this->submitForm([], $this->t('Delete'));
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     // Assert that Minisite assets were removed.
+     $this->assertMinisiteRemoved($node, $field_name, $test_archive_assets);
+@@ -79,11 +80,12 @@ class UploadBrowseTest extends MinisiteTestBase {
+ 
+     $test_archive = $this->getUploadedArchiveFile($node, $field_name);
+     $this->browseFixtureMinisite($node, $test_archive->getFilename());
++    $this->drupalGet("node/$nid/edit");
+ 
+     // Remove the uploaded file and save the node.
+-    $this->drupalPostForm("node/$nid/edit", [], $this->t('Remove'));
+-    $this->drupalPostForm(NULL, [], $this->t('Save'));
+-    $this->assertResponse(200);
++    $this->submitForm([], $this->t('Remove'));
++    $this->submitForm([], $this->t('Save'));
++    $this->assertSession()->statusCodeEquals(200);
+ 
+     // Assert that Minisite assets were removed.
+     $this->assertMinisiteRemoved($node, $field_name, $test_archive_assets);
+diff --git a/tests/src/Kernel/UrlBagTest.php b/tests/src/Kernel/UrlBagTest.php
+index b88248e..b0e2663 100644
+--- a/tests/src/Kernel/UrlBagTest.php
++++ b/tests/src/Kernel/UrlBagTest.php
+@@ -312,7 +312,7 @@ class UrlBagTest extends KernelTestBase {
+     // With parent alias.
+     $bag->setParentAlias('/parent/alias');
+     $this->assertEquals('/parent/alias/rootpath/subpath/file.txt', $bag->getAlias());
+-    $this->assertContains('/parent/alias/rootpath/subpath/file.txt', $bag->getAliasAbsolute());
++    $this->assertStringContainsString('/parent/alias/rootpath/subpath/file.txt', $bag->getAliasAbsolute());
+     $this->assertEquals('/parent/alias', $bag->getParentAlias());
+     $this->assertContains('/parent/alias', $bag->getParentAliasAbsolute());
+     $this->assertNotContains('rootpath/subpath/file.txt', $bag->getParentAlias());
+@@ -324,7 +324,7 @@ class UrlBagTest extends KernelTestBase {
+     // With alias autodiscovery.
+     $bag->setAlias('/parent/alias/rootpath/subpath/file.txt');
+     $this->assertEquals('/parent/alias/rootpath/subpath/file.txt', $bag->getAlias());
+-    $this->assertContains('/parent/alias/rootpath/subpath/file.txt', $bag->getAliasAbsolute());
++    $this->assertStringContainsString('/parent/alias/rootpath/subpath/file.txt', $bag->getAliasAbsolute());
+     $this->assertEquals('/parent/alias', $bag->getParentAlias());
+     $this->assertContains('/parent/alias', $bag->getParentAliasAbsolute());
+     $this->assertNotContains('rootpath/subpath/file.txt', $bag->getParentAlias());
+diff --git a/tests/src/Unit/FixtureTest.php b/tests/src/Unit/FixtureTest.php
+index e75780d..93e6e02 100644
+--- a/tests/src/Unit/FixtureTest.php
++++ b/tests/src/Unit/FixtureTest.php
+@@ -23,7 +23,7 @@ class FixtureTest extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->fixtureSetUp();
+   }
+@@ -31,7 +31,7 @@ class FixtureTest extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function tearDown() {
++  protected function tearDown(): void {
+     parent::tearDown();
+     $this->fixtureTearDown();
+   }
+@@ -57,7 +57,7 @@ class FixtureTest extends UnitTestCase {
+     $this->assertNotEquals($first_dir, $second_dir, 'fixtureSetUp() creates new directory on every call');
+ 
+     $this->fixtureTearDown();
+-    $this->assertDirectoryNotExists($second_dir, 'fixtureTearDown() removes directory');
++    $this->assertDirectoryDoesNotExist($second_dir, 'fixtureTearDown() removes directory');
+     $this->assertEmpty($this->fixtureDir, 'fixtureTearDown() removes the value from $fixtureDir');
+   }
+ 

@@ -1,0 +1,100 @@
+diff --git a/data_policy.api.php b/data_policy.api.php
+index 0c7c05c..f0ec886 100644
+--- a/data_policy.api.php
++++ b/data_policy.api.php
+@@ -1,10 +1,11 @@
+ <?php
+ 
++use Drupal\Core\Session\AccountProxyInterface;
++use Drupal\Core\Routing\RedirectDestinationInterface;
+ /**
+  * @file
+  * Documentation for Data Policy API.
+  */
+-
+ /**
+  * Alter the data policy destination before performing the redirect.
+  *
+@@ -16,7 +17,7 @@
+  * @return \Drupal\Core\Routing\RedirectDestinationInterface
+  *   An altered data policy destination url.
+  */
+-function hook_data_policy_destination_alter(\Drupal\Core\Session\AccountProxyInterface $current_user, \Drupal\Core\Routing\RedirectDestinationInterface $destination) {
++function hook_data_policy_destination_alter(AccountProxyInterface $current_user, RedirectDestinationInterface $destination) {
+   if ($current_user->isAnonymous()) {
+     $destination->set('/user/login');
+   }
+diff --git a/data_policy.install b/data_policy.install
+index 72e1260..641e647 100644
+--- a/data_policy.install
++++ b/data_policy.install
+@@ -130,7 +130,7 @@ function data_policy_update_8003() {
+ function data_policy_update_8004() {
+   $name = 'views.view.data_policy_agreements';
+ 
+-  $install_source = drupal_get_path('module', 'data_policy') . '/config/install';
++  $install_source = \Drupal::service('extension.list.module')->getPath('data_policy') . '/config/install';
+   $source = new FileStorage($install_source);
+   $config_storage = \Drupal::service('config.storage');
+   $config_storage->write($name, $source->read($name));
+diff --git a/modules/data_policy_export/src/Plugin/Action/ExportDataPolicy.php b/modules/data_policy_export/src/Plugin/Action/ExportDataPolicy.php
+index f058c6e..3d2cd72 100644
+--- a/modules/data_policy_export/src/Plugin/Action/ExportDataPolicy.php
++++ b/modules/data_policy_export/src/Plugin/Action/ExportDataPolicy.php
+@@ -174,8 +174,8 @@ class ExportDataPolicy extends ViewsBulkOperationsActionBase implements Containe
+       $name = basename($this->context['sandbox']['results']['file_path']);
+       $path = 'private://csv';
+ 
+-      if ($this->fileSystem->prepareDirectory($path, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS) && (file_save_data($data, $path . '/' . $name))) {
+-        $url = Url::fromUri(file_create_url($path . '/' . $name));
++      if ($this->fileSystem->prepareDirectory($path, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS) && (\Drupal::service('file.repository')->writeData($data, $path . '/' . $name))) {
++        $url = \Drupal::service('file_url_generator')->generate($path . '/' . $name);
+         $link = Link::fromTextAndUrl($this->t('Download file'), $url);
+ 
+         $this->messenger()->addMessage($this->t('Export is complete. @link', [
+diff --git a/src/RedirectSubscriber.php b/src/RedirectSubscriber.php
+index ac424ff..28fe835 100644
+--- a/src/RedirectSubscriber.php
++++ b/src/RedirectSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\data_policy;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+@@ -16,7 +17,6 @@ use Drupal\Core\Url;
+ use Drupal\data_policy\Entity\DataPolicyInterface;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+ use Symfony\Component\HttpFoundation\RedirectResponse;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -146,10 +146,10 @@ class RedirectSubscriber implements EventSubscriberInterface {
+   /**
+    * This method is called when the KernelEvents::REQUEST event is dispatched.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
+    *   The event.
+    */
+-  public function checkForRedirection(GetResponseEvent $event): void {
++  public function checkForRedirection(RequestEvent $event): void {
+     // Check if a data policy is set.
+     if (!$this->dataPolicyConsentManager->isDataPolicy()) {
+       return;
+@@ -279,10 +279,10 @@ class RedirectSubscriber implements EventSubscriberInterface {
+   /**
+    * Do redirect to the agreement page.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
+    *   The event.
+    */
+-  private function doRedirect(GetResponseEvent $event): void {
++  private function doRedirect(RequestEvent $event): void {
+     // Set the destination that redirects the user after accepting the
+     // data policy agreements.
+     $destination = $this->getDestination();

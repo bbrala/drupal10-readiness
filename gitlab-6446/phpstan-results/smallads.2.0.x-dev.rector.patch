@@ -1,0 +1,346 @@
+diff --git a/csvimport-deprecated/src/ImportSmallads.php b/csvimport-deprecated/src/ImportSmallads.php
+index c3f8757..5996a91 100644
+--- a/csvimport-deprecated/src/ImportSmallads.php
++++ b/csvimport-deprecated/src/ImportSmallads.php
+@@ -7,11 +7,13 @@
+  */
+ namespace Drupal\smallads_import;
+ 
++use Drupal\Core\Form\FormBase;
++use Drupal\Core\Url;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Language\Language;
+ use GuzzleHttp;
+ 
+-class ImportSmallads extends \Drupal\Core\Form\FormBase {
++class ImportSmallads extends FormBase {
+ 
+   private $database;
+ 
+@@ -105,7 +107,7 @@ class ImportSmallads extends \Drupal\Core\Form\FormBase {
+       '#value' => 'import',
+       '#weight' => 4
+     );
+-    $form['#redirect'] = \Drupal\Core\Url::fromRoute('entity.smallad.collection');
++    $form['#redirect'] = Url::fromRoute('entity.smallad.collection');
+     return $form;
+   }
+ 
+@@ -147,7 +149,7 @@ class ImportSmallads extends \Drupal\Core\Form\FormBase {
+     foreach ($incoming_terms as $key => $term) {
+       $incoming_terms[$key] = trim($term);
+     }
+-    $all_terms = db_query("SELECT LOWER(name) FROM {taxonomy_term_data}")->fetchCol();
++    $all_terms = \Drupal::database()->query("SELECT LOWER(name) FROM {taxonomy_term_data}")->fetchCol();
+     $new_terms = array_diff(array_unique($incoming_terms), $all_terms);
+ 
+     if (count($new_terms)) {
+@@ -168,7 +170,7 @@ class ImportSmallads extends \Drupal\Core\Form\FormBase {
+     $rows = $this->loadCsv($form_state);
+ 
+     //get the terms so we can lookup the ids
+-    $all_terms = db_query("
++    $all_terms = \Drupal::database()->query("
+       SELECT d.tid, d.vid, d.name, LOWER(d.name) as term_name, v.name, v.machine_name
+       FROM {taxonomy_term_data} d
+       LEFT JOIN {taxonomy_vocabulary} v ON d.vid = v.vid
+@@ -224,10 +226,7 @@ class ImportSmallads extends \Drupal\Core\Form\FormBase {
+       }
+       node_save($node);
+       if (array_key_exists('created', $row)) {
+-        db_query(
+-          "UPDATE {node} SET changed = :changed where nid = $node->nid",
+-          array('changed' => is_numeric($row['created']) ? $row['created'] : strtotime($row['created']))
+-        );
++        \Drupal::database()->query("UPDATE {node} SET changed = :changed where nid = $node->nid", array('changed' => is_numeric($row['created']) ? $row['created'] : strtotime($row['created'])));
+       }
+       $imported++;
+     }
+diff --git a/modules/smallads_index/smallads_index.module b/modules/smallads_index/smallads_index.module
+index e981669..f213d72 100644
+--- a/modules/smallads_index/smallads_index.module
++++ b/modules/smallads_index/smallads_index.module
+@@ -1,5 +1,7 @@
+ <?php
+ 
++use Drupal\Core\Form\FormStateInterface;
++use function GuzzleHttp\json_encode;
+ use Drupal\smallads\Entity\Smallad;
+ use Drupal\smallads\Entity\SmalladInterface;
+ use \GuzzleHttp\Psr7\Response;
+@@ -71,7 +73,7 @@ function smallads_index_to_solItem(SmalladInterface $smallad) {
+     'keywords' => taxonomy_implode_tags($smallad->categories->referencedEntities()),
+     'created' => $smallad->getCreatedTime(),
+     'expires' => $smallad->expires->value,
+-    'image' => ($smallad->image && $smallad->image->entity) ? substr(file_url_transform_relative(file_create_url($smallad->image->entity->getFileUri())), 1) : '',
++    'image' => ($smallad->image && $smallad->image->entity) ? substr(\Drupal::service('file_url_generator')->generateString($smallad->image->entity->getFileUri()), 1) : '',
+     'scope' => $smallad->scope->value,
+     'location' => $smallad->coordinates->value,
+     'directexchange' => (int)$smallad->directexchange->value,
+@@ -128,7 +130,7 @@ function smalladIndex($type) {
+  */
+ function smallads_index_http_request($method, $url, $body = '') : Response {
+   if ($key = \Drupal::config('smallads_index.settings')->get('apikey')) {
+-    $options['body'] = GuzzleHttp\json_encode($body);
++    $options['body'] = json_encode($body);
+     $options['headers'] = [
+       'Content-Type' => 'application/json',
+       'apikey' => $key
+@@ -142,13 +144,13 @@ function smallads_index_http_request($method, $url, $body = '') : Response {
+     catch(\Exception $e)  {
+       $message = 'No response from '.SMALLAD_INDEX_URL;
+       trigger_error($message, E_USER_ERROR);
+-      $response = new \GuzzleHttp\Psr7\Response(404, [], NULL, NULL, $message);
++      $response = new Response(404, [], NULL, NULL, $message);
+     }
+   }
+   else {
+     \Drupal::moduleHandler()->loadInclude('smallads_index', 'install');
+     \Drupal::messenger()->addStatus(strtoupper($method) ." to /$url cannot run without APIkey");
+-    $response = new \GuzzleHttp\Psr7\Response(403, [], NULL, NULL, 'No apikey given');
++    $response = new Response(403, [], NULL, NULL, 'No apikey given');
+   }
+   return $response;
+ }
+@@ -156,7 +158,7 @@ function smallads_index_http_request($method, $url, $body = '') : Response {
+ /**
+  * Implements hook_form_FORM_ID_alter().
+  */
+-function smallads_index_form_smallads_config_form_alter(&$form, Drupal\Core\Form\FormStateInterface $form_state) {
++function smallads_index_form_smallads_config_form_alter(&$form, FormStateInterface $form_state) {
+   $form['solsearch'] = [
+     '#title' => 'SolSearch',
+     '#description' => t('Web service for global offers & wants.'),
+diff --git a/modules/smallads_index/src/Form.php b/modules/smallads_index/src/Form.php
+index 72a8905..bde5c58 100644
+--- a/modules/smallads_index/src/Form.php
++++ b/modules/smallads_index/src/Form.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\smallads_index;
+ 
++use Drupal\Core\Link;
++use Drupal\Core\Render\Markup;
+ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+@@ -132,7 +134,7 @@ class Form extends FormBase {
+     return $form;
+   }
+ 
+-  function submitForm(array &$form, \Drupal\Core\Form\FormStateInterface $form_state) {
++  function submitForm(array &$form, FormStateInterface $form_state) {
+     //save the search settings
+     $prefs = [
+       'radius' => $form_state->getValue('radius'),
+@@ -224,7 +226,7 @@ class Form extends FormBase {
+           'icon_anchor' => ['x' => 24, 'y' => 32],//not supported yet in leaflet module Beta1
+           'popup_anchor' => ['x' => 16, 'y' => 0],
+         ],
+-        'popup' => \Drupal\Core\Link::fromTextAndUrl($result->title, $dest)->toString() . '<br>'.$result->body,
++        'popup' => Link::fromTextAndUrl($result->title, $dest)->toString() . '<br>'.$result->body,
+         'leaflet_id' => $result->id
+       ];
+     }
+@@ -249,9 +251,9 @@ class Form extends FormBase {
+         $snippet = $this->t(
+             '@snippet<strong>Keywords</strong>: @words<br />on %site',
+             [
+-              '@snippet' => $body ? \Drupal\Core\Render\Markup::create($body.'<br \>') : '',
++              '@snippet' => $body ? Markup::create($body.'<br \>') : '',
+               '@words' => $result->keywords,
+-              '%site' => \Drupal\Core\Link::fromTextAndUrl($result->name, Url::fromUri($result->url))->toString()
++              '%site' => Link::fromTextAndUrl($result->name, Url::fromUri($result->url))->toString()
+             ]
+         );
+         $hits[] = [
+diff --git a/modules/smallads_index/src/RouteSubscriber.php b/modules/smallads_index/src/RouteSubscriber.php
+index c233fda..6a7d48c 100644
+--- a/modules/smallads_index/src/RouteSubscriber.php
++++ b/modules/smallads_index/src/RouteSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\smallads_index;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Routing\RouteSubscriberBase;
+ use Symfony\Component\Routing\Route;
+ use Symfony\Component\Routing\RouteCollection;
+@@ -20,7 +21,7 @@ class RouteSubscriber extends RouteSubscriberBase {
+    */
+   private $smalladTypes;
+ 
+-  function __construct(\Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager) {
++  function __construct(EntityTypeManagerInterface $entity_type_manager) {
+     $this->smalladTypes = $entity_type_manager->getStorage('smallad_type')->loadMultiple();
+   }
+ 
+diff --git a/smallads.install b/smallads.install
+index 62670fe..2aa0bf3 100644
+--- a/smallads.install
++++ b/smallads.install
+@@ -1,5 +1,8 @@
+ <?php
+ 
++use Drupal\user\Entity\Role;
++use Drupal\Core\Field\BaseFieldDefinition;
++use Drupal\views\Entity\View;
+ /**
+  * @file
+  * Hooks for installing the smallads module.
+@@ -40,7 +43,7 @@ function smallads_uninstall() {
+ 
+ 
+ function smallads_update_8001(){
+-  foreach (\Drupal\user\Entity\Role::loadMultiple() as $role) {
++  foreach (Role::loadMultiple() as $role) {
+     if ($role->hasPermission('post ad')) {
+       $role->revokePermission('post ad')->grantpermission('post smallad')->save();
+     }
+@@ -54,7 +57,7 @@ function smallads_update_8001(){
+  * Standardise the language field.
+  */
+ function smallads_update_8002() {
+-  $definition = Drupal\Core\Field\BaseFieldDefinition::create('language')
++  $definition = BaseFieldDefinition::create('language')
+     ->setLabel(t('Language'))
+     ->setDisplayOptions('view', [
+       'region' => 'hidden',
+@@ -84,7 +87,7 @@ function smallads_update_9000() {
+  * Remove the views 'scope' filter.
+  */
+ function smallads_update_9001() {
+-  foreach (\Drupal\views\Entity\View::loadMultiple() as $view) {
++  foreach (View::loadMultiple() as $view) {
+     $save = 0;
+     /** @var \Drupal\views\Entity\View $view */
+     $displays = $view->get('display');
+@@ -169,4 +172,4 @@ function smallads_update_9005() {
+   $v['display']['my_ads']['id'] = 'my_ads';
+   $config->setData($v);
+   $config->save();
+-}
+\ No newline at end of file
++}
+diff --git a/smallads.module b/smallads.module
+index 2972366..8728abb 100644
+--- a/smallads.module
++++ b/smallads.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use Drupal\Core\Entity\EntityInterface;
+ /**
+  * @file
+  *
+@@ -530,7 +531,7 @@ function smallads_taxonomy_term_update($term) {
+  * Implements hook_ENTITY_TYPE_delete().
+  * Delete all the user's smallads.
+  */
+-function smallads_user_delete(Drupal\Core\Entity\EntityInterface $entity) {
++function smallads_user_delete(EntityInterface $entity) {
+   $ads = \Drupal::entityTypeManager()
+     ->getStorage('smallad')
+     ->loadByProperties(['uid' => $entity->id()]);
+@@ -549,4 +550,4 @@ function smallads_form_views_ui_add_handler_form_alter(&$form, $form_state) {
+   if (isset($form['override']['controls']['group']['#options']['small-ad'])) {
+     $form['options']['name']['#caption'] = t('N.B. It may be necessary to disable your ad-blocker to see the smallad fields.');
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/src/EventSubscriber/RouteSubscriber.php b/src/EventSubscriber/RouteSubscriber.php
+index 10d6246..18a916c 100644
+--- a/src/EventSubscriber/RouteSubscriber.php
++++ b/src/EventSubscriber/RouteSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\smallads\EventSubscriber;
+ 
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Routing\RouteSubscriberBase;
+ use Symfony\Component\Routing\Route;
+ use Symfony\Component\Routing\RouteCollection;
+@@ -20,7 +21,7 @@ class RouteSubscriber extends RouteSubscriberBase {
+    */
+   private $smalladTypes;
+ 
+-  function __construct(\Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager) {
++  function __construct(EntityTypeManagerInterface $entity_type_manager) {
+     $this->smalladTypes = $entity_type_manager->getStorage('smallad_type')->loadMultiple();
+   }
+ 
+diff --git a/src/Form/Config.php b/src/Form/Config.php
+index 4013856..aabe96a 100644
+--- a/src/Form/Config.php
++++ b/src/Form/Config.php
+@@ -22,7 +22,7 @@ class Config extends ConfigFormBase {
+    * @param ConfigFactoryInterface $config_factory
+    * @param RouteBuilderInterface $router_builder
+    */
+-  function __construct(\Drupal\Core\Config\ConfigFactoryInterface $config_factory, RouteBuilderInterface $router_builder) {
++  function __construct(ConfigFactoryInterface $config_factory, RouteBuilderInterface $router_builder) {
+     parent::__construct($config_factory);
+     $this->routeBuilder = $router_builder;
+   }
+diff --git a/src/Form/SmalladTypeForm.php b/src/Form/SmalladTypeForm.php
+index 2f6dd7d..a9c625b 100644
+--- a/src/Form/SmalladTypeForm.php
++++ b/src/Form/SmalladTypeForm.php
+@@ -73,7 +73,7 @@ class SmalladTypeForm extends EntityForm {
+     $smallad_type = $this->entity;
+     $smallad_type->save();
+ 
+-    $form_state->setRedirectUrl($smallad_type->urlInfo('collection'));
++    $form_state->setRedirectUrl($smallad_type->toUrl('collection'));
+     // If the plural has changed we need to rebuild the menu.
+     \Drupal::service('router.builder')->rebuild();
+   }
+diff --git a/src/Plugin/DevelGenerate/SmalladDevelGenerate.php b/src/Plugin/DevelGenerate/SmalladDevelGenerate.php
+index 35f6bc9..f9f5bc1 100644
+--- a/src/Plugin/DevelGenerate/SmalladDevelGenerate.php
++++ b/src/Plugin/DevelGenerate/SmalladDevelGenerate.php
+@@ -306,7 +306,7 @@ class SmalladDevelGenerate extends DevelGenerateBase implements ContainerFactory
+       'money' => rand(0, 1),
+     ];
+     $smallad = Smallad::create($props);
+-    $smallad->created->value = rand($this->since, REQUEST_TIME);
++    $smallad->created->value = rand($this->since, \Drupal::time()->getRequestTime());
+     // Populate all additional fields with sample values.
+     $this->populateFields($smallad);
+     $smallad->save();
+@@ -363,7 +363,7 @@ class SmalladDevelGenerate extends DevelGenerateBase implements ContainerFactory
+         'entity_id' => $smallad->id(),
+         'comment_type' => 'smallad',
+         'field_name' => 'comments',
+-        'created' => mt_rand($smallad->get('created')->value, REQUEST_TIME),
++        'created' => mt_rand($smallad->get('created')->value, \Drupal::time()->getRequestTime()),
+         'subject' => substr($random->sentences(mt_rand(2, 6), TRUE), 0, 63),
+         'langcode' => $smallad->language()->getId(),
+       );
+diff --git a/src/Plugin/Field/FieldFormatter/TimeBeforeAfterFormatter.php b/src/Plugin/Field/FieldFormatter/TimeBeforeAfterFormatter.php
+index b78876b..58c6fdc 100644
+--- a/src/Plugin/Field/FieldFormatter/TimeBeforeAfterFormatter.php
++++ b/src/Plugin/Field/FieldFormatter/TimeBeforeAfterFormatter.php
+@@ -28,7 +28,7 @@ class TimeBeforeAfterFormatter extends BooleanFormatter {
+     // @todo include the library
+     $elements = array();
+     foreach ($items as $delta => &$item) {
+-      if (REQUEST_TIME > $item->value) {
++      if (\Drupal::time()->getRequestTime() > $item->value) {
+         $item->value = FALSE;
+         $class = 'expired';
+       }
+diff --git a/src/SmalladListBuilder.php b/src/SmalladListBuilder.php
+index 2fa5888..a83f389 100644
+--- a/src/SmalladListBuilder.php
++++ b/src/SmalladListBuilder.php
+@@ -117,7 +117,7 @@ class SmalladListBuilder extends EntityListBuilder {
+     $row['scope'] = $scopeMap[$entity->scope->value];
+     $row['type'] = $entity->type->entity->label();
+     $row['title'] = $entity->title->value;
+-    $row['changed'] = $this->dateFormatter->formatInterval(REQUEST_TIME - $entity->changed->value);
++    $row['changed'] = $this->dateFormatter->formatInterval(\Drupal::time()->getRequestTime() - $entity->changed->value);
+ 
+     return $row + parent::buildRow($entity);
+   }

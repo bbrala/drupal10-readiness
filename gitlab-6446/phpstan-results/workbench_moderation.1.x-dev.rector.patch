@@ -1,0 +1,874 @@
+diff --git a/src/EntityOperations.php b/src/EntityOperations.php
+index aa1af6b..d947710 100644
+--- a/src/EntityOperations.php
++++ b/src/EntityOperations.php
+@@ -181,7 +181,7 @@ class EntityOperations {
+       // Entity API doesn't allow hook_entity_presave to short-circuit a save.
+       $event = new WorkbenchModerationTransitionEvent($entity, $state_before, $state_after);
+ 
+-      $this->eventDispatcher->dispatch(WorkbenchModerationEvents::STATE_TRANSITION, $event);
++      $this->eventDispatcher->dispatch($event, WorkbenchModerationEvents::STATE_TRANSITION);
+     }
+   }
+ 
+diff --git a/src/Event/WorkbenchModerationTransitionEvent.php b/src/Event/WorkbenchModerationTransitionEvent.php
+index cf4f5f0..7f75ce4 100644
+--- a/src/Event/WorkbenchModerationTransitionEvent.php
++++ b/src/Event/WorkbenchModerationTransitionEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\workbench_moderation\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\Core\Entity\ContentEntityInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Defines a class for transition events.
+diff --git a/tests/src/Functional/ModerationFormTest.php b/tests/src/Functional/ModerationFormTest.php
+index df20cfe..e9461a5 100644
+--- a/tests/src/Functional/ModerationFormTest.php
++++ b/tests/src/Functional/ModerationFormTest.php
+@@ -12,7 +12,7 @@ class ModerationFormTest extends ModerationStateTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->drupalLogin($this->adminUser);
+     $this->createContentTypeFromUi('Moderated content', 'moderated_content', TRUE, [
+@@ -34,8 +34,9 @@ class ModerationFormTest extends ModerationStateTestBase {
+    * @see \Drupal\Tests\workbench_moderation\Functional\ModerationStateBlockTest::testCustomBlockModeration
+    */
+   public function testModerationForm() {
++    $this->drupalGet('node/add/moderated_content');
+     // Create new moderated content in draft.
+-    $this->drupalPostForm('node/add/moderated_content', [
++    $this->submitForm([
+       'title[0][value]' => 'Some moderated content',
+       'body[0][value]' => 'First version of the content.',
+     ], t('Save and Create New Draft'));
+@@ -51,15 +52,16 @@ class ModerationFormTest extends ModerationStateTestBase {
+     // live revision.
+     $this->drupalGet($canonical_path);
+     $this->assertSession()->statusCodeEquals(200);
+-    $this->assertField('edit-new-state', 'The node view page has a moderation form.');
++    $this->assertSession()->fieldExists('edit-new-state', 'The node view page has a moderation form.');
+ 
+     // The latest version page should not show, because there is no forward
+     // revision.
+     $this->drupalGet($latest_version_path);
+     $this->assertSession()->statusCodeEquals(403);
++    $this->drupalGet($edit_path);
+ 
+     // Update the draft.
+-    $this->drupalPostForm($edit_path, [
++    $this->submitForm([
+       'body[0][value]' => 'Second version of the content.',
+     ], t('Save and Request Review'));
+ 
+@@ -67,15 +69,16 @@ class ModerationFormTest extends ModerationStateTestBase {
+     // live revision.
+     $this->drupalGet($canonical_path);
+     $this->assertSession()->statusCodeEquals(200);
+-    $this->assertField('edit-new-state', 'The node view page has a moderation form.');
++    $this->assertSession()->fieldExists('edit-new-state', 'The node view page has a moderation form.');
+ 
+     // The latest version page should not show, because there is still no
+     // forward revision.
+     $this->drupalGet($latest_version_path);
+     $this->assertSession()->statusCodeEquals(403);
++    $this->drupalGet($edit_path);
+ 
+     // Publish the draft.
+-    $this->drupalPostForm($edit_path, [
++    $this->submitForm([
+       'body[0][value]' => 'Third version of the content.',
+     ], t('Save and Publish'));
+ 
+@@ -83,15 +86,16 @@ class ModerationFormTest extends ModerationStateTestBase {
+     // live revision.
+     $this->drupalGet($canonical_path);
+     $this->assertSession()->statusCodeEquals(200);
+-    $this->assertNoField('edit-new-state', 'The node view page has no moderation form.');
++    $this->assertSession()->fieldNotExists('edit-new-state', 'The node view page has no moderation form.');
+ 
+     // The latest version page should not show, because there is still no
+     // forward revision.
+     $this->drupalGet($latest_version_path);
+     $this->assertSession()->statusCodeEquals(403);
++    $this->drupalGet($edit_path);
+ 
+     // Make a forward revision.
+-    $this->drupalPostForm($edit_path, [
++    $this->submitForm([
+       'body[0][value]' => 'Fourth version of the content.',
+     ], t('Save and Create New Draft'));
+ 
+@@ -99,17 +103,18 @@ class ModerationFormTest extends ModerationStateTestBase {
+     // live revision.
+     $this->drupalGet($canonical_path);
+     $this->assertSession()->statusCodeEquals(200);
+-    $this->assertNoField('edit-new-state', 'The node view page has no moderation form.');
++    $this->assertSession()->fieldNotExists('edit-new-state', 'The node view page has no moderation form.');
+ 
+     // The latest version page should show the moderation form and have "Draft"
+     // status, because the forward revision is in "Draft".
+     $this->drupalGet($latest_version_path);
+     $this->assertSession()->statusCodeEquals(200);
+-    $this->assertField('edit-new-state', 'The latest-version page has a moderation form.');
++    $this->assertSession()->fieldExists('edit-new-state', 'The latest-version page has a moderation form.');
+     $this->assertSession()->pageTextContains('Draft', 'Correct status found on the latest-version page.');
++    $this->drupalGet($latest_version_path);
+ 
+     // Submit the moderation form to change status to needs review.
+-    $this->drupalPostForm($latest_version_path, [
++    $this->submitForm([
+       'new_state' => 'needs_review',
+     ], t('Apply'));
+ 
+@@ -117,7 +122,7 @@ class ModerationFormTest extends ModerationStateTestBase {
+     // Review" status, because the forward revision is in "Needs Review".
+     $this->drupalGet($latest_version_path);
+     $this->assertSession()->statusCodeEquals(200);
+-    $this->assertField('edit-new-state', 'The latest-version page has a moderation form.');
++    $this->assertSession()->fieldExists('edit-new-state', 'The latest-version page has a moderation form.');
+     $this->assertSession()->pageTextContains('Needs Review', 'Correct status found on the latest-version page.');
+   }
+ 
+@@ -134,7 +139,8 @@ class ModerationFormTest extends ModerationStateTestBase {
+     $another_user = $this->drupalCreateUser($this->permissions);
+     $this->grantUserPermissionToCreateContentOfType($another_user, 'moderated_content');
+     $this->drupalLogin($another_user);
+-    $this->drupalPostForm(sprintf('node/%d/latest', $node->id()), [
++    $this->drupalGet(sprintf('node/%d/latest', $node->id()));
++    $this->submitForm([
+       'new_state' => 'needs_review',
+     ], t('Apply'));
+ 
+diff --git a/tests/src/Functional/ModerationLocaleTest.php b/tests/src/Functional/ModerationLocaleTest.php
+index 1c84597..95617b6 100644
+--- a/tests/src/Functional/ModerationLocaleTest.php
++++ b/tests/src/Functional/ModerationLocaleTest.php
+@@ -38,7 +38,8 @@ class ModerationLocaleTest extends ModerationStateTestBase {
+     $edit = [
+       'predefined_langcode' => 'fr',
+     ];
+-    $this->drupalPostForm('admin/config/regional/language/add', $edit, t('Add language'));
++    $this->drupalGet('admin/config/regional/language/add');
++    $this->submitForm($edit, t('Add language'));
+ 
+     // Enable content translation on articles.
+     $this->drupalGet('admin/config/regional/content-language');
+@@ -47,14 +48,15 @@ class ModerationLocaleTest extends ModerationStateTestBase {
+       'settings[node][article][translatable]' => TRUE,
+       'settings[node][article][settings][language][language_alterable]' => TRUE,
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save configuration'));
++    $this->submitForm($edit, t('Save configuration'));
+ 
+     // Create a published article in English.
+     $edit = [
+       'title[0][value]' => 'Published English node',
+       'langcode[0][value]' => 'en',
+     ];
+-    $this->drupalPostForm('node/add/article', $edit, t('Save and Publish'));
++    $this->drupalGet('node/add/article');
++    $this->submitForm($edit, t('Save and Publish'));
+     $this->assertSession()->pageTextContains(t('Article Published English node has been created.'));
+     $english_node = $this->drupalGetNodeByTitle('Published English node');
+ 
+@@ -64,7 +66,7 @@ class ModerationLocaleTest extends ModerationStateTestBase {
+     $edit = [
+       'title[0][value]' => 'French node Draft',
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save and Create New Draft (this translation)'));
++    $this->submitForm($edit, t('Save and Create New Draft (this translation)'));
+     // Here the error has occured "The website encountered an unexpected error.
+     // Please try again later."
+     // If the translation has got lost.
+@@ -77,7 +79,8 @@ class ModerationLocaleTest extends ModerationStateTestBase {
+       'title[0][value]' => 'English node',
+       'langcode[0][value]' => 'en',
+     ];
+-    $this->drupalPostForm('node/add/article', $edit, t('Save and Create New Draft'));
++    $this->drupalGet('node/add/article');
++    $this->submitForm($edit, t('Save and Create New Draft'));
+     $this->assertSession()->pageTextContains(t('Article English node has been created.'));
+     $english_node = $this->drupalGetNodeByTitle('English node');
+ 
+@@ -87,14 +90,15 @@ class ModerationLocaleTest extends ModerationStateTestBase {
+     $edit = [
+       'title[0][value]' => 'French node',
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save and Create New Draft (this translation)'));
++    $this->submitForm($edit, t('Save and Create New Draft (this translation)'));
+     $this->assertSession()->pageTextContains(t('Article French node has been updated.'));
+     $english_node = $this->drupalGetNodeByTitle('English node', TRUE);
+     $french_node = $english_node->getTranslation('fr');
++    $this->drupalGet('node/' . $english_node->id() . '/edit');
+ 
+     // Publish the English article and check that the translation stays
+     // unpublished.
+-    $this->drupalPostForm('node/' . $english_node->id() . '/edit', [], t('Save and Publish (this translation)'));
++    $this->submitForm([], t('Save and Publish (this translation)'));
+     $this->assertSession()->pageTextContains(t('Article English node has been updated.'));
+     $english_node = $this->drupalGetNodeByTitle('English node', TRUE);
+     $french_node = $english_node->getTranslation('fr');
+@@ -108,7 +112,8 @@ class ModerationLocaleTest extends ModerationStateTestBase {
+     $edit = [
+       'title[0][value]' => 'Another node',
+     ];
+-    $this->drupalPostForm('node/add/article', $edit, t('Save and Create New Draft'));
++    $this->drupalGet('node/add/article');
++    $this->submitForm($edit, t('Save and Create New Draft'));
+     $this->assertSession()->pageTextContains(t('Article Another node has been created.'));
+     $english_node = $this->drupalGetNodeByTitle('Another node');
+ 
+@@ -118,14 +123,15 @@ class ModerationLocaleTest extends ModerationStateTestBase {
+     $edit = [
+       'title[0][value]' => 'Translated node',
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save and Create New Draft (this translation)'));
++    $this->submitForm($edit, t('Save and Create New Draft (this translation)'));
+     $this->assertSession()->pageTextContains(t('Article Translated node has been updated.'));
+     $english_node = $this->drupalGetNodeByTitle('Another node', TRUE);
+     $french_node = $english_node->getTranslation('fr');
++    $this->drupalGet('fr/node/' . $english_node->id() . '/edit');
+ 
+     // Publish the translation and check that the source language version stays
+     // unpublished.
+-    $this->drupalPostForm('fr/node/' . $english_node->id() . '/edit', [], t('Save and Publish (this translation)'));
++    $this->submitForm([], t('Save and Publish (this translation)'));
+     $this->assertSession()->pageTextContains(t('Article Translated node has been updated.'));
+     $english_node = $this->drupalGetNodeByTitle('Another node', TRUE);
+     $french_node = $english_node->getTranslation('fr');
+@@ -139,7 +145,8 @@ class ModerationLocaleTest extends ModerationStateTestBase {
+     $edit = [
+       'title[0][value]' => 'New draft of translated node',
+     ];
+-    $this->drupalPostForm('fr/node/' . $english_node->id() . '/edit', $edit, t('Save and Create New Draft (this translation)'));
++    $this->drupalGet('fr/node/' . $english_node->id() . '/edit');
++    $this->submitForm($edit, t('Save and Create New Draft (this translation)'));
+     $this->assertSession()->pageTextContains(t('Article New draft of translated node has been updated.'));
+     $english_node = $this->drupalGetNodeByTitle('Another node', TRUE);
+     $french_node = $english_node->getTranslation('fr');
+@@ -151,22 +158,26 @@ class ModerationLocaleTest extends ModerationStateTestBase {
+     $edit = [
+       'new_state' => 'published',
+     ];
+-    $this->drupalPostForm('fr/node/' . $english_node->id() . '/latest', $edit, t('Apply'));
++    $this->drupalGet('fr/node/' . $english_node->id() . '/latest');
++    $this->submitForm($edit, t('Apply'));
+     $this->assertSession()->pageTextContains(t('The moderation state has been updated.'));
+     $english_node = $this->drupalGetNodeByTitle('Another node', TRUE);
+     $french_node = $english_node->getTranslation('fr');
+     $this->assertEquals($french_node->moderation_state->target_id, 'published');
+     $this->assertTrue($french_node->isPublished());
+     $this->assertEquals($french_node->getTitle(), 'New draft of translated node', 'The draft has replaced the published revision.');
++    $this->drupalGet('node/' . $english_node->id() . '/edit');
+ 
+     // Publish the English article before testing the archive transition.
+-    $this->drupalPostForm('node/' . $english_node->id() . '/edit', [], t('Save and Publish (this translation)'));
++    $this->submitForm([], t('Save and Publish (this translation)'));
+     $this->assertSession()->pageTextContains(t('Article Another node has been updated.'));
++    $this->drupalGet('node/' . $english_node->id() . '/edit');
+ 
+     // Archive the node and its translation.
+-    $this->drupalPostForm('node/' . $english_node->id() . '/edit', [], t('Save and Archive (this translation)'));
++    $this->submitForm([], t('Save and Archive (this translation)'));
+     $this->assertSession()->pageTextContains(t('Article Another node has been updated.'));
+-    $this->drupalPostForm('fr/node/' . $english_node->id() . '/edit', [], t('Save and Archive (this translation)'));
++    $this->drupalGet('fr/node/' . $english_node->id() . '/edit');
++    $this->submitForm([], t('Save and Archive (this translation)'));
+     $this->assertSession()->pageTextContains(t('Article New draft of translated node has been updated.'));
+     $english_node = $this->drupalGetNodeByTitle('Another node', TRUE);
+     $french_node = $english_node->getTranslation('fr');
+diff --git a/tests/src/Functional/ModerationStateBlockTest.php b/tests/src/Functional/ModerationStateBlockTest.php
+index 0b886e0..61c0ece 100644
+--- a/tests/src/Functional/ModerationStateBlockTest.php
++++ b/tests/src/Functional/ModerationStateBlockTest.php
+@@ -15,7 +15,7 @@ class ModerationStateBlockTest extends ModerationStateTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // Create the "basic" block type.
+@@ -59,7 +59,8 @@ class ModerationStateBlockTest extends ModerationStateTestBase {
+       'allowed_moderation_states_published[published]' => TRUE,
+       'default_moderation_state' => 'draft',
+     ];
+-    $this->drupalPostForm('admin/structure/block/block-content/manage/basic/moderation', $edit, t('Save'));
++    $this->drupalGet('admin/structure/block/block-content/manage/basic/moderation');
++    $this->submitForm($edit, t('Save'));
+     $this->assertSession()->pageTextContains(t('Your settings have been saved.'));
+ 
+     // Create a custom block at block/add and save it as draft.
+@@ -68,7 +69,8 @@ class ModerationStateBlockTest extends ModerationStateTestBase {
+       'info[0][value]' => 'Moderated block',
+       'body[0][value]' => $body,
+     ];
+-    $this->drupalPostForm('block/add', $edit, t('Save and Create New Draft'));
++    $this->drupalGet('block/add');
++    $this->submitForm($edit, t('Save and Create New Draft'));
+     $this->assertSession()->pageTextContains(t('basic Moderated block has been created.'));
+ 
+     // Place the block in the Sidebar First region.
+@@ -79,7 +81,8 @@ class ModerationStateBlockTest extends ModerationStateTestBase {
+     ];
+     $block = BlockContent::load(1);
+     $url = 'admin/structure/block/add/block_content:' . $block->uuid() . '/' . $this->config('system.theme')->get('default');
+-    $this->drupalPostForm($url, $instance, t('Save block'));
++    $this->drupalGet($url);
++    $this->submitForm($instance, t('Save block'));
+ 
+     // Navigate to home page and check that the block is visible. It should be
+     // visible because it is the default revision.
+@@ -91,7 +94,8 @@ class ModerationStateBlockTest extends ModerationStateTestBase {
+     $edit = [
+       'body[0][value]' => $updated_body,
+     ];
+-    $this->drupalPostForm('block/' . $block->id(), $edit, t('Save and Create New Draft'));
++    $this->drupalGet('block/' . $block->id());
++    $this->submitForm($edit, t('Save and Create New Draft'));
+     $this->assertSession()->pageTextContains(t('basic Moderated block has been updated.'));
+ 
+     // Navigate to the home page and check that the block shows the updated
+@@ -99,16 +103,18 @@ class ModerationStateBlockTest extends ModerationStateTestBase {
+     // revision is not a published moderation state.
+     $this->drupalGet('');
+     $this->assertSession()->pageTextContains($updated_body);
++    $this->drupalGet('block/' . $block->id());
+ 
+     // Publish the block so we can create a forward revision.
+-    $this->drupalPostForm('block/' . $block->id(), [], t('Save and Publish'));
++    $this->submitForm([], t('Save and Publish'));
+ 
+     // Create a forward revision.
+     $forward_revision_body = 'This is the forward revision body value';
+     $edit = [
+       'body[0][value]' => $forward_revision_body,
+     ];
+-    $this->drupalPostForm('block/' . $block->id(), $edit, t('Save and Create New Draft'));
++    $this->drupalGet('block/' . $block->id());
++    $this->submitForm($edit, t('Save and Create New Draft'));
+     $this->assertSession()->pageTextContains(t('basic Moderated block has been updated.'));
+ 
+     // Navigate to home page and check that the forward revision doesn't show,
+@@ -120,7 +126,8 @@ class ModerationStateBlockTest extends ModerationStateTestBase {
+     $edit = [
+       'new_state' => 'published',
+     ];
+-    $this->drupalPostForm('block/' . $block->id() . '/latest', $edit, t('Apply'));
++    $this->drupalGet('block/' . $block->id() . '/latest');
++    $this->submitForm($edit, t('Apply'));
+     $this->assertSession()->pageTextContains(t('The moderation state has been updated.'));
+ 
+     // Navigate to home page and check that the forward revision is now the
+diff --git a/tests/src/Functional/ModerationStateNodeTest.php b/tests/src/Functional/ModerationStateNodeTest.php
+index afbe4ae..6827333 100644
+--- a/tests/src/Functional/ModerationStateNodeTest.php
++++ b/tests/src/Functional/ModerationStateNodeTest.php
+@@ -15,7 +15,7 @@ class ModerationStateNodeTest extends ModerationStateTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->drupalLogin($this->adminUser);
+     $this->createContentTypeFromUi('Moderated content', 'moderated_content', TRUE, [
+@@ -30,7 +30,8 @@ class ModerationStateNodeTest extends ModerationStateTestBase {
+    * Tests creating and deleting content.
+    */
+   public function testCreatingContent() {
+-    $this->drupalPostForm('node/add/moderated_content', [
++    $this->drupalGet('node/add/moderated_content');
++    $this->submitForm([
+       'title[0][value]' => 'moderated content',
+     ], t('Save and Create New Draft'));
+     $nodes = \Drupal::entityTypeManager()
+@@ -47,20 +48,23 @@ class ModerationStateNodeTest extends ModerationStateTestBase {
+     $node = reset($nodes);
+ 
+     $path = 'node/' . $node->id() . '/edit';
++    $this->drupalGet($path);
+     // Set up needs review revision.
+-    $this->drupalPostForm($path, [], t('Save and Request Review'));
++    $this->submitForm([], t('Save and Request Review'));
++    $this->drupalGet($path);
+     // Set up published revision.
+-    $this->drupalPostForm($path, [], t('Save and Publish'));
++    $this->submitForm([], t('Save and Publish'));
+     \Drupal::entityTypeManager()->getStorage('node')->resetCache([$node->id()]);
+     /* @var \Drupal\node\NodeInterface $node */
+     $node = \Drupal::entityTypeManager()->getStorage('node')->load($node->id());
+     $this->assertTrue($node->isPublished());
+ 
+     // Verify that the state field is not shown.
+-    $this->assertNoText('Published');
++    $this->assertSession()->pageTextNotContains('Published');
++    $this->drupalGet('node/' . $node->id() . '/delete');
+ 
+     // Delete the node.
+-    $this->drupalPostForm('node/' . $node->id() . '/delete', [], t('Delete'));
++    $this->submitForm([], t('Delete'));
+     $this->assertSession()->pageTextContains(t('The Moderated content moderated content has been deleted.'));
+   }
+ 
+@@ -68,8 +72,9 @@ class ModerationStateNodeTest extends ModerationStateTestBase {
+    * Tests edit form destinations.
+    */
+   public function testFormSaveDestination() {
++    $this->drupalGet('node/add/moderated_content');
+     // Create new moderated content in draft.
+-    $this->drupalPostForm('node/add/moderated_content', [
++    $this->submitForm([
+       'title[0][value]' => 'Some moderated content',
+       'body[0][value]' => 'First version of the content.',
+     ], t('Save and Create New Draft'));
+@@ -79,31 +84,34 @@ class ModerationStateNodeTest extends ModerationStateTestBase {
+ 
+     // After saving, we should be at the canonical URL and viewing the first
+     // revision.
+-    $this->assertUrl(Url::fromRoute('entity.node.canonical', ['node' => $node->id()]));
++    $this->assertSession()->addressEquals(Url::fromRoute('entity.node.canonical', ['node' => $node->id()]));
+     $this->assertSession()->pageTextContains('First version of the content.');
++    $this->drupalGet($edit_path);
+ 
+     // Update the draft to review; after saving, we should still be on the
+     // canonical URL, but viewing the second revision.
+-    $this->drupalPostForm($edit_path, [
++    $this->submitForm([
+       'body[0][value]' => 'Second version of the content.',
+     ], t('Save and Request Review'));
+-    $this->assertUrl(Url::fromRoute('entity.node.canonical', ['node' => $node->id()]));
++    $this->assertSession()->addressEquals(Url::fromRoute('entity.node.canonical', ['node' => $node->id()]));
+     $this->assertSession()->pageTextContains('Second version of the content.');
++    $this->drupalGet($edit_path);
+ 
+     // Make a new published revision; after saving, we should be at the
+     // canonical URL.
+-    $this->drupalPostForm($edit_path, [
++    $this->submitForm([
+       'body[0][value]' => 'Third version of the content.',
+     ], t('Save and Publish'));
+-    $this->assertUrl(Url::fromRoute('entity.node.canonical', ['node' => $node->id()]));
++    $this->assertSession()->addressEquals(Url::fromRoute('entity.node.canonical', ['node' => $node->id()]));
+     $this->assertSession()->pageTextContains('Third version of the content.');
++    $this->drupalGet($edit_path);
+ 
+     // Make a new forward revision; after saving, we should be on the "Latest
+     // version" tab.
+-    $this->drupalPostForm($edit_path, [
++    $this->submitForm([
+       'body[0][value]' => 'Fourth version of the content.',
+     ], t('Save and Create New Draft'));
+-    $this->assertUrl(Url::fromRoute('entity.node.latest_version', ['node' => $node->id()]));
++    $this->assertSession()->addressEquals(Url::fromRoute('entity.node.latest_version', ['node' => $node->id()]));
+     $this->assertSession()->pageTextContains('Fourth version of the content.');
+   }
+ 
+diff --git a/tests/src/Functional/ModerationStateNodeTypeTest.php b/tests/src/Functional/ModerationStateNodeTypeTest.php
+index 5791203..1973d80 100644
+--- a/tests/src/Functional/ModerationStateNodeTypeTest.php
++++ b/tests/src/Functional/ModerationStateNodeTypeTest.php
+@@ -18,8 +18,8 @@ class ModerationStateNodeTypeTest extends ModerationStateTestBase {
+     $this->assertSession()->pageTextContains('The content type Not moderated has been added.');
+     $this->grantUserPermissionToCreateContentOfType($this->adminUser, 'not_moderated');
+     $this->drupalGet('node/add/not_moderated');
+-    $this->assertRaw('Save as unpublished');
+-    $this->drupalPostForm(NULL, [
++    $this->assertSession()->responseContains('Save as unpublished');
++    $this->submitForm([
+       'title[0][value]' => 'Test',
+     ], t('Save and publish'));
+     $this->assertSession()->pageTextContains('Not moderated Test has been created.');
+@@ -41,7 +41,7 @@ class ModerationStateNodeTypeTest extends ModerationStateTestBase {
+ 
+     // Create content.
+     $this->drupalGet('node/add/not_moderated');
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'title[0][value]' => 'Test',
+     ], t('Save and publish'));
+     $this->assertSession()->pageTextContains('Not moderated Test has been created.');
+@@ -61,11 +61,11 @@ class ModerationStateNodeTypeTest extends ModerationStateTestBase {
+     $node = reset($nodes);
+     $this->drupalGet('node/' . $node->id());
+     $this->assertSession()->statusCodeEquals(200);
+-    $this->assertLinkByHref('node/' . $node->id() . '/edit');
++    $this->assertSession()->linkByHrefExists('node/' . $node->id() . '/edit');
+     $this->drupalGet('node/' . $node->id() . '/edit');
+     $this->assertSession()->statusCodeEquals(200);
+-    $this->assertRaw('Save and Create New Draft');
+-    $this->assertNoRaw('Save and publish');
++    $this->assertSession()->responseContains('Save and Create New Draft');
++    $this->assertSession()->responseNotContains('Save and publish');
+   }
+ 
+ }
+diff --git a/tests/src/Functional/ModerationStateStatesTest.php b/tests/src/Functional/ModerationStateStatesTest.php
+index 2cdae08..efeeb60 100644
+--- a/tests/src/Functional/ModerationStateStatesTest.php
++++ b/tests/src/Functional/ModerationStateStatesTest.php
+@@ -40,27 +40,27 @@ class ModerationStateStatesTest extends ModerationStateTestBase {
+   public function testStateAdministration() {
+     $this->drupalLogin($this->adminUser);
+     $this->drupalGet('admin/structure/workbench-moderation');
+-    $this->assertLink('Moderation states');
+-    $this->assertLink('Moderation state transitions');
++    $this->assertSession()->linkExists('Moderation states');
++    $this->assertSession()->linkExists('Moderation state transitions');
+     $this->clickLink('Moderation states');
+-    $this->assertLink('Add Moderation state');
++    $this->assertSession()->linkExists('Add Moderation state');
+     $this->assertSession()->pageTextContains('Draft');
+     // Edit the draft.
+     $this->clickLink('Edit', 1);
+-    $this->assertFieldByName('label', 'Draft');
+-    $this->assertNoFieldChecked('edit-published');
+-    $this->drupalPostForm(NULL, [
++    $this->assertSession()->fieldValueEquals('label', 'Draft');
++    $this->assertSession()->checkboxNotChecked('edit-published');
++    $this->submitForm([
+       'label' => 'Drafty',
+     ], t('Save'));
+     $this->assertSession()->pageTextContains('Saved the Drafty Moderation state.');
+     $this->drupalGet('admin/structure/workbench-moderation/states/draft');
+-    $this->assertFieldByName('label', 'Drafty');
+-    $this->drupalPostForm(NULL, [
++    $this->assertSession()->fieldValueEquals('label', 'Drafty');
++    $this->submitForm([
+       'label' => 'Draft',
+     ], t('Save'));
+     $this->assertSession()->pageTextContains('Saved the Draft Moderation state.');
+     $this->clickLink(t('Add Moderation state'));
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'label' => 'Expired',
+       'id' => 'expired',
+     ], t('Save'));
+@@ -68,7 +68,7 @@ class ModerationStateStatesTest extends ModerationStateTestBase {
+     $this->drupalGet('admin/structure/workbench-moderation/states/expired');
+     $this->clickLink('Delete');
+     $this->assertSession()->pageTextContains('Are you sure you want to delete Expired?');
+-    $this->drupalPostForm(NULL, [], t('Delete'));
++    $this->submitForm([], t('Delete'));
+     $this->assertSession()->pageTextContains('Moderation state Expired deleted');
+   }
+ 
+diff --git a/tests/src/Functional/ModerationStateTestBase.php b/tests/src/Functional/ModerationStateTestBase.php
+index 2ddc40c..1ced56f 100644
+--- a/tests/src/Functional/ModerationStateTestBase.php
++++ b/tests/src/Functional/ModerationStateTestBase.php
+@@ -71,7 +71,7 @@ abstract class ModerationStateTestBase extends BrowserTestBase {
+   /**
+    * Sets the test up.
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->adminUser = $this->drupalCreateUser($this->permissions);
+     $this->drupalPlaceBlock('local_tasks_block', ['id' => 'tabs_block']);
+@@ -100,7 +100,7 @@ abstract class ModerationStateTestBase extends BrowserTestBase {
+       'name' => $content_type_name,
+       'type' => $content_type_id,
+     ];
+-    $this->drupalPostForm(NULL, $edit, t('Save content type'));
++    $this->submitForm($edit, t('Save content type'));
+ 
+     if ($moderated) {
+       $this->enableModerationThroughUi($content_type_id, $allowed_states, $default_state);
+@@ -119,8 +119,8 @@ abstract class ModerationStateTestBase extends BrowserTestBase {
+    */
+   protected function enableModerationThroughUi($content_type_id, array $allowed_states, $default_state) {
+     $this->drupalGet('admin/structure/types/manage/' . $content_type_id . '/moderation');
+-    $this->assertFieldByName('enable_moderation_state');
+-    $this->assertNoFieldChecked('edit-enable-moderation-state');
++    $this->assertSession()->fieldExists('enable_moderation_state');
++    $this->assertSession()->checkboxNotChecked('edit-enable-moderation-state');
+ 
+     $edit['enable_moderation_state'] = 1;
+ 
+@@ -132,7 +132,7 @@ abstract class ModerationStateTestBase extends BrowserTestBase {
+ 
+     $edit['default_moderation_state'] = $default_state;
+ 
+-    $this->drupalPostForm(NULL, $edit, t('Save'));
++    $this->submitForm($edit, t('Save'));
+   }
+ 
+   /**
+diff --git a/tests/src/Functional/ModerationStateTransitionsTest.php b/tests/src/Functional/ModerationStateTransitionsTest.php
+index fad1f2b..f096e5e 100644
+--- a/tests/src/Functional/ModerationStateTransitionsTest.php
++++ b/tests/src/Functional/ModerationStateTransitionsTest.php
+@@ -41,29 +41,29 @@ class ModerationStateTransitionsTest extends ModerationStateTestBase {
+ 
+     $this->drupalGet('admin/structure/workbench-moderation');
+     $this->clickLink('Moderation state transitions');
+-    $this->assertLink('Add Moderation state transition');
++    $this->assertSession()->linkExists('Add Moderation state transition');
+     $this->assertSession()->pageTextContains('Request Review');
+ 
+     // Edit the Draft » Needs review.
+     $this->drupalGet('admin/structure/workbench-moderation/transitions/draft_needs_review');
+-    $this->assertFieldByName('label', 'Request Review');
+-    $this->assertFieldByName('stateFrom', 'draft');
+-    $this->assertFieldByName('stateTo', 'needs_review');
+-    $this->drupalPostForm(NULL, [
++    $this->assertSession()->fieldValueEquals('label', 'Request Review');
++    $this->assertSession()->fieldValueEquals('stateFrom', 'draft');
++    $this->assertSession()->fieldValueEquals('stateTo', 'needs_review');
++    $this->submitForm([
+       'label' => 'Draft to Needs review',
+     ], t('Save'));
+     $this->assertSession()->pageTextContains('Saved the Draft to Needs review Moderation state transition.');
+     $this->drupalGet('admin/structure/workbench-moderation/transitions/draft_needs_review');
+-    $this->assertFieldByName('label', 'Draft to Needs review');
++    $this->assertSession()->fieldValueEquals('label', 'Draft to Needs review');
+     // Now set it back.
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'label' => 'Request Review',
+     ], t('Save'));
+     $this->assertSession()->pageTextContains('Saved the Request Review Moderation state transition.');
+ 
+     // Add a new state.
+     $this->drupalGet('admin/structure/workbench-moderation/states/add');
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'label' => 'Expired',
+       'id' => 'expired',
+     ], t('Save'));
+@@ -72,7 +72,7 @@ class ModerationStateTransitionsTest extends ModerationStateTestBase {
+     // Add a new transition.
+     $this->drupalGet('admin/structure/workbench-moderation/transitions');
+     $this->clickLink(t('Add Moderation state transition'));
+-    $this->drupalPostForm(NULL, [
++    $this->submitForm([
+       'label' => 'Published » Expired',
+       'id' => 'published_expired',
+       'stateFrom' => 'published',
+@@ -84,7 +84,7 @@ class ModerationStateTransitionsTest extends ModerationStateTestBase {
+     $this->drupalGet('admin/structure/workbench-moderation/transitions/published_expired');
+     $this->clickLink('Delete');
+     $this->assertSession()->pageTextContains('Are you sure you want to delete Published » Expired?');
+-    $this->drupalPostForm(NULL, [], t('Delete'));
++    $this->submitForm([], t('Delete'));
+     $this->assertSession()->pageTextContains('Moderation transition Published » Expired deleted');
+   }
+ 
+diff --git a/tests/src/Functional/NodeAccessTest.php b/tests/src/Functional/NodeAccessTest.php
+index d96be1e..0435ad3 100644
+--- a/tests/src/Functional/NodeAccessTest.php
++++ b/tests/src/Functional/NodeAccessTest.php
+@@ -12,7 +12,7 @@ class NodeAccessTest extends ModerationStateTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->drupalLogin($this->adminUser);
+     $this->createContentTypeFromUi('Moderated content', 'moderated_content', TRUE, [
+@@ -28,9 +28,10 @@ class NodeAccessTest extends ModerationStateTestBase {
+    */
+   public function testPageAccess() {
+     $this->drupalLogin($this->adminUser);
++    $this->drupalGet('node/add/moderated_content');
+ 
+     // Create a node to test with.
+-    $this->drupalPostForm('node/add/moderated_content', [
++    $this->submitForm([
+       'title[0][value]' => 'moderated content',
+     ], t('Save and Create New Draft'));
+     $nodes = \Drupal::entityTypeManager()
+@@ -50,10 +51,12 @@ class NodeAccessTest extends ModerationStateTestBase {
+     $view_path = 'node/' . $node->id();
+     $edit_path = 'node/' . $node->id() . '/edit';
+     $latest_path = 'node/' . $node->id() . '/latest';
++    $this->drupalGet($edit_path);
+ 
+     // Publish the node.
+-    $this->drupalPostForm($edit_path, [], t('Save and Request Review'));
+-    $this->drupalPostForm($edit_path, [], t('Save and Publish'));
++    $this->submitForm([], t('Save and Request Review'));
++    $this->drupalGet($edit_path);
++    $this->submitForm([], t('Save and Publish'));
+ 
+     // Ensure access works correctly for anonymous users.
+     $this->drupalLogout();
+@@ -68,7 +71,8 @@ class NodeAccessTest extends ModerationStateTestBase {
+ 
+     // Create a forward revision for the 'Latest revision' tab.
+     $this->drupalLogin($this->adminUser);
+-    $this->drupalPostForm($edit_path, [
++    $this->drupalGet($edit_path);
++    $this->submitForm([
+       'title[0][value]' => 'moderated content revised',
+     ], t('Save and Create New Draft'));
+ 
+diff --git a/tests/src/Kernel/EntityOperationsTest.php b/tests/src/Kernel/EntityOperationsTest.php
+index 64473e2..bc4c1a5 100644
+--- a/tests/src/Kernel/EntityOperationsTest.php
++++ b/tests/src/Kernel/EntityOperationsTest.php
+@@ -30,7 +30,7 @@ class EntityOperationsTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installEntitySchema('node');
+     $this->installSchema('node', 'node_access');
+diff --git a/tests/src/Kernel/EntityRevisionConverterTest.php b/tests/src/Kernel/EntityRevisionConverterTest.php
+index caa928d..a24e23b 100644
+--- a/tests/src/Kernel/EntityRevisionConverterTest.php
++++ b/tests/src/Kernel/EntityRevisionConverterTest.php
+@@ -30,7 +30,7 @@ class EntityRevisionConverterTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installEntitySchema('entity_test');
+diff --git a/tests/src/Kernel/EntityStateChangeValidationTest.php b/tests/src/Kernel/EntityStateChangeValidationTest.php
+index 2f83071..8aa79a5 100644
+--- a/tests/src/Kernel/EntityStateChangeValidationTest.php
++++ b/tests/src/Kernel/EntityStateChangeValidationTest.php
+@@ -38,7 +38,7 @@ class EntityStateChangeValidationTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installSchema('node', 'node_access');
+diff --git a/tests/src/Kernel/ModerationStateEntityTest.php b/tests/src/Kernel/ModerationStateEntityTest.php
+index 856a8d8..b5188a8 100644
+--- a/tests/src/Kernel/ModerationStateEntityTest.php
++++ b/tests/src/Kernel/ModerationStateEntityTest.php
+@@ -22,7 +22,7 @@ class ModerationStateEntityTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installEntitySchema('moderation_state');
+diff --git a/tests/src/Kernel/ModerationStateFieldTest.php b/tests/src/Kernel/ModerationStateFieldTest.php
+index 5aec8bc..fffff6d 100644
+--- a/tests/src/Kernel/ModerationStateFieldTest.php
++++ b/tests/src/Kernel/ModerationStateFieldTest.php
+@@ -25,7 +25,7 @@ class ModerationStateFieldTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installEntitySchema('node');
+   }
+diff --git a/tests/src/Kernel/ViewsDataIntegrationTest.php b/tests/src/Kernel/ViewsDataIntegrationTest.php
+index 40fb2c0..a5d0ab5 100644
+--- a/tests/src/Kernel/ViewsDataIntegrationTest.php
++++ b/tests/src/Kernel/ViewsDataIntegrationTest.php
+@@ -26,7 +26,7 @@ class ViewsDataIntegrationTest extends ViewsKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp($import_test_views = TRUE) {
++  protected function setUp($import_test_views = TRUE): void {
+     parent::setUp($import_test_views);
+ 
+     $this->installEntitySchema('node');
+diff --git a/tests/src/Unit/LatestRevisionCheckTest.php b/tests/src/Unit/LatestRevisionCheckTest.php
+index c1ff1c5..0924f41 100644
+--- a/tests/src/Unit/LatestRevisionCheckTest.php
++++ b/tests/src/Unit/LatestRevisionCheckTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\workbench_moderation\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\block_content\Entity\BlockContent;
+ use Drupal\Core\Access\AccessResultAllowed;
+ use Drupal\Core\Access\AccessResultForbidden;
+@@ -18,6 +19,7 @@ use Symfony\Component\Routing\Route;
+  */
+ class LatestRevisionCheckTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Test the access check of the LatestRevisionCheck service.
+    *
+diff --git a/tests/src/Unit/ModerationInformationTest.php b/tests/src/Unit/ModerationInformationTest.php
+index d739c5f..68cc61a 100644
+--- a/tests/src/Unit/ModerationInformationTest.php
++++ b/tests/src/Unit/ModerationInformationTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\workbench_moderation\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Core\Config\Entity\ConfigEntityInterface;
+ use Drupal\Core\Entity\ContentEntityFormInterface;
+ use Drupal\Core\Entity\ContentEntityInterface;
+@@ -19,6 +20,7 @@ use Drupal\workbench_moderation\ModerationInformation;
+  */
+ class ModerationInformationTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Builds a mock user.
+    *
+diff --git a/tests/src/Unit/StateTransitionValidationTest.php b/tests/src/Unit/StateTransitionValidationTest.php
+index 57a7c7e..0a919ff 100644
+--- a/tests/src/Unit/StateTransitionValidationTest.php
++++ b/tests/src/Unit/StateTransitionValidationTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\workbench_moderation\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Core\Entity\EntityStorageInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Session\AccountInterface;
+@@ -17,6 +18,7 @@ use Prophecy\Argument;
+  */
+ class StateTransitionValidationTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Builds a mock storage object for Transitions.
+    *
+diff --git a/tests/src/Unit/WorkbenchPreprocessTest.php b/tests/src/Unit/WorkbenchPreprocessTest.php
+index 7627a2f..623dcc2 100644
+--- a/tests/src/Unit/WorkbenchPreprocessTest.php
++++ b/tests/src/Unit/WorkbenchPreprocessTest.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\Tests\workbench_moderation\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
+ use Drupal\Tests\UnitTestCase;
+ use Drupal\workbench_moderation\WorkbenchPreprocess;
+ use Drupal\Core\Routing\CurrentRouteMatch;
+@@ -15,6 +16,7 @@ use Drupal\node\Entity\Node;
+  */
+ class WorkbenchPreprocessTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * @covers ::isLatestVersionPage
+    * @dataProvider routeNodeProvider

@@ -1,0 +1,303 @@
+diff --git a/library_manager.drush.inc b/library_manager.drush.inc
+index 0eb04c5..3844c32 100644
+--- a/library_manager.drush.inc
++++ b/library_manager.drush.inc
+@@ -102,7 +102,7 @@ function drush_library_manager_lm_check_assets() {
+       foreach ($library_info[$asset_type] as $file) {
+ 
+         if ($file['type'] == 'file') {
+-          $url = file_create_url($file['data']);
++          $url = \Drupal::service('file_url_generator')->generateAbsoluteString($file['data']);
+         }
+         elseif ($file['type'] == 'external') {
+           $url = $file['data'];
+diff --git a/src/Commands/LibraryManagerCommands.php b/src/Commands/LibraryManagerCommands.php
+index 5a35c7c..bf7196d 100644
+--- a/src/Commands/LibraryManagerCommands.php
++++ b/src/Commands/LibraryManagerCommands.php
+@@ -152,7 +152,7 @@ class LibraryManagerCommands extends DrushCommands {
+         foreach ($library_info[$asset_type] as $file) {
+ 
+           if ($file['type'] == 'file') {
+-            $url = file_create_url($file['data']);
++            $url = \Drupal::service('file_url_generator')->generateAbsoluteString($file['data']);
+           }
+           elseif ($file['type'] == 'external') {
+             $url = $file['data'];
+diff --git a/src/Form/AssetsCheckForm.php b/src/Form/AssetsCheckForm.php
+index 13bbc2d..5666f99 100644
+--- a/src/Form/AssetsCheckForm.php
++++ b/src/Form/AssetsCheckForm.php
+@@ -108,7 +108,7 @@ class AssetsCheckForm extends FormBase {
+       foreach (['css', 'js'] as $asset_type) {
+         foreach ($library_info[$asset_type] as $file) {
+           if ($file['type'] == 'file') {
+-            $operations[] = [$processCallback, [file_create_url($file['data'])]];
++            $operations[] = [$processCallback, [\Drupal::service('file_url_generator')->generateAbsoluteString($file['data'])]];
+           }
+           elseif ($file['type'] == 'external') {
+             $operations[] = [$processCallback, [$file['data']]];
+diff --git a/src/LibraryDiscovery.php b/src/LibraryDiscovery.php
+index bb84ff9..42b3f6f 100644
+--- a/src/LibraryDiscovery.php
++++ b/src/LibraryDiscovery.php
+@@ -131,7 +131,7 @@ class LibraryDiscovery extends BaseLibraryDiscovery implements LibraryDiscoveryI
+   public function getExtensionPath($extension) {
+     $path = $extension == 'core' ?
+       'core' :
+-      drupal_get_path($this->moduleHandler->moduleExists($extension) ? 'module' : 'theme', $extension);
++      \Drupal::service('extension.path.resolver')->getPath($this->moduleHandler->moduleExists($extension) ? 'module' : 'theme', $extension);
+ 
+     return $path . '/';
+   }
+diff --git a/tests/src/Functional/AssetsCheckFormTest.php b/tests/src/Functional/AssetsCheckFormTest.php
+index ba0919a..4cbf95b 100644
+--- a/tests/src/Functional/AssetsCheckFormTest.php
++++ b/tests/src/Functional/AssetsCheckFormTest.php
+@@ -18,7 +18,7 @@ class AssetsCheckFormTest extends TestBase {
+     $this->clickLink('Library assets');
+     $this->assertPageTitle('Library assets');
+     $this->assertXpath('//div[normalize-space() = "Last check: never."]');
+-    $this->drupalPostForm(NULL, [], 'Check assets');
++    $this->submitForm([], 'Check assets');
+     $assert_session = $this->assertSession();
+     $assert_session->responseMatches('#Could not load .*library_manager/tests/library_manager_test/js/example.js#');
+     $assert_session->responseMatches('#Could not load .*library_manager/tests/library_manager_test/css/example.css#');
+diff --git a/tests/src/Functional/LibraryAutoLoadTest.php b/tests/src/Functional/LibraryAutoLoadTest.php
+index f406cdb..b82a735 100644
+--- a/tests/src/Functional/LibraryAutoLoadTest.php
++++ b/tests/src/Functional/LibraryAutoLoadTest.php
+@@ -29,8 +29,9 @@ class LibraryAutoLoadTest extends TestBase {
+       'load' => TRUE,
+       'visibility[request_path][pages]' => '/node/1',
+     ];
++    $this->drupalGet('admin/structure/library/definition/alpha/edit');
+ 
+-    $this->drupalPostForm('admin/structure/library/definition/alpha/edit', $edit, 'Save');
++    $this->submitForm($edit, 'Save');
+ 
+     $this->drupalGet('node/1');
+     $assert_session->responseContains('/sites/default/files/libraries/custom/alpha/example.css');
+@@ -42,7 +43,8 @@ class LibraryAutoLoadTest extends TestBase {
+ 
+     // Negate the condition and check the pages again.
+     $edit['visibility[request_path][negate]'] = TRUE;
+-    $this->drupalPostForm('admin/structure/library/definition/alpha/edit', $edit, 'Save');
++    $this->drupalGet('admin/structure/library/definition/alpha/edit');
++    $this->submitForm($edit, 'Save');
+     $this->drupalGet('admin/structure/library/definition/alpha/edit');
+ 
+     drupal_flush_all_caches();
+diff --git a/tests/src/Functional/LibraryDefinitionAssetsTest.php b/tests/src/Functional/LibraryDefinitionAssetsTest.php
+index 3150767..0218713 100644
+--- a/tests/src/Functional/LibraryDefinitionAssetsTest.php
++++ b/tests/src/Functional/LibraryDefinitionAssetsTest.php
+@@ -20,26 +20,30 @@ class LibraryDefinitionAssetsTest extends TestBase {
+       'id' => 'beta',
+       'version' => '1.0.0',
+     ];
+-    $this->drupalPostForm('admin/structure/library/definition/add', $edit, 'Save');
++    $this->drupalGet('admin/structure/library/definition/add');
++    $this->submitForm($edit, 'Save');
+ 
+     // Create new file.
+     $edit = [
+       'file_name' => 'example-1.js',
+       'code' => 'alert(123)',
+     ];
+-    $this->drupalPostForm('admin/structure/library/definition/beta/js/add', $edit, 'Save');
++    $this->drupalGet('admin/structure/library/definition/beta/js/add');
++    $this->submitForm($edit, 'Save');
+     $this->assertTrue(file_exists($libraries_path . 'beta/example-1.js'));
+ 
+     // Rename the file.
+     $edit = [
+       'file_name' => 'example-2.js',
+     ];
+-    $this->drupalPostForm('admin/structure/library/definition/beta/js/1/edit', $edit, 'Save');
++    $this->drupalGet('admin/structure/library/definition/beta/js/1/edit');
++    $this->submitForm($edit, 'Save');
+     $this->assertFalse(file_exists($libraries_path . 'beta/example-1.js'));
+     $this->assertTrue(file_exists($libraries_path . 'beta/example-2.js'));
++    $this->drupalGet('admin/structure/library/definition/beta/js/1/delete');
+ 
+     // Delete the file.
+-    $this->drupalPostForm('admin/structure/library/definition/beta/js/1/delete', [], 'Delete');
++    $this->submitForm([], 'Delete');
+     $this->assertFalse(file_exists($libraries_path . 'beta/example-2.js'));
+ 
+     // Create new file.
+@@ -47,11 +51,13 @@ class LibraryDefinitionAssetsTest extends TestBase {
+       'file_name' => 'example-3.css',
+       'code' => 'body {color: blue;}',
+     ];
+-    $this->drupalPostForm('admin/structure/library/definition/beta/css/add', $edit, 'Save');
++    $this->drupalGet('admin/structure/library/definition/beta/css/add');
++    $this->submitForm($edit, 'Save');
+     $this->assertTrue(file_exists($libraries_path . 'beta/example-3.css'));
++    $this->drupalGet('admin/structure/library/definition/beta/delete');
+ 
+     // Delete the definition.
+-    $this->drupalPostForm('admin/structure/library/definition/beta/delete', [], 'Delete');
++    $this->submitForm([], 'Delete');
+     $this->assertFalse(file_exists($libraries_path . 'beta'));
+   }
+ 
+diff --git a/tests/src/Functional/LibraryDefinitionBuildFormTest.php b/tests/src/Functional/LibraryDefinitionBuildFormTest.php
+index 3fd720e..27b2a23 100644
+--- a/tests/src/Functional/LibraryDefinitionBuildFormTest.php
++++ b/tests/src/Functional/LibraryDefinitionBuildFormTest.php
+@@ -40,12 +40,12 @@ class LibraryDefinitionBuildFormTest extends TestBase {
+       $this->assertPageTitle('Create library definition');
+       $cloned_library_id = $extension . '_' . $library . '_cloned';
+ 
+-      $this->drupalPostForm(NULL, ['id' => $cloned_library_id], 'Create');
++      $this->submitForm(['id' => $cloned_library_id], 'Create');
+       $this->assertStatusMessage('Library definition has been created.');
+       $this->assertPageTitle('Edit library definition');
+ 
+       // Register a new library to compare its properties with original.
+-      $this->drupalPostForm(NULL, ['mode' => 'new'], 'Save');
++      $this->submitForm(['mode' => 'new'], 'Save');
+ 
+       drupal_static_reset('library_manager_build_libraries');
+       $library_info = $library_discovery->exportLibraryByName($extension, $library);
+diff --git a/tests/src/Functional/LibraryDefinitionTest.php b/tests/src/Functional/LibraryDefinitionTest.php
+index 73786fe..1a2516e 100644
+--- a/tests/src/Functional/LibraryDefinitionTest.php
++++ b/tests/src/Functional/LibraryDefinitionTest.php
+@@ -100,7 +100,7 @@ class LibraryDefinitionTest extends TestBase {
+       'visibility[user_role][roles][anonymous]' => TRUE,
+     ];
+ 
+-    $this->drupalPostForm(NULL, $edit, 'Save');
++    $this->submitForm($edit, 'Save');
+     $this->assertStatusMessage('Library definition has been created.');
+ 
+     // Check default form values for newly created definition.
+@@ -131,7 +131,7 @@ class LibraryDefinitionTest extends TestBase {
+     $this->clickLink('Cancel');
+     $this->assertPageTitle('Library definitions');
+     $this->drupalGet($delete_url);
+-    $this->drupalPostForm(NULL, [], 'Delete');
++    $this->submitForm([], 'Delete');
+     $this->assertStatusMessage($this->t('Deleted library definition %definition_name.', ['%definition_name' => 'foo']));
+     $this->assertPageTitle('Library definitions');
+   }
+@@ -162,19 +162,19 @@ class LibraryDefinitionTest extends TestBase {
+       'external' => FALSE,
+       'code' => 'console.log(123);',
+     ];
+-    $this->drupalPostForm(NULL, $edit, 'Save');
++    $this->submitForm($edit, 'Save');
+     $this->assertErrorMessage('The file name is not correct.');
+ 
+     $edit['file_name'] = 'foo.php';
+-    $this->drupalPostForm(NULL, $edit, 'Save');
++    $this->submitForm($edit, 'Save');
+     $this->assertErrorMessage('The file name is not correct.');
+ 
+     $edit['file_name'] = 'bar/../foo.js';
+-    $this->drupalPostForm(NULL, $edit, 'Save');
++    $this->submitForm($edit, 'Save');
+     $this->assertErrorMessage('The file name is not correct.');
+ 
+     $edit['file_name'] = 'foo.js';
+-    $this->drupalPostForm(NULL, $edit, 'Save');
++    $this->submitForm($edit, 'Save');
+ 
+     $this->assertStatusMessage('The JS file has been saved.');
+     $this->assertPageTitle('Edit library definition');
+@@ -198,7 +198,7 @@ class LibraryDefinitionTest extends TestBase {
+     $this->assertPageTitle('Edit library definition');
+ 
+     $this->clickLinkInRow('foo.js', 'Delete');
+-    $this->drupalPostForm(NULL, [], 'Delete');
++    $this->submitForm([], 'Delete');
+ 
+     $this->assertStatusMessage('The JS file has been deleted.');
+     $this->assertPageTitle('Edit library definition');
+@@ -231,19 +231,19 @@ class LibraryDefinitionTest extends TestBase {
+       'url' => 'http://example.com/foo.css',
+     ];
+ 
+-    $this->drupalPostForm(NULL, $edit, 'Save');
++    $this->submitForm($edit, 'Save');
+     $this->assertErrorMessage('The file name is not correct.');
+ 
+     $edit['file_name'] = 'foo.php';
+-    $this->drupalPostForm(NULL, $edit, 'Save');
++    $this->submitForm($edit, 'Save');
+     $this->assertErrorMessage('The file name is not correct.');
+ 
+     $edit['file_name'] = 'bar/../foo.css';
+-    $this->drupalPostForm(NULL, $edit, 'Save');
++    $this->submitForm($edit, 'Save');
+     $this->assertErrorMessage('The file name is not correct.');
+ 
+     $edit['file_name'] = 'foo.css';
+-    $this->drupalPostForm(NULL, $edit, 'Save');
++    $this->submitForm($edit, 'Save');
+ 
+     $this->assertStatusMessage('The CSS file has been saved.');
+     $this->assertPageTitle('Edit library definition');
+@@ -268,7 +268,7 @@ class LibraryDefinitionTest extends TestBase {
+ 
+     $this->clickLinkInRow('foo.css', 'Delete');
+ 
+-    $this->drupalPostForm(NULL, [], 'Delete');
++    $this->submitForm([], 'Delete');
+ 
+     $this->assertStatusMessage('The CSS file has been deleted.');
+     $this->assertPageTitle('Edit library definition');
+@@ -282,9 +282,9 @@ class LibraryDefinitionTest extends TestBase {
+     $this->clickLinkInRow('alpha', 'Duplicate');
+     $this->assertPageTitle('Duplicate of alpha');
+     $this->assertXpath('//input[@name = "id" and @value = "duplicate_of_alpha"]');
+-    $this->drupalPostForm(NULL, ['id' => 'alpha'], 'Duplicate');
++    $this->submitForm(['id' => 'alpha'], 'Duplicate');
+     $this->assertErrorMessage('The machine-readable name is already in use. It must be unique.');
+-    $this->drupalPostForm(NULL, ['id' => 'beta'], 'Duplicate');
++    $this->submitForm(['id' => 'beta'], 'Duplicate');
+     $this->assertPageTitle('Edit library definition');
+     $this->assertXpath('//input[@name = "id" and @value = "beta"]');
+     $this->assertXpath('//input[@name = "version" and @value = "1.2.3"]');
+diff --git a/tests/src/Functional/LibraryInformationTest.php b/tests/src/Functional/LibraryInformationTest.php
+index f812889..6d582a9 100644
+--- a/tests/src/Functional/LibraryInformationTest.php
++++ b/tests/src/Functional/LibraryInformationTest.php
+@@ -46,7 +46,7 @@ class LibraryInformationTest extends TestBase {
+    */
+   public function testDetailsPage() {
+ 
+-    $module_path = drupal_get_path('module', 'library_manager_test');
++    $module_path = \Drupal::service('extension.list.module')->getPath('library_manager_test');
+ 
+     $this->drupalGet('admin/structure/library');
+     $this->clickLinkInRow('library_manager_test/library_manager_test', 'library_manager_test/library_manager_test');
+diff --git a/tests/src/Functional/LibraryOverrideTest.php b/tests/src/Functional/LibraryOverrideTest.php
+index e3653f2..5735ac5 100644
+--- a/tests/src/Functional/LibraryOverrideTest.php
++++ b/tests/src/Functional/LibraryOverrideTest.php
+@@ -23,7 +23,7 @@ class LibraryOverrideTest extends TestBase {
+     // Override core/jquery library.
+     $this->drupalGet('admin/structure/library');
+     $this->clickLinkInRow('core/jquery', 'Create definition');
+-    $this->drupalPostForm(NULL, ['id' => 'jquery_overridden'], 'Create');
++    $this->submitForm(['id' => 'jquery_overridden'], 'Create');
+ 
+     // Make sure that the jQuery library is replaced.
+     $this->drupalGet('<front>');
+diff --git a/tests/src/Functional/SettingsFormTest.php b/tests/src/Functional/SettingsFormTest.php
+index 36b8c9c..d9d0738 100644
+--- a/tests/src/Functional/SettingsFormTest.php
++++ b/tests/src/Functional/SettingsFormTest.php
+@@ -19,7 +19,7 @@ class SettingsFormTest extends TestBase {
+     $edit = [
+       'libraries_path' => 'sites/default/files/foo',
+     ];
+-    $this->drupalPostForm(NULL, $edit, 'Save configuration');
++    $this->submitForm($edit, 'Save configuration');
+     $this->assertStatusMessage('The configuration options have been saved.');
+     $this->assertXpath($form_prefix . '//input[@name = "libraries_path" and @value = "sites/default/files/foo"]');
+   }

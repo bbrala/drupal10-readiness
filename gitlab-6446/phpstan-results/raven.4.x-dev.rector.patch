@@ -1,0 +1,135 @@
+diff --git a/raven.module b/raven.module
+index 8c1e070..4073323 100644
+--- a/raven.module
++++ b/raven.module
+@@ -1,5 +1,6 @@
+ <?php
+ 
++use function Sentry\captureEvent;
+ /**
+  * @file
+  * Raven Drupal module.
+@@ -151,6 +152,6 @@ function raven_monitoring_run_sensors(array $results): void {
+     ];
+     $formatted_message = strtr($message, $message_placeholders);
+     $event->setMessage($message, $message_placeholders, $formatted_message);
+-    \Sentry\captureEvent($event);
++    captureEvent($event);
+   }
+ }
+diff --git a/src/Commands/RavenCommands.php b/src/Commands/RavenCommands.php
+index b84337b..009e6dd 100644
+--- a/src/Commands/RavenCommands.php
++++ b/src/Commands/RavenCommands.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\raven\Commands;
+ 
++use function Sentry\captureMessage;
+ use Consolidation\AnnotatedCommand\CommandData;
+ use Drupal\raven\EventSubscriber\RequestSubscriber;
+ use Drupal\raven\Logger\Raven;
+@@ -90,7 +91,7 @@ class RavenCommands extends DrushCommands {
+ 
+     $start = microtime(TRUE);
+ 
+-    $id = \Sentry\captureMessage($message, $severity);
++    $id = captureMessage($message, $severity);
+ 
+     if ($parent = SentrySdk::getCurrentHub()->getSpan()) {
+       $span = new SpanContext();
+diff --git a/src/EventSubscriber/RequestSubscriber.php b/src/EventSubscriber/RequestSubscriber.php
+index f726118..38e5570 100644
+--- a/src/EventSubscriber/RequestSubscriber.php
++++ b/src/EventSubscriber/RequestSubscriber.php
+@@ -2,6 +2,7 @@
+ 
+ namespace Drupal\raven\EventSubscriber;
+ 
++use function Sentry\startTransaction;
+ use Consolidation\AnnotatedCommand\CommandData;
+ use Drupal\Component\Datetime\TimeInterface;
+ use Drupal\Core\Database\Database;
+@@ -88,7 +89,7 @@ class RequestSubscriber implements EventSubscriberInterface, ContainerAwareInter
+     $transactionContext->setName('drush ' . $commandData->input()->getArgument('command'));
+     $transactionContext->setOp('drush.command');
+     $transactionContext->setStartTimestamp($this->time->getRequestMicroTime());
+-    $this->transaction = \Sentry\startTransaction($transactionContext);
++    $this->transaction = startTransaction($transactionContext);
+     SentrySdk::getCurrentHub()->setSpan($this->transaction);
+     if ($config->get('database_tracing')) {
+       foreach (Database::getAllConnectionInfo() as $key => $info) {
+@@ -121,7 +122,7 @@ class RequestSubscriber implements EventSubscriberInterface, ContainerAwareInter
+       'http.url' => $request->getUri(),
+     ]);
+     $transactionContext->setStartTimestamp($this->time->getRequestMicroTime());
+-    $this->transaction = \Sentry\startTransaction($transactionContext);
++    $this->transaction = startTransaction($transactionContext);
+     SentrySdk::getCurrentHub()->setSpan($this->transaction);
+     if ($config->get('database_tracing')) {
+       foreach (Database::getAllConnectionInfo() as $key => $info) {
+diff --git a/src/Logger/Raven.php b/src/Logger/Raven.php
+index 6b17d69..3b64956 100644
+--- a/src/Logger/Raven.php
++++ b/src/Logger/Raven.php
+@@ -2,6 +2,11 @@
+ 
+ namespace Drupal\raven\Logger;
+ 
++use function Sentry\init;
++use function Sentry\configureScope;
++use function Sentry\captureEvent;
++use function Sentry\captureException;
++use function Sentry\addBreadcrumb;
+ use Drupal\Component\ClassFinder\ClassFinder;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\DependencyInjection\DependencySerializationTrait;
+@@ -207,7 +212,7 @@ class Raven implements LoggerInterface {
+         SentrySdk::init()->bindClient(ClientBuilder::create($options)->setLogger(Drush::logger())->getClient());
+       }
+       else {
+-        \Sentry\init($options);
++        init($options);
+       }
+     }
+     catch (\InvalidArgumentException $e) {
+@@ -217,7 +222,7 @@ class Raven implements LoggerInterface {
+       return NULL;
+     }
+     // Set default user context.
+-    \Sentry\configureScope(function (Scope $scope) use ($config): void {
++    configureScope(function (Scope $scope) use ($config): void {
+       $user = ['id' => $this->currentUser ? $this->currentUser->id() : 0];
+       if ($this->requestStack && ($request = $this->requestStack->getCurrentRequest())) {
+         $user['ip_address'] = $request->getClientIp();
+@@ -328,10 +333,10 @@ class Raven implements LoggerInterface {
+       $start = microtime(TRUE);
+       $rateLimit = $config->get('rate_limit');
+       if (!$rateLimit || $counter < $rateLimit) {
+-        \Sentry\captureEvent($event, EventHint::fromArray($eventHint));
++        captureEvent($event, EventHint::fromArray($eventHint));
+       }
+       elseif ($counter == $rateLimit) {
+-        \Sentry\captureException(new RateLimitException('Log event discarded due to rate limit exceeded; future log events will not be captured by Sentry.'));
++        captureException(new RateLimitException('Log event discarded due to rate limit exceeded; future log events will not be captured by Sentry.'));
+       }
+       $counter++;
+       if ($parent = SentrySdk::getCurrentHub()->getSpan()) {
+@@ -363,7 +368,7 @@ class Raven implements LoggerInterface {
+     }
+     $this->moduleHandler->alter('raven_breadcrumb', $breadcrumb);
+     if (!empty($breadcrumb['process'])) {
+-      \Sentry\addBreadcrumb(Breadcrumb::fromArray($breadcrumb['breadcrumb']));
++      addBreadcrumb(Breadcrumb::fromArray($breadcrumb['breadcrumb']));
+     }
+   }
+ 
+@@ -384,7 +389,7 @@ class Raven implements LoggerInterface {
+    */
+   public function onConsoleError(ConsoleErrorEvent $event): void {
+     if ($this->getClient()) {
+-      \Sentry\captureException($event->getError());
++      captureException($event->getError());
+     }
+   }
+ 

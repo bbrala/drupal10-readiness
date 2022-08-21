@@ -1,0 +1,1241 @@
+diff --git a/modules/crm_core_activity/legacy/CRMFeedsActivityProcessor.inc b/modules/crm_core_activity/legacy/CRMFeedsActivityProcessor.inc
+index 05ee489..36077c4 100644
+--- a/modules/crm_core_activity/legacy/CRMFeedsActivityProcessor.inc
++++ b/modules/crm_core_activity/legacy/CRMFeedsActivityProcessor.inc
+@@ -43,7 +43,7 @@ class CRMFeedsActivityProcessor extends FeedsProcessor {
+       'uid' => $this->config['author'],
+     ];
+ 
+-    return entity_create('crm_core_activity', $values);
++    return \Drupal::service('entity_type.manager')->getStorage('crm_core_activity')->create($values);
+   }
+ 
+   /**
+@@ -58,7 +58,7 @@ class CRMFeedsActivityProcessor extends FeedsProcessor {
+     }
+     else {
+       // We're replacing the existing activity. Only save the necessary.
+-      $activity = db_query("SELECT created, activity_id, type FROM {crm_core_activity} WHERE activity_id = :activity_id", [':activity_id' => $activity_id])->fetchObject();
++      $activity = \Drupal::database()->query("SELECT created, activity_id, type FROM {crm_core_activity} WHERE activity_id = :activity_id", [':activity_id' => $activity_id])->fetchObject();
+       $activity->uid = $this->config['author'];
+     }
+     // Populate properties that are set by activity_object_prepare().
+@@ -98,13 +98,13 @@ class CRMFeedsActivityProcessor extends FeedsProcessor {
+       return;
+     }
+     $count = $this->getLimit();
+-    $activitys = db_query_range("SELECT a.activity_id FROM {crm_core_activity} a JOIN {feeds_item} fi ON fi.entity_type = 'crm_core_activity' AND a.activity_id = fi.entity_id WHERE fi.id = :id AND c.created < :created", 0, $count, [':id' => $this->id, ':created' => REQUEST_TIME - $time]);
++    $activitys = db_query_range("SELECT a.activity_id FROM {crm_core_activity} a JOIN {feeds_item} fi ON fi.entity_type = 'crm_core_activity' AND a.activity_id = fi.entity_id WHERE fi.id = :id AND c.created < :created", 0, $count, [':id' => $this->id, ':created' => \Drupal::time()->getRequestTime() - $time]);
+     $activity_ids = [];
+     foreach ($activitys as $activity) {
+       $activity_ids[$activity->activity_id] = $activity->activity_id;
+     }
+     $this->entityDeleteMultiple($activity_ids);
+-    if (db_query_range("SELECT 1 FROM {crm_core_activity} a JOIN {feeds_item} fi ON fi.entity_type = 'crm_core_activity' AND a.activity_id = fi.entity_id WHERE fi.id = :id AND a.created < :created", 0, 1, [':id' => $this->id, ':created' => REQUEST_TIME - $time])->fetchField()) {
++    if (db_query_range("SELECT 1 FROM {crm_core_activity} a JOIN {feeds_item} fi ON fi.entity_type = 'crm_core_activity' AND a.activity_id = fi.entity_id WHERE fi.id = :id AND a.created < :created", 0, 1, [':id' => $this->id, ':created' => \Drupal::time()->getRequestTime() - $time])->fetchField()) {
+       return FEEDS_BATCH_ACTIVE;
+     }
+     return FEEDS_BATCH_COMPLETE;
+@@ -160,7 +160,7 @@ class CRMFeedsActivityProcessor extends FeedsProcessor {
+       '#options' => $types,
+       '#default_value' => $this->config['activity_type'],
+     ];
+-    $author = user_load($this->config['author']);
++    $author = \Drupal::service('entity_type.manager')->getStorage('user')->load($this->config['author']);
+     $form['author'] = [
+       '#type' => 'textfield',
+       '#title' => t('Author'),
+@@ -215,7 +215,7 @@ class CRMFeedsActivityProcessor extends FeedsProcessor {
+   public function setTargetElement(FeedsSource $source, $target_activity, $target_element, $value) {
+     switch ($target_element) {
+       case 'created':
+-        $target_activity->created = feeds_to_unixtime($value, REQUEST_TIME);
++        $target_activity->created = feeds_to_unixtime($value, \Drupal::time()->getRequestTime());
+         break;
+ 
+       case 'feeds_source':
+@@ -295,12 +295,12 @@ class CRMFeedsActivityProcessor extends FeedsProcessor {
+     foreach ($this->uniqueTargets($source, $result) as $target => $value) {
+       switch ($target) {
+         case 'activity_id':
+-          $activity_id = db_query("SELECT activity_id FROM {crm_core_activity} WHERE activity_id = :activity_id", [':activity_id' => $value])->fetchField();
++          $activity_id = \Drupal::database()->query("SELECT activity_id FROM {crm_core_activity} WHERE activity_id = :activity_id", [':activity_id' => $value])->fetchField();
+           break;
+ 
+         case 'feeds_source':
+           if ($id = feeds_get_importer_id($this->config['activity_type'])) {
+-            $activity_id = db_query("SELECT fs.feed_activity_id FROM {crm_core_activity} c JOIN {feeds_source} fs ON c.activity_id = fs.feed_activity_id WHERE fs.id = :id AND fs.source = :source", [':id' => $id, ':source' => $value])->fetchField();
++            $activity_id = \Drupal::database()->query("SELECT fs.feed_activity_id FROM {crm_core_activity} c JOIN {feeds_source} fs ON c.activity_id = fs.feed_activity_id WHERE fs.id = :id AND fs.source = :source", [':id' => $id, ':source' => $value])->fetchField();
+           }
+           break;
+       }
+diff --git a/modules/crm_core_activity/tests/src/Functional/ActivityUiTest.php b/modules/crm_core_activity/tests/src/Functional/ActivityUiTest.php
+index 43f83b7..195c536 100644
+--- a/modules/crm_core_activity/tests/src/Functional/ActivityUiTest.php
++++ b/modules/crm_core_activity/tests/src/Functional/ActivityUiTest.php
+@@ -38,7 +38,7 @@ class ActivityUiTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     // Place local actions blocks.
+@@ -125,7 +125,7 @@ class ActivityUiTest extends BrowserTestBase {
+     $this->assertSession()->linkExists('CRM');
+     $this->assertSession()->linkExists('Activities');
+ 
+-    $this->drupalPostForm(NULL, $meeting_activity, 'Save Activity');
++    $this->submitForm($meeting_activity, 'Save Activity');
+     $this->assertSession()->pageTextContains('Activity Pellentesque created.');
+ 
+     $activities = \Drupal::entityTypeManager()
+@@ -137,14 +137,14 @@ class ActivityUiTest extends BrowserTestBase {
+     $new_user = $this->drupalCreateUser();
+ 
+     // Test EntityOwnerTrait functions on meeting activity.
+-    $this->assertEqual($meeting_activity->getOwnerId(), $user->id());
+-    $this->assertEqual($meeting_activity->getOwner()->id(), $user->id());
++    $this->assertEquals($meeting_activity->getOwnerId(), $user->id());
++    $this->assertEquals($meeting_activity->getOwner()->id(), $user->id());
+     $meeting_activity->setOwner($new_user);
+-    $this->assertEqual($meeting_activity->getOwnerId(), $new_user->id());
+-    $this->assertEqual($meeting_activity->getOwner()->id(), $new_user->id());
++    $this->assertEquals($meeting_activity->getOwnerId(), $new_user->id());
++    $this->assertEquals($meeting_activity->getOwner()->id(), $new_user->id());
+     $meeting_activity->setOwnerId($user->id());
+-    $this->assertEqual($meeting_activity->getOwnerId(), $user->id());
+-    $this->assertEqual($meeting_activity->getOwner()->id(), $user->id());
++    $this->assertEquals($meeting_activity->getOwnerId(), $user->id());
++    $this->assertEquals($meeting_activity->getOwner()->id(), $user->id());
+ 
+     // Test Activity::hasParticipant() method.
+     $this->assertTrue(
+@@ -172,7 +172,8 @@ class ActivityUiTest extends BrowserTestBase {
+       'activity_participants[0][target_type]' => $individual->getEntityTypeId(),
+       'activity_participants[0][target_id]' => $individual->label() . ' (' . $individual->id() . ')',
+     ];
+-    $this->drupalPostForm('crm-core/activity/add/phone_call', $phonecall_activity, 'Save Activity');
++    $this->drupalGet('crm-core/activity/add/phone_call');
++    $this->submitForm($phonecall_activity, 'Save Activity');
+     $this->assertSession()->pageTextContains('Activity Mollis created.');
+ 
+     /** @var \Drupal\crm_core_activity\Entity\Activity $phonecall_activity_db */
+@@ -188,7 +189,7 @@ class ActivityUiTest extends BrowserTestBase {
+       'title[0][value]' => 'Vestibulum',
+       'activity_notes[0][value]' => 'Pellentesque egestas neque sit',
+     ];
+-    $this->drupalPostForm(NULL, $meeting_activity, 'Save Activity');
++    $this->submitForm($meeting_activity, 'Save Activity');
+     // Activity updated.
+     $this->assertSession()->pageTextContains('Vestibulum');
+     $this->drupalGet('crm-core/activity');
+@@ -214,8 +215,8 @@ class ActivityUiTest extends BrowserTestBase {
+       ->loadByProperties(['title' => 'Vestibulum']);
+     $activity = current($activities);
+ 
+-    $this->assertRaw('crm-core/activity/' . $activity->id() . '/edit');
+-    $this->assertRaw('crm-core/activity/' . $activity->id() . '/delete');
++    $this->assertSession()->responseContains('crm-core/activity/' . $activity->id() . '/edit');
++    $this->assertSession()->responseContains('crm-core/activity/' . $activity->id() . '/delete');
+     $date = $activity->get('activity_date')->date;
+     $this->container->get('date.formatter')->format($date->getTimeStamp(), 'medium');
+     $this->assertSession()->pageTextContains($this->container->get('date.formatter')->format($date->getTimeStamp(), 'medium'));
+@@ -229,26 +230,30 @@ class ActivityUiTest extends BrowserTestBase {
+     $empty_participant = [
+       'activity_participants[0][target_id]' => '',
+     ];
+-    $this->drupalPostForm('crm-core/activity/1/edit', $empty_participant, 'Save Activity');
++    $this->drupalGet('crm-core/activity/1/edit');
++    $this->submitForm($empty_participant, 'Save Activity');
+     $this->assertSession()->pageTextContains('Label field is required.');
+ 
+     // Update phone call activity and assert its title changed on the list.
+     $phonecall_activity = [
+       'title[0][value]' => 'Commodo',
+     ];
+-    $this->drupalPostForm('crm-core/activity/2/edit', $phonecall_activity, 'Save Activity');
++    $this->drupalGet('crm-core/activity/2/edit');
++    $this->submitForm($phonecall_activity, 'Save Activity');
+     $this->assertSession()->pageTextContains('Commodo');
+     $this->drupalGet('crm-core/activity');
+     $this->assertSession()->linkExists('Commodo', 0);
++    $this->drupalGet('crm-core/activity/1/delete');
+ 
+     // Delete Meeting activity.
+-    $this->drupalPostForm('crm-core/activity/1/delete', [], 'Delete');
++    $this->submitForm([], 'Delete');
+     $this->assertSession()->pageTextContains('Meeting Pellentesque has been deleted.');
+     $this->drupalGet('crm-core/activity');
+     $this->assertSession()->linkNotExists('Pellentesque');
++    $this->drupalGet('crm-core/activity/2/delete');
+ 
+     // Delete Phone call activity.
+-    $this->drupalPostForm('crm-core/activity/2/delete', [], 'Delete');
++    $this->submitForm([], 'Delete');
+     $this->assertSession()->pageTextContains('Phone call Commodo has been deleted.');
+     $this->drupalGet('crm-core/activity');
+     $this->assertSession()->linkNotExists('Commodo');
+@@ -267,7 +272,7 @@ class ActivityUiTest extends BrowserTestBase {
+       'type' => 'new_activity_type',
+       'description' => 'New activity type description',
+     ];
+-    $this->drupalPostForm(NULL, $new_activity_type, 'Save activity type');
++    $this->submitForm($new_activity_type, 'Save activity type');
+ 
+     // Check that new activity type is displayed in activity types overview.
+     $this->drupalGet('admin/structure/crm-core/activity-types');
+@@ -278,14 +283,14 @@ class ActivityUiTest extends BrowserTestBase {
+     $edit = [
+       'name' => 'Edited activity type',
+     ];
+-    $this->drupalPostForm(NULL, $edit, 'Save activity type');
++    $this->submitForm($edit, 'Save activity type');
+     $this->drupalGet('admin/structure/crm-core/activity-types');
+     $this->assertSession()->pageTextContains($edit['name']);
+ 
+     // Test activity type delete operation.
+     $this->drupalGet('admin/structure/crm-core/activity-types');
+     $this->clickLink('Delete');
+-    $this->drupalPostForm(NULL, [], 'Delete');
++    $this->submitForm([], 'Delete');
+     $this->assertSession()->pageTextContains('The activity type ' . $edit['name'] . ' has been deleted.');
+     $this->drupalGet('admin/structure/crm-core/activity-types');
+     $this->assertSession()->pageTextNotContains($edit['name']);
+@@ -304,7 +309,7 @@ class ActivityUiTest extends BrowserTestBase {
+ 
+     // Delete generated activity view to get default view from list builder.
+     $this->drupalGet('admin/structure/views/view/crm_core_activity_overview/delete');
+-    $this->drupalPostForm(NULL, [], 'Delete');
++    $this->submitForm([], 'Delete');
+     // Check activity collection page.
+     $this->drupalGet('/crm-core/activity');
+     $this->assertSession()->statusCodeEquals(200);
+diff --git a/modules/crm_core_activity/tests/src/Kernel/ActivityEntityPreDeleteTest.php b/modules/crm_core_activity/tests/src/Kernel/ActivityEntityPreDeleteTest.php
+index 12dc3f5..bacded8 100644
+--- a/modules/crm_core_activity/tests/src/Kernel/ActivityEntityPreDeleteTest.php
++++ b/modules/crm_core_activity/tests/src/Kernel/ActivityEntityPreDeleteTest.php
+@@ -41,7 +41,7 @@ class ActivityEntityPreDeleteTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installEntitySchema('crm_core_activity');
+     $this->installEntitySchema('crm_core_individual');
+diff --git a/modules/crm_core_activity/tests/src/Kernel/ActivityTypePluginTest.php b/modules/crm_core_activity/tests/src/Kernel/ActivityTypePluginTest.php
+index b06af83..c0a8345 100644
+--- a/modules/crm_core_activity/tests/src/Kernel/ActivityTypePluginTest.php
++++ b/modules/crm_core_activity/tests/src/Kernel/ActivityTypePluginTest.php
+@@ -44,7 +44,7 @@ class ActivityTypePluginTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installEntitySchema('crm_core_activity');
+     $this->installEntitySchema('crm_core_individual');
+@@ -102,7 +102,7 @@ class ActivityTypePluginTest extends KernelTestBase {
+     $this->assertEquals($activity->label(), 'Activity title');
+     $this->assertTrue($activity->hasParticipant($individual_1));
+     $this->assertFalse($activity->hasParticipant($individual_3));
+-    $this->assertEqual($activity->get('created')->value, $activity->getChangedTime()->value);
++    $this->assertEquals($activity->get('created')->value, $activity->getChangedTime()->value);
+     $activity->addParticipant($individual_3);
+     $this->assertTrue($activity->hasParticipant($individual_3));
+   }
+diff --git a/modules/crm_core_contact/legacy/CRMFeedsContactProcessor.inc b/modules/crm_core_contact/legacy/CRMFeedsContactProcessor.inc
+index 27134b6..72ea5cc 100644
+--- a/modules/crm_core_contact/legacy/CRMFeedsContactProcessor.inc
++++ b/modules/crm_core_contact/legacy/CRMFeedsContactProcessor.inc
+@@ -40,8 +40,8 @@ class CRMFeedsContactProcessor extends FeedsProcessor {
+   protected function newEntity(FeedsSource $source) {
+     $contact = new stdClass();
+     $contact->type = $this->config['contact_type'];
+-    $contact->changed = REQUEST_TIME;
+-    $contact->created = REQUEST_TIME;
++    $contact->changed = \Drupal::time()->getRequestTime();
++    $contact->created = \Drupal::time()->getRequestTime();
+     $contact->language = LANGUAGE_NONE;
+     $contact->revision_log = t('Imported by feeds.');
+     $contact->uid = $this->config['author'];
+@@ -60,7 +60,7 @@ class CRMFeedsContactProcessor extends FeedsProcessor {
+     }
+     else {
+       // We're replacing the existing contact. Only save the absolutely necessary.
+-      $contact = db_query("SELECT created, contact_id, vid, type FROM {crm_core_contact} WHERE contact_id = :contact_id", [':contact_id' => $contact_id])->fetchObject();
++      $contact = \Drupal::database()->query("SELECT created, contact_id, vid, type FROM {crm_core_contact} WHERE contact_id = :contact_id", [':contact_id' => $contact_id])->fetchObject();
+       $contact->uid = $this->config['author'];
+     }
+     // Populate properties that are set by contact_object_prepare().
+@@ -100,13 +100,13 @@ class CRMFeedsContactProcessor extends FeedsProcessor {
+       return;
+     }
+     $count = $this->getLimit();
+-    $contacts = db_query_range("SELECT c.contact_id FROM {crm_core_contact} c JOIN {feeds_item} fi ON fi.entity_type = 'crm_core_contact' AND c.contact_id = fi.entity_id WHERE fi.id = :id AND c.created < :created", 0, $count, [':id' => $this->id, ':created' => REQUEST_TIME - $time]);
++    $contacts = db_query_range("SELECT c.contact_id FROM {crm_core_contact} c JOIN {feeds_item} fi ON fi.entity_type = 'crm_core_contact' AND c.contact_id = fi.entity_id WHERE fi.id = :id AND c.created < :created", 0, $count, [':id' => $this->id, ':created' => \Drupal::time()->getRequestTime() - $time]);
+     $contact_ids = [];
+     foreach ($contacts as $contact) {
+       $contact_ids[$contact->contact_id] = $contact->contact_id;
+     }
+     $this->entityDeleteMultiple($contact_ids);
+-    if (db_query_range("SELECT 1 FROM {crm_core_contact} c JOIN {feeds_item} fi ON fi.entity_type = 'crm_core_contact' AND c.contact_id = fi.entity_id WHERE fi.id = :id AND c.created < :created", 0, 1, [':id' => $this->id, ':created' => REQUEST_TIME - $time])->fetchField()) {
++    if (db_query_range("SELECT 1 FROM {crm_core_contact} c JOIN {feeds_item} fi ON fi.entity_type = 'crm_core_contact' AND c.contact_id = fi.entity_id WHERE fi.id = :id AND c.created < :created", 0, 1, [':id' => $this->id, ':created' => \Drupal::time()->getRequestTime() - $time])->fetchField()) {
+       return FEEDS_BATCH_ACTIVE;
+     }
+     return FEEDS_BATCH_COMPLETE;
+@@ -146,7 +146,7 @@ class CRMFeedsContactProcessor extends FeedsProcessor {
+       '#options' => $types,
+       '#default_value' => $this->config['contact_type'],
+     ];
+-    $author = user_load($this->config['author']);
++    $author = \Drupal::service('entity_type.manager')->getStorage('user')->load($this->config['author']);
+     $form['author'] = [
+       '#type' => 'textfield',
+       '#title' => t('Author'),
+@@ -198,7 +198,7 @@ class CRMFeedsContactProcessor extends FeedsProcessor {
+   public function setTargetElement(FeedsSource $source, $target_contact, $target_element, $value) {
+     switch ($target_element) {
+       case 'created':
+-        $target_contact->created = feeds_to_unixtime($value, REQUEST_TIME);
++        $target_contact->created = feeds_to_unixtime($value, \Drupal::time()->getRequestTime());
+         break;
+ 
+       case 'feeds_source':
+@@ -273,12 +273,12 @@ class CRMFeedsContactProcessor extends FeedsProcessor {
+     foreach ($this->uniqueTargets($source, $result) as $target => $value) {
+       switch ($target) {
+         case 'contact_id':
+-          $contact_id = db_query("SELECT contact_id FROM {crm_core_contact} WHERE contact_id = :contact_id", [':contact_id' => $value])->fetchField();
++          $contact_id = \Drupal::database()->query("SELECT contact_id FROM {crm_core_contact} WHERE contact_id = :contact_id", [':contact_id' => $value])->fetchField();
+           break;
+ 
+         case 'feeds_source':
+           if ($id = feeds_get_importer_id($this->config['contact_type'])) {
+-            $contact_id = db_query("SELECT fs.feed_contact_id FROM {crm_core_contact} c JOIN {feeds_source} fs ON c.contact_id = fs.feed_contact_id WHERE fs.id = :id AND fs.source = :source", [':id' => $id, ':source' => $value])->fetchField();
++            $contact_id = \Drupal::database()->query("SELECT fs.feed_contact_id FROM {crm_core_contact} c JOIN {feeds_source} fs ON c.contact_id = fs.feed_contact_id WHERE fs.id = :id AND fs.source = :source", [':id' => $id, ':source' => $value])->fetchField();
+           }
+           break;
+       }
+diff --git a/modules/crm_core_contact/tests/src/Functional/IndividualUiTest.php b/modules/crm_core_contact/tests/src/Functional/IndividualUiTest.php
+index a4488cc..e6fe29b 100644
+--- a/modules/crm_core_contact/tests/src/Functional/IndividualUiTest.php
++++ b/modules/crm_core_contact/tests/src/Functional/IndividualUiTest.php
+@@ -36,7 +36,7 @@ class IndividualUiTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     IndividualType::create([
+@@ -95,7 +95,7 @@ class IndividualUiTest extends BrowserTestBase {
+ 
+     $this->drupalGet('crm-core');
+ 
+-    $this->assertTitle('CRM | Drupal');
++    $this->assertSession()->titleEquals('CRM | Drupal');
+ 
+     $this->assertSession()->linkExists('CRM Activities');
+     $this->assertSession()->linkExists('CRM Individuals');
+@@ -106,7 +106,7 @@ class IndividualUiTest extends BrowserTestBase {
+     $this->assertSession()->linkExists('Add an individual');
+ 
+     $this->drupalGet('crm-core/individual/add');
+-    $this->assertUrl('crm-core/individual/add/customer');
++    $this->assertSession()->addressEquals('crm-core/individual/add/customer');
+ 
+     // Create individual customer.
+     $user = $this->drupalCreateUser([
+@@ -125,10 +125,11 @@ class IndividualUiTest extends BrowserTestBase {
+       'name[0][generational]' => 'IV',
+       'name[0][credentials]' => '',
+     ];
+-    $this->drupalPostForm('crm-core/individual/add/customer', $customer_node, 'Save Customer');
++    $this->drupalGet('crm-core/individual/add/customer');
++    $this->submitForm($customer_node, 'Save Customer');
+ 
+     // Assert we were redirected back to the list of individuals.
+-    $this->assertUrl('crm-core/individual');
++    $this->assertSession()->addressEquals('crm-core/individual');
+ 
+     $this->assertSession()->linkExists('John Smith', 0, 'Newly created individual title listed.');
+     $this->assertSession()->pageTextContains('Customer');
+@@ -154,16 +155,16 @@ class IndividualUiTest extends BrowserTestBase {
+     $this->assertSession()->linkByHrefExists('crm-core/individual/' . $individual->id());
+ 
+     // Edit link is available.
+-    $this->assertRaw('crm-core/individual/' . $individual->id() . '/edit');
++    $this->assertSession()->responseContains('crm-core/individual/' . $individual->id() . '/edit');
+     // Delete link is available'.
+-    $this->assertRaw('crm-core/individual/' . $individual->id() . '/delete');
++    $this->assertSession()->responseContains('crm-core/individual/' . $individual->id() . '/delete');
+ 
+     // Individual updated date is available.
+     $this->assertSession()->pageTextContains($this->container->get('date.formatter')->format($individual->get('changed')->value, 'medium'));
+ 
+     $this->drupalGet('crm-core/individual/1/edit');
+     // Delete link is available.
+-    $this->assertRaw('crm-core/individual/1/delete" class="button button--danger" data-drupal-selector="edit-delete" id="edit-delete"');
++    $this->assertSession()->responseContains('crm-core/individual/1/delete" class="button button--danger" data-drupal-selector="edit-delete" id="edit-delete"');
+ 
+     $individual->save();
+ 
+@@ -184,20 +185,22 @@ class IndividualUiTest extends BrowserTestBase {
+       ->getStorage('crm_core_individual')
+       ->loadByProperties(['name__given' => 'John', 'name__family' => 'Smith']);
+     $individual = current($individuals);
+-    $this->drupalPostForm('crm-core/individual/' . $individual->id() . '/edit', $customer_node, 'Save Customer');
++    $this->drupalGet('crm-core/individual/' . $individual->id() . '/edit');
++    $this->submitForm($customer_node, 'Save Customer');
+     // Assert we are viewing the updated entity after update.
+-    $this->assertUrl('crm-core/individual/' . $individual->id());
++    $this->assertSession()->addressEquals('crm-core/individual/' . $individual->id());
+     // Local task "Delete" is available.
+-    $this->assertRaw('data-drupal-link-system-path="crm-core/individual/' . $individual->id() . '/delete"');
++    $this->assertSession()->responseContains('data-drupal-link-system-path="crm-core/individual/' . $individual->id() . '/delete"');
+ 
+     // Check listing page.
+     $this->drupalGet('crm-core/individual');
+     // Updated customer individual title listed.
+     $this->assertSession()->pageTextContains('Maynard Keenan');
++    $this->drupalGet('crm-core/individual/' . $individual->id() . '/delete');
+ 
+     // Delete individual contact.
+-    $this->drupalPostForm('crm-core/individual/' . $individual->id() . '/delete', [], 'Delete');
+-    $this->assertUrl('crm-core/individual');
++    $this->submitForm([], 'Delete');
++    $this->assertSession()->addressEquals('crm-core/individual');
+     // Deleted individual customer title no more listed.
+     $this->assertSession()->linkNotExists('Maynard Keenan');
+ 
+@@ -214,21 +217,21 @@ class IndividualUiTest extends BrowserTestBase {
+     $new_user = $this->drupalCreateUser();
+ 
+     // Test EntityOwnerTrait functions on contact.
+-    $this->assertEqual($individual->getOwnerId(), $user->id());
+-    $this->assertEqual($individual->getOwner()->id(), $user->id());
++    $this->assertEquals($individual->getOwnerId(), $user->id());
++    $this->assertEquals($individual->getOwner()->id(), $user->id());
+     $individual->setOwner($new_user);
+-    $this->assertEqual($individual->getOwnerId(), $new_user->id());
+-    $this->assertEqual($individual->getOwner()->id(), $new_user->id());
++    $this->assertEquals($individual->getOwnerId(), $new_user->id());
++    $this->assertEquals($individual->getOwner()->id(), $new_user->id());
+     $individual->setOwnerId($user->id());
+-    $this->assertEqual($individual->getOwnerId(), $user->id());
+-    $this->assertEqual($individual->getOwner()->id(), $user->id());
++    $this->assertEquals($individual->getOwnerId(), $user->id());
++    $this->assertEquals($individual->getOwner()->id(), $user->id());
+ 
+     // Test whether owner is loaded from database correctly.
+     // No need to save individual here, since nothing has changed.
+     $id = $individual->id();
+     $individual = Individual::load($id);
+-    $this->assertEqual($individual->getOwnerId(), $user->id());
+-    $this->assertEqual($individual->getOwner()->id(), $user->id());
++    $this->assertEquals($individual->getOwnerId(), $user->id());
++    $this->assertEquals($individual->getOwner()->id(), $user->id());
+ 
+     // And then make sure the result is correct even with owner being someone
+     // else than the user who was logged in while creating entity.
+@@ -236,8 +239,8 @@ class IndividualUiTest extends BrowserTestBase {
+     $individual->save();
+     $id = $individual->id();
+     $individual = Individual::load($id);
+-    $this->assertEqual($individual->getOwnerId(), $new_user->id());
+-    $this->assertEqual($individual->getOwner()->id(), $new_user->id());
++    $this->assertEquals($individual->getOwnerId(), $new_user->id());
++    $this->assertEquals($individual->getOwner()->id(), $new_user->id());
+ 
+     // Go to overview page and assert there is a default label displayed.
+     $this->drupalGet('crm-core/individual');
+@@ -346,10 +349,13 @@ class IndividualUiTest extends BrowserTestBase {
+       'revert all crm_core_individual revisions',
+     ]);
+     $this->drupalLogin($user);
++    $this->drupalGet('crm-core/individual/add/customer');
+ 
+-    $this->drupalPostForm('crm-core/individual/add/customer', ['name[0][given]' => 'rev', 'name[0][family]' => '1'], 'Save Customer');
+-    $this->drupalPostForm('crm-core/individual/1/edit', ['name[0][family]' => '2'], 'Save Customer');
+-    $this->drupalPostForm('crm-core/individual/1/edit', ['name[0][family]' => '3'], 'Save Customer');
++    $this->submitForm(['name[0][given]' => 'rev', 'name[0][family]' => '1'], 'Save Customer');
++    $this->drupalGet('crm-core/individual/1/edit');
++    $this->submitForm(['name[0][family]' => '2'], 'Save Customer');
++    $this->drupalGet('crm-core/individual/1/edit');
++    $this->submitForm(['name[0][family]' => '3'], 'Save Customer');
+ 
+     $this->clickLink('Revisions');
+     $this->assertSession()->linkByHrefExists('crm-core/individual/1');
+@@ -379,7 +385,7 @@ class IndividualUiTest extends BrowserTestBase {
+ 
+     $this->drupalGet($individual->toUrl('version-history'));
+     // Assert we have one revision link and current revision.
+-    $this->assertEqual($individual->getRevisionId(), 5);
++    $this->assertEquals($individual->getRevisionId(), 5);
+     $this->assertSession()->linkByHrefExists('crm-core/individual/' . $individual->id() . '/revisions/5/view');
+     $this->assertSession()->linkByHrefExists('crm-core/individual/' . $individual->id());
+ 
+@@ -408,13 +414,13 @@ class IndividualUiTest extends BrowserTestBase {
+ 
+     // Delete created organization view to get default view from list builder.
+     $this->drupalGet('admin/structure/views/view/crm_core_organization_overview/delete');
+-    $this->drupalPostForm(NULL, [], 'Delete');
++    $this->submitForm([], 'Delete');
+     // Check organization collection page.
+     $this->drupalGet('/crm-core/organization');
+     $this->assertSession()->statusCodeEquals(200);
+     // Delete created individual view to get default view from list builder.
+     $this->drupalGet('admin/structure/views/view/crm_core_individual_overview/delete');
+-    $this->drupalPostForm(NULL, [], 'Delete');
++    $this->submitForm([], 'Delete');
+     // Assert response on individual collection page.
+     $this->drupalGet('/crm-core/individual');
+     $this->assertSession()->statusCodeEquals(200);
+diff --git a/modules/crm_core_contact/tests/src/Functional/OrganizationUiTest.php b/modules/crm_core_contact/tests/src/Functional/OrganizationUiTest.php
+index bedee90..d85296f 100644
+--- a/modules/crm_core_contact/tests/src/Functional/OrganizationUiTest.php
++++ b/modules/crm_core_contact/tests/src/Functional/OrganizationUiTest.php
+@@ -33,7 +33,7 @@ class OrganizationUiTest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     OrganizationType::create([
+@@ -77,16 +77,17 @@ class OrganizationUiTest extends BrowserTestBase {
+     $this->clickLink('CRM Organizations');
+     // There should be no organizations available after fresh installation and
+     // there is a link to create new organizations.
+-    $this->assertText('There are no organizations available.');
++    $this->assertSession()->pageTextContains('There are no organizations available.');
+     $this->assertSession()->linkExists('Add an organization');
+ 
+     $household_values = [
+       'name[0][value]' => 'Fam. Johnson',
+     ];
+-    $this->drupalPostForm('crm-core/organization/add/household', $household_values, 'Save Household');
++    $this->drupalGet('crm-core/organization/add/household');
++    $this->submitForm($household_values, 'Save Household');
+ 
+     // Assert we were redirected back to the list of contacts.
+-    $this->assertUrl('crm-core/organization');
++    $this->assertSession()->addressEquals('crm-core/organization');
+ 
+     $this->assertSession()->pageTextContains('Fam. Johnson');
+     $this->assertSession()->pageTextContains('Household');
+@@ -97,11 +98,12 @@ class OrganizationUiTest extends BrowserTestBase {
+     $household_values = [
+       'name[0][value]' => 'Fam. Bane',
+     ];
++    $this->drupalGet('crm-core/organization/' . $household->id() . '/edit');
+ 
+-    $this->drupalPostForm('crm-core/organization/' . $household->id() . '/edit', $household_values, 'Save Household');
++    $this->submitForm($household_values, 'Save Household');
+ 
+     // Assert we are viewing the entity.
+-    $this->assertUrl('crm-core/organization/' . $household->id());
++    $this->assertSession()->addressEquals('crm-core/organization/' . $household->id());
+     $this->assertSession()->pageTextContains('Fam. Bane');
+ 
+     // Check listing page.
+@@ -112,12 +114,14 @@ class OrganizationUiTest extends BrowserTestBase {
+     $supplier_values = [
+       'name[0][value]' => 'Example ltd',
+     ];
+-    $this->drupalPostForm('crm-core/organization/add/supplier', $supplier_values, 'Save Supplier');
++    $this->drupalGet('crm-core/organization/add/supplier');
++    $this->submitForm($supplier_values, 'Save Supplier');
++    $this->drupalGet('crm-core/organization/add/supplier');
+     // Create supplier with no name.
+-    $this->drupalPostForm('crm-core/organization/add/supplier', [], 'Save Supplier');
++    $this->submitForm([], 'Save Supplier');
+ 
+     // Assert we were redirected back to the list of organizations.
+-    $this->assertUrl('crm-core/organization');
++    $this->assertSession()->addressEquals('crm-core/organization');
+ 
+     $this->assertSession()->linkExists('Example ltd');
+     $this->assertSession()->linkExists('Example ltd', 0, 'Newly created organization title listed.');
+@@ -145,22 +149,22 @@ class OrganizationUiTest extends BrowserTestBase {
+     $new_user = $this->drupalCreateUser();
+ 
+     // Test EntityOwnerTrait functions on organization.
+-    $this->assertEqual($organization->getOwnerId(), $user->id());
+-    $this->assertEqual($organization->getOwner()->id(), $user->id());
++    $this->assertEquals($organization->getOwnerId(), $user->id());
++    $this->assertEquals($organization->getOwner()->id(), $user->id());
+     $organization->setOwner($new_user);
+-    $this->assertEqual($organization->getOwnerId(), $new_user->id());
+-    $this->assertEqual($organization->getOwner()->id(), $new_user->id());
++    $this->assertEquals($organization->getOwnerId(), $new_user->id());
++    $this->assertEquals($organization->getOwner()->id(), $new_user->id());
+     $organization->setOwnerId($user->id());
+-    $this->assertEqual($organization->getOwnerId(), $user->id());
+-    $this->assertEqual($organization->getOwner()->id(), $user->id());
++    $this->assertEquals($organization->getOwnerId(), $user->id());
++    $this->assertEquals($organization->getOwner()->id(), $user->id());
+ 
+     // Test whether owner is loaded from database correctly.
+     $organizations = \Drupal::entityTypeManager()
+       ->getStorage('crm_core_organization')
+       ->loadByProperties(['name' => 'Example ltd']);
+     $organization = current($organizations);
+-    $this->assertEqual($organization->getOwnerId(), $user->id());
+-    $this->assertEqual($organization->getOwner()->id(), $user->id());
++    $this->assertEquals($organization->getOwnerId(), $user->id());
++    $this->assertEquals($organization->getOwner()->id(), $user->id());
+ 
+     // And then make sure the result is correct even with owner being someone
+     // else than the user who was logged in while creating entity.
+@@ -172,8 +176,8 @@ class OrganizationUiTest extends BrowserTestBase {
+     $organization = current($organizations);
+     $this->drupalGet('crm-core/organization');
+ 
+-    $this->assertEqual($organization->getOwnerId(), $new_user->id());
+-    $this->assertEqual($organization->getOwner()->id(), $new_user->id());
++    $this->assertEquals($organization->getOwnerId(), $new_user->id());
++    $this->assertEquals($organization->getOwner()->id(), $new_user->id());
+ 
+     $this->assertSession()->responseContains('crm-core/organization/' . $organization->id() . '/edit');
+     $this->assertSession()->responseContains('crm-core/organization/' . $organization->id() . '/delete');
+@@ -185,10 +189,11 @@ class OrganizationUiTest extends BrowserTestBase {
+     $supplier_values = [
+       'name[0][value]' => 'Another Example ltd',
+     ];
+-    $this->drupalPostForm('crm-core/organization/' . $organization->id() . '/edit', $supplier_values, 'Save Supplier');
++    $this->drupalGet('crm-core/organization/' . $organization->id() . '/edit');
++    $this->submitForm($supplier_values, 'Save Supplier');
+ 
+     // Assert we are viewing the entity.
+-    $this->assertUrl('crm-core/organization/' . $organization->id());
++    $this->assertSession()->addressEquals('crm-core/organization/' . $organization->id());
+     $this->assertSession()->pageTextContains('Another Example ltd');
+ 
+     $this->drupalGet('crm-core/organization/1/edit');
+@@ -200,12 +205,15 @@ class OrganizationUiTest extends BrowserTestBase {
+     // Check listing page.
+     $this->drupalGet('crm-core/organization');
+     $this->assertSession()->linkExists('Another Example ltd', 0, 'Updated organization title listed.');
++    $this->drupalGet('crm-core/organization/1/delete');
+ 
+     // Delete organizations.
+-    $this->drupalPostForm('crm-core/organization/1/delete', [], 'Delete');
+-    $this->drupalPostForm('crm-core/organization/2/delete', [], 'Delete');
+-    $this->drupalPostForm('crm-core/organization/3/delete', [], 'Delete');
+-    $this->assertUrl('crm-core/organization');
++    $this->submitForm([], 'Delete');
++    $this->drupalGet('crm-core/organization/2/delete');
++    $this->submitForm([], 'Delete');
++    $this->drupalGet('crm-core/organization/3/delete');
++    $this->submitForm([], 'Delete');
++    $this->assertSession()->addressEquals('crm-core/organization');
+     $this->assertSession()->linkNotExists('Another Example ltd', 'Deleted organization title no more listed.');
+ 
+     // Assert that there are no organizations.
+@@ -250,7 +258,7 @@ class OrganizationUiTest extends BrowserTestBase {
+     // Test that there is no a delete link.
+     $this->assertNoOrganizationTypeLink('supplier/delete', 'No delete link for supplier.');
+     $this->drupalGet('admin/structure/crm-core/organization-types/supplier/delete');
+-    $this->assertResponse(403);
++    $this->assertSession()->statusCodeEquals(403);
+ 
+     $this->drupalGet('admin/structure/crm-core/organization-types/supplier');
+ 
+@@ -309,16 +317,19 @@ class OrganizationUiTest extends BrowserTestBase {
+     $this->drupalLogin($user);
+ 
+     $organization = ['name[0][value]' => 'rev'];
+-    $this->drupalPostForm('crm-core/organization/add/supplier', $organization, 'Save Supplier');
++    $this->drupalGet('crm-core/organization/add/supplier');
++    $this->submitForm($organization, 'Save Supplier');
+     $organization_1 = ['name[0][value]' => 'rev1'];
+-    $this->drupalPostForm('crm-core/organization/1/edit', $organization_1, 'Save Supplier');
++    $this->drupalGet('crm-core/organization/1/edit');
++    $this->submitForm($organization_1, 'Save Supplier');
+     $organization_2 = ['name[0][value]' => 'rev2'];
+-    $this->drupalPostForm('crm-core/organization/1/edit', $organization_2, 'Save Supplier');
++    $this->drupalGet('crm-core/organization/1/edit');
++    $this->submitForm($organization_2, 'Save Supplier');
+ 
+     $this->clickLink('Revisions');
+-    $this->assertLinkByHref('crm-core/organization/1');
+-    $this->assertLinkByHref('crm-core/organization/1/revisions/1/view');
+-    $this->assertLinkByHref('crm-core/organization/1/revisions/2/view');
++    $this->assertSession()->linkByHrefExists('crm-core/organization/1');
++    $this->assertSession()->linkByHrefExists('crm-core/organization/1/revisions/1/view');
++    $this->assertSession()->linkByHrefExists('crm-core/organization/1/revisions/2/view');
+ 
+     $this->drupalGet('crm-core/organization/1/revisions/1/view');
+     $this->assertSession()->pageTextContains('rev');
+diff --git a/modules/crm_core_contact/tests/src/Kernel/IndividualCRUDTest.php b/modules/crm_core_contact/tests/src/Kernel/IndividualCRUDTest.php
+index 50a8e54..0dda795 100644
+--- a/modules/crm_core_contact/tests/src/Kernel/IndividualCRUDTest.php
++++ b/modules/crm_core_contact/tests/src/Kernel/IndividualCRUDTest.php
+@@ -42,7 +42,7 @@ class IndividualCRUDTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installConfig(['field']);
+diff --git a/modules/crm_core_contact/tests/src/Kernel/IndividualPrimaryFieldsTest.php b/modules/crm_core_contact/tests/src/Kernel/IndividualPrimaryFieldsTest.php
+index fce8c7f..beb2881 100644
+--- a/modules/crm_core_contact/tests/src/Kernel/IndividualPrimaryFieldsTest.php
++++ b/modules/crm_core_contact/tests/src/Kernel/IndividualPrimaryFieldsTest.php
+@@ -37,7 +37,7 @@ class IndividualPrimaryFieldsTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installConfig(['field']);
+     $this->installEntitySchema('crm_core_individual');
+@@ -106,9 +106,9 @@ class IndividualPrimaryFieldsTest extends KernelTestBase {
+       'field_email' => 'jane@example.com',
+     ]);
+     $individual->save();
+-    $this->assertEqual($individual->getPrimaryEmail()->value, 'jane@example.com');
+-    $this->assertEqual($individual->getPrimaryPhone()->value, '+15551234');
+-    $this->assertEqual($individual->getPrimaryAddress()->getValue()[0]['country_code'], 'US');
++    $this->assertEquals($individual->getPrimaryEmail()->value, 'jane@example.com');
++    $this->assertEquals($individual->getPrimaryPhone()->value, '+15551234');
++    $this->assertEquals($individual->getPrimaryAddress()->getValue()[0]['country_code'], 'US');
+   }
+ 
+ }
+diff --git a/modules/crm_core_contact/tests/src/Kernel/LocalTaskTest.php b/modules/crm_core_contact/tests/src/Kernel/LocalTaskTest.php
+index 30ebc22..112e560 100644
+--- a/modules/crm_core_contact/tests/src/Kernel/LocalTaskTest.php
++++ b/modules/crm_core_contact/tests/src/Kernel/LocalTaskTest.php
+@@ -28,7 +28,7 @@ class LocalTaskTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installEntitySchema('crm_core_individual');
+     $this->installEntitySchema('user');
+@@ -53,7 +53,7 @@ class LocalTaskTest extends KernelTestBase {
+       $this->container->get('string_translation')
+     );
+     $tasks = $provider->buildLocalTasks($individual->getEntityType());
+-    $this->assertEqual([
++    $this->assertEquals([
+       'entity.crm_core_individual.canonical' => [
+         'title' => 'View',
+         'route_name' => 'entity.crm_core_individual.canonical',
+diff --git a/modules/crm_core_contact/tests/src/Kernel/OrganizationCRUDTest.php b/modules/crm_core_contact/tests/src/Kernel/OrganizationCRUDTest.php
+index 5b0210d..bd37860 100644
+--- a/modules/crm_core_contact/tests/src/Kernel/OrganizationCRUDTest.php
++++ b/modules/crm_core_contact/tests/src/Kernel/OrganizationCRUDTest.php
+@@ -35,7 +35,7 @@ class OrganizationCRUDTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installConfig(['field']);
+diff --git a/modules/crm_core_contact/tests/src/Unit/ContactModuleTest.php b/modules/crm_core_contact/tests/src/Unit/ContactModuleTest.php
+index c9c3d88..cc74cfb 100644
+--- a/modules/crm_core_contact/tests/src/Unit/ContactModuleTest.php
++++ b/modules/crm_core_contact/tests/src/Unit/ContactModuleTest.php
+@@ -16,7 +16,7 @@ class ContactModuleTest extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     require_once __DIR__ . '/../../../crm_core_contact.module';
+   }
+ 
+diff --git a/modules/crm_core_match/tests/src/Functional/DefaultMatchingEngineUITest.php b/modules/crm_core_match/tests/src/Functional/DefaultMatchingEngineUITest.php
+index 5b131ab..8cabc90 100644
+--- a/modules/crm_core_match/tests/src/Functional/DefaultMatchingEngineUITest.php
++++ b/modules/crm_core_match/tests/src/Functional/DefaultMatchingEngineUITest.php
+@@ -33,7 +33,7 @@ class DefaultMatchingEngineUITest extends BrowserTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  public function setUp() {
++  public function setUp(): void {
+     parent::setUp();
+ 
+     IndividualType::create([
+@@ -61,14 +61,14 @@ class DefaultMatchingEngineUITest extends BrowserTestBase {
+     // Test Organization matcher form.
+     $this->drupalGet('admin/config/crm-core/match/organization');
+ 
+-    $this->assertText('Field Matching');
+-    $this->assertText('Unsupported Fields');
+-    $this->assertText('A given field is unsupported when there is no field match handler for the field type it belongs to. In order to make it supported a handler plugin should be created for it.');
++    $this->assertSession()->pageTextContains('Field Matching');
++    $this->assertSession()->pageTextContains('Unsupported Fields');
++    $this->assertSession()->pageTextContains('A given field is unsupported when there is no field match handler for the field type it belongs to. In order to make it supported a handler plugin should be created for it.');
+     // There is checkbox for title property of the name field.
+-    $this->assertNoFieldChecked('edit-configuration-rules-nametitle-status');
++    $this->assertSession()->checkboxNotChecked('edit-configuration-rules-nametitle-status');
+     // There is title property operator for the name field.
+-    $this->assertFieldByName('configuration[rules][name:title][operator]');
+-    $this->assertText('ID');
++    $this->assertSession()->fieldExists('configuration[rules][name:title][operator]');
++    $this->assertSession()->pageTextContains('ID');
+     $this->assertSession()->fieldNotExists('edit-configuration-rules-idvalue-status');
+     $this->assertSession()->fieldNotExists('edit-configuration-rules-idvalue-operator');
+ 
+@@ -82,17 +82,17 @@ class DefaultMatchingEngineUITest extends BrowserTestBase {
+       'configuration[rules][name:family][options]' => 'Smith',
+       'configuration[rules][name:family][score]' => 1,
+     ];
+-    $this->drupalPostForm(NULL, $configuration, 'Save');
++    $this->submitForm($configuration, 'Save');
+ 
+     $this->drupalGet('admin/config/crm-core/match');
+     $this->clickLink('Edit', 2);
+ 
+-    $this->assertFieldChecked('edit-configuration-rules-namegiven-status');
++    $this->assertSession()->checkboxChecked('edit-configuration-rules-namegiven-status');
+     $this->assertSession()->fieldValueEquals('edit-configuration-rules-namegiven-operator', 'CONTAINS');
+     $this->assertSession()->fieldValueEquals('edit-configuration-rules-namegiven-options', 'John');
+     $this->assertSession()->fieldValueEquals('edit-configuration-rules-namegiven-score', 1);
+ 
+-    $this->assertFieldChecked('edit-configuration-rules-namefamily-status');
++    $this->assertSession()->checkboxChecked('edit-configuration-rules-namefamily-status');
+     $this->assertSession()->fieldValueEquals('edit-configuration-rules-namefamily-operator', 'CONTAINS');
+     $this->assertSession()->fieldValueEquals('edit-configuration-rules-namefamily-options', 'Smith');
+     $this->assertSession()->fieldValueEquals('edit-configuration-rules-namefamily-score', 1);
+diff --git a/modules/crm_core_match/tests/src/Kernel/FieldMatcherTest.php b/modules/crm_core_match/tests/src/Kernel/FieldMatcherTest.php
+index 43e1f7c..6b54a06 100644
+--- a/modules/crm_core_match/tests/src/Kernel/FieldMatcherTest.php
++++ b/modules/crm_core_match/tests/src/Kernel/FieldMatcherTest.php
+@@ -45,7 +45,7 @@ class FieldMatcherTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $this->installConfig(['crm_core_contact']);
+@@ -186,7 +186,7 @@ class FieldMatcherTest extends KernelTestBase {
+ 
+     $ids = $text->match($individual_needle);
+     $this->assertTrue(array_key_exists($individual_match->id(), $ids), 'Text match returns expected match');
+-    $this->assertEqual(42, $ids[$individual_match->id()]['individual_text.value'], 'Got expected match score');
++    $this->assertEquals(42, $ids[$individual_match->id()]['individual_text.value'], 'Got expected match score');
+   }
+ 
+   /**
+@@ -227,7 +227,7 @@ class FieldMatcherTest extends KernelTestBase {
+ 
+     $ids = $text->match($individual_needle);
+     $this->assertTrue(array_key_exists($individual_match->id(), $ids), 'Text match returns expected match');
+-    $this->assertEqual(42, $ids[$individual_match->id()]['individual_mail.value'], 'Got expected match score');
++    $this->assertEquals(42, $ids[$individual_match->id()]['individual_mail.value'], 'Got expected match score');
+   }
+ 
+ }
+diff --git a/modules/crm_core_match/tests/src/Unit/DefaultEngineTest.php b/modules/crm_core_match/tests/src/Unit/DefaultEngineTest.php
+index 7e9cd67..a6b7b56 100644
+--- a/modules/crm_core_match/tests/src/Unit/DefaultEngineTest.php
++++ b/modules/crm_core_match/tests/src/Unit/DefaultEngineTest.php
+@@ -17,7 +17,7 @@ class DefaultEngineTest extends UnitTestCase {
+   /**
+    * The mocked match field plugin manager.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface|\PHPUnit_Framework_MockObject_MockObject
++   * @var \Drupal\Core\Entity\EntityTypeManagerInterface|\PHPUnit\Framework\MockObject\MockObject
+    */
+   protected $pluginManager;
+ 
+@@ -25,7 +25,7 @@ class DefaultEngineTest extends UnitTestCase {
+   /**
+    * The mocked entity manager service.
+    *
+-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface|\PHPUnit_Framework_MockObject_MockObject
++   * @var \Drupal\Core\Entity\EntityTypeManagerInterface|\PHPUnit\Framework\MockObject\MockObject
+    */
+   protected $entityTypeManager;
+ 
+@@ -39,14 +39,14 @@ class DefaultEngineTest extends UnitTestCase {
+   /**
+    * A mocked individual entity used to get matches.
+    *
+-   * @var \Drupal\crm_core_contact\Entity\Individual|\PHPUnit_Framework_MockObject_MockObject
++   * @var \Drupal\crm_core_contact\Entity\Individual|\PHPUnit\Framework\MockObject\MockObject
+    */
+   protected $individual;
+ 
+   /**
+    * A mocked matcher.
+    *
+-   * @var \Drupal\crm_core_match\Entity\Matcher|\PHPUnit_Framework_MockObject_MockObject
++   * @var \Drupal\crm_core_match\Entity\Matcher|\PHPUnit\Framework\MockObject\MockObject
+    */
+   protected $matcher;
+ 
+@@ -60,41 +60,33 @@ class DefaultEngineTest extends UnitTestCase {
+   /**
+    * A mocked field definition.
+    *
+-   * @var \Drupal\Core\Field\FieldDefinitionInterface|\PHPUnit_Framework_MockObject_MockObject
++   * @var \Drupal\Core\Field\FieldDefinitionInterface|\PHPUnit\Framework\MockObject\MockObject
+    */
+   protected $field;
+ 
+   /**
+    * A mocked match field handler.
+    *
+-   * @var \Drupal\crm_core_match\Plugin\crm_core_match\field\FieldHandlerInterface|\PHPUnit_Framework_MockObject_MockObject
++   * @var \Drupal\crm_core_match\Plugin\crm_core_match\field\FieldHandlerInterface|\PHPUnit\Framework\MockObject\MockObject
+    */
+   protected $matchHandler;
+ 
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     $this->pluginManager = $this->createMock('\Drupal\Core\Entity\EntityTypeManagerInterface');
+ 
+-    $this->entityTypeManager = $this->getMockBuilder('\Drupal\Core\Entity\EntityTypeManagerInterface')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->entityTypeManager = $this->createMock('\Drupal\Core\Entity\EntityTypeManagerInterface');
+ 
+-    $this->entityFieldManager = $this->getMockBuilder('\Drupal\Core\Entity\EntityFieldManagerInterface')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->entityFieldManager = $this->createMock('\Drupal\Core\Entity\EntityFieldManagerInterface');
+ 
+-    $this->individual = $this->getMockBuilder('Drupal\crm_core_contact\Entity\Individual')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->individual = $this->createMock('Drupal\crm_core_contact\Entity\Individual');
+     $this->individual->expects($this->any())
+       ->method('bundle')
+       ->will($this->returnValue('dogs'));
+ 
+-    $this->matcher = $this->getMockBuilder('Drupal\crm_core_match\Entity\Matcher')
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $this->matcher = $this->createMock('Drupal\crm_core_match\Entity\Matcher');
+     $this->matcher->expects($this->any())
+       ->method('status')
+       ->will($this->returnValue(TRUE));
+diff --git a/modules/crm_core_relationship/crm_core_relationship.install b/modules/crm_core_relationship/crm_core_relationship.install
+index 622b9bc..ab21d88 100644
+--- a/modules/crm_core_relationship/crm_core_relationship.install
++++ b/modules/crm_core_relationship/crm_core_relationship.install
+@@ -51,7 +51,7 @@ function crm_core_relationship_uninstall() {
+ 
+   // Get all the relationship_types (bundles), find all fields
+   // delete them.
+-  $query = db_select('relation_bundles', 'rb')
++  $query = \Drupal::database()->select('relation_bundles', 'rb')
+     ->fields('rb', ['relation_type'])
+     ->condition('rb.entity_type', 'crm_core_contact')
+     ->distinct()
+@@ -63,7 +63,7 @@ function crm_core_relationship_uninstall() {
+ 
+   foreach ($relationship_type as $type) {
+     // Look into the database for each type.
+-    $relationship_query = db_select('relation', 'r')
++    $relationship_query = \Drupal::database()->select('relation', 'r')
+       ->fields('r', ['relation_id'])
+       ->condition('r.relation_type', $type)
+       ->execute();
+diff --git a/modules/crm_core_relationship/templates/relationship.tpl.php b/modules/crm_core_relationship/templates/relationship.tpl.php
+index f3da642..d450280 100644
+--- a/modules/crm_core_relationship/templates/relationship.tpl.php
++++ b/modules/crm_core_relationship/templates/relationship.tpl.php
+@@ -18,7 +18,7 @@
+ <div class="<?php print $classes; ?> clearfix"<?php print $attributes; ?>>
+   <div class="content"<?php print $content_attributes; ?>>
+     <?php
+-      print render($content);
++      print \Drupal::service('renderer')->render($content);
+     ?>
+   </div>
+ </div>
+diff --git a/modules/crm_core_relationship_ui/crm_core_relationship_ui.admin.inc b/modules/crm_core_relationship_ui/crm_core_relationship_ui.admin.inc
+index 5af240a..16b39cf 100644
+--- a/modules/crm_core_relationship_ui/crm_core_relationship_ui.admin.inc
++++ b/modules/crm_core_relationship_ui/crm_core_relationship_ui.admin.inc
+@@ -247,7 +247,7 @@ function crm_core_relationship_ui_type_form_submit($form, &$form_state) {
+   RelationType::create($record)->save();
+   $form_state['redirect'] = 'admin/structure/crm-core/relationship-types';
+ 
+-  drupal_set_message(t('The relationship type has been saved.'));
++  \Drupal::messenger()->addStatus(t('The relationship type has been saved.'));
+ }
+ 
+ /**
+@@ -290,7 +290,7 @@ function crm_core_relationship_ui_type_delete_confirm_submit($form, &$form_state
+   RelationType::load($form_state['values']['relation_type'])->delete();
+ 
+   $t_args = ['%label' => $form_state['values']['label']];
+-  drupal_set_message(t('The %label relationship type has been deleted.', $t_args));
++  \Drupal::messenger()->addStatus(t('The %label relationship type has been deleted.', $t_args));
+   watchdog('relation', 'Deleted the %label relationship type.', $t_args, WATCHDOG_NOTICE);
+ 
+   // TODO: relation_types_rebuild() ?;.
+diff --git a/modules/crm_core_relationship_ui/crm_core_relationship_ui.module b/modules/crm_core_relationship_ui/crm_core_relationship_ui.module
+index d0a28a8..2836cc6 100644
+--- a/modules/crm_core_relationship_ui/crm_core_relationship_ui.module
++++ b/modules/crm_core_relationship_ui/crm_core_relationship_ui.module
+@@ -152,7 +152,7 @@ function crm_core_relationship_ui_menu() {
+ function crm_core_relationship_ui_menu_alter(&$items) {
+   // We are simply hiding crm relationships from other types of relations.
+   $items['admin/structure/relation']['page callback'] = 'crm_core_relationship_ui_types_overview';
+-  $items['admin/structure/relation']['file path'] = drupal_get_path('module', 'crm_core_relationship_ui');
++  $items['admin/structure/relation']['file path'] = \Drupal::service('extension.list.module')->getPath('crm_core_relationship_ui');
+   $items['admin/structure/relation']['file'] = 'crm_core_relationship_ui.admin.inc';
+   $items['admin/structure/relation']['page arguments'] = [1];
+ }
+@@ -331,7 +331,7 @@ function crm_core_relationship_ui_field_formatter_view($entity_type, $entity, $f
+ function crm_core_relationship_ui_views_api() {
+   return [
+     'api' => 3,
+-    'path' => drupal_get_path('module', 'crm_core_relationship_ui'),
++    'path' => \Drupal::service('extension.list.module')->getPath('crm_core_relationship_ui'),
+   ];
+ }
+ 
+diff --git a/modules/crm_core_relationship_ui/crm_core_relationship_ui.pages.inc b/modules/crm_core_relationship_ui/crm_core_relationship_ui.pages.inc
+index 2dbefd9..e850a5f 100644
+--- a/modules/crm_core_relationship_ui/crm_core_relationship_ui.pages.inc
++++ b/modules/crm_core_relationship_ui/crm_core_relationship_ui.pages.inc
+@@ -69,7 +69,7 @@ function crm_core_relation_entity_ui_get_form_wrapper($contact, $type, $reverse)
+  */
+ function crm_core_relationship_form($form, &$form_state, $relation) {
+   // Ensure this include file is loaded when the form is rebuilt from the cache.
+-  $form_state['build_info']['file'] = drupal_get_path('module', 'crm_core_ui') . '/pages/contact_activity.pages.inc';
++  $form_state['build_info']['file'] = \Drupal::service('extension.list.module')->getPath('crm_core_ui') . '/pages/contact_activity.pages.inc';
+   $form_state['entity_type'] = 'relation';
+   $form_state['relation'] = $form_state['crm_core_relationship'];
+   unset($form_state['crm_core_relationship']);
+@@ -400,7 +400,7 @@ function crm_core_relationship_ui_add_relationship_autocomplete($crm_core_contac
+   $query->addMetaData('match', $string)
+     ->addTag(variable_get('crm_core_contact_search_query_tag', 'crm_core_contact_search'));
+   $result = $query->execute();
+-  $contacts = entity_load('crm_core_contact', array_keys($result['crm_core_contact']));
++  $contacts = \Drupal::service('entity_type.manager')->getStorage('crm_core_contact')->load(array_keys($result['crm_core_contact']));
+   foreach ($contacts as $contact) {
+     $crm_core_contact_title = $contact->label();
+     $matches[$crm_core_contact_title . " [cid:$contact->contact_id]"] = $crm_core_contact_title;
+@@ -422,7 +422,7 @@ function _crm_core_relationship_ui_get_contact_from_autocomplete_field_value($st
+   if (!array_key_exists(1, $matches) || !is_numeric($matches[1])) {
+     return FALSE;
+   }
+-  $contacts = entity_load('crm_core_contact', [$matches[1]]);
++  $contacts = \Drupal::service('entity_type.manager')->getStorage('crm_core_contact')->load([$matches[1]]);
+   if (empty($contacts)) {
+     return FALSE;
+   }
+@@ -437,7 +437,7 @@ function crm_core_relationship_ui_toggle_relationship_status($relationship_id, $
+   $relation = Relation::load($relationship_id);
+   $relation->crm_core_relationship_status[LANGUAGE_NONE][0]['value'] = $status ? 1 : 0;
+   entity_save('relation', $relation);
+-  drupal_set_message(t('Relationship status was successfully changed.'));
++  \Drupal::messenger()->addStatus(t('Relationship status was successfully changed.'));
+   $path = drupal_get_destination();
+   drupal_goto($path);
+ }
+diff --git a/modules/crm_core_user_sync/src/EventSubscriber/RequestSubscriber.php b/modules/crm_core_user_sync/src/EventSubscriber/RequestSubscriber.php
+index d08353b..bc610bc 100644
+--- a/modules/crm_core_user_sync/src/EventSubscriber/RequestSubscriber.php
++++ b/modules/crm_core_user_sync/src/EventSubscriber/RequestSubscriber.php
+@@ -2,12 +2,12 @@
+ 
+ namespace Drupal\crm_core_user_sync\EventSubscriber;
+ 
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Entity\EntityTypeManagerInterface;
+ use Drupal\Core\Session\AccountProxyInterface;
+ use Drupal\crm_core_user_sync\CrmCoreUserSyncRelationInterface;
+ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\KernelEvents;
+ 
+ /**
+@@ -65,10 +65,10 @@ class RequestSubscriber implements EventSubscriberInterface {
+   /**
+    * Kernel request event handler.
+    *
+-   * @param \Symfony\Component\HttpKernel\Event\GetResponseEvent $event
++   * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
+    *   Response event.
+    */
+-  public function onKernelRequest(GetResponseEvent $event) {
++  public function onKernelRequest(RequestEvent $event) {
+     if ($this->currentUser->isAuthenticated()) {
+       $config = $this->configFactory->get('crm_core_user_sync.settings');
+       if ($config->get('contact_load')) {
+diff --git a/modules/crm_core_user_sync/tests/src/Kernel/CrmCoreUserSyncRelationTest.php b/modules/crm_core_user_sync/tests/src/Kernel/CrmCoreUserSyncRelationTest.php
+index 5576033..03d0ba6 100644
+--- a/modules/crm_core_user_sync/tests/src/Kernel/CrmCoreUserSyncRelationTest.php
++++ b/modules/crm_core_user_sync/tests/src/Kernel/CrmCoreUserSyncRelationTest.php
+@@ -33,7 +33,7 @@ class CrmCoreUserSyncRelationTest extends EntityKernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     // User::delete() fails without this.
+diff --git a/modules/crm_core_user_sync/tests/src/Kernel/RelationEntityTest.php b/modules/crm_core_user_sync/tests/src/Kernel/RelationEntityTest.php
+index f94e508..b800446 100644
+--- a/modules/crm_core_user_sync/tests/src/Kernel/RelationEntityTest.php
++++ b/modules/crm_core_user_sync/tests/src/Kernel/RelationEntityTest.php
+@@ -26,7 +26,7 @@ class RelationEntityTest extends KernelTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installEntitySchema('crm_core_user_sync_relation');
+   }
+diff --git a/modules/crm_core_user_sync/tests/src/Kernel/SettingsFormTest.php b/modules/crm_core_user_sync/tests/src/Kernel/SettingsFormTest.php
+index 7b172ca..3b34519 100644
+--- a/modules/crm_core_user_sync/tests/src/Kernel/SettingsFormTest.php
++++ b/modules/crm_core_user_sync/tests/src/Kernel/SettingsFormTest.php
+@@ -26,7 +26,7 @@ class SettingsFormTest extends ConfigFormTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->installConfig('crm_core_user_sync');
+     $this->form = SettingsForm::create($this->container);
+diff --git a/modules/crm_core_user_sync/tests/src/Unit/CrmCoreUserSyncRelationRulesTest.php b/modules/crm_core_user_sync/tests/src/Unit/CrmCoreUserSyncRelationRulesTest.php
+index 98390bf..c6b3958 100644
+--- a/modules/crm_core_user_sync/tests/src/Unit/CrmCoreUserSyncRelationRulesTest.php
++++ b/modules/crm_core_user_sync/tests/src/Unit/CrmCoreUserSyncRelationRulesTest.php
+@@ -21,7 +21,7 @@ class CrmCoreUserSyncRelationRulesTest extends UnitTestCase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+ 
+     $rules = [];
+@@ -39,9 +39,7 @@ class CrmCoreUserSyncRelationRulesTest extends UnitTestCase {
+       'weight' => 10,
+     ];
+ 
+-    $config = $this->getMockBuilder(ImmutableConfig::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $config = $this->createMock(ImmutableConfig::class);
+     $config
+       ->expects($this->once())
+       ->method('get')
+diff --git a/modules/crm_core_user_sync/tests/src/Unit/RequestSubscriberTest.php b/modules/crm_core_user_sync/tests/src/Unit/RequestSubscriberTest.php
+index 83e7761..142697c 100644
+--- a/modules/crm_core_user_sync/tests/src/Unit/RequestSubscriberTest.php
++++ b/modules/crm_core_user_sync/tests/src/Unit/RequestSubscriberTest.php
+@@ -2,6 +2,8 @@
+ 
+ namespace Drupal\Tests\crm_core_user_sync\Unit;
+ 
++use Prophecy\PhpUnit\ProphecyTrait;
++use Symfony\Component\HttpKernel\Event\RequestEvent;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+ use Drupal\Core\Config\ImmutableConfig;
+ use Drupal\Core\Entity\EntityStorageInterface;
+@@ -13,7 +15,6 @@ use Drupal\crm_core_user_sync\CrmCoreUserSyncRelationInterface;
+ use Drupal\crm_core_user_sync\EventSubscriber\RequestSubscriber;
+ use Drupal\Tests\UnitTestCase;
+ use Symfony\Component\HttpFoundation\Request;
+-use Symfony\Component\HttpKernel\Event\GetResponseEvent;
+ use Symfony\Component\HttpKernel\HttpKernelInterface;
+ 
+ /**
+@@ -23,6 +24,7 @@ use Symfony\Component\HttpKernel\HttpKernelInterface;
+  */
+ class RequestSubscriberTest extends UnitTestCase {
+ 
++  use ProphecyTrait;
+   /**
+    * Tests nothing happens for Anonymous.
+    */
+@@ -48,7 +50,7 @@ class RequestSubscriberTest extends UnitTestCase {
+     $request = Request::create('/', 'GET');
+ 
+     $subscriber = new RequestSubscriber($current_user, $configFactory, $relationService, $entityTypeManager);
+-    $event = new GetResponseEvent($kernel->reveal(), $request, HttpKernelInterface::MASTER_REQUEST);
++    $event = new RequestEvent($kernel->reveal(), $request, HttpKernelInterface::MASTER_REQUEST);
+     $subscriber->onKernelRequest($event);
+     // Nothing to assert as we should exit immediately. Current user expectation
+     // will fail the test if something...
+@@ -67,9 +69,7 @@ class RequestSubscriberTest extends UnitTestCase {
+       ->method('id')
+       ->willReturn('101');
+ 
+-    $config = $this->getMockBuilder(ImmutableConfig::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $config = $this->createMock(ImmutableConfig::class);
+     $config
+       ->expects($this->once())
+       ->method('get')
+@@ -99,7 +99,7 @@ class RequestSubscriberTest extends UnitTestCase {
+     $request = Request::create('/', 'GET');
+ 
+     $subscriber = new RequestSubscriber($current_user, $configFactory, $relationService, $entityTypeManager);
+-    $event = new GetResponseEvent($kernel->reveal(), $request, HttpKernelInterface::MASTER_REQUEST);
++    $event = new RequestEvent($kernel->reveal(), $request, HttpKernelInterface::MASTER_REQUEST);
+     $subscriber->onKernelRequest($event);
+     // Nothing to assert. Entity type manager expectations will the test.
+   }
+@@ -128,9 +128,7 @@ class RequestSubscriberTest extends UnitTestCase {
+       ->method('setAccount')
+       ->willReturnReference($account);
+ 
+-    $config = $this->getMockBuilder(ImmutableConfig::class)
+-      ->disableOriginalConstructor()
+-      ->getMock();
++    $config = $this->createMock(ImmutableConfig::class);
+     $config
+       ->expects($this->once())
+       ->method('get')
+@@ -172,7 +170,7 @@ class RequestSubscriberTest extends UnitTestCase {
+     $request = Request::create('/', 'GET');
+ 
+     $subscriber = new RequestSubscriber($current_user, $configFactory, $relationService, $entityTypeManager);
+-    $event = new GetResponseEvent($kernel->reveal(), $request, HttpKernelInterface::MASTER_REQUEST);
++    $event = new RequestEvent($kernel->reveal(), $request, HttpKernelInterface::MASTER_REQUEST);
+     $subscriber->onKernelRequest($event);
+     $this->assertEquals($individual, $account->crm_core['contact'], 'Related contact was loaded');
+   }
+diff --git a/tests/src/Kernel/SettingsFormTest.php b/tests/src/Kernel/SettingsFormTest.php
+index 183ad0b..0c91a65 100644
+--- a/tests/src/Kernel/SettingsFormTest.php
++++ b/tests/src/Kernel/SettingsFormTest.php
+@@ -20,7 +20,7 @@ class SettingsFormTest extends ConfigFormTestBase {
+   /**
+    * {@inheritdoc}
+    */
+-  protected function setUp() {
++  protected function setUp(): void {
+     parent::setUp();
+     $this->container->get('theme_installer')->install(['claro']);
+     $this->form = SettingsForm::create($this->container);
