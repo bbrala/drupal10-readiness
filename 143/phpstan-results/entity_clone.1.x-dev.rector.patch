@@ -1,0 +1,593 @@
+diff --git a/entity_clone.api.php b/entity_clone.api.php
+index a52b258..92734d6 100644
+--- a/entity_clone.api.php
++++ b/entity_clone.api.php
+@@ -1,10 +1,12 @@
+ <?php
+ 
++use Symfony\Component\EventDispatcher\EventSubscriberInterface;
++use Drupal\entity_clone\Event\EntityCloneEvent;
++use Drupal\entity_clone\Event\EntityCloneEvents;
+ /**
+  * @file
+  * Entity Clone hooks and events.
+  */
+-
+ /**
+  * Event subscribers for Entity Clone.
+  *
+@@ -25,7 +27,7 @@
+  * ?>
+  * </code>
+  */
+-class MyEntityCloneEventSubscriber implements \Symfony\Component\EventDispatcher\EventSubscriberInterface {
++class MyEntityCloneEventSubscriber implements EventSubscriberInterface {
+ 
+   /**
+    * An example event subscriber.
+@@ -34,7 +36,7 @@ class MyEntityCloneEventSubscriber implements \Symfony\Component\EventDispatcher
+    *
+    * @see \Drupal\entity_clone\Event\EntityCloneEvents::PRE_CLONE
+    */
+-  public function myPreClone(\Drupal\entity_clone\Event\EntityCloneEvent $event): void {
++  public function myPreClone(EntityCloneEvent $event): void {
+     $original = $event->getEntity();
+     $newEntity = $event->getClonedEntity();
+   }
+@@ -46,7 +48,7 @@ class MyEntityCloneEventSubscriber implements \Symfony\Component\EventDispatcher
+    *
+    * @see \Drupal\entity_clone\Event\EntityCloneEvents::POST_CLONE
+    */
+-  public function myPostClone(\Drupal\entity_clone\Event\EntityCloneEvent $event): void {
++  public function myPostClone(EntityCloneEvent $event): void {
+     $original = $event->getEntity();
+     $newEntity = $event->getClonedEntity();
+   }
+@@ -55,8 +57,8 @@ class MyEntityCloneEventSubscriber implements \Symfony\Component\EventDispatcher
+    * {@inheritdoc}
+    */
+   public static function getSubscribedEvents(): array {
+-    $events[\Drupal\entity_clone\Event\EntityCloneEvents::PRE_CLONE][] = ['myPreClone'];
+-    $events[\Drupal\entity_clone\Event\EntityCloneEvents::POST_CLONE][] = ['myPostClone'];
++    $events[EntityCloneEvents::PRE_CLONE][] = ['myPreClone'];
++    $events[EntityCloneEvents::POST_CLONE][] = ['myPostClone'];
+     return $events;
+   }
+ 
+diff --git a/src/EntityClone/Content/FileEntityClone.php b/src/EntityClone/Content/FileEntityClone.php
+index 4821b0d..4f6b7b5 100644
+--- a/src/EntityClone/Content/FileEntityClone.php
++++ b/src/EntityClone/Content/FileEntityClone.php
+@@ -15,7 +15,7 @@ class FileEntityClone extends ContentEntityCloneBase {
+    */
+   public function cloneEntity(EntityInterface $entity, EntityInterface $cloned_entity, array $properties = [], array &$already_cloned = []) {
+     /** @var \Drupal\file\FileInterface $cloned_entity */
+-    $cloned_file = file_copy($cloned_entity, $cloned_entity->getFileUri(), FileSystemInterface::EXISTS_RENAME);
++    $cloned_file = \Drupal::service('file.repository')->copy($cloned_entity, $cloned_entity->getFileUri(), FileSystemInterface::EXISTS_RENAME);
+     if (isset($properties['take_ownership']) && $properties['take_ownership'] === 1) {
+       $cloned_file->setOwnerId(\Drupal::currentUser()->id());
+     }
+diff --git a/src/Event/EntityCloneEvent.php b/src/Event/EntityCloneEvent.php
+index 8889928..54eba6b 100644
+--- a/src/Event/EntityCloneEvent.php
++++ b/src/Event/EntityCloneEvent.php
+@@ -2,8 +2,8 @@
+ 
+ namespace Drupal\entity_clone\Event;
+ 
++use Symfony\Contracts\EventDispatcher\Event;
+ use Drupal\Core\Entity\EntityInterface;
+-use Symfony\Component\EventDispatcher\Event;
+ 
+ /**
+  * Represents entity selection as event.
+diff --git a/src/Form/EntityCloneForm.php b/src/Form/EntityCloneForm.php
+index f99e011..2f63152 100644
+--- a/src/Form/EntityCloneForm.php
++++ b/src/Form/EntityCloneForm.php
+@@ -205,9 +205,9 @@ class EntityCloneForm extends FormBase {
+ 
+     $duplicate = $this->entity->createDuplicate();
+ 
+-    $this->eventDispatcher->dispatch(EntityCloneEvents::PRE_CLONE, new EntityCloneEvent($this->entity, $duplicate, $properties));
++    $this->eventDispatcher->dispatch(new EntityCloneEvent($this->entity, $duplicate, $properties), EntityCloneEvents::PRE_CLONE);
+     $cloned_entity = $entity_clone_handler->cloneEntity($this->entity, $duplicate, $properties);
+-    $this->eventDispatcher->dispatch(EntityCloneEvents::POST_CLONE, new EntityCloneEvent($this->entity, $duplicate, $properties));
++    $this->eventDispatcher->dispatch(new EntityCloneEvent($this->entity, $duplicate, $properties), EntityCloneEvents::POST_CLONE);
+ 
+     $this->messenger->addMessage($this->stringTranslationManager->translate('The entity <em>@entity (@entity_id)</em> of type <em>@type</em> was cloned.', [
+       '@entity' => $this->entity->label(),
+diff --git a/tests/src/Functional/EntityCloneActionTest.php b/tests/src/Functional/EntityCloneActionTest.php
+index 601dd9b..726921f 100644
+--- a/tests/src/Functional/EntityCloneActionTest.php
++++ b/tests/src/Functional/EntityCloneActionTest.php
+@@ -70,7 +70,8 @@ class EntityCloneActionTest extends BrowserTestBase {
+       'subject' => 'test subject',
+       'message' => 'test message',
+     ];
+-    $this->drupalPostForm("admin/config/system/actions/add/$action_key", $edit, t('Save'));
++    $this->drupalGet("admin/config/system/actions/add/$action_key");
++    $this->submitForm($edit, t('Save'));
+ 
+     $actions = \Drupal::entityTypeManager()
+       ->getStorage('action')
+@@ -83,7 +84,8 @@ class EntityCloneActionTest extends BrowserTestBase {
+       'label' => 'Test send email action cloned',
+       'id' => 'test_send_email_cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/action/' . $action->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/action/' . $action->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $actions = \Drupal::entityTypeManager()
+       ->getStorage('action')
+diff --git a/tests/src/Functional/EntityCloneBlockTest.php b/tests/src/Functional/EntityCloneBlockTest.php
+index 139c528..0308812 100644
+--- a/tests/src/Functional/EntityCloneBlockTest.php
++++ b/tests/src/Functional/EntityCloneBlockTest.php
+@@ -71,7 +71,8 @@ class EntityCloneBlockTest extends BrowserTestBase {
+     $edit = [
+       'id' => 'test_block_cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/block/' . $block->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/block/' . $block->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $blocks = \Drupal::entityTypeManager()
+       ->getStorage('block')
+diff --git a/tests/src/Functional/EntityCloneCommentTest.php b/tests/src/Functional/EntityCloneCommentTest.php
+index 7470142..8652af0 100644
+--- a/tests/src/Functional/EntityCloneCommentTest.php
++++ b/tests/src/Functional/EntityCloneCommentTest.php
+@@ -72,8 +72,9 @@ class EntityCloneCommentTest extends CommentTestBase {
+     $subject = 'Test comment for clone';
+     $body = $this->randomMachineName();
+     $comment = $this->postComment($this->node, $body, $subject, TRUE);
++    $this->drupalGet('entity_clone/comment/' . $comment->id());
+ 
+-    $this->drupalPostForm('entity_clone/comment/' . $comment->id(), [], t('Clone'));
++    $this->submitForm([], t('Clone'));
+ 
+     $comments = \Drupal::entityTypeManager()
+       ->getStorage('comment')
+diff --git a/tests/src/Functional/EntityCloneContactTest.php b/tests/src/Functional/EntityCloneContactTest.php
+index 1d29611..05e1277 100644
+--- a/tests/src/Functional/EntityCloneContactTest.php
++++ b/tests/src/Functional/EntityCloneContactTest.php
+@@ -62,7 +62,8 @@ class EntityCloneContactTest extends BrowserTestBase {
+       'id' => 'test_contact_form_for_clone',
+       'recipients' => 'test@recipient.com',
+     ];
+-    $this->drupalPostForm('admin/structure/contact/add', $edit, t('Save'));
++    $this->drupalGet('admin/structure/contact/add');
++    $this->submitForm($edit, t('Save'));
+ 
+     $contact_forms = \Drupal::entityTypeManager()
+       ->getStorage('contact_form')
+@@ -75,7 +76,8 @@ class EntityCloneContactTest extends BrowserTestBase {
+       'label' => 'Test contact form cloned',
+       'id' => 'test_contact_form_cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/contact_form/' . $contact_form->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/contact_form/' . $contact_form->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $contact_forms = \Drupal::entityTypeManager()
+       ->getStorage('contact_form')
+@@ -89,8 +91,9 @@ class EntityCloneContactTest extends BrowserTestBase {
+       'id' => 'test_contact_form_clone_with_a_really_long_name_that_is_longer_than_the_bundle_max_length',
+       'label' => 'Test contact form clone with a really long name that is longer than the bundle max length',
+     ];
+-    $this->drupalPostForm('entity_clone/contact_form/' . $contact_form->id(), $edit, t('Clone'));
+-    $this->assertText('New Id cannot be longer than 32 characters');
++    $this->drupalGet('entity_clone/contact_form/' . $contact_form->id());
++    $this->submitForm($edit, t('Clone'));
++    $this->assertSession()->pageTextContains('New Id cannot be longer than 32 characters');
+   }
+ 
+ }
+diff --git a/tests/src/Functional/EntityCloneContentRecursiveCircularTest.php b/tests/src/Functional/EntityCloneContentRecursiveCircularTest.php
+index 71f37d8..094573f 100644
+--- a/tests/src/Functional/EntityCloneContentRecursiveCircularTest.php
++++ b/tests/src/Functional/EntityCloneContentRecursiveCircularTest.php
+@@ -103,8 +103,9 @@ class EntityCloneContentRecursiveCircularTest extends NodeTestBase {
+       ],
+     ];
+     \Drupal::service('config.factory')->getEditable('entity_clone.settings')->set('form_settings', $settings)->save();
++    $this->drupalGet('entity_clone/node/' . $node1->id());
+ 
+-    $this->drupalPostForm('entity_clone/node/' . $node1->id(), [], t('Clone'));
++    $this->submitForm([], t('Clone'));
+ 
+     $nodes = \Drupal::entityTypeManager()
+       ->getStorage('node')
+@@ -172,8 +173,9 @@ class EntityCloneContentRecursiveCircularTest extends NodeTestBase {
+       ],
+     ];
+     \Drupal::service('config.factory')->getEditable('entity_clone.settings')->set('form_settings', $settings)->save();
++    $this->drupalGet('entity_clone/node/' . $parent_node->id());
+ 
+-    $this->drupalPostForm('entity_clone/node/' . $parent_node->id(), [], t('Clone'));
++    $this->submitForm([], t('Clone'));
+ 
+     $nodes = \Drupal::entityTypeManager()
+       ->getStorage('node')
+diff --git a/tests/src/Functional/EntityCloneContentRecursiveTest.php b/tests/src/Functional/EntityCloneContentRecursiveTest.php
+index 872b7a6..aac5fbf 100644
+--- a/tests/src/Functional/EntityCloneContentRecursiveTest.php
++++ b/tests/src/Functional/EntityCloneContentRecursiveTest.php
+@@ -91,8 +91,9 @@ class EntityCloneContentRecursiveTest extends NodeTestBase {
+       ],
+     ];
+     \Drupal::service('config.factory')->getEditable('entity_clone.settings')->set('form_settings', $settings)->save();
++    $this->drupalGet('entity_clone/node/' . $node->id());
+ 
+-    $this->drupalPostForm('entity_clone/node/' . $node->id(), [
++    $this->submitForm([
+       'recursive[node.article.field_tags][references][' . $term->id() . '][clone]' => 1,
+     ], t('Clone'));
+ 
+diff --git a/tests/src/Functional/EntityCloneContentTest.php b/tests/src/Functional/EntityCloneContentTest.php
+index 85770f6..db0518f 100644
+--- a/tests/src/Functional/EntityCloneContentTest.php
++++ b/tests/src/Functional/EntityCloneContentTest.php
+@@ -71,8 +71,9 @@ class EntityCloneContentTest extends NodeTestBase {
+       'title' => $node_title,
+     ]);
+     $node->save();
++    $this->drupalGet('entity_clone/node/' . $node->id());
+ 
+-    $this->drupalPostForm('entity_clone/node/' . $node->id(), [], t('Clone'));
++    $this->submitForm([], t('Clone'));
+ 
+     $nodes = \Drupal::entityTypeManager()
+       ->getStorage('node')
+@@ -129,9 +130,10 @@ class EntityCloneContentTest extends NodeTestBase {
+      $this->assertEquals($original_node_creation_date->getTimestamp(), $original_node->getChangedTime());
+      $this->assertEquals($translation_creation_date->getTimestamp(), $original_node->getTranslation('fr')->getCreatedTime());
+      $this->assertEquals($translation_creation_date->getTimestamp(), $original_node->getTranslation('fr')->getChangedTime());
++     $this->drupalGet('entity_clone/node/' . $original_node->id());
+ 
+      // Clone the node.
+-     $this->drupalPostForm('entity_clone/node/' . $original_node->id(), [], t('Clone'));
++     $this->submitForm([], t('Clone'));
+ 
+      // Find the cloned node.
+      $nodes = \Drupal::entityTypeManager()
+diff --git a/tests/src/Functional/EntityCloneCustomBlockTest.php b/tests/src/Functional/EntityCloneCustomBlockTest.php
+index 34292d3..7831da5 100644
+--- a/tests/src/Functional/EntityCloneCustomBlockTest.php
++++ b/tests/src/Functional/EntityCloneCustomBlockTest.php
+@@ -51,7 +51,8 @@ class EntityCloneCustomBlockTest extends BlockContentTestBase {
+     $edit = [];
+     $edit['info[0][value]'] = 'Test block ready to clone';
+     $edit['body[0][value]'] = $this->randomMachineName(16);
+-    $this->drupalPostForm('block/add/basic', $edit, t('Save'));
++    $this->drupalGet('block/add/basic');
++    $this->submitForm($edit, t('Save'));
+ 
+     $blocks = \Drupal::entityTypeManager()
+       ->getStorage('block_content')
+@@ -60,8 +61,9 @@ class EntityCloneCustomBlockTest extends BlockContentTestBase {
+       ]);
+     $block = reset($blocks);
+     $this->assertInstanceOf(BlockContent::class, $block, 'Test Block for clone found in database.');
++    $this->drupalGet('entity_clone/block_content/' . $block->id());
+ 
+-    $this->drupalPostForm('entity_clone/block_content/' . $block->id(), [], t('Clone'));
++    $this->submitForm([], t('Clone'));
+ 
+     $blocks = \Drupal::entityTypeManager()
+       ->getStorage('block_content')
+diff --git a/tests/src/Functional/EntityCloneDateFormatTest.php b/tests/src/Functional/EntityCloneDateFormatTest.php
+index 34acea6..f6dc7cc 100644
+--- a/tests/src/Functional/EntityCloneDateFormatTest.php
++++ b/tests/src/Functional/EntityCloneDateFormatTest.php
+@@ -61,7 +61,8 @@ class EntityCloneDateFormatTest extends BrowserTestBase {
+       'id' => 'test_date_format_for_clone',
+       'date_format_pattern' => 'Y m d',
+     ];
+-    $this->drupalPostForm("admin/config/regional/date-time/formats/add", $edit, t('Add format'));
++    $this->drupalGet("admin/config/regional/date-time/formats/add");
++    $this->submitForm($edit, t('Add format'));
+ 
+     $date_formats = \Drupal::entityTypeManager()
+       ->getStorage('date_format')
+@@ -74,7 +75,8 @@ class EntityCloneDateFormatTest extends BrowserTestBase {
+       'id' => 'test_date_format_cloned',
+       'label' => 'Test date format cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/date_format/' . $date_format->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/date_format/' . $date_format->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $date_formats = \Drupal::entityTypeManager()
+       ->getStorage('date_format')
+diff --git a/tests/src/Functional/EntityCloneEntityFormModeTest.php b/tests/src/Functional/EntityCloneEntityFormModeTest.php
+index 2e3acaa..c18da81 100644
+--- a/tests/src/Functional/EntityCloneEntityFormModeTest.php
++++ b/tests/src/Functional/EntityCloneEntityFormModeTest.php
+@@ -69,7 +69,8 @@ class EntityCloneEntityFormModeTest extends BrowserTestBase {
+       'label' => 'User register cloned form mode',
+       'id' => 'register_clone',
+     ];
+-    $this->drupalPostForm('entity_clone/entity_form_mode/' . $entity_form_mode->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/entity_form_mode/' . $entity_form_mode->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $entity_form_modes = \Drupal::entityTypeManager()
+       ->getStorage('entity_form_mode')
+diff --git a/tests/src/Functional/EntityCloneEntityViewModeTest.php b/tests/src/Functional/EntityCloneEntityViewModeTest.php
+index 1a7faf1..bbcd584 100644
+--- a/tests/src/Functional/EntityCloneEntityViewModeTest.php
++++ b/tests/src/Functional/EntityCloneEntityViewModeTest.php
+@@ -69,7 +69,8 @@ class EntityCloneEntityViewModeTest extends BrowserTestBase {
+       'label' => 'User full cloned view mode',
+       'id' => 'register_clone',
+     ];
+-    $this->drupalPostForm('entity_clone/entity_view_mode/' . $entity_view_mode->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/entity_view_mode/' . $entity_view_mode->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $entity_view_modes = \Drupal::entityTypeManager()
+       ->getStorage('entity_view_mode')
+diff --git a/tests/src/Functional/EntityCloneFileTest.php b/tests/src/Functional/EntityCloneFileTest.php
+index b6e6882..91c6287 100644
+--- a/tests/src/Functional/EntityCloneFileTest.php
++++ b/tests/src/Functional/EntityCloneFileTest.php
+@@ -65,8 +65,9 @@ class EntityCloneFileTest extends BrowserTestBase {
+     ]);
+     file_put_contents($file->getFileUri(), 'hello world');
+     $file->save();
++    $this->drupalGet('entity_clone/file/' . $file->id());
+ 
+-    $this->drupalPostForm('entity_clone/file/' . $file->id(), [], t('Clone'));
++    $this->submitForm([], t('Clone'));
+ 
+     $files = \Drupal::entityTypeManager()
+       ->getStorage('file')
+@@ -76,7 +77,7 @@ class EntityCloneFileTest extends BrowserTestBase {
+     $file = reset($files);
+     $this->assertInstanceOf(File::class, $file, 'Test file cloned found in database.');
+ 
+-    $this->assertEqual($file->getFileUri(), 'public://druplicon_0.txt', 'The stored file is also cloned.');
++    $this->assertEquals($file->getFileUri(), 'public://druplicon_0.txt', 'The stored file is also cloned.');
+   }
+ 
+ }
+diff --git a/tests/src/Functional/EntityCloneFilterFormatTest.php b/tests/src/Functional/EntityCloneFilterFormatTest.php
+index 03411ec..6fac1c0 100644
+--- a/tests/src/Functional/EntityCloneFilterFormatTest.php
++++ b/tests/src/Functional/EntityCloneFilterFormatTest.php
+@@ -62,7 +62,8 @@ class EntityCloneFilterFormatTest extends BrowserTestBase {
+       'name' => 'Test filter format for clone',
+       'format' => 'test_filter_format_for_clone',
+     ];
+-    $this->drupalPostForm("admin/config/content/formats/add", $edit, t('Save configuration'));
++    $this->drupalGet("admin/config/content/formats/add");
++    $this->submitForm($edit, t('Save configuration'));
+ 
+     $filter_formats = \Drupal::entityTypeManager()
+       ->getStorage('filter_format')
+@@ -75,7 +76,8 @@ class EntityCloneFilterFormatTest extends BrowserTestBase {
+       'id' => 'test_filter_format_cloned',
+       'label' => 'Test filter format cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/filter_format/' . $filter_format->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/filter_format/' . $filter_format->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $filter_formats = \Drupal::entityTypeManager()
+       ->getStorage('filter_format')
+diff --git a/tests/src/Functional/EntityCloneImageStyleTest.php b/tests/src/Functional/EntityCloneImageStyleTest.php
+index 30ebf2f..901728d 100644
+--- a/tests/src/Functional/EntityCloneImageStyleTest.php
++++ b/tests/src/Functional/EntityCloneImageStyleTest.php
+@@ -60,7 +60,8 @@ class EntityCloneImageStyleTest extends BrowserTestBase {
+       'label' => 'Test image style for clone',
+       'name' => 'test_image_style_for_clone',
+     ];
+-    $this->drupalPostForm("admin/config/media/image-styles/add", $edit, t('Create new style'));
++    $this->drupalGet("admin/config/media/image-styles/add");
++    $this->submitForm($edit, t('Create new style'));
+ 
+     $image_styles = \Drupal::entityTypeManager()
+       ->getStorage('image_style')
+@@ -73,7 +74,8 @@ class EntityCloneImageStyleTest extends BrowserTestBase {
+       'id' => 'test_iamge_style_cloned',
+       'label' => 'Test image_style cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/image_style/' . $image_style->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/image_style/' . $image_style->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $image_styles = \Drupal::entityTypeManager()
+       ->getStorage('image_style')
+@@ -87,8 +89,9 @@ class EntityCloneImageStyleTest extends BrowserTestBase {
+       'id' => 'test_image_style_clone_with_a_really_long_name_that_is_longer_than_the_max_length',
+       'label' => 'Test image style clone with a really long name that is longer than the max length',
+     ];
+-    $this->drupalPostForm('entity_clone/image_style/' . $image_style->id(), $edit, t('Clone'));
+-    $this->assertText('New Id cannot be longer than 64 characters');
++    $this->drupalGet('entity_clone/image_style/' . $image_style->id());
++    $this->submitForm($edit, t('Clone'));
++    $this->assertSession()->pageTextContains('New Id cannot be longer than 64 characters');
+   }
+ 
+ }
+diff --git a/tests/src/Functional/EntityCloneLanguageTest.php b/tests/src/Functional/EntityCloneLanguageTest.php
+index 0b3a416..5dffa76 100644
+--- a/tests/src/Functional/EntityCloneLanguageTest.php
++++ b/tests/src/Functional/EntityCloneLanguageTest.php
+@@ -59,7 +59,8 @@ class EntityCloneLanguageTest extends BrowserTestBase {
+     $edit = [
+       'predefined_langcode' => 'fr',
+     ];
+-    $this->drupalPostForm("/admin/config/regional/language/add", $edit, t('Add language'));
++    $this->drupalGet("/admin/config/regional/language/add");
++    $this->submitForm($edit, t('Add language'));
+ 
+     $languages = \Drupal::entityTypeManager()
+       ->getStorage('configurable_language')
+@@ -72,7 +73,8 @@ class EntityCloneLanguageTest extends BrowserTestBase {
+       'id' => 'test_language_cloned',
+       'label' => 'French language cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/configurable_language/' . $language->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/configurable_language/' . $language->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $languages = \Drupal::entityTypeManager()
+       ->getStorage('configurable_language')
+diff --git a/tests/src/Functional/EntityCloneMenuTest.php b/tests/src/Functional/EntityCloneMenuTest.php
+index 3a67d1b..9e3e3f4 100644
+--- a/tests/src/Functional/EntityCloneMenuTest.php
++++ b/tests/src/Functional/EntityCloneMenuTest.php
+@@ -68,7 +68,8 @@ class EntityCloneMenuTest extends BrowserTestBase {
+       'label' => 'Test menu cloned',
+       'id' => 'test-menu-cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/menu/' . $menu->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/menu/' . $menu->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $menus = \Drupal::entityTypeManager()
+       ->getStorage('menu')
+diff --git a/tests/src/Functional/EntityCloneParagraphTest.php b/tests/src/Functional/EntityCloneParagraphTest.php
+index aa870ce..6661edd 100644
+--- a/tests/src/Functional/EntityCloneParagraphTest.php
++++ b/tests/src/Functional/EntityCloneParagraphTest.php
+@@ -79,8 +79,9 @@ class EntityCloneParagraphTest extends NodeTestBase {
+       'recursive[node.paragraphed_content_demo.field_paragraphs_demo][references][5][clone]' => 1,
+       'recursive[node.paragraphed_content_demo.field_paragraphs_demo][references][5][children][recursive][paragraph.nested_paragraph.field_paragraphs_demo][references][4][clone]' => 1,
+     ];
++    $this->drupalGet('entity_clone/node/' . $node->id());
+ 
+-    $this->drupalPostForm('entity_clone/node/' . $node->id(), $clone_options, t('Clone'));
++    $this->submitForm($clone_options, t('Clone'));
+ 
+     $clones = \Drupal::entityTypeManager()
+       ->getStorage('node')
+@@ -101,7 +102,7 @@ class EntityCloneParagraphTest extends NodeTestBase {
+       ->getTarget()
+       ->getValue();
+ 
+-    $this->assertNotEqual($original_paragraph->getParentEntity()->id(), $cloned_paragraph->getParentEntity()->id());
++    $this->assertNotEquals($original_paragraph->getParentEntity()->id(), $cloned_paragraph->getParentEntity()->id());
+   }
+ 
+ }
+diff --git a/tests/src/Functional/EntityCloneResponsiveImageStyleTest.php b/tests/src/Functional/EntityCloneResponsiveImageStyleTest.php
+index b3880c7..d067c02 100644
+--- a/tests/src/Functional/EntityCloneResponsiveImageStyleTest.php
++++ b/tests/src/Functional/EntityCloneResponsiveImageStyleTest.php
+@@ -62,7 +62,8 @@ class EntityCloneResponsiveImageStyleTest extends BrowserTestBase {
+       'breakpoint_group' => 'responsive_image',
+       'fallback_image_style' => 'large',
+     ];
+-    $this->drupalPostForm("admin/config/media/responsive-image-style/add", $edit, t('Save'));
++    $this->drupalGet("admin/config/media/responsive-image-style/add");
++    $this->submitForm($edit, t('Save'));
+ 
+     $responsive_image_styles = \Drupal::entityTypeManager()
+       ->getStorage('responsive_image_style')
+@@ -75,7 +76,8 @@ class EntityCloneResponsiveImageStyleTest extends BrowserTestBase {
+       'id' => 'test_responsive_image_style_cloned',
+       'label' => 'Test responsive image style cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/responsive_image_style/' . $responsive_image_style->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/responsive_image_style/' . $responsive_image_style->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $responsive_image_styles = \Drupal::entityTypeManager()
+       ->getStorage('responsive_image_style')
+diff --git a/tests/src/Functional/EntityCloneRoleTest.php b/tests/src/Functional/EntityCloneRoleTest.php
+index 45fb551..52ef3a5 100644
+--- a/tests/src/Functional/EntityCloneRoleTest.php
++++ b/tests/src/Functional/EntityCloneRoleTest.php
+@@ -60,7 +60,8 @@ class EntityCloneRoleTest extends BrowserTestBase {
+       'label' => 'Test role for clone',
+       'id' => 'test_role_for_clone',
+     ];
+-    $this->drupalPostForm("/admin/people/roles/add", $edit, t('Save'));
++    $this->drupalGet("/admin/people/roles/add");
++    $this->submitForm($edit, t('Save'));
+ 
+     $roles = \Drupal::entityTypeManager()
+       ->getStorage('user_role')
+@@ -73,7 +74,8 @@ class EntityCloneRoleTest extends BrowserTestBase {
+       'id' => 'test_role_cloned',
+       'label' => 'Test role cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/user_role/' . $role->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/user_role/' . $role->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $roles = \Drupal::entityTypeManager()
+       ->getStorage('user_role')
+diff --git a/tests/src/Functional/EntityCloneSearchPageTest.php b/tests/src/Functional/EntityCloneSearchPageTest.php
+index 56d6688..a8da79e 100644
+--- a/tests/src/Functional/EntityCloneSearchPageTest.php
++++ b/tests/src/Functional/EntityCloneSearchPageTest.php
+@@ -61,7 +61,8 @@ class EntityCloneSearchPageTest extends BrowserTestBase {
+       'id' => 'test_search_page_for_clone',
+       'path' => 'test_search_page_for_clone_url',
+     ];
+-    $this->drupalPostForm("/admin/config/search/pages/add/node_search", $edit, t('Save'));
++    $this->drupalGet("/admin/config/search/pages/add/node_search");
++    $this->submitForm($edit, t('Save'));
+ 
+     $search_pages = \Drupal::entityTypeManager()
+       ->getStorage('search_page')
+@@ -74,7 +75,8 @@ class EntityCloneSearchPageTest extends BrowserTestBase {
+       'id' => 'test_search_page_cloned',
+       'label' => 'Test search page cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/search_page/' . $search_page->id(), $edit, t('Clone'));
++    $this->drupalGet('entity_clone/search_page/' . $search_page->id());
++    $this->submitForm($edit, t('Clone'));
+ 
+     $search_pages = \Drupal::entityTypeManager()
+       ->getStorage('search_page')
+diff --git a/tests/src/Functional/EntityCloneShortcutSetTest.php b/tests/src/Functional/EntityCloneShortcutSetTest.php
+index be26497..0b9711f 100644
+--- a/tests/src/Functional/EntityCloneShortcutSetTest.php
++++ b/tests/src/Functional/EntityCloneShortcutSetTest.php
+@@ -60,7 +60,8 @@ class EntityCloneShortcutSetTest extends BrowserTestBase {
+       'id' => 'test_shortcut_set_cloned',
+       'label' => 'Test shortcut set cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/shortcut_set/default', $edit, t('Clone'));
++    $this->drupalGet('entity_clone/shortcut_set/default');
++    $this->submitForm($edit, t('Clone'));
+ 
+     $shortcut_sets = \Drupal::entityTypeManager()
+       ->getStorage('shortcut_set')
+diff --git a/tests/src/Functional/EntityCloneUserTest.php b/tests/src/Functional/EntityCloneUserTest.php
+index 08fa2df..80090d7 100644
+--- a/tests/src/Functional/EntityCloneUserTest.php
++++ b/tests/src/Functional/EntityCloneUserTest.php
+@@ -56,7 +56,8 @@ class EntityCloneUserTest extends BrowserTestBase {
+    * Test user entity clone.
+    */
+   public function testUserEntityClone() {
+-    $this->drupalPostForm('entity_clone/user/' . $this->adminUser->id(), [], t('Clone'));
++    $this->drupalGet('entity_clone/user/' . $this->adminUser->id());
++    $this->submitForm([], t('Clone'));
+ 
+     $users = \Drupal::entityTypeManager()
+       ->getStorage('user')
+diff --git a/tests/src/Functional/EntityCloneViewTest.php b/tests/src/Functional/EntityCloneViewTest.php
+index a2efac0..426a7ae 100644
+--- a/tests/src/Functional/EntityCloneViewTest.php
++++ b/tests/src/Functional/EntityCloneViewTest.php
+@@ -60,7 +60,8 @@ class EntityCloneViewTest extends BrowserTestBase {
+       'id' => 'test_view_cloned',
+       'label' => 'Test view cloned',
+     ];
+-    $this->drupalPostForm('entity_clone/view/who_s_new', $edit, t('Clone'));
++    $this->drupalGet('entity_clone/view/who_s_new');
++    $this->submitForm($edit, t('Clone'));
+ 
+     $views = \Drupal::entityTypeManager()
+       ->getStorage('view')
